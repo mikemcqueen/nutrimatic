@@ -44,6 +44,6 @@ int main(int argc, char *argv[]) {
   ExprFilter filter(parsed);
   IndexReader reader(fp);
   SearchDriver driver(&reader, &filter, filter.start(), 1e-6);
-  PrintAll(&driver);
+  PrintAll(&driver, stdout);
   return 0;
 }

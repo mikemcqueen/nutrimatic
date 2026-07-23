@@ -88,6 +88,6 @@ int main(int argc, char *argv[]) {
   IndexReader reader(fp);
   PhoneFilter filter(argv[2]);
   SearchDriver driver(&reader, &filter, 0, 1e-6);
-  PrintAll(&driver);
+  PrintAll(&driver, stdout);
   return 0;
 }

@@ -68,9 +68,9 @@ foreach p : ['make-index', 'merge-indexes', 'dump-index', 'explore-index']
 endforeach
 
 foreach p : ['find-anagrams', 'find-phone-words']
-  executable(p, p + '.cpp', link_with: search_lib, install: true)
+  executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)
 endforeach
 
 foreach p : ['find-expr', 'test-expr']
-  executable(p, p + '.cpp', link_with: expr_lib, dependencies: fst_dep, install: true)
+  executable(p, p + '.cpp', link_with: [expr_lib, search_lib, index_lib], dependencies: fst_dep, install: true)
 endforeach

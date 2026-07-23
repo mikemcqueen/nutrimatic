@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include <deque>
 #include <queue>
 #include <set>
@@ -49,4 +51,9 @@ class SearchDriver {
   const double restart;
 };
 
-void PrintAll(SearchDriver*);
+// Prints "score text" for every match to stdout, and a "# <steps>" progress
+// line every 100k steps to "progress".  cgi-search.py parses the progress
+// lines out of find-expr's stdout to enforce its computation limit, so that
+// tool must keep them there; tools meant to be used in a shell pipeline can
+// pass stderr instead to keep stdout clean.
+void PrintAll(SearchDriver*, FILE* progress);
