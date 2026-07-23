@@ -16,18 +16,27 @@ static const IndexReader::Node LEAF = (IndexReader::Node) -1;
 // Never collect a history smaller than this.  A Crumb is 8 bytes, so this says
 // the history isn't worth reclaiming below ~240 MB, which is noise next to the
 // multi-gigabyte frontier that motivates collecting in the first place.  It is
-// not a performance guard: collections grow geometrically, so all of them
-// before any given size cost less than a single collection at that size.
+// not a performance guard: a collection costs a pass over the history, and the
+// threshold below never lets one follow another without real growth between.
 static const size_t MIN_CRUMBS = 30000000;
 
-// Ceiling on the collection threshold's growth multiplier (see gc_slack), and
-// so also the factor by which the history may overshoot the live count before
-// anything checks.  Kept low deliberately: the backoff exists to stop a
-// mostly-live history from paying to rediscover that, but a search that spends
-// its early expansion reclaiming nothing will ratchet the multiplier up before
-// it reaches the depth where paths start dying off in bulk, and the first
-// collectable moment then arrives this many times too late.
-static const double MAX_GC_SLACK = 4.0;
+// The multiplier from the live count to the next collection threshold, as a
+// function of how much of the history the collection just reclaimed.  The two
+// branches meet at 1.25, so this is continuous.
+//
+// Above the 25% knee, (1 + freed) * live is roughly the size the history was
+// when this collection ran: a collection that keeps paying for itself is
+// allowed to keep running at the same size rather than at a shrinking one, so
+// its cost stays flat instead of falling off with the live count.
+//
+// Below the knee, the multiplier grows as the yield drops -- to 1.5 at zero
+// yield -- so a history that really is mostly live isn't rescanned to
+// rediscover that.  The growth is bounded and per-collection, not compounding:
+// a stretch of barren collections can't ratchet the threshold up and leave the
+// first collectable moment arriving many times too late.
+static double gc_slack(double freed) {
+  return freed < 0.25 ? 1.5 - freed : 1.0 + freed;
+}
 
 namespace {
 
@@ -105,7 +114,6 @@ SearchDriver::SearchDriver(const IndexReader* r,
   nexts.push(seed);
 
   gc_threshold = MIN_CRUMBS;
-  gc_slack = 1.5;
   gc_progress = NULL;
 
   text = NULL;
@@ -144,15 +152,14 @@ void SearchDriver::collect() {
   }
 
   double const reclaimed = before > 0 ? 1.0 - double(out) / double(before) : 0.0;
-  gc_slack = reclaimed < 0.10 ? min(gc_slack * 2.0, MAX_GC_SLACK) : 1.5;
-  gc_threshold = max(MIN_CRUMBS, size_t(double(out) * gc_slack));
+  double const slack = gc_slack(reclaimed);
+  gc_threshold = max(MIN_CRUMBS, size_t(double(out) * slack));
 
   if (gc_progress != NULL) {
     fprintf(gc_progress,
             "# collect: freed %zu of %zu crumbs (%.1f%%), %zu live,"
             " next at %zu (slack %.3g)\n",
-            before - out, before, reclaimed * 100.0, out, gc_threshold,
-            gc_slack);
+            before - out, before, reclaimed * 100.0, out, gc_threshold, slack);
     fflush(gc_progress);
   }
 }

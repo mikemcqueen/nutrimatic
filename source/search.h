@@ -124,13 +124,11 @@ class SearchDriver {
   // a doubling-sized spike is the failure this whole exercise is about.
   std::deque<Crumb> crumbs;
 
-  // When "crumbs" reaches this size, collect().  Set from the live count after
-  // each collection, so the cost of collecting is bounded by how much has been
-  // allocated since the last one.  "gc_slack" is the multiplier: it doubles
-  // (up to MAX_GC_SLACK) whenever a collection reclaims almost nothing, so a
-  // search whose history really is all live stops paying to rediscover that.
+  // When "crumbs" reaches this size, collect().  Set after each collection from
+  // the live count times gc_slack(), which reads the yield just measured -- see
+  // search-driver.cpp -- so the cost of collecting is bounded by how much has
+  // been allocated since the last one.
   size_t gc_threshold;
-  double gc_slack;
   FILE* gc_progress;
 
   // Matches already reported, keyed by make_seen_key() rather than by the match
