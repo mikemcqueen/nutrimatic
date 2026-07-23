@@ -25,3 +25,5 @@ the end of word > 1, it sorts the words, builds a WordComboIdx struct, and check
 for its presence in the visited_combos set.  if already present, we've already checked
 this combo, bail.  if not present, add to set and continue.
 
+Idea Status: asked and answered.
+Result: plans/trie-node-ordered-permutations.md, plans/trie-node-ordering-phase2.md
