@@ -151,12 +151,14 @@ struct Args {
   std::string letters;  // the bag, with any used letters already removed
   int min_word_len;
   int progress_factor;  // multiplies the 100k-step progress interval
+  bool canonical_order;
 };
 
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [-u used-letters] [-m min-word-length] [-p progress-factor]\n",
+      " [-u used-letters] [-m min-word-length] [-p progress-factor]"
+      " [-c]\n",
       program);
 }
 
@@ -164,12 +166,14 @@ static struct optparse_long const long_options[] = {
   { "used-letters", 'u', OPTPARSE_REQUIRED },
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
+  { "canonical-order", 'c', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
 
 static bool parse_args(char *argv[], Args* out) {
   out->min_word_len = 0;
   out->progress_factor = 1;
+  out->canonical_order = false;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -194,6 +198,9 @@ static bool parse_args(char *argv[], Args* out) {
           fputs("error: --progress-factor must be at least 1", stderr);
           return false;
         }
+        break;
+      case 'c':
+        out->canonical_order = true;
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
@@ -238,7 +245,7 @@ int main(int argc, char *argv[]) {
 
   IndexReader reader(fp);
   AnagramFilter filter(args.letters.c_str(), args.min_word_len);
-  SearchDriver driver(&reader, &filter, 0, 1e-6);
+  SearchDriver driver(&reader, &filter, 0, 1e-6, args.canonical_order);
   PrintAll(&driver, stderr, args.progress_factor);
   return 0;
 }
