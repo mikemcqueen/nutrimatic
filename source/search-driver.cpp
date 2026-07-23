@@ -39,6 +39,17 @@ bool SearchDriver::out_of_order(Next const& n) const {
       n.choice.next < n.last_seg;
 }
 
+double SearchDriver::queue_median_score() const {
+  if (nexts.c.empty()) return 0.0;
+  std::vector<double> scores;
+  scores.reserve(nexts.c.size());
+  for (size_t i = 0; i < nexts.c.size(); ++i)
+    scores.push_back(nexts.c[i].scale * nexts.c[i].choice.count);
+  size_t const mid = scores.size() / 2;
+  nth_element(scores.begin(), scores.begin() + mid, scores.end());
+  return scores[mid];
+}
+
 bool SearchDriver::step() {
   if (nexts.empty()) {
     text = NULL;

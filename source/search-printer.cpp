@@ -9,7 +9,9 @@ void PrintAll(SearchDriver* d, FILE* progress, int progress_factor) {
   long long count = 0;
   for (;;) {
     if (!(++count % interval)) {
-      fprintf(progress, "# %lld\n", count);
+      fprintf(progress, "# %lld seen(%zu) queue(%zu) median(%#.4g)\n",
+              count, d->seen_size(), d->queue_size(),
+              d->queue_median_score());
       fflush(progress);
       // Results are block-buffered when stdout is a pipe.  If progress went
       // somewhere else then flushing it didn't move them, so nudge them out

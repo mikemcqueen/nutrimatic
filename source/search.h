@@ -30,6 +30,16 @@ class SearchDriver {
   bool step();
   void next() { while (!step()) ; }
 
+  // Progress reporting: how many distinct matches have been reported so far,
+  // and how big the frontier is.
+  size_t seen_size() const { return seen.size(); }
+  size_t queue_size() const { return nexts.size(); }
+
+  // The score of the median entry in the frontier, or 0 if it's empty.  A heap
+  // is unordered below its top, so this is a linear-time selection over a copy
+  // of the scores -- cheap enough once per progress line, not per step.
+  double queue_median_score() const;
+
  private:
   // Millions of these live in the frontier queue at once, so the field order
   // matters: the two 4-byte members are paired up front to share one 8-byte
@@ -74,7 +84,14 @@ class SearchDriver {
   // of segments in canonical order and this one is a redundant permutation.
   bool out_of_order(Next const& n) const;
 
-  std::priority_queue<Next> nexts;
+  // std::priority_queue keeps its backing container as a protected member, so
+  // a trivial subclass is the sanctioned way to reach the whole frontier --
+  // needed to sample scores below the top for queue_median_score().
+  struct NextQueue : std::priority_queue<Next> {
+    using std::priority_queue<Next>::c;
+  };
+
+  NextQueue nexts;
   std::deque<Crumb> crumbs;
   std::vector<IndexReader::Choice> tmp;
   std::set<std::string> seen;
@@ -84,10 +101,15 @@ class SearchDriver {
   const bool canonical;
 };
 
-// Prints "score text" for every match to stdout, and a "# <steps>" progress
-// line every 100k * progress_factor steps to "progress".  cgi-search.py parses
-// the progress lines out of find-expr's stdout to enforce its computation
-// limit, so that tool must keep them there (and must keep the interval it
-// expects); tools meant to be used in a shell pipeline can pass stderr instead
-// to keep stdout clean, and can space the lines out with progress_factor.
+// Prints "score text" for every match to stdout, and a progress line
+//
+//   # <steps> seen(<matches>) queue(<frontier>) median(<frontier median score>)
+//
+// every 100k * progress_factor steps to "progress".  cgi-search.py parses the
+// progress lines out of find-expr's stdout to enforce its computation limit,
+// so that tool must keep them there (and must keep the interval it expects);
+// note it reads the whole rest of the line as the step count, so it needs
+// updating for the fields after <steps>.  Tools meant to be used in a shell
+// pipeline can pass stderr instead to keep stdout clean, and can space the
+// lines out with progress_factor.
 void PrintAll(SearchDriver*, FILE* progress, int progress_factor = 1);
