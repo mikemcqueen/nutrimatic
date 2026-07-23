@@ -39,6 +39,25 @@ bool SearchDriver::out_of_order(Next const& n) const {
       n.choice.next < n.last_seg;
 }
 
+std::string SearchDriver::make_seen_key(std::string const& match) {
+  vector<string> words;
+  for (size_t i = 0; i < match.size(); ) {
+    size_t const end = match.find(' ', i);
+    if (end != i) words.push_back(match.substr(i, end - i));
+    if (end == string::npos) break;
+    i = end + 1;
+  }
+
+  sort(words.begin(), words.end());
+
+  string key;
+  for (size_t i = 0; i < words.size(); ++i) {
+    if (i > 0) key += ' ';
+    key += words[i];
+  }
+  return key;
+}
+
 double SearchDriver::queue_median_score() const {
   if (nexts.c.empty()) return 0.0;
   std::vector<double> scores;
@@ -85,22 +104,21 @@ bool SearchDriver::step() {
   // is terminal and has no transitions out -- so this is the only place its
   // order gets checked.  Without it the last segment would be unconstrained and
   // every set of k segments would still be reported in k arrangements.
-  // Note a suppressed match is deliberately kept out of "seen": the canonical
-  // arrangement is a different string and must stay free to be reported.
+  // Note a suppressed match is deliberately kept out of "seen": it shares its
+  // key with the canonical arrangement, which must stay free to be reported.
   if (filter->is_accepting(next.state) && next.crumb != -1 &&
       !out_of_order(next)) {
     size_t len = 0;
     for (int i = next.crumb; i >= 0; i = crumbs[i].parent)
       ++len;
 
-    std::string buffer(len--, next.choice.ch);
+    match.assign(len--, next.choice.ch);
     for (int i = next.crumb; i >= 0 && len > 0; i = crumbs[i].parent)
-      buffer[--len] = crumbs[i].ch;
+      match[--len] = crumbs[i].ch;
     assert(len == 0);
 
-    pair<set<string>::iterator, bool> ib = seen.insert(buffer);
-    if (ib.second) {
-      text = ib.first->c_str();
+    if (seen.insert(make_seen_key(match)).second) {
+      text = match.c_str();
       score = next.scale * next.choice.count;
       return true;
     }

@@ -31,9 +31,12 @@ class SearchDriver {
   void next() { while (!step()) ; }
 
   // Progress reporting: how many distinct matches have been reported so far,
-  // and how big the frontier is.
+  // how big the frontier is, and how much never-released path history is behind
+  // it.  Note "text" points at storage owned by the driver and reused by the
+  // next step(), so copy it if it must outlive that.
   size_t seen_size() const { return seen.size(); }
   size_t queue_size() const { return nexts.size(); }
+  size_t crumbs_size() const { return crumbs.size(); }
 
   // The score of the median entry in the frontier, or 0 if it's empty.  A heap
   // is unordered below its top, so this is a linear-time selection over a copy
@@ -91,10 +94,28 @@ class SearchDriver {
     using std::priority_queue<Next>::c;
   };
 
+  // The words of a match, sorted and rejoined: the key a match is deduplicated
+  // under.  See "seen".
+  static std::string make_seen_key(std::string const& match);
+
   NextQueue nexts;
   std::deque<Crumb> crumbs;
   std::vector<IndexReader::Choice> tmp;
+
+  // Matches already reported, keyed by make_seen_key() rather than by the match
+  // itself, so a set of words is reported once instead of once per arrangement.
+  // Rearrangements are not merely redundant output: for an anagram they are the
+  // bulk of it, since the search reaches every ordering of every word set it
+  // finds.  The arrangement kept is the best-scoring one, because a path's
+  // priority never rises -- a character transition holds "scale" and can only
+  // shrink "count", and a restart multiplies by "restart" < 1 -- so matches are
+  // popped in non-increasing score order and the first one wins.
   std::set<std::string> seen;
+
+  // Owns what "text" points at; make_seen_key() is what "seen" holds, so the
+  // match itself needs storage of its own.
+  std::string match;
+
   const IndexReader* const reader;
   const SearchFilter* const filter;
   const double restart;
@@ -103,7 +124,8 @@ class SearchDriver {
 
 // Prints "score text" for every match to stdout, and a progress line
 //
-//   # <steps> seen(<matches>) queue(<frontier>) median(<frontier median score>)
+//   # <steps> seen(<matches>) crumbs(<path history>) queue(<frontier>)
+//     median(<frontier median score>)
 //
 // every 100k * progress_factor steps to "progress".  cgi-search.py parses the
 // progress lines out of find-expr's stdout to enforce its computation limit,
