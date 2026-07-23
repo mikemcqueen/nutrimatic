@@ -4,6 +4,9 @@ is covered by a BSD license; see the comemnt header in memoize.py.
 OpenFst (http://www.openfst.org) is covered by the Apache License v2,
 see openfst-1.0/COPYING.
 
+Optparse (https://github.com/skeeto/optparse) is released into the
+public domain; see the comment header in source/optparse.h.
+
 The rest of Nutrimatic is covered by the GPLv3, reproduced below.
 
 =====

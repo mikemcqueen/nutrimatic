@@ -1,4 +1,5 @@
 #include "index.h"
+#include "optparse.h"
 #include "search.h"
 
 #include <assert.h>
@@ -150,50 +151,61 @@ struct Args {
   int min_word_len;
 };
 
-// Parses the index filename and the letter bag, followed by any number of
-// -u/--used-letters and -m/--min-word-length flags in any order.  Prints a
-// message and returns false on any usage error.
-static bool parse_args(int argc, char *argv[], Args* out) {
-  if (argc < 3) {
-    fprintf(stderr,
-        "usage: %s input.index letters"
-        " [-u used-letters] [-m min-word-length]\n", argv[0]);
-    return false;
-  }
+static void usage(char const* program) {
+  fprintf(stderr,
+      "usage: %s input.index letters"
+      " [-u used-letters] [-m min-word-length]\n", program);
+}
 
+static struct optparse_long const long_options[] = {
+  { "used-letters", 'u', OPTPARSE_REQUIRED },
+  { "min-word-length", 'm', OPTPARSE_REQUIRED },
+  { NULL, 0, OPTPARSE_NONE },
+};
+
+// Parses the index filename and the letter bag, plus any number of
+// -u/--used-letters and -m/--min-word-length flags, in any order (optparse
+// permutes, so flags may come before, after or between the positionals; "--"
+// stops option parsing if a letter bag ever needs to start with '-').  Prints
+// a message and returns false on any usage error.
+static bool parse_args(char *argv[], Args* out) {
   out->min_word_len = 0;
 
+  struct optparse options;
+  optparse_init(&options, argv);
+
   std::string used;
-  for (int argi = 3; argi < argc; ++argi) {
-    char const* arg = argv[argi];
-    if (!strcmp(arg, "-u") || !strcmp(arg, "--used-letters")) {
-      if (argi + 1 >= argc) {
-        fprintf(stderr, "error: %s needs an argument\n", arg);
+  int opt;
+  while ((opt = optparse_long(&options, long_options, NULL)) != -1) {
+    switch (opt) {
+      case 'u':
+        used += options.optarg;
+        break;
+      case 'm':
+        if (!parse_count(options.optarg, "--min-word-length",
+                         &out->min_word_len))
+          return false;
+        break;
+      default:
+        fprintf(stderr, "error: %s\n", options.errmsg);
+        usage(argv[0]);
         return false;
-      }
-      used += argv[++argi];
-    } else if (!strncmp(arg, "--used-letters=", 15)) {
-      used += arg + 15;
-    } else if (!strcmp(arg, "-m") || !strcmp(arg, "--min-word-length")) {
-      if (argi + 1 >= argc) {
-        fprintf(stderr, "error: %s needs an argument\n", arg);
-        return false;
-      }
-      if (!parse_count(argv[++argi], arg, &out->min_word_len)) return false;
-    } else if (!strncmp(arg, "--min-word-length=", 18)) {
-      if (!parse_count(arg + 18, "--min-word-length", &out->min_word_len))
-        return false;
-    } else {
-      fprintf(stderr, "error: unexpected argument \"%s\"\n", arg);
-      return false;
     }
   }
 
+  char const* index_file = optparse_arg(&options);
+  char const* letters = optparse_arg(&options);
+  if (index_file == NULL || letters == NULL ||
+      optparse_arg(&options) != NULL) {
+    usage(argv[0]);
+    return false;
+  }
+
   std::string bag, remove;
-  if (!clean_letters(argv[2], "letters", &bag)) return false;
+  if (!clean_letters(letters, "letters", &bag)) return false;
   if (!clean_letters(used.c_str(), "used letters", &remove)) return false;
 
-  out->index_file = argv[1];
+  out->index_file = index_file;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
 
   if (out->min_word_len > (int) out->letters.size()) {
@@ -207,7 +219,7 @@ static bool parse_args(int argc, char *argv[], Args* out) {
 
 int main(int argc, char *argv[]) {
   Args args;
-  if (!parse_args(argc, argv, &args)) return 2;
+  if (!parse_args(argv, &args)) return 2;
 
   FILE *fp = fopen(args.index_file, "rb");
   if (fp == NULL) {

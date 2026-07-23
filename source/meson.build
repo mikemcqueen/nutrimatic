@@ -36,6 +36,15 @@ fst_dep = dependency('openfst')
 tre_dep = dependency('tre')
 xml2_dep = dependency('libxml-2.0')
 
+# Public-domain getopt_long work-alike (https://github.com/skeeto/optparse),
+# vendored because getopt.h is POSIX-only.  Built with warnings off since it
+# isn't our code to fix.
+optparse_lib = static_library(
+  'optparse',
+  ['optparse.cpp'],
+  override_options: ['warning_level=0', 'werror=false'],
+)
+
 index_lib = library(
   'index',
   ['index-reader.cpp', 'index-walker.cpp', 'index-writer.cpp'],
@@ -67,7 +76,10 @@ foreach p : ['make-index', 'merge-indexes', 'dump-index', 'explore-index']
   executable(p, p + '.cpp', link_with: index_lib, install: true)
 endforeach
 
-foreach p : ['find-anagrams', 'find-phone-words']
+executable('find-anagrams', 'find-anagrams.cpp',
+  link_with: [optparse_lib, search_lib, index_lib], install: true)
+
+foreach p : ['find-phone-words']
   executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)
 endforeach
 
