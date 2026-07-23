@@ -89,7 +89,7 @@ class AnagramFilter: public SearchFilter {
 };
 
 // Copies the alphanumerics of "in" to "out", dropping spaces so that
-// multi-word arguments like "grain word" are accepted.  Anything else is an
+// multi-word arguments like "word1 word2" are accepted.  Anything else is an
 // error; in particular a space left in the letter bag would be counted into
 // AnagramFilter's radix but could never be consumed (has_transition handles
 // ' ' before it looks at value[]), so the search would silently never accept.
@@ -133,9 +133,10 @@ static bool subtract_letters(std::string const& bag, std::string const& used,
   return true;
 }
 
-// Parses a non-negative decimal count, e.g. the argument to -m.
+// Parses a non-negative decimal count, e.g. the argument to -m or -p.
 static bool parse_count(char const* in, char const* what, int* out) {
   char* end;
+
   long value = strtol(in, &end, 10);
   if (*in == '\0' || *end != '\0' || value < 0 || value > INT_MAX) {
     fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
@@ -149,27 +150,26 @@ struct Args {
   char const* index_file;
   std::string letters;  // the bag, with any used letters already removed
   int min_word_len;
+  int progress_factor;  // multiplies the 100k-step progress interval
 };
 
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [-u used-letters] [-m min-word-length]\n", program);
+      " [-u used-letters] [-m min-word-length] [-p progress-factor]\n",
+      program);
 }
 
 static struct optparse_long const long_options[] = {
   { "used-letters", 'u', OPTPARSE_REQUIRED },
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
+  { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
 
-// Parses the index filename and the letter bag, plus any number of
-// -u/--used-letters and -m/--min-word-length flags, in any order (optparse
-// permutes, so flags may come before, after or between the positionals; "--"
-// stops option parsing if a letter bag ever needs to start with '-').  Prints
-// a message and returns false on any usage error.
 static bool parse_args(char *argv[], Args* out) {
   out->min_word_len = 0;
+  out->progress_factor = 1;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -185,6 +185,15 @@ static bool parse_args(char *argv[], Args* out) {
         if (!parse_count(options.optarg, "--min-word-length",
                          &out->min_word_len))
           return false;
+        break;
+      case 'p':
+        if (!parse_count(options.optarg, "--progress-factor",
+                         &out->progress_factor))
+          return false;
+        if (out->progress_factor < 1) {
+          fputs("error: --progress-factor must be at least 1", stderr);
+          return false;
+        }
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
@@ -230,6 +239,6 @@ int main(int argc, char *argv[]) {
   IndexReader reader(fp);
   AnagramFilter filter(args.letters.c_str(), args.min_word_len);
   SearchDriver driver(&reader, &filter, 0, 1e-6);
-  PrintAll(&driver, stderr);
+  PrintAll(&driver, stderr, args.progress_factor);
   return 0;
 }

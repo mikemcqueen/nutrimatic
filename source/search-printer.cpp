@@ -4,11 +4,12 @@
 #include <stdio.h>
 #include <string.h>
 
-void PrintAll(SearchDriver* d, FILE* progress) {
-  int count = 0;
+void PrintAll(SearchDriver* d, FILE* progress, int progress_factor) {
+  long long const interval = 100000LL * (progress_factor > 0 ? progress_factor : 1);
+  long long count = 0;
   for (;;) {
-    if (!(++count % 100000)) {
-      fprintf(progress, "# %d\n", count);
+    if (!(++count % interval)) {
+      fprintf(progress, "# %lld\n", count);
       fflush(progress);
       // Results are block-buffered when stdout is a pipe.  If progress went
       // somewhere else then flushing it didn't move them, so nudge them out
