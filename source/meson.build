@@ -5,6 +5,14 @@ project(
     'cpp_std=c++17',
     'warning_level=3',
     'werror=true',
+    # The search spends nearly all its time crossing between these libraries:
+    # SearchDriver::step() calls IndexReader::children() once per step and the
+    # filter's has_transition() once per surviving child.  Through a shared
+    # library neither can be inlined and every call goes through the PLT.
+    # Linking statically with LTO lets them inline into step(); worth ~7% on
+    # find-anagrams.  See findings/perf-analysis.md.
+    'default_library=static',
+    'b_lto=true',
   ],
 )
 
