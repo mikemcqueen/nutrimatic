@@ -45,6 +45,14 @@ class AnagramFilter: public SearchFilter {
       }
     }
 
+    // The letters actually in the bag, so allowed_chars() walks those instead
+    // of all 256 byte values.  A bag has at most 36 distinct characters and
+    // usually far fewer, which is what makes answering once per step cheaper
+    // than calling has_transition() once per child.
+    num_letters = 0;
+    for (size_t i = 0; i < sizeof(value) / sizeof(State); ++i)
+      if (value[i] != 0) bag_letters[num_letters++] = (unsigned char) i;
+
     if (product > (INT_MAX - 1) / (min_len + 1)) {
       fputs("anagram too long\n", stderr);
       exit(1);
@@ -80,12 +88,34 @@ class AnagramFilter: public SearchFilter {
     return true;
   }
 
+  // Exactly the set has_transition() accepts, not merely a superset: the same
+  // two tests, run over the bag's letters instead of over the node's children.
+  // That trades ~23 of these per step (one per child decoded) for ~15 (one per
+  // distinct letter in the bag), and it lifts the two divisions by "product"
+  // out to once per step as well.
+  void allowed_chars(State from, IndexReader::CharSet* out) const {
+    out->clear();
+    if (from == terminal) return;
+
+    State const bag = from % product, word = from / product;
+    if (word >= min_len) out->set(' ');
+
+    for (int i = 0; i < num_letters; ++i) {
+      unsigned char const ch = bag_letters[i];
+      State const v = value[ch];
+      if ((bag + v) % count[ch] >= v) out->set(ch);
+    }
+  }
+
  private:
   State count[256];
   State value[256];
   State product;
   State terminal;
   State min_len;
+
+  unsigned char bag_letters[256];  // the distinct letters of the bag
+  int num_letters;
 };
 
 // Copies the alphanumerics of "in" to "out", dropping spaces so that

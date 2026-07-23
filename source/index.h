@@ -68,6 +68,28 @@ class IndexReader {
   int64_t count() const { return total; }
 
   struct Choice { char ch; int64_t count; Node next; };
+
+  // A set of the byte values a caller is willing to receive.  children() tests
+  // a child's character against this before decoding anything else about it,
+  // and a child's character is a single byte at a known offset while its count
+  // and node offset are variable-width fields behind it -- so a caller that can
+  // rule characters out cheaply skips the expensive part.  The search does:
+  // most of a node's children are letters its filter has no transition for.
+  struct CharSet {
+    uint64_t bits[4];
+    bool has(unsigned char c) const { return bits[c >> 6] >> (c & 63) & 1; }
+    void set(unsigned char c) { bits[c >> 6] |= uint64_t(1) << (c & 63); }
+    void clear() { bits[0] = bits[1] = bits[2] = bits[3] = 0; }
+    void fill() { bits[0] = bits[1] = bits[2] = bits[3] = ~(uint64_t) 0; }
+  };
+
+  int children(Node parent, int64_t count,
+               CharSet const& allowed,
+               std::vector<Choice>* out) const;
+
+  // Range form, kept for callers that want a contiguous span of characters.
+  // Note the bounds are compared as "char", which is signed here, so this is
+  // not simply a byte range.
   int children(Node parent, int64_t count,
                char min, char max,
                std::vector<Choice>* out) const;

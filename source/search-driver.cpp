@@ -267,8 +267,14 @@ bool SearchDriver::step() {
   // the two together, so strip the count out once here rather than per child.
   float const log_scale = next.log_score - log2f(float(next.count));
 
+  // Asked once per step rather than per child, and answered from the popped
+  // state alone, so children() can drop most of this node's children without
+  // decoding them.  See SearchFilter::allowed_chars.
+  IndexReader::CharSet allowed;
+  filter->allowed_chars(next.state, &allowed);
+
   tmp.clear();
-  reader->children(node_of(next.node), next.count, CHAR_MIN, CHAR_MAX, &tmp);
+  reader->children(node_of(next.node), next.count, allowed, &tmp);
   for (size_t i = 0; i < tmp.size(); ++i) {
     assert(tmp[i].count > 0);
     if (filter->has_transition(next.state, tmp[i].ch, &new_next.state)) {

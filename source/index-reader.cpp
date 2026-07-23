@@ -39,6 +39,16 @@ IndexReader::~IndexReader() {
 int IndexReader::children(off_t n, int64_t count,
                           char min, char max,
                           std::vector<Choice>* out) const {
+  CharSet allowed;
+  allowed.clear();
+  for (int c = 0; c <= UCHAR_MAX; ++c)
+    if ((char) c >= min && (char) c <= max) allowed.set((unsigned char) c);
+  return children(n, count, allowed, out);
+}
+
+int IndexReader::children(off_t n, int64_t count,
+                          CharSet const& allowed,
+                          std::vector<Choice>* out) const {
   if (n == (off_t) -1) return count;
 
   Choice choice;
@@ -48,7 +58,7 @@ int IndexReader::children(off_t n, int64_t count,
 
   if (num >= 0x20 && num < 0x80) {
     if (n < 1) fail(n, "need immediate next");
-    if (num >= min && num <= max) {
+    if (allowed.has((unsigned char) num)) {
       choice.ch = num;
       choice.count = count;
       choice.next = n;
@@ -71,8 +81,11 @@ int IndexReader::children(off_t n, int64_t count,
 
   off_t start = n - num * size;
   for (off_t p = start; p < n; p += size) {
+    // The character is one byte at a known offset; everything else about this
+    // child is variable-width and has to be decoded.  Rejecting here skips all
+    // of that, and the push_back behind it.
+    if (!allowed.has(data[p])) continue;  // TODO: binary search
     choice.ch = data[p];
-    if (choice.ch < min || choice.ch > max) continue;  // TODO: binary search
 
     if (count_size == 1) {
       choice.count = data[p + 1];

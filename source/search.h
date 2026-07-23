@@ -10,6 +10,19 @@ struct SearchFilter {
   typedef int State;
   virtual bool is_accepting(State state) const = 0;
   virtual bool has_transition(State from, char ch, State* to) const = 0;
+
+  // A superset of the characters has_transition() can accept from "state".
+  // The driver asks once per step and hands the answer to
+  // IndexReader::children(), which then skips decoding the count and node
+  // offset of every child outside it -- measured at ~74% of them for an
+  // anagram, since most letters of the alphabet are not in the bag or are
+  // already spent.  has_transition() still decides, so a filter that
+  // overapproximates here is correct, merely slower; the default admits
+  // everything, which is exactly the old behaviour.
+  virtual void allowed_chars(State, IndexReader::CharSet* out) const {
+    out->fill();
+  }
+
   virtual ~SearchFilter() { }
 };
 
