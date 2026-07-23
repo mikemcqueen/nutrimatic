@@ -38,6 +38,15 @@ class SearchDriver {
   size_t queue_size() const { return nexts.size(); }
   size_t crumbs_size() const { return crumbs.size(); }
 
+  // Report each collection of path history to this stream, or NULL (the
+  // default) for silence.  Deliberately not tied to PrintAll's progress stream:
+  // find-expr points that at stdout, where cgi-search.py parses "# <steps>" and
+  // reads the whole rest of the line as the step count, so an extra line there
+  // would be taken for a step count.  Callers that send progress to stderr can
+  // safely pass it here.  Lines start with '#', like the progress lines, so one
+  // filter drops both.
+  void report_collections(FILE* fp) { gc_progress = fp; }
+
   // The score of the median entry in the frontier, or 0 if it's empty.  A heap
   // is unordered below its top, so this is a linear-time selection over a copy
   // of the scores -- cheap enough once per progress line, not per step.
@@ -87,6 +96,14 @@ class SearchDriver {
   // of segments in canonical order and this one is a redundant permutation.
   bool out_of_order(Next const& n) const;
 
+  // Drop the crumbs no path can still reach and renumber what's left.  A crumb
+  // is live only if it's an ancestor of some frontier entry's crumb, so the
+  // frontier is the root set and this may only run with the queue whole -- at
+  // the top of step(), before the pop, since afterwards the popped entry (and
+  // later the half-built child crumb) are roots too.  Reported matches pin
+  // nothing: "text" points into "match", which is a copy.
+  void collect();
+
   // std::priority_queue keeps its backing container as a protected member, so
   // a trivial subclass is the sanctioned way to reach the whole frontier --
   // needed to sample scores below the top for queue_median_score().
@@ -99,8 +116,22 @@ class SearchDriver {
   static std::string make_seen_key(std::string const& match);
 
   NextQueue nexts;
-  std::deque<Crumb> crumbs;
   std::vector<IndexReader::Choice> tmp;
+
+  // Path history: every reported match is reconstructed by walking "parent"
+  // links back to the root.  A deque rather than a vector because collect()
+  // shrinks it, and a deque hands whole blocks back instead of reallocating --
+  // a doubling-sized spike is the failure this whole exercise is about.
+  std::deque<Crumb> crumbs;
+
+  // When "crumbs" reaches this size, collect().  Set from the live count after
+  // each collection, so the cost of collecting is bounded by how much has been
+  // allocated since the last one.  "gc_slack" is the multiplier: it doubles
+  // (up to MAX_GC_SLACK) whenever a collection reclaims almost nothing, so a
+  // search whose history really is all live stops paying to rediscover that.
+  size_t gc_threshold;
+  double gc_slack;
+  FILE* gc_progress;
 
   // Matches already reported, keyed by make_seen_key() rather than by the match
   // itself, so a set of words is reported once instead of once per arrangement.

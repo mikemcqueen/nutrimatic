@@ -246,6 +246,7 @@ int main(int argc, char *argv[]) {
   IndexReader reader(fp);
   AnagramFilter filter(args.letters.c_str(), args.min_word_len);
   SearchDriver driver(&reader, &filter, 0, 1e-6, args.canonical_order);
+  driver.report_collections(stderr);
   PrintAll(&driver, stderr, args.progress_factor);
   return 0;
 }
