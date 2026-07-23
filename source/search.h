@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 
 #include <deque>
@@ -53,14 +54,53 @@ class SearchDriver {
   double queue_median_score() const;
 
  private:
-  // Millions of these live in the frontier queue at once, so the field order
-  // matters: the two 4-byte members are paired up front to share one 8-byte
-  // slot rather than each costing 8 with padding.
+  // The width a frontier entry holds a trie node in.  Nodes are file offsets,
+  // so IndexReader::root() -- the index length -- bounds every one of them, and
+  // the constructor refuses an index too large to address this way.  Kept
+  // separate from IndexReader::Node so the index format stays 64-bit: this is a
+  // decision about how the frontier is stored, not about what can be indexed.
+  using Node_t = uint32_t;
+
+  // The node IndexReader::children() reports for a childless node, as stored in
+  // Next::node.  Narrowing one needs no special case, since truncating all-ones
+  // stays all-ones -- but widening does: zero-extending this gives 4294967295,
+  // not the -1 that children() tests for, and handing that over would walk into
+  // the middle of the index instead of stopping.  Every stored node goes back
+  // to the reader through node_of() for that reason.
+  static constexpr Node_t LEAF_NODE = Node_t(-1);
+  static IndexReader::Node node_of(Node_t n);
+
+  // The width a frontier entry holds an occurrence count in.  Every count
+  // stored here is bounded by IndexReader::count(): children() reports node
+  // counts, which are sums over a subtree, and the seed and every restart store
+  // that total itself.  So the constructor's single check on it covers every
+  // count the search can produce, and no count can wrap unnoticed.  Widen this
+  // to int64_t if that check ever fires.
+  using Count_t = uint32_t;
+
+  // Millions of these live in the frontier queue at once, and the queue is by
+  // far the largest thing the search allocates, so each field is cut to the
+  // narrowest width its values provably fit in and ordered to leave no padding
+  // except the three bytes after "ch".  IndexReader::Choice is unpacked into
+  // "ch", "count" and "node" rather than embedded, because its own layout
+  // spends 7 bytes padding "ch" out to the alignment of a 64-bit count -- more
+  // than everything saved by narrowing the nodes.
   struct Next {
     int crumb;
     SearchFilter::State state;
-    double scale;
-    IndexReader::Choice choice;
+
+    // log2 of this entry's priority, which is "scale" (the product of the
+    // restart penalties behind it) times "count".  Kept in log space rather
+    // than as the scale itself because each restart multiplies by
+    // count/total * restart, around 2^-36 with the usual restart of 1e-6: a
+    // double scale underflows to zero after ~28 of them, and every path past
+    // that depth would tie at zero and lose its ordering silently.  A float
+    // holds ~5 parts in 10^5 out at the -1000 the deepest paths reach, far
+    // finer than the search can act on.
+    float log_score;
+
+    Node_t node;    // the trie node this entry sits on
+    Count_t count;  // occurrences of the string ending at "node"
 
     // A "segment" is the text consumed between two restarts -- usually one
     // word, but a phrase found contiguously in the corpus is a single segment
@@ -75,16 +115,18 @@ class SearchDriver {
     // unordered, carrying the previous value forward.  0 means "no segment
     // finished yet" -- IndexWriter always writes a byte before taking a node's
     // offset, so no real node lands there.
-    IndexReader::Node last_seg;
+    Node_t last_seg;
 
-    bool operator<(Next const& n) const {
-      return choice.count * scale < n.choice.count * n.scale;
-    }
+    char ch;  // the character consumed to arrive at "node"
+
+    // Comparing the logs orders the same as comparing the priorities, since
+    // log2 is monotonic -- and it is one float compare rather than a multiply
+    // per side, on the hottest path in the search.
+    bool operator<(Next const& n) const { return log_score < n.log_score; }
   };
 
-  static_assert(sizeof(Next) == 16 + sizeof(IndexReader::Choice) +
-                               sizeof(IndexReader::Node),
-                "Next has padding; check the field order");
+  static_assert(sizeof(Next) == 28,
+                "Next has unexpected padding; check the field order");
 
   struct Crumb {
     int parent;
@@ -120,8 +162,7 @@ class SearchDriver {
 
   // Path history: every reported match is reconstructed by walking "parent"
   // links back to the root.  A deque rather than a vector because collect()
-  // shrinks it, and a deque hands whole blocks back instead of reallocating --
-  // a doubling-sized spike is the failure this whole exercise is about.
+  // shrinks it, and a deque hands whole blocks back instead of reallocating.
   std::deque<Crumb> crumbs;
 
   // When "crumbs" reaches this size, collect().  Set after each collection from
@@ -136,9 +177,18 @@ class SearchDriver {
   // Rearrangements are not merely redundant output: for an anagram they are the
   // bulk of it, since the search reaches every ordering of every word set it
   // finds.  The arrangement kept is the best-scoring one, because a path's
-  // priority never rises -- a character transition holds "scale" and can only
-  // shrink "count", and a restart multiplies by "restart" < 1 -- so matches are
+  // priority never rises -- a character transition holds the scale and can only
+  // shrink the count, and a restart adds log2(restart) < 0 -- so matches are
   // popped in non-increasing score order and the first one wins.
+  //
+  // In exact arithmetic that ordering is strict.  step() rebuilds a child's
+  // log_score by subtracting the parent's count out and adding the child's
+  // back in, though, and where the two counts are equal -- which they are
+  // whenever children() passes a count through unchanged -- that round trip
+  // can land an ulp above where it started.  So a child may outrank its parent
+  // by ~1e-3 in log2 after a long path.  All that costs is the arrangement
+  // chosen between matches whose scores agree to that precision, which is
+  // finer than the four digits PrintAll shows.
   std::set<std::string> seen;
 
   // Owns what "text" points at; make_seen_key() is what "seen" holds, so the
@@ -148,6 +198,15 @@ class SearchDriver {
   const IndexReader* const reader;
   const SearchFilter* const filter;
   const double restart;
+
+  // log2(restart), the whole cost of a restart in log space: the new entry
+  // sits at the corpus total, which cancels the /total in the restart factor,
+  // so a restart is exactly this much added to the popped entry's log_score.
+  // Zero when "restart" is, which would read as a free restart rather than a
+  // forbidden one -- safe only because step() gates restarting on "restart"
+  // itself, so this is never reached in that case.
+  const float log_restart;
+
   const bool canonical;
 };
 

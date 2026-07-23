@@ -3,15 +3,21 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 
 #include <algorithm>
+#include <limits>
 
 using namespace std;
 
 // The node IndexReader::children() reports for a childless node; such nodes
 // are indistinguishable from each other, so they can't order anything.
 static const IndexReader::Node LEAF = (IndexReader::Node) -1;
+
+IndexReader::Node SearchDriver::node_of(Node_t n) {
+  return n == LEAF_NODE ? LEAF : IndexReader::Node(n);
+}
 
 // Never collect a history smaller than this.  A Crumb is 8 bytes, so this says
 // the history isn't worth reclaiming below ~240 MB, which is noise next to the
@@ -102,13 +108,39 @@ SearchDriver::SearchDriver(const IndexReader* r,
                            SearchFilter::State start,
                            double rp,
                            bool canonical_order):
-    reader(r), filter(f), restart(rp), canonical(canonical_order) {
+    reader(r), filter(f), restart(rp),
+    log_restart(rp > 0.0 ? log2f(float(rp)) : 0.0f),
+    canonical(canonical_order) {
+  // A frontier entry holds counts and nodes narrowed to 32 bits (see Count_t
+  // and Node_t).  Both bounds are knowable here and nowhere else, and neither
+  // failure is detectable downstream: a wrapped count would ride into a
+  // reported score as a plausible number, and a wrapped node would name a real
+  // but wrong place in the index.  So this is a hard check, not an assert --
+  // it has to survive an NDEBUG build.
+  if (r->count() > int64_t(numeric_limits<Count_t>::max())) {
+    fprintf(stderr,
+            "error: index total %lld exceeds the %u a frontier entry holds;"
+            " widen SearchDriver::Count_t in search.h\n",
+            (long long) r->count(),
+            (unsigned) numeric_limits<Count_t>::max());
+    exit(1);
+  }
+
+  // ">=" rather than ">": the top of the range is spoken for by LEAF_NODE.
+  if (uint64_t(r->root()) >= uint64_t(LEAF_NODE)) {
+    fprintf(stderr,
+            "error: index length %lld exceeds the %u a frontier entry holds;"
+            " widen SearchDriver::Node_t in search.h\n",
+            (long long) r->root(), (unsigned) LEAF_NODE);
+    exit(1);
+  }
+
   Next seed;
   seed.crumb = -1;
-  seed.scale = 1.0;
-  seed.choice.ch = '\0';
-  seed.choice.next = reader->root();
-  seed.choice.count = reader->count();
+  seed.ch = '\0';
+  seed.node = Node_t(reader->root());
+  seed.count = Count_t(reader->count());
+  seed.log_score = log2f(float(reader->count()));  // scale is 1 at the root
   seed.state = start;
   seed.last_seg = 0;
   nexts.push(seed);
@@ -145,7 +177,7 @@ void SearchDriver::collect() {
   crumbs.resize(out);
 
   // Renumbering the frontier can't disturb the heap: Next::operator< reads only
-  // choice.count and scale.  The seed's -1 means "no history" and stays put.
+  // log_score.  The seed's -1 means "no history" and stays put.
   for (size_t i = 0; i < nexts.c.size(); ++i) {
     int& c = nexts.c[i].crumb;
     if (c >= 0) c = int(marks.rank(c));
@@ -166,9 +198,9 @@ void SearchDriver::collect() {
 
 bool SearchDriver::out_of_order(Next const& n) const {
   return canonical &&
-      n.choice.ch == ' ' &&  // only a space ends a segment
-      n.choice.next != LEAF &&
-      n.choice.next < n.last_seg;
+      n.ch == ' ' &&  // only a space ends a segment
+      n.node != LEAF_NODE &&
+      n.node < n.last_seg;
 }
 
 std::string SearchDriver::make_seen_key(std::string const& match) {
@@ -192,13 +224,18 @@ std::string SearchDriver::make_seen_key(std::string const& match) {
 
 double SearchDriver::queue_median_score() const {
   if (nexts.c.empty()) return 0.0;
-  std::vector<double> scores;
-  scores.reserve(nexts.c.size());
+
+  // Select over the logs and convert once at the end, rather than converting
+  // every entry: log2 is monotonic, so the median is the same either way, and
+  // this copy is a float per frontier entry made at the moment memory is
+  // tightest.
+  std::vector<float> logs;
+  logs.reserve(nexts.c.size());
   for (size_t i = 0; i < nexts.c.size(); ++i)
-    scores.push_back(nexts.c[i].scale * nexts.c[i].choice.count);
-  size_t const mid = scores.size() / 2;
-  nth_element(scores.begin(), scores.begin() + mid, scores.end());
-  return scores[mid];
+    logs.push_back(nexts.c[i].log_score);
+  size_t const mid = logs.size() / 2;
+  nth_element(logs.begin(), logs.begin() + mid, logs.end());
+  return exp2(double(logs[mid]));
 }
 
 bool SearchDriver::step() {
@@ -215,22 +252,28 @@ bool SearchDriver::step() {
 
   Next new_next;
   new_next.crumb = crumbs.size();
-  new_next.scale = next.scale;
   // Inherited by every character transition; only a restart advances it.
   new_next.last_seg = next.last_seg;
 
+  // The children share this path's scale but not its count, and log_score folds
+  // the two together, so strip the count out once here rather than per child.
+  float const log_scale = next.log_score - log2f(float(next.count));
+
   tmp.clear();
-  reader->children(next.choice.next, next.choice.count, CHAR_MIN, CHAR_MAX, &tmp);
+  reader->children(node_of(next.node), next.count, CHAR_MIN, CHAR_MAX, &tmp);
   for (size_t i = 0; i < tmp.size(); ++i) {
     assert(tmp[i].count > 0);
     if (filter->has_transition(next.state, tmp[i].ch, &new_next.state)) {
       if (int(crumbs.size()) == new_next.crumb) {
         Crumb new_crumb;
         new_crumb.parent = next.crumb;
-        new_crumb.ch = next.choice.ch;
+        new_crumb.ch = next.ch;
         crumbs.push_back(new_crumb);
       }
-      new_next.choice = tmp[i];
+      new_next.ch = tmp[i].ch;
+      new_next.count = Count_t(tmp[i].count);
+      new_next.node = Node_t(tmp[i].next);
+      new_next.log_score = log_scale + log2f(float(tmp[i].count));
       nexts.push(new_next);
     }
   }
@@ -247,14 +290,19 @@ bool SearchDriver::step() {
     for (int i = next.crumb; i >= 0; i = crumbs[i].parent)
       ++len;
 
-    match.assign(len--, next.choice.ch);
+    match.assign(len--, next.ch);
     for (int i = next.crumb; i >= 0 && len > 0; i = crumbs[i].parent)
       match[--len] = crumbs[i].ch;
     assert(len == 0);
 
     if (seen.insert(make_seen_key(match)).second) {
       text = match.c_str();
-      score = next.scale * next.choice.count;
+      // Reconstructed from the log, so this carries the float's ~5 parts in
+      // 10^5 at the depths where scores get small.  PrintAll shows four
+      // significant digits, so the last one can differ from what an exact
+      // product would have printed; nothing consumes the score as an exact
+      // quantity, and the ordering it came from is unaffected.
+      score = exp2(double(next.log_score));
       return true;
     }
   }
@@ -263,18 +311,21 @@ bool SearchDriver::step() {
   // carries it on contiguously, so all that's forbidden is *starting* a new
   // segment out of order.
   if (restart > 0.0 &&
-      next.choice.ch == ' ' &&
-      next.choice.next != reader->root() &&
+      next.ch == ' ' &&
+      next.node != Node_t(reader->root()) &&
       !out_of_order(next)) {
     new_next.crumb = next.crumb;
-    new_next.scale = next.scale * next.choice.count / reader->count() * restart;
-    new_next.choice.ch = next.choice.ch;
-    new_next.choice.count = reader->count();
-    new_next.choice.next = reader->root();
+    new_next.ch = next.ch;
+    new_next.count = Count_t(reader->count());
+    new_next.node = Node_t(reader->root());
+    // The restart scales by count/total * restart and then sits at a count of
+    // total again, so the two totals cancel and the whole step is a constant
+    // in log space -- no division, and exactly the old arithmetic.
+    new_next.log_score = next.log_score + log_restart;
     new_next.state = next.state;
     // The segment just finished becomes the floor for the next one.  A leaf
     // can't be named, so it orders nothing and the old floor stands.
-    if (next.choice.next != LEAF) new_next.last_seg = next.choice.next;
+    if (next.node != LEAF_NODE) new_next.last_seg = next.node;
     nexts.push(new_next);
   }
 
