@@ -2,7 +2,6 @@
 #include <stdio.h>
 
 #include <deque>
-#include <queue>
 #include <set>
 #include <string>
 #include <vector>
@@ -48,9 +47,11 @@ class SearchDriver {
   // filter drops both.
   void report_collections(FILE* fp) { gc_progress = fp; }
 
-  // The score of the median entry in the frontier, or 0 if it's empty.  A heap
-  // is unordered below its top, so this is a linear-time selection over a copy
-  // of the scores -- cheap enough once per progress line, not per step.
+  // The score of the median entry in the frontier, or 0 if it's empty.  The
+  // frontier is bucketed by score, so this walks the bucket sizes to find the
+  // one holding the middle entry and reports that bucket's score -- constant
+  // work per bucket and none per entry.  Resolution is the bucket width, which
+  // is finer than the four digits the progress line prints.
   double queue_median_score() const;
 
  private:
@@ -119,10 +120,6 @@ class SearchDriver {
 
     char ch;  // the character consumed to arrive at "node"
 
-    // Comparing the logs orders the same as comparing the priorities, since
-    // log2 is monotonic -- and it is one float compare rather than a multiply
-    // per side, on the hottest path in the search.
-    bool operator<(Next const& n) const { return log_score < n.log_score; }
   };
 
   static_assert(sizeof(Next) == 28,
@@ -146,11 +143,70 @@ class SearchDriver {
   // nothing: "text" points into "match", which is a copy.
   void collect();
 
-  // std::priority_queue keeps its backing container as a protected member, so
-  // a trivial subclass is the sanctioned way to reach the whole frontier --
-  // needed to sample scores below the top for queue_median_score().
-  struct NextQueue : std::priority_queue<Next> {
-    using std::priority_queue<Next>::c;
+  // A monotone bucket queue, in place of the binary heap this used to be.
+  //
+  // The search never raises a priority -- a character transition holds the
+  // scale and can only shrink the count, and a restart adds log2(restart) < 0
+  // -- so the maximum only ever falls.  That makes a bucket queue applicable:
+  // entries land in a bucket chosen by their quantized log_score, and a cursor
+  // walks the buckets downward once, never back.  Push appends to a bucket's
+  // tail and pop takes from the current bucket's tail, so both are O(1) and
+  // touch memory sequentially, where the heap spent ~24 dependent cache misses
+  // sifting the last element back down on every pop -- measured as 29% of
+  // total runtime on one compare instruction.  See findings/perf-analysis.md.
+  //
+  // The order this gives up is *within* a bucket, where entries come out
+  // last-in-first-out rather than by exact score.  That is the same class of
+  // approximation findings/priority-invariant.md already records, just larger:
+  // the arrangement "seen" keeps for a set of words can now be any of those
+  // scoring within a bucket width of the best, and printed matches are
+  // descending only to that tolerance.
+  struct NextQueue {
+    // Buckets per log2 unit of score.  Entries inside one bucket come out in
+    // LIFO order rather than by exact score, so this sets how far the pop order
+    // may depart from exact: 1/16 of a log2 unit is 4.4% in score.
+    static constexpr float SCALE = 16.0f;
+
+    std::vector<std::vector<Next> > buckets;
+    float top_log;   // log_score of the seed: no entry can exceed it
+    size_t cur;      // bucket the next pop comes from; only ever advances
+    size_t count;
+
+    NextQueue(): top_log(0), cur(0), count(0) { }
+
+    size_t bucket_of(float log_score) const {
+      float const d = (top_log - log_score) * SCALE;
+      return d <= 0.0f ? 0 : size_t(d);
+    }
+
+    bool empty() const { return count == 0; }
+    size_t size() const { return count; }
+
+    void push(Next const& n) {
+      // Clamping to "cur" covers the one case where a child can outrank its
+      // parent: step() rebuilds log_score by subtracting the parent's count out
+      // and adding the child's back in, which can land an ulp high.  Without
+      // the clamp that entry would go to a bucket the cursor has passed and
+      // never be popped.  The error it introduces is under one bucket.
+      size_t b = bucket_of(n.log_score);
+      if (b < cur) b = cur;
+      if (b >= buckets.size()) buckets.resize(b + 1);
+      buckets[b].push_back(n);
+      ++count;
+    }
+
+    void settle() {
+      while (cur < buckets.size() && buckets[cur].empty()) {
+        // Hand this bucket's storage back as the cursor leaves it.  A heap
+        // holds one allocation that only ever doubles; here the memory behind
+        // exhausted scores is released as the search descends past them.
+        std::vector<Next>().swap(buckets[cur]);
+        ++cur;
+      }
+    }
+
+    Next const& top() { settle(); return buckets[cur].back(); }
+    void pop() { settle(); buckets[cur].pop_back(); --count; }
   };
 
   // The words of a match, sorted and rejoined: the key a match is deduplicated

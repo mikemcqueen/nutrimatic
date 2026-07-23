@@ -143,6 +143,10 @@ SearchDriver::SearchDriver(const IndexReader* r,
   seed.log_score = log2f(float(reader->count()));  // scale is 1 at the root
   seed.state = start;
   seed.last_seg = 0;
+
+  // The seed sits at the corpus total with a scale of 1, so nothing the search
+  // reaches can score above it; that makes it the queue's bucket-zero datum.
+  nexts.top_log = seed.log_score;
   nexts.push(seed);
 
   gc_threshold = MIN_CRUMBS;
@@ -156,9 +160,10 @@ void SearchDriver::collect() {
   size_t const before = crumbs.size();
 
   Marks marks(before);
-  for (size_t i = 0; i < nexts.c.size(); ++i)
-    for (int c = nexts.c[i].crumb; c >= 0; c = crumbs[c].parent)
-      if (!marks.mark(c)) break;
+  for (size_t b = nexts.cur; b < nexts.buckets.size(); ++b)
+    for (size_t i = 0; i < nexts.buckets[b].size(); ++i)
+      for (int c = nexts.buckets[b][i].crumb; c >= 0; c = crumbs[c].parent)
+        if (!marks.mark(c)) break;
   marks.summarize();
 
   // A crumb is always appended after its parent (only a surviving child causes
@@ -176,12 +181,14 @@ void SearchDriver::collect() {
   assert(out == marks.live_count());
   crumbs.resize(out);
 
-  // Renumbering the frontier can't disturb the heap: Next::operator< reads only
-  // log_score.  The seed's -1 means "no history" and stays put.
-  for (size_t i = 0; i < nexts.c.size(); ++i) {
-    int& c = nexts.c[i].crumb;
-    if (c >= 0) c = int(marks.rank(c));
-  }
+  // Renumbering the frontier can't disturb the queue's order: an entry's
+  // bucket is a function of log_score alone.  The seed's -1 means "no history"
+  // and stays put.
+  for (size_t b = nexts.cur; b < nexts.buckets.size(); ++b)
+    for (size_t i = 0; i < nexts.buckets[b].size(); ++i) {
+      int& c = nexts.buckets[b][i].crumb;
+      if (c >= 0) c = int(marks.rank(c));
+    }
 
   double const reclaimed = before > 0 ? 1.0 - double(out) / double(before) : 0.0;
   double const slack = gc_slack(reclaimed);
@@ -223,20 +230,21 @@ std::string SearchDriver::make_seen_key(std::string const& match) {
 }
 
 double SearchDriver::queue_median_score() const {
-  if (nexts.c.empty()) return 0.0;
+  if (nexts.empty()) return 0.0;
 
-  // Select over the logs and convert once at the end, rather than converting
-  // every entry: log2 is monotonic, so the median is the same either way, and
-  // this copy is a float per frontier entry made at the moment memory is
-  // tightest.
-  std::vector<float> logs;
-  logs.reserve(nexts.c.size());
-  for (size_t i = 0; i < nexts.c.size(); ++i)
-    logs.push_back(nexts.c[i].log_score);
-  size_t const mid = logs.size() / 2;
-  nth_element(logs.begin(), logs.begin() + mid, logs.end());
-  return exp2(double(logs[mid]));
+  // The buckets are already ordered by score, so the median is the score at
+  // the bucket holding the middle entry -- no selection pass at all.  Buckets
+  // are 1/16 of a log2 unit wide, which is finer than the four digits the
+  // progress line shows.
+  size_t half = nexts.size() / 2, seen_so_far = 0;
+  for (size_t b = nexts.cur; b < nexts.buckets.size(); ++b) {
+    seen_so_far += nexts.buckets[b].size();
+    if (seen_so_far > half)
+      return exp2(double(nexts.top_log) - double(b) / NextQueue::SCALE);
+  }
+  return 0.0;
 }
+
 
 bool SearchDriver::step() {
   if (nexts.empty()) {
