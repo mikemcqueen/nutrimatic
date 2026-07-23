@@ -35,6 +35,16 @@ project_args = [
   '-Wno-vla',
 ] + extra_toolchain_args
 
+# Plain x86-64 has no POPCNT, so __builtin_popcountll in SearchDriver::collect()
+# compiles to a call into libgcc -- 6% of find-anagrams' runtime, spent entirely
+# on the call.  The v2 level is what turns that into the instruction; it also
+# picks up SSE4.2, and is worth ~12% overall.  Every x86-64 part since Nehalem
+# (2009) and Bulldozer (2011) has it, and measuring -march=native on top of it
+# found nothing further.  See findings/perf-analysis.md.
+if host_machine.cpu_family() == 'x86_64'
+  project_args += ['-march=x86-64-v2']
+endif
+
 add_project_arguments(
   project_args,
   language: ['cpp'],
