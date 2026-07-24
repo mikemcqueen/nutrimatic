@@ -153,6 +153,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     bound_capacity(0),
     bound_max_entries(0),
     bound_entries(0),
+    bound_states_computed(0),
     bound_charged_bytes(0),
     bound_aborted(false),
     bound_prunes(0),
@@ -371,7 +372,10 @@ bool DfsAnagramSearch::store_score_bound(uint64_t key, double value) {
   if (bound_mode == SCORE_BOUND_DENSE) {
     assert(key < bound_capacity);
     double& stored = bound_values.get()[size_t(key)];
-    if (isnan(stored)) ++bound_entries;
+    if (isnan(stored)) {
+      ++bound_entries;
+      ++bound_states_computed;
+    }
     stored = value;
     return true;
   }
@@ -389,6 +393,7 @@ bool DfsAnagramSearch::store_score_bound(uint64_t key, double value) {
         bound_values.get()[position] = value;
         bound_keys.get()[position] = key;
         ++bound_entries;
+        ++bound_states_computed;
         return true;
       }
       position = (position + 1) & mask;
@@ -503,6 +508,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
 
 void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
                            int progress_factor) {
+  bound_states_computed = 0;
   bag.fill(0);
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();

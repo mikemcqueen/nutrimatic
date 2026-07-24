@@ -233,10 +233,12 @@ int main(int argc, char* argv[]) {
   search.run(args.top == 0 ? NULL : &output, stderr, args.progress_factor);
   fprintf(stderr,
           "# phase 2 complete: %lld nodes, %lld solutions, "
-          "%zu spellings expanded, %zu retained\n",
+          "%zu spellings expanded, %zu retained, "
+          "%zu bound states computed\n",
           (long long) search.nodes_visited(),
           (long long) search.solutions_found(),
-          output.spellings_expanded(), output.size());
+          output.spellings_expanded(), output.size(),
+          search.score_bound_states_computed());
   fflush(stderr);
 
   std::vector<DfsSpelling> const results = output.take_sorted_results();
