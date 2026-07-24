@@ -283,17 +283,211 @@ class PhrasePass: public Extractor {
   int64_t dump;  // remaining phrases to print, for eyeballing the score model
 };
 
+// Phase 0 of plans/dfs.md: ancc's check_dict (findings/ancc-inspiration.md
+// T2/T3/T5), ported to run over letter-multiset *classes* rather than
+// spellings.  It emits nothing -- it is a node counter, to settle whether the
+// collapsing DFS over the phrase-included class list costs what §3 of
+// findings/phrase-recovery-cost.md predicts.  Deliberately faithful to ancc so
+// its published node counts (5,488,296 at 19 letters, words only) reproduce.
+//
+// The 36 bag symbols, matching is_bag_char: a-z then 0-9.
+static int const NSYM = 36;
+static int sym_index(unsigned char c) {
+  if (c >= 'a' && c <= 'z') return c - 'a';
+  if (c >= '0' && c <= '9') return 26 + (c - '0');
+  return -1;
+}
+
+class CollapseDFS {
+ public:
+  // class_keys: the distinct anagram-class keys (sorted letters, no spaces),
+  //   from measure-f's class_key().
+  // freq: per-symbol frequency over the extracted entry list, which fixes the
+  //   global rarest-first priority order -- ancc's least-frequent-in-dictionary
+  //   (calc_letter_freq): each entry counted once, letters with multiplicity.
+  // max_depth: hard cap on the number of classes (segments) in a solution,
+  //   = floor(letters / min_len), the emergent cap of plans/dfs.md §"The search".
+  CollapseDFS(std::vector<std::string> const& class_keys,
+              int64_t const freq[NSYM], int max_depth):
+      max_depth(max_depth), nodes(0), fits(0), iters(0), solutions(0) {
+    // Priority order: symbols ascending by frequency, ties by symbol index
+    // (a<b<...), a symbol absent from every entry treated as 5000 exactly as
+    // ancc's calc_letter_freq does.  rank 0 is the rarest letter.
+    int order[NSYM];
+    int64_t k[NSYM];
+    for (int s = 0; s < NSYM; ++s) { order[s] = s; k[s] = freq[s] ? freq[s] : 5000; }
+    std::sort(order, order + NSYM, [&](int a, int b) {
+      return k[a] != k[b] ? k[a] < k[b] : a < b;
+    });
+    for (int r = 0; r < NSYM; ++r) { rank_to_sym[r] = order[r]; rank_of_sym[order[r]] = r; }
+
+    // One record per class: its (symbol,count) letters, total length, and the
+    // rank of its own rarest symbol.  Any class that is a subset of a bag whose
+    // rarest present letter it contains has that letter as its own rarest (see
+    // plans/dfs.md §"candidate index"), so bucketing on own-rarest makes "the
+    // classes covering the forced letter" an O(1) range.
+    classes.reserve(class_keys.size());
+    for (size_t ci = 0; ci < class_keys.size(); ++ci) {
+      std::string const& key = class_keys[ci];
+      int cnt[NSYM] = { 0 };
+      for (size_t i = 0; i < key.size(); ++i) {
+        int s = sym_index((unsigned char) key[i]);
+        if (s >= 0) ++cnt[s];
+      }
+      Class c;
+      c.len = 0;
+      int best = NSYM;
+      for (int s = 0; s < NSYM; ++s) if (cnt[s] > 0) {
+        c.letters.push_back(std::make_pair((uint8_t) s, (uint8_t) cnt[s]));
+        c.len += cnt[s];
+        if (rank_of_sym[s] < best) best = rank_of_sym[s];
+      }
+      c.rarest_rank = best;
+      classes.push_back(c);
+    }
+
+    // Sort class indices into rarest-rank buckets.  Any fixed total order within
+    // a bucket canonicalises correctly (plans/dfs.md §"The search"); sort by
+    // (rank, length desc, key) to stay close to ancc's long->short order.
+    order_idx.resize(classes.size());
+    for (size_t i = 0; i < classes.size(); ++i) order_idx[i] = int(i);
+    std::sort(order_idx.begin(), order_idx.end(), [&](int a, int b) {
+      if (classes[a].rarest_rank != classes[b].rarest_rank)
+        return classes[a].rarest_rank < classes[b].rarest_rank;
+      if (classes[a].len != classes[b].len) return classes[a].len > classes[b].len;
+      return class_keys[a] < class_keys[b];
+    });
+    int const n = int(order_idx.size());
+    for (int r = 0; r <= NSYM; ++r) bucket_start[r] = n;
+    for (int pos = n - 1; pos >= 0; --pos)
+      bucket_start[classes[order_idx[pos]].rarest_rank] = pos;
+    // Collapse empty ranks so bucket_start stays non-decreasing: an absent rank
+    // r gets bucket_start[r] == bucket_start[r+1], i.e. an empty range.
+    for (int r = NSYM - 1; r >= 0; --r)
+      if (bucket_start[r] > bucket_start[r + 1]) bucket_start[r] = bucket_start[r + 1];
+  }
+
+  void run(std::string const& letters) {
+    for (int s = 0; s < NSYM; ++s) bag[s] = 0;
+    int left = 0;
+    for (size_t i = 0; i < letters.size(); ++i) {
+      int s = sym_index((unsigned char) letters[i]);
+      if (s >= 0) { ++bag[s]; ++left; }
+    }
+    walk(left, 0, 0, 0);
+  }
+
+  int64_t nodes_visited() const { return nodes; }
+  int64_t fits_count() const { return fits; }
+  int64_t iters_count() const { return iters; }
+  int64_t solutions_found() const { return solutions; }
+  size_t class_count() const { return classes.size(); }
+
+  // Independent oracle: enumerate class multisets by non-decreasing class index
+  // over *all* classes (no forced-letter collapsing), which visits each multiset
+  // exactly once.  This is the pre-collapse search (findings/ancc-inspiration.md:
+  // the 7.7M-node 14-letter number) and its solution count is ground truth --
+  // the forced-letter DFS above must agree with it exactly.
+  int64_t reference_solutions() const { return ref_solutions; }
+  int64_t reference_nodes() const { return ref_nodes; }
+  void run_reference(std::string const& letters) {
+    for (int s = 0; s < NSYM; ++s) bag[s] = 0;
+    int left = 0;
+    for (size_t i = 0; i < letters.size(); ++i) {
+      int s = sym_index((unsigned char) letters[i]);
+      if (s >= 0) { ++bag[s]; ++left; }
+    }
+    ref_nodes = ref_solutions = 0;
+    ref_walk(left, 0, 0);
+  }
+
+ private:
+  struct Class {
+    std::vector<std::pair<uint8_t, uint8_t> > letters;
+    int len;
+    int rarest_rank;
+  };
+
+  void walk(int left, int level, int entry_point, int old_high) {
+    ++nodes;
+
+    // Forced letter L: the rarest symbol still in the bag.  The forced rank only
+    // rises down a path (letters only leave), so resume the scan at the parent's
+    // rank rather than from 0 -- ancc's old_high_letter_num.
+    int r = old_high;
+    while (r < NSYM && bag[rank_to_sym[r]] == 0) ++r;
+    if (r == NSYM) return;
+
+    // Only classes whose own rarest letter is L are candidates, and among those
+    // covering the *same* forced letter require non-decreasing index to collapse
+    // permutations (ancc's entry_point).  Passing the chosen pos (not pos+1)
+    // lets a class repeat when L occurs more than once.
+    int start = bucket_start[r];
+    if (entry_point > start) start = entry_point;
+    int const end = bucket_start[r + 1];
+
+    for (int pos = start; pos < end; ++pos) {
+      ++iters;
+      Class const& c = classes[order_idx[pos]];
+      bool fit = true;
+      for (size_t i = 0; i < c.letters.size(); ++i)
+        if (bag[c.letters[i].first] < c.letters[i].second) { fit = false; break; }
+      if (!fit) continue;
+      ++fits;
+
+      int const nleft = left - c.len;
+      if (nleft == 0) { ++solutions; continue; }  // bag empty: a solution
+      if (level + 1 >= max_depth) continue;        // cap reached, cannot extend
+
+      for (size_t i = 0; i < c.letters.size(); ++i) bag[c.letters[i].first] -= c.letters[i].second;
+      walk(nleft, level + 1, pos, r);
+      for (size_t i = 0; i < c.letters.size(); ++i) bag[c.letters[i].first] += c.letters[i].second;
+    }
+  }
+
+  void ref_walk(int left, int level, int min_index) {
+    ++ref_nodes;
+    for (int i = min_index; i < int(classes.size()); ++i) {
+      Class const& c = classes[i];
+      bool fit = true;
+      for (size_t j = 0; j < c.letters.size(); ++j)
+        if (bag[c.letters[j].first] < c.letters[j].second) { fit = false; break; }
+      if (!fit) continue;
+      int const nleft = left - c.len;
+      if (nleft == 0) { ++ref_solutions; continue; }
+      if (level + 1 >= max_depth) continue;
+      for (size_t j = 0; j < c.letters.size(); ++j) bag[c.letters[j].first] -= c.letters[j].second;
+      ref_walk(nleft, level + 1, i);
+      for (size_t j = 0; j < c.letters.size(); ++j) bag[c.letters[j].first] += c.letters[j].second;
+    }
+  }
+
+  int const max_depth;
+  int rank_to_sym[NSYM];
+  int rank_of_sym[NSYM];
+  std::vector<Class> classes;
+  std::vector<int> order_idx;
+  int bucket_start[NSYM + 1];
+  int bag[NSYM];
+  int64_t nodes, fits, iters, solutions;
+  int64_t ref_nodes, ref_solutions;
+};
+
 int main(int argc, char* argv[]) {
   static struct optparse_long const long_options[] = {
     { "used-letters", 'u', OPTPARSE_REQUIRED },
     { "min-word-length", 'm', OPTPARSE_REQUIRED },
     { "max-words", 'x', OPTPARSE_REQUIRED },
+    { "max-classes", 'k', OPTPARSE_REQUIRED },
     { "restart", 'r', OPTPARSE_REQUIRED },
     { "dump", 'd', OPTPARSE_REQUIRED },
+    { "reference", 'R', OPTPARSE_NONE },
+    { "dump-words", 'W', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
 
-  int min_len = 4, max_words = 0;
+  int min_len = 4, max_words = 0, max_classes = 0;
+  bool reference = false, dump_words = false;
   double restart = 1e-6;
   int64_t dump = 0;
   std::string used;
@@ -307,8 +501,11 @@ int main(int argc, char* argv[]) {
       case 'u': used += options.optarg; break;
       case 'm': min_len = atoi(options.optarg); break;
       case 'x': max_words = atoi(options.optarg); break;
+      case 'k': max_classes = atoi(options.optarg); break;
       case 'r': restart = atof(options.optarg); break;
       case 'd': dump = atoll(options.optarg); break;
+      case 'R': reference = true; break;
+      case 'W': dump_words = true; break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
         return 2;
@@ -321,7 +518,7 @@ int main(int argc, char* argv[]) {
     fprintf(stderr,
         "usage: %s input.index letters"
         " [-u used-letters] [-m min-word-length] [-x max-words]"
-        " [-r restart] [-d dump-phrases]\n",
+        " [-k max-classes] [-r restart] [-d dump-phrases]\n",
         argv[0]);
     return 2;
   }
@@ -366,6 +563,13 @@ int main(int argc, char* argv[]) {
   WordPass words(&reader, letters, min_len);
   words.run();
   double const t1 = now_seconds();
+
+  if (dump_words) {
+    for (std::unordered_map<std::string, int64_t>::const_iterator i =
+             words.counts.begin(); i != words.counts.end(); ++i)
+      printf("%s\n", i->first.c_str());
+    return 0;
+  }
 
   PhrasePass phrases(&reader, letters, min_len, max_words, restart,
                      reader.count(), &words.counts, &words.classes, dump);
@@ -436,5 +640,61 @@ int main(int argc, char* argv[]) {
     printf("\nat depth %d: %.1fx nodes, %.1f letters of reach lost\n",
            depth, pow(f, depth), log(pow(f, depth)) / log(3.2));
   }
+
+  // Phase 0 (plans/dfs.md): the collapsing bag-subtraction DFS itself, over the
+  // class lists just built.  This is the measurement F^depth was a proxy for --
+  // the actual phase-2 node count, words only versus phrases included.
+  //
+  // The priority order is fixed once from the *word* entry list and reused for
+  // both runs, so the only thing that changes between them is the candidate set
+  // (words vs words+phrases).  That reproduces ancc's words-only node count as a
+  // known target and isolates the phrase effect as a clean node multiplier.
+  int64_t freq[NSYM] = { 0 };
+  for (std::unordered_map<std::string, int64_t>::const_iterator i =
+           words.counts.begin(); i != words.counts.end(); ++i) {
+    std::string const& w = i->first;
+    for (size_t j = 0; j < w.size(); ++j) {
+      int s = sym_index((unsigned char) w[j]);
+      if (s >= 0) ++freq[s];
+    }
+  }
+
+  int const cap = max_classes > 0 ? max_classes : int(letters.size()) / min_len;
+
+  std::vector<std::string> word_keys(words.classes.begin(), words.classes.end());
+  std::vector<std::string> all_keys(phrases.classes.begin(), phrases.classes.end());
+
+  double const p0 = now_seconds();
+  CollapseDFS dfs_words(word_keys, freq, cap);
+  dfs_words.run(letters);
+  double const p1 = now_seconds();
+  CollapseDFS dfs_all(all_keys, freq, cap);
+  dfs_all.run(letters);
+  double const p2 = now_seconds();
+
+  printf("\nphase 2 DFS (max %d classes/solution):\n", cap);
+  printf("  words only:   %zu classes, %" PRId64 " solutions, %" PRId64
+         " nodes (%" PRId64 " fits, %" PRId64 " iters), %.2f s\n",
+         dfs_words.class_count(), dfs_words.solutions_found(),
+         dfs_words.nodes_visited(), dfs_words.fits_count(),
+         dfs_words.iters_count(), p1 - p0);
+  printf("  with phrases: %zu classes, %" PRId64 " solutions, %" PRId64
+         " nodes (%" PRId64 " fits, %" PRId64 " iters), %.2f s\n",
+         dfs_all.class_count(), dfs_all.solutions_found(),
+         dfs_all.nodes_visited(), dfs_all.fits_count(),
+         dfs_all.iters_count(), p2 - p1);
+  if (dfs_words.nodes_visited() > 0)
+    printf("  node multiplier (phrases / words): %.3fx\n",
+           double(dfs_all.nodes_visited()) / double(dfs_words.nodes_visited()));
+
+  if (reference) {
+    double const r0 = now_seconds();
+    dfs_words.run_reference(letters);
+    double const r1 = now_seconds();
+    printf("  reference (words, non-decreasing index, no forcing):"
+           " %" PRId64 " solutions, %" PRId64 " nodes, %.2f s\n",
+           dfs_words.reference_solutions(), dfs_words.reference_nodes(), r1 - r0);
+  }
+
   return 0;
 }

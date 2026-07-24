@@ -102,10 +102,87 @@ bound that the geometry of the bag is actively working against.
 
 **What this does not do is give the real number.** Turning the length
 distribution into a node count needs phase 2 itself — the ancc DFS over the
-class list. That is a ~100-line prototype now that the class list exists, and it
-would settle the question against a known target (5,488,296 nodes at 19 letters,
-words only). Until it is run, the honest statement is "somewhere between 1.0x
-and 4.4x at 19 letters, and much closer to 1.0x than to 4.4x".
+class list. That DFS is now built and run; §3.5 closes this gap. The measured
+answer is **1.04x at 19 letters** — below even the "much closer to 1.0x than to
+4.4x" this section predicted.
+
+## 3.5 Measured: the phase-2 node count (Phase 0 of plans/dfs.md)
+
+§3 named the still-open gap: turning the class-length distribution into an actual
+phase-2 node count needs the DFS itself. That DFS is now built
+(`source/measure-f.cpp`, `CollapseDFS`) — ancc's `check_dict` (rarest-letter
+forcing + anagram-multiset collapsing, T2/T3/T5) ported to run over the class
+list this tool already builds. It emits nothing; it counts nodes and solutions.
+Run it with `measure-f <index> <letters>`; `-R` adds the reference oracle below.
+
+**The answer: the phrase node multiplier at 19 letters, operational depth, is
+1.04x — far below §3's 4.4x upper bound and the plan's >6x "reconsider B" gate.
+Approach A is confirmed on the phrase-cost axis.**
+
+### The measured node/solution counts, `-m 4`
+
+The depth cap is the emergent one, `floor(letters / min_len)` (plans/dfs.md
+§"The search"): 3 at 14 letters, 4 at 19.
+
+| Bag | cap | words: solutions | words: nodes | +phrases: solutions | +phrases: nodes | node mult |
+|---|---|---|---|---|---|---|
+| 14 letters | 3 | 27,177 | 53,084 | 27,401 | 54,250 | **1.022x** |
+| 19 letters | 4 | 29,349,795 | 68,219,824 | 29,783,883 | 70,924,776 | **1.040x** |
+
+"nodes" counts DFS-function invocations. A solution is a distinct multiset of
+anagram classes tiling the bag; the phrase columns add the phrase classes to the
+candidate list.
+
+### The multiplier shrinks with depth — exactly §3's prediction
+
+Sweeping the cap at 19 letters isolates *where* phrases cost anything:
+
+| cap | words nodes | +phrases nodes | node multiplier |
+|---|---|---|---|
+| 2 | 4,885 | 8,590 | 1.76x |
+| 3 | 2,296,313 | 2,863,603 | 1.25x |
+| 4 (operational) | 68,219,824 | 70,924,776 | **1.04x** |
+
+This is §3 made concrete. A phrase class is ≥ `2*min_len` = 8 letters, so it is
+only a candidate while the bag is still near-full — i.e. at shallow depth. In a
+2-class tiling a phrase covers half the bag and phrases boost the search 1.76x;
+by the 4-class tiling the 19-letter search actually runs, a phrase almost never
+fits alongside three other segments under the forced-letter structure, and the
+cost falls to 1.04x. `F^depth` predicted 4.4x; the real geometry gives 1.04x.
+
+### The DFS is correct — validated against ancc directly
+
+The words-only run does **not** reproduce the node/solution counts this document
+and `ancc-inspiration.md` recorded from the original throwaway prototype
+(1,315 solutions / 25,157 nodes at 14 letters; 156,138 / 5,488,296 at 19). Those
+figures are wrong. On the *identical* 17,274-word list extracted from the trie
+for the documented 14-letter bag (`feat studio tsen`, `-m 4`), correctness was
+checked four independent ways, all agreeing on **27,177**, not 1,315:
+
+- the forced-letter collapsing DFS: 27,177 solutions;
+- an independent exhaustive reference (enumerate class multisets by
+  non-decreasing class index, no forcing — a different code path, `-R`): 27,177,
+  and it agrees with the DFS again at 19 letters/cap 3 (1,657,557 each);
+- the **real `ancc` binary** on that word list (`-m 4 -l 3`), its 29,874,575
+  emitted spellings collapsed to distinct sorted class-multisets: **27,177**;
+- a 9-letter cross-check (`computers`): DFS = reference = ancc = 123.
+
+Since the whole approach *is* ancc's algorithm, ancc's own count on the same
+input is the ground truth, and it matches the new DFS exactly. The recorded
+targets are also internally inconsistent — `ancc-inspiration.md` lists 12 letters
+at 35,041 solutions but 14 letters at only 1,315, impossible for a monotone
+solution count — which corroborates that they came from a differently-scoped or
+buggy earlier prototype rather than the algorithm as specified.
+
+**Consequence beyond this document.** The real search is much larger than the
+prototype's figures implied: 29.3M solutions and 68M nodes at 19 letters, versus
+the recorded 156,138 / 5.49M. `ancc-inspiration-summary.md` §8's ceilings and its
+"19 letters in 3.25 s, 156,138 solutions" line rest on those undercounts and need
+revisiting. This does **not** change the A-vs-B decision — the phrase multiplier
+is the thing Phase 0 was gating on, and at 1.04x it says *build A* — but it does
+mean the output stage (summary §6: expansion volume, top-N heap sizing) is
+budgeting against a solution count ~190x too low, and the runtime ceilings are
+optimistic. Flagged for the plan's performance sections, not its architecture.
 
 ## 4. §5's mitigation is vacuous, and its formula is missing a term
 

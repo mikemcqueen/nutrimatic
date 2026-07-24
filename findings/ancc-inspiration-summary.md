@@ -35,8 +35,11 @@ Two relations the original leaves implicit, which are what make the rest legible
 constraint under any of these designs.** Every configuration in §8 sits between
 10 MB and 300 MB and stays there regardless of runtime or solution count. Today's
 8.7 GB is a best-first *frontier*; a DFS has no frontier. At a 10-minute budget:
-today ~19–20 letters and it never completes; approach B ~17–19 (~21–23 tuned and
-parallel); approach A ~23 (~26–27 tuned and parallel).
+today ~19–20 letters and it never completes; approach B ~15–16 (~18–20 tuned and
+parallel); approach A ~20–21 (~23–24 tuned and parallel). **These are ~3 letters
+below an earlier draft: the prototype's counts undercounted the real exhaustive
+search by ~27x at 19 letters (68M nodes / 89 s, not 5.5M / 3.25 s), so §8's
+projections are re-anchored — `phrase-recovery-cost.md` §3.5.**
 
 **Anagram collapsing does not discard spellings (§2).** The 306x is a *search-time*
 optimisation: the class `{yacht, cathy}` is explored as one branch instead of two,
@@ -45,13 +48,14 @@ then re-expanded at output so both are emitted. ancc does exactly this
 the pruning bound, which must use the class **maximum** to stay admissible — the
 best member decides whether a branch is *explored*, never what is *printed*.
 
-**The stream-then-filter plan works, up to ~16–17 letters if all spellings are
-written (§6).** Solution counts grow 3.07x/letter, but each solution expands
-~10^3-fold into spellings, so 19 letters is ~7 GB of output and 21 letters ~46 GB.
-The fix is lazy exact expansion: generate each solution's spellings in descending
-score order and stop at the current N-th best. That yields the true top N over the
-full 10^9 while touching one or two spellings per solution, discards nothing, and
-keeps the intermediate file useful as a file of *solutions* (60 MB at 21 letters).
+**The stream-then-filter plan works, up to ~13–14 letters if all spellings are
+written (§6).** Each solution expands ~10^3-fold into spellings, and with the
+corrected solution counts (29.3M at 19 letters, not 156,138) 19 letters is ~1.3 TB
+of output. The fix is lazy exact expansion: generate each solution's spellings in
+descending score order and stop at the current N-th best. That yields the true
+top N over the full ~10^10 while touching one or two spellings per solution,
+discards nothing, and keeps the intermediate file useful as a file of *solutions*
+— though that file is now much larger than the earlier 60 MB estimate implied.
 
 **In-corpus word adjacency is a requirement, which promoted §5 from optional to
 blocking — and §5 has now been measured.** Approach A only preserves adjacency if
@@ -79,8 +83,8 @@ branch-and-bound.
   magnitude. See `findings/phrase-recovery-cost.md`.
 - **Design C's standalone value is unquantified**, and is left that way here
   rather than given a number. Its measured benefit is already baked into
-  approach A's 3.25 s / 37 s — the prototype used forced-letter DFS throughout —
-  so it is a prerequisite, not an additive win.
+  approach A's runtime (89 s at 19 letters, corrected) — the prototype used
+  forced-letter DFS throughout — so it is a prerequisite, not an additive win.
 
 §8's B-row penalty (100–1000x) and the 5x/12x tuning factors are estimates from
 mechanism, not measurements. The closing section separates measured from
@@ -111,8 +115,10 @@ not a 7x speedup; it is 7x *per level*. The measured 306x ≈ 7.0^2.9 — the
 14-letter bag with `-m 4` is a 3-word search. At a 4-word search with the
 19-letter ratio of 5.8x, the same lever is worth 5.8^3–5.8^4 ≈ 200–1100x.
 
-**2. Constant-factor wins buy bag length logarithmically.** Measured node count
-grows **3.2x per additional letter** (19→21 letters: 5.5M → 55.9M nodes). So any
+**2. Constant-factor wins buy bag length logarithmically.** Node count grows
+roughly **3.2x per additional letter** (the original 19→21 basis, 5.5M → 55.9M
+nodes, came from the undercounting prototype and has **not** been re-measured —
+see §8's correction note; the slope is retained as a working assumption). So any
 speedup S buys `log(S)/log(3.2)` letters:
 
 | Speedup | Extra letters bought |
@@ -167,10 +173,11 @@ worth building.)*
   regardless of bag length, runtime, or how many solutions come back. Measured
   93 MB / 177 MB / 220 MB at 14 / 19 / 21 letters **(M)**, against 8.7 GB and
   climbing for the current tool at 19.
-- **It actually finishes.** 19 letters, ≤4 words, exhaustive: **3.25 seconds**,
-  156,138 distinct solutions. 21 letters: **37 seconds**, 1,474,843 solutions
-  **(M)**. The current tool returns a handful of results at those sizes and then
-  dies without ever completing.
+- **It actually finishes.** 19 letters, ≤4 words, exhaustive: **89 seconds**,
+  **29.3M distinct solutions**, on the untuned single-thread DFS **(M, corrected
+  — the earlier 3.25 s / 156,138 figures were a buggy prototype undercount;
+  `phrase-recovery-cost.md` §3.5)**. The current tool returns a handful of
+  results at that size and then dies without ever completing.
 - **~5 letters of extra reach from collapsing alone**, and roughly **+6–7
   letters overall** versus today.
 
@@ -281,8 +288,8 @@ probably modest.** Its value is as an enabler.
   frontier still grows without bound, just more slowly. This will not move the
   ~40-second wall by much.
 - **It is already baked into approach A's measured numbers.** The prototype used
-  forced-letter DFS throughout. C is not additive on top of A's 3.25 s / 37 s;
-  it is a prerequisite for them.
+  forced-letter DFS throughout. C is not additive on top of A's runtime (89 s at
+  19 letters, corrected); it is a prerequisite for it.
 
 ### The cost
 
@@ -372,10 +379,12 @@ is F.
 left unverified: walking past the space costs 3.9x the nodes and 2.4x the time of
 the word-only walk, and all 26 letters finish in under 3 s.
 
-**What is still open:** nobody has converted the class-length distribution into
-an actual phase-2 node count, which needs the ancc DFS over the class list. The
-honest statement at 19 letters is "between 1.0x and 4.4x, and much closer to
-1.0x". See `findings/phrase-recovery-cost.md` §3.
+**Now closed:** the class-length distribution has been turned into an actual
+phase-2 node count via the ancc DFS over the class list (Phase 0 of
+`plans/dfs.md`). At 19 letters, operational depth, the phrase cost is **1.04x
+nodes** — below even the "much closer to 1.0x than 4.4x" this predicted, and it
+*shrinks* with depth (1.76x/1.25x/1.04x at caps 2/3/4) because phrase classes are
+too long to place deep in the search. See `findings/phrase-recovery-cost.md` §3.5.
 
 ---
 
@@ -395,14 +404,16 @@ at 19 letters, ~5.3 at 21 **(M)** — so a 4-word solution expands ~10^3-fold:
 
 | Letters | Solutions | All spellings **(P)** | As a file @ ~40 B/line |
 |---|---|---|---|
-| 14 | 1,315 **(M)** | ~450k | 18 MB |
-| 19 | 156,138 **(M)** | ~1.8e8 | **~7 GB** |
-| 21 | 1.47M **(M)** | ~1.2e9 | **~46 GB** |
+| 14 | 27,177 **(M, corrected)** | ~9M | ~370 MB |
+| 19 | 29.3M **(M, corrected)** | ~3.4e10 | **~1.3 TB** |
 
-So **"write everything to a file, then filter" only survives to ~16–17 letters
-once all spellings are kept** — not the ~22–23 an earlier version of this
-document claimed, which assumed the lossy collapse. Above that the expansion has
-to stay lazy.
+The solution counts here are corrected from the buggy-prototype figures (1,315 /
+156,138) to the real exhaustive counts — see `phrase-recovery-cost.md` §3.5. The
+21-letter row is dropped rather than re-measured. So **"write everything to a
+file, then filter" only survives to ~13–14 letters once all spellings are kept**
+— even lower than the ~16–17 an earlier draft claimed, and far below the ~22–23
+before that (which assumed the lossy collapse). Above that the expansion has to
+stay lazy — the correction makes lazy exact expansion more necessary, not less.
 
 ### The fix: lazy exact expansion, nothing discarded
 
@@ -473,56 +484,71 @@ leverage untouched item.
 
 ## 8. How far can each combination actually go?
 
-Extrapolated from the measured prototype at **3.2x nodes/letter** and **1.54M
-nodes/s**, at `-m 4` and a hard cap of 4 words. All memory figures are *flat* —
-they do not grow with runtime or solution count. Every A row is words-only:
-subtract up to 1.3 letters for phrase recovery (§5), and less than that wherever
-the solution depth is 4, since the classes phrases add are too long to appear
-there.
+> **Corrected (Phase 0 of `plans/dfs.md`).** The prototype figures this section
+> was first built on — 156,138 solutions / 5.49M nodes / 3.25 s at 19 letters —
+> were a **~12–27x undercount**. The real exhaustive words-only search at 19
+> letters is **29.3M solutions, 68.2M nodes, 89 s** on the untuned single-thread
+> DFS, verified four ways against `ancc` itself (`phrase-recovery-cost.md` §3.5).
+> The A-column times below are re-anchored to that 89 s; the ceilings drop by
+> `log(89/3.25)/log(3.2) ≈ 2.9 letters` versus the earlier draft. The
+> **conclusions are unchanged** — memory stays flat, the levers rank the same —
+> only the absolute reach is ~3 letters shorter than previously claimed.
+
+Extrapolated from the corrected prototype anchor (**89 s / 68.2M nodes at 19
+letters, 1 thread**) and an assumed **3.2x nodes/letter** slope, at `-m 4` and a
+hard cap of 4 words. The slope itself was **not** re-measured — its original
+19→21 basis came from the same undercounting prototype — so the per-letter
+extrapolation is now an assumption, not a measurement; only the 19-letter anchor
+is solid. All memory figures are *flat* — they do not grow with runtime or
+solution count. Every A row is words-only: the measured phrase cost is negligible
+at solution depth 4 (1.04x nodes, §5 / `phrase-recovery-cost.md` §3.5).
 
 ### Time to exhaust a bag
 
-| Letters | A, prototype 1-thread | A, tuned + 20 cores (60x) **(P)** | B, tuned + 20 cores **(P)** |
+| Letters | A, prototype 1-thread | A, tuned + 20 cores (60x) **(P)** | B, tuned + 20 cores **(P/U)** |
 |---|---|---|---|
-| 19 | 3.3 s **(M)** | 0.05 s | 15 s |
-| 21 | 37 s **(M)** | 0.6 s | 3 min |
-| 23 | 6 min | 6 s | 30 min |
-| 25 | 1 hr | 1 min | 5 hr |
-| 26 | 3.4 hr | 3.4 min | 17 hr |
-| 28 | 35 hr | 35 min | — |
-| 30 | 15 days | 6 hr | — |
+| 19 | **89 s (M)** | 1.5 s | ~7 min |
+| 21 | 15 min **(P)** | 15 s | ~80 min |
+| 23 | 2.6 hr **(P)** | 2.6 min | ~14 hr |
+| 25 | 27 hr **(P)** | 27 min | ~6 days |
+| 26 | 3.5 days **(P)** | 85 min | ~19 days |
+| 28 | 36 days **(P)** | 14 hr | — |
+| 30 | ~1 yr **(P)** | 6 days | — |
 
-The 60x is 5x from a tuned inner loop (ancc's bitmask stack and length-sorted
-skip index, versus a throwaway prototype) times 12x from splitting the
-depth-1 branches across 20 cores. DFS parallelises almost perfectly here —
-independent subtrees, no shared state, and the only synchronisation is the
-top-N heap.
+Only the 19-letter A row is measured; every other cell is `89 s × 3.2^(letters−19)`
+under the assumed slope (÷60 for the tuned+parallel column). The 60x is 5x from a
+tuned inner loop (ancc's bitmask stack and length-sorted skip index, versus this
+throwaway prototype) times 12x from splitting the depth-1 branches across 20
+cores. DFS parallelises almost perfectly here — independent subtrees, no shared
+state, and the only synchronisation is the top-N heap. The B column is the same
+re-anchoring applied to the earlier (U) B estimate and carries all its old
+uncertainty plus the assumed slope.
 
 ### Practical ceilings, at a ~10-minute budget
 
 | Configuration | Max bag | Peak memory |
 |---|---|---|
 | **Today** (best-first, trie) | ~19–20 letters, and *never completes* — best-effort results only | **8.7 GB and climbing; OOM at ~40 s (M)** |
-| **B** — DFS over trie | ~17–19 letters, exhaustive **(P)** | **< 10 MB** (DFS stack + `seen`) |
-| **B** + tuned + 20 cores | ~21–23 letters **(P)** | < 10 MB + `seen` |
-| **A** — word list + collapsing, 1 thread | ~23 letters **(M/P)** | **~220 MB measured, ~50 MB packed** |
-| **A** + tuned + 20 cores | ~26–27 letters **(P)** | ~50 MB + heap |
-| **A** + tuned + parallel + a tight `h` | 30+ letters **(U)** | ~50 MB + heap |
+| **B** — DFS over trie | ~14–16 letters, exhaustive **(P/U)** | **< 10 MB** (DFS stack + `seen`) |
+| **B** + tuned + 20 cores | ~18–20 letters **(P/U)** | < 10 MB + `seen` |
+| **A** — word list + collapsing, 1 thread | ~20–21 letters **(M/P)** | **~220 MB measured, ~50 MB packed** |
+| **A** + tuned + 20 cores | ~23–24 letters **(P)** | ~50 MB + heap |
+| **A** + tuned + parallel + a tight `h` | 27+ letters **(U)** | ~50 MB + heap |
 
 Adjacency is required (§5), so only these last two rows are actually eligible —
 and only with phrase recovery included:
 
 | Configuration | Max bag | Peak memory |
 |---|---|---|
-| **A + phrase recovery**, tuned + 20 cores | **~25–26 letters**, F now measured **(P)** | ~100–300 MB |
-| **B**, tuned + 20 cores | **~21–23 letters**, no unknowns **(P)** | < 10 MB + `seen` |
+| **A + phrase recovery**, tuned + 20 cores | **~23–24 letters**, F measured at 1.04x nodes **(P)** | ~100–300 MB |
+| **B**, tuned + 20 cores | **~18–20 letters (P/U)** | < 10 MB + `seen` |
 
-That is the real choice: A-with-phrases is worth roughly **+2 to +4 letters over
-B**. When this table was written that depended entirely on an unmeasured F, and
-the A row spanned 23–26 accordingly. F came in at the low end (§5): ≤1.3 letters
-off the words-only figure and likely well under that, so the A row is now the
-top of its old range rather than the bottom. B's number is still the one with no
-projections in it at all.
+That is the real choice: A-with-phrases is worth roughly **+3 to +5 letters over
+B**. Phrase recovery costs essentially nothing at solution depth 4 (1.04x nodes,
+`phrase-recovery-cost.md` §3.5), so the A+phrase row is at the top of the
+words-only A range, not below it. Both rows are ~3 letters lower than the earlier
+draft's claim because that draft's 19-letter anchor was a 27x undercount; the
+*gap* between A and B is unchanged.
 
 ### The two conclusions worth taking away
 
@@ -564,13 +590,16 @@ the front, because it decided the architecture).
 3. **Approach A**, which F selects: phase-1 extraction — `source/measure-f.cpp`
    is a working prototype of it, phrases included — plus ancc's DFS with
    rarest-letter forcing (C) and anagram collapsing (D), lazy spelling expansion
-   (§6), and a bounded top-N heap. Reaches ~25–26 letters (§8).
+   (§6), and a bounded top-N heap. Reaches ~23–24 letters (§8, corrected).
 
-   **Do the phase-2 node count first**, as the opening move of A rather than as
-   a separate measurement: the class list already exists, the DFS is ~100 lines,
-   and it both closes §5's remaining gap and checks against a known target
-   (5,488,296 nodes at 19 letters, words only). If it comes back far worse than
-   the class-length distribution predicts, B is still there.
+   ~~**Do the phase-2 node count first.**~~ **Done (Phase 0 of `plans/dfs.md`).**
+   The DFS is built (`CollapseDFS` in `source/measure-f.cpp`) and the phrase cost
+   is measured: **1.04x nodes at 19 letters**, well under the >6x "reconsider B"
+   gate, so A proceeds. The "known target" this was meant to check against
+   (5,488,296 nodes / 156,138 solutions) turned out to be a **buggy-prototype
+   undercount** — the real counts are 68.2M nodes / 29.3M solutions, verified
+   four ways against `ancc` itself (`phrase-recovery-cost.md` §3.5). §8's ceilings
+   were re-anchored to the corrected figures.
 4. **The `h` bound (§7)** — small, pays off in both designs, and the only lever
    with no ceiling.
 5. **Parallelise the DFS.** Mechanical, ~12x, do it last since it changes no
@@ -587,16 +616,24 @@ change to code that already exists. What F settles is that A is no longer
 ## What is measured vs. projected
 
 Measured on `~/code/nutrimatic/idx/wiki-merged.5.index`: everything in §1, the
-93/177/220 MB and 0.03/3.25/37.2 s figures, the 306x, the collapse ratios, the
-solution and node counts, the 3.2x/letter and 3.07x/letter scaling constants,
-the zero-duplicate result at 12 letters, and — since this document was first
-written — **§5's F, the class-length distribution behind it, and the
-multi-segment extraction cost**.
+93/177/220 MB figures, the collapse ratios, the zero-duplicate property at 12
+letters, and — since this document was first written — **§5's F, the class-length
+distribution behind it, the multi-segment extraction cost, and (Phase 0 of
+`plans/dfs.md`) the corrected phase-2 node/solution counts: 27,177 sol / 53,084
+nodes at 14 letters, 29.3M sol / 68.2M nodes / 89 s at 19 letters, verified four
+ways against `ancc`** (`phrase-recovery-cost.md` §3.5).
+
+**Corrected, not measured as first stated:** the old 0.03/3.25/37.2 s timings and
+the 156,138 / 1.47M / 5.49M solution-and-node counts were a buggy-prototype
+undercount (~12–27x at 19 letters); the 3.2x/letter and 3.07x/letter scaling
+constants rested on those and are now working assumptions, not measurements; the
+306x is a ratio of those same undercounted node counts (the underlying ~7x/level
+collapse *ratio* still holds, being a branching-factor property).
 
 Projected or unmeasured: the 5x tuning factor, the 12x parallel factor, B's
 100–1000x penalty, the value of `h`, C's standalone benefit, the
 spelling-expansion volumes in §6, every row of §8 marked (P) or (U), and the
-phase-2 node count that would turn §5's class counts into a time.
+per-letter slope now that its prototype basis is retracted.
 
 Two caveats on the original prototype no longer apply in full: its
 spelling-expansion counts still over-count by ~10% (node and solution counts are

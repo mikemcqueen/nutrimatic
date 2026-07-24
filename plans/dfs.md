@@ -34,8 +34,8 @@ Locked in with the user; not open for re-litigation here:
    behaviour (`search-driver.cpp:make_seen_key`): `{pen built}` as one contiguous
    phrase (score 7) and `{pen}{built}` as two segments (2.1e-05) share a word set
    and collapse to the 7. Memory stays bounded by N — a global dedup set over all
-   1.47M solutions at 21 letters would reintroduce the unbounded memory A exists
-   to remove.
+   solutions (29.3M at 19 letters, more at 21; `phrase-recovery-cost.md` §3.5)
+   would reintroduce the unbounded memory A exists to remove.
 4. **Single-threaded.** Parallelising the depth-1 branches is a mechanical ~12x
    (summary §8) and is explicitly deferred — it changes no semantics and should
    be the last thing done, if at all.
@@ -85,28 +85,39 @@ runtime, or solution count.
 
 ## Phase 0 — the phase-2 node count, as a de-risking measurement first
 
-**This is the opening move, per summary §9 item 3's sub-bullet.** Before building
+**Done. Result: phrase cost is 1.04x nodes at 19 letters — A proceeds.** Details
+and the corrected counts are in `findings/phrase-recovery-cost.md` §3.5. What the
+measurement was, and the one surprise it turned up:
+
+**This was the opening move, per summary §9 item 3's sub-bullet.** Before building
 any output machinery, settle the one number that could still send us to B: does
 the collapsing DFS over the *phrase-included* class list actually cost what §3 of
 `phrase-recovery-cost.md` predicts, or worse?
 
-- Extend `measure-f` (or a sibling throwaway) with ancc's `check_dict` DFS over
-  the class list it already builds — ~100 lines, no output, just a node counter.
-- **Validate against the known target**: words-only at 19 letters must reproduce
-  **5,488,296 nodes** (`ancc-inspiration.md`). Reproducing it requires matching
-  the prototype's config — **words only (no phrases) and a hard 4-word cap** —
-  even though the shipped tool has neither, so Phase 0's DFS needs both knobs
-  temporarily. If it doesn't hit the number, the DFS is wrong and nothing
-  downstream is trustworthy.
-- Then run it with phrases included and report the real node multiplier. §3
-  predicts "between 1.0x and 4.4x at 19 letters, much closer to 1.0x". 
-- **Decision gate**: if phrases-included comes back far worse than the
-  class-length distribution predicts (say > 6x at 19 letters), stop and reconsider
-  B before writing the rest of A. Otherwise proceed. This is cheap insurance —
-  the class list already exists in `measure-f`.
+- Extended `measure-f` with ancc's `check_dict` DFS (`CollapseDFS`) over the class
+  list it already builds — a node/solution counter, plus an independent reference
+  enumerator (`-R`) and a word dump (`-W`) for validation.
+- **The documented target was wrong.** `ancc-inspiration.md` said words-only at 19
+  letters should reproduce 5,488,296 nodes / 156,138 solutions; at 14 letters,
+  1,315 solutions. Neither reproduces. The real counts are ~12–190x larger, and
+  the DFS was instead validated **four independent ways against `ancc` itself**:
+  the forced-letter DFS, the reference enumerator, and the real `ancc` binary on
+  the identical trie word list all agree (27,177 solutions at 14 letters, 123 on a
+  9-letter cross-check). The recorded targets came from a buggy/differently-scoped
+  earlier prototype — do not use them as a correctness gate. Real figures: 27,177
+  sol / 53,084 nodes at 14 letters; 29.3M sol / 68.2M nodes / 89 s at 19 letters.
+- Ran it with phrases included: the node multiplier is **1.04x at 19 letters**
+  (operational cap 4), and it *shrinks* with depth (1.76x/1.25x/1.04x at caps
+  2/3/4) — phrase classes are ≥8 letters and can't be placed deep in the search.
+  §3 predicted "between 1.0x and 4.4x, much closer to 1.0x"; measured, it is even
+  below that.
+- **Decision gate — passed.** 1.04x is far under the >6x "reconsider B" threshold.
+  Proceed with A. Separately, the corrected (much larger) absolute counts moved
+  the summary §8 ceilings down ~3 letters and enlarged the output-stage volume
+  budget ~190x — flagged for those sections, no change to the architecture.
 
-Deliverable: a node count, appended to `findings/phrase-recovery-cost.md` §3,
-closing the "still open" gap that document names.
+Deliverable: done — corrected node/solution counts and the multiplier are in
+`findings/phrase-recovery-cost.md` §3.5, and summary §8 has been re-anchored.
 
 ## Phase 1 — extraction into a packed class list
 
@@ -225,8 +236,10 @@ per-spelling score uses the chosen members' real counts, computed at expansion.
 ### The volume problem this solves
 
 A solution's spellings are the cross-product of its classes' members (~10^3-fold
-at 19 letters). Writing them all is ~7 GB at 19 letters, ~46 GB at 21 (summary
-§6). So expansion must stay lazy and bounded.
+at 19 letters). With the corrected solution count (29.3M at 19 letters, not the
+retracted 156,138), writing them all is on the order of **~1.3 TB at 19 letters**
+(summary §6, corrected). So expansion must stay lazy and bounded — the correction
+makes this more essential, not less.
 
 ### The mechanism
 
@@ -242,9 +255,10 @@ as the heap.
   - **A plain `unordered_map<key, score>` plus lazy heap deletion does not
     bound memory** — nothing would remove a map entry when its word set is
     pushed out of the top-N as the heap fills, so the map grows with the number
-    of *distinct word sets ever briefly in the top N*, which over a 1.47M-solution
-    search is unbounded. The `key → position` index that erases on eviction is
-    what closes this; do not skip it.
+    of *distinct word sets ever briefly in the top N*, which over a
+    tens-of-millions-of-solutions search (29.3M at 19 letters) is unbounded. The
+    `key → position` index that erases on eviction is what closes this; do not
+    skip it.
 - The **word-set key** is built exactly like `make_seen_key`: split every segment
   of the spelling on spaces, sort the words, rejoin. This makes `{pen built}` and
   `{pen}{built}` collide on `built pen`, and — because A already collapses
@@ -339,30 +353,35 @@ point of the design (summary §8 "memory ceases to be the constraint").
   `find-anagrams`' to the float tolerance both already carry. In particular
   reproduce `7.000 pen built` (contiguous) and the 2.1e-05 split, per
   `measure-f -d` and `find-anagrams` itself.
-- **Zero duplicate word sets, words-only, at 12 letters** (the forced-letter
-  property; summary "measured": 35,041 solutions = 35,041 sets). This is the way
-  to test forcing in isolation, so run it with phrases *off*: with phrases on,
-  phase 2 legitimately emits two solutions for one word set (`{pen built}` vs
-  `{pen}{built}`), which are distinct class-sequences with distinct scores and
-  are collapsed at *output*, not in phase 2 — so the phase-2 solution count then
-  exceeds the distinct-word-set count by design, and only the final printed
-  output is one row per word set.
-- **Node-count target** from Phase 0 (5,488,296 at 19 letters, words only) still
-  holds once phase 2 is productionised.
+- **Zero duplicate word sets, words-only** (the forced-letter property). Run with
+  phrases *off* and confirm the solution count equals the distinct-word-set count
+  exactly — Phase 0 verified this holds (forced-letter DFS == the `-R` reference
+  enumerator == `ancc`, no dupes). Do not anchor on the summary's recorded 35,041
+  figure at 12 letters; it is from the same buggy prototype whose counts Phase 0
+  retracted. With phrases *on*, phase 2 legitimately emits two solutions for one
+  word set (`{pen built}` vs `{pen}{built}`), which are distinct class-sequences
+  with distinct scores and are collapsed at *output*, not in phase 2 — so the
+  phase-2 solution count then exceeds the distinct-word-set count by design, and
+  only the final printed output is one row per word set.
+- **Node/solution-count target** from Phase 0 (words-only, `-m 4`, emergent cap):
+  **27,177 sol / 53,084 nodes at 14 letters; 29.3M sol / 68.2M nodes at 19
+  letters** (`phrase-recovery-cost.md` §3.5). These are the real, ancc-verified
+  counts — *not* the retracted 156,138 / 5,488,296.
 - **Flat memory**: peak RSS at 14 / 19 / 21 letters should track the prototype's
   93 / 177 / 220 MB (careless) and not grow with N or runtime.
-- **Exhaustive completion**: at 19 letters the emergent cap `floor(19/4) = 4`
-  equals the prototype's hard 4-word cap, so the ~3.25 s / 156,138-solution
-  figures should reproduce closely (phrases add a little). At 21 the emergent cap
-  is `floor(21/4) = 5`, one deeper than the prototype's hard 4, so expect the
-  ~37 s / 1.47M-solution figures to come in *higher*, not match — that is the
-  §"Word cap" divergence showing up, not a regression.
+- **Exhaustive completion**: at 19 letters the emergent cap `floor(19/4) = 4`, so
+  the words-only run should reproduce Phase 0's **29.3M solutions / 68.2M nodes /
+  ~89 s** on the untuned prototype (phrases add ~4%). At 21 the emergent cap is
+  `floor(21/4) = 5`, one deeper, so expect counts well *above* those — that is the
+  §"Word cap" divergence, not a regression. (The old ~3.25 s / 156,138 and
+  ~37 s / 1.47M figures were the retracted undercounts; ignore them.)
 
 ## Build order
 
-1. **Phase 0** — DFS node count in `measure-f`, validate against 5,488,296,
-   report the phrase-included multiplier, decision gate on B. *(De-risks
-   everything; cheap.)*
+1. ~~**Phase 0** — DFS node count in `measure-f`, decision gate on B.~~ **Done:
+   phrase cost 1.04x at 19 letters → A proceeds. The DFS was validated against
+   `ancc` directly (the documented 5,488,296 target was a buggy undercount, now
+   retracted). See `phrase-recovery-cost.md` §3.5.**
 2. **Phase 1** — productionise `Extractor` into the class list with
    count-descending members. Reuse `measure-f`'s scoring.
 3. **Phase 2** — the collapsing forced-letter DFS emitting solutions. This is
