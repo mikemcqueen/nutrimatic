@@ -1,0 +1,346 @@
+# Plan: `dfs-anagrams` — approach A (word extraction + collapsing DFS)
+
+## Why this plan, and why now
+
+`findings/ancc-inspiration-summary.md` §9 item 2 made the whole architecture wait
+on one measurement: **F**, the cost of keeping contiguous corpus phrases in a
+word-list search. §9's rule was F ≲ 1.5 → build A, F ≳ 2 → build B.
+`findings/phrase-recovery-cost.md` measured it: **F = 1.12–1.80**, and its §3
+shows even that overstates the real cost, because the classes phrases add are all
+≥ `2*min_len` letters and so cannot be picked at the depths where a four-word
+solution actually lives (4.75 letters/word at 19 letters). That selects **A**.
+
+Approach A is the only design that gets anagram collapsing (the 306x, worth ~+4.9
+letters — more than a fully tuned 20-core build at +3.5), and with phrases
+recovered it is a strict superset of today's tool rather than a trade. This plan
+builds it, **single-threaded**, with **no `--max-words` switch** (the word cap is
+derived from `-m`, exactly as `find-anagrams` already does).
+
+This document does not re-argue A vs B; `ancc-inspiration-summary.md` §8–§9 does
+that. It is the construction plan.
+
+## Settled decisions
+
+Locked in with the user; not open for re-litigation here:
+
+1. **New binary, `dfs-anagrams`.** `find-anagrams` (best-first, streaming) stays
+   exactly as it is, so the two can be diffed side by side and today's streaming
+   behaviour remains available. A is a different product — two-phase, completes
+   then emits — not a refactor of the existing engine.
+2. **Default output: top-N spellings.** An exact global ranking over the full set
+   of spellings (see §6 of the summary), not top-N-solutions-fully-expanded.
+3. **Segmentation collisions are deduped inside the top-N heap, keyed by the
+   sorted word set, keeping the higher score.** This reproduces today's `seen`
+   behaviour (`search-driver.cpp:make_seen_key`): `{pen built}` as one contiguous
+   phrase (score 7) and `{pen}{built}` as two segments (2.1e-05) share a word set
+   and collapse to the 7. Memory stays bounded by N — a global dedup set over all
+   1.47M solutions at 21 letters would reintroduce the unbounded memory A exists
+   to remove.
+4. **Single-threaded.** Parallelising the depth-1 branches is a mechanical ~12x
+   (summary §8) and is explicitly deferred — it changes no semantics and should
+   be the last thing done, if at all.
+5. **No `--max-words` flag.** The word cap is `floor(letters / min_word_len)`,
+   which `AnagramFilter` already enforces and `find-anagrams` already derives
+   (`find-anagrams.cpp:291`). See the caveat in §"Word cap" below — this is the
+   one place the plan knowingly diverges from the summary's §8 ceiling rows.
+
+## What already exists and is reused
+
+- **`IndexReader`** (`source/index.h`, `index-reader.cpp`): the trie, the bag
+  filter via `children(node, count, CharSet, out)`, `root()`, `count()` (corpus
+  total). Phase 1 is a DFS over this.
+- **`source/measure-f.cpp`** is a **working prototype of phase 1**, phrases
+  included. Its `Extractor` class walks the index under the bag constraint and
+  emits every segment (words at `-x 1`, contiguous phrases beyond). Its word-only
+  pass reproduces every phase-1 figure in `ancc-inspiration.md` exactly, so the
+  extractor is trustworthy. `dfs-anagrams`' phase 1 is a productionised
+  `Extractor`. `measure-f` is measurement-only and stays uninstalled; do not
+  delete it — Phase 0 below extends it.
+- **The score model** is confirmed end to end (summary "What is measured", and
+  `search-driver.cpp:step()`): a segment scores the count of the trie node it
+  ends on; k segments score `∏count_i × (restart/total)^(k-1)` because each
+  restart multiplies by `restart` and re-seeds the count at `total`, which the
+  next segment divides back out. `restart` is `1e-6`, `total` is
+  `reader->count()` (3,586,472,603 on the wiki index). `measure-f.cpp:210-271`
+  already implements this scoring in log space; reuse it verbatim.
+
+## Architecture
+
+Two phases, no frontier anywhere:
+
+```
+phase 1  trie DFS under bag filter  ->  entry list (words + contiguous phrases)
+                                        grouped into anagram classes
+phase 2  bag-subtraction DFS over    ->  solutions (ordered lists of classes)
+         classes, rarest-letter          in canonical order, no duplicates
+         forcing + collapsing
+output   lazy per-solution spelling  ->  bounded top-N heap over spellings,
+         expansion in score order         deduped by sorted word set
+```
+
+Peak memory is the entry list (bounded by the a–z dictionary, tens of MB) plus
+the DFS stack (kilobytes) plus the N-entry heap — flat regardless of bag length,
+runtime, or solution count.
+
+## Phase 0 — the phase-2 node count, as a de-risking measurement first
+
+**This is the opening move, per summary §9 item 3's sub-bullet.** Before building
+any output machinery, settle the one number that could still send us to B: does
+the collapsing DFS over the *phrase-included* class list actually cost what §3 of
+`phrase-recovery-cost.md` predicts, or worse?
+
+- Extend `measure-f` (or a sibling throwaway) with ancc's `check_dict` DFS over
+  the class list it already builds — ~100 lines, no output, just a node counter.
+- **Validate against the known target**: words-only at 19 letters must reproduce
+  **5,488,296 nodes** (`ancc-inspiration.md`). If it doesn't, the DFS is wrong
+  and nothing downstream is trustworthy.
+- Then run it with phrases included and report the real node multiplier. §3
+  predicts "between 1.0x and 4.4x at 19 letters, much closer to 1.0x". 
+- **Decision gate**: if phrases-included comes back far worse than the
+  class-length distribution predicts (say > 6x at 19 letters), stop and reconsider
+  B before writing the rest of A. Otherwise proceed. This is cheap insurance —
+  the class list already exists in `measure-f`.
+
+Deliverable: a node count, appended to `findings/phrase-recovery-cost.md` §3,
+closing the "still open" gap that document names.
+
+## Phase 1 — extraction into a packed class list
+
+Productionise `measure-f`'s `Extractor`. Output is an in-memory structure phase 2
+searches:
+
+### Entries and classes
+
+- An **entry** is one extracted segment: its spelling text (a word like `yacht`,
+  or a phrase like `pen built` with its internal space), its **count** (the trie
+  node count at the terminating space — its corpus score), and its **word count**
+  (1 for a word, ≥2 for a phrase; needed only for the sorted-word-set dedup key).
+- An entry's **class** is the sorted multiset of its letters, spaces dropped
+  (`measure-f.cpp:class_key`). `yacht` and `cathy` share class `achty`;
+  `pen built` has class `belnptu`.
+- Group entries by class. Within a class, keep **members sorted by count
+  descending** (this ordering is what makes lazy expansion in §output cheap — do
+  it once here). A member is a distinct spelling; two entries with equal spelling
+  and count are one member.
+
+### Representation
+
+Correctness first, packing second. Start with whatever `measure-f` uses
+(`unordered_map<string, ...>`), get the pipeline correct, then pack only if RSS
+matters. The summary (§2) prices the packed form at ~5 MB for 144k words and
+~23 MB for the whole a–z dictionary — a 16-byte-mask-per-class array plus inline
+member characters — versus 220 MB stored carelessly. The packed form is an
+**optimisation, not a precondition**: 220 MB is already flat and fine to ship
+with. Note it as a follow-up, don't block on it.
+
+Phase 1 cost is not the bottleneck (summary §2, `phrase-recovery-cost.md` §5):
+multi-segment extraction for all 26 letters is under 3 s and ~3.9x the nodes of
+the word-only walk. Nothing to optimise here.
+
+### Phrases are on by default
+
+Phase 1 walks *past* the first space (`Extractor` with `max_words > 1`), because
+adjacency is a requirement, not an option (summary §5). There is **no phrase
+pruning** — `phrase-recovery-cost.md` §4 proved the proposed mitigation is a
+tautology (every one of 462,730 measured phrases pays for itself by 6.7–7.3
+orders of magnitude). Keep every phrase; F as measured is F.
+
+## Phase 2 — collapsing bag-subtraction DFS
+
+This is ancc's `check_dict`, techniques T2/T3/T5 from `ancc-inspiration.md`,
+which the summary's approach C describes as mechanics. Over **classes**, not
+spellings — that is the 306x.
+
+### The search
+
+- State: the remaining letter bag (26 counts) and the depth (segments chosen so
+  far). Stack depth is O(word cap); the whole live state is kilobytes.
+- **Rarest-letter forcing (T2, = approach C).** Fix a global letter priority by
+  ascending corpus frequency, computed once from the index. At each node, L =
+  the highest-priority letter still in the bag. Only classes *containing L* are
+  candidates. This is both fail-first pruning (the hardest letter is resolved at
+  depth 1, where the candidate list is tiny) and **free canonicalisation**: the
+  class covering L is forced now, so the k! orderings of a solution collapse to 1
+  with no dedup structure at all. This is why the prototype emitted zero
+  duplicate word sets at 12 letters (summary "measured").
+- **`entry_point` tie-break.** When L occurs more than once in the bag the choice
+  is ambiguous; require non-decreasing class index *among classes covering the
+  same forced letter* to keep one arrangement. This is the same ordering `-c`
+  uses, restricted to the ambiguous case — see the `out_of_order` /
+  forced-letter-advance discussion in `ancc-inspiration.md` §C. Because forcing
+  supplies the canonical order structurally, **`dfs-anagrams` has no `-c` flag**;
+  it is always on and always free.
+- **Subset test and subtraction** per candidate class: it fits if every letter's
+  count is ≤ the bag's. Subtract, recurse; on return, add back.
+- **Depth cap** = the derived word cap (§"Word cap"). Prune when adding a segment
+  would exceed it. A solution is complete when the bag is empty.
+- A **solution** is the ordered list of classes chosen (canonical order). Phase 2
+  emits solutions; it does not expand spellings — that is the output stage's job,
+  done lazily.
+
+### Scoring a solution for ranking
+
+For pruning and for the output cutoff, a class needs a single representative
+score. Use the class **maximum** member count (the first member, since members
+are sorted descending) — this is admissible: it is the best any spelling of that
+class can score, so it never under-estimates a solution's best spelling. A
+solution's representative score is `∏max_count_i × (restart/total)^(k-1)`, in log
+space to avoid underflow (`measure-f.cpp:229` shows the pattern). The *actual*
+per-spelling score uses the chosen members' real counts, computed at expansion.
+
+## Output — lazy expansion, top-N spellings, word-set dedup
+
+### The volume problem this solves
+
+A solution's spellings are the cross-product of its classes' members (~10^3-fold
+at 19 letters). Writing them all is ~7 GB at 19 letters, ~46 GB at 21 (summary
+§6). So expansion must stay lazy and bounded.
+
+### The mechanism
+
+- Maintain a **bounded min-heap of the best N spellings**, ordered by score. N is
+  a CLI flag (default e.g. 10,000 → ~0.5 MB).
+- Keep an **`unordered_map<word-set-key, score>`** alongside it for dedup. The
+  key is built exactly like `make_seen_key`: split every segment of the spelling
+  on spaces, sort the words, rejoin. This makes `{pen built}` and `{pen}{built}`
+  collide on `built pen`, and — because A already collapses permutations — it
+  otherwise leaves distinct member choices (`yacht` vs `cathy`) as distinct rows,
+  which is what "top-N spellings" wants.
+- **When phase 2 emits a solution**, generate its spellings **in descending score
+  order on demand** — the standard k-best-combination heap over member-index
+  tuples, cheap because each class's members are already sorted descending
+  (Phase 1). Stop at the first spelling whose score is ≤ the current N-th best
+  (the heap's min once full): every later spelling of this solution is worse, so
+  none can enter. Typically one or two spellings per solution are touched.
+- **Insertion with dedup**: for a candidate spelling with key k and score s:
+  - if k not in the map → insert into heap and map;
+  - if k in the map with score ≥ s → skip (a better arrangement already held);
+  - if k in the map with score < s → this is a higher-scoring segmentation of the
+    same word set (the phrase form arriving after the split, or vice versa);
+    update the map to s and push the new entry, marking the old heap entry stale
+    (lazy deletion: skip stale entries when they surface at the heap top). This
+    keeps live memory O(N).
+- After the search completes, drain the heap into a sorted list and print
+  `score text` descending, matching `find-anagrams`' output format
+  (`search-printer.cpp` / `PrintAll`).
+
+### Why this is exact
+
+Every spelling is reachable and none is preferred a priori; the heap holds the
+true top N over the full spelling space, with segmentation duplicates collapsed
+to their best score. This is the summary §6 "lazy exact expansion", specialised
+to the top-N-spellings output the user chose.
+
+## Word cap — the one knowing divergence from §8
+
+Summary §8's "~25–26 letters" A rows assume a **hard 4-word cap**. With no
+`--max-words` switch, `dfs-anagrams` uses the derived cap
+`floor(letters / min_word_len)`, which at 26 letters with `-m 4` is **6, not 4**
+(`find-anagrams.cpp:281-293` documents exactly this). Two extra levels at a
+branching factor in the thousands is not a rounding error, so **long bags will
+run deeper and slower than §8's rows predict**. This is the accepted consequence
+of "no `--max-words` for now"; the summary's ceilings are for the capped search.
+If the uncapped depth proves painful in practice, adding the switch later is
+mechanical (the depth cap already exists in phase 2). Flagged here so a future
+measurement against §8 isn't read as a regression.
+
+## Memory budget
+
+```
+entry / class list   <= ~50 MB packed (bounded by the dictionary, NOT the bag);
+                        ~220 MB if stored carelessly to start.  Flat.
+phase-2 DFS stack    kilobytes (O(word cap))
+top-N heap + dedup   N x (~48 B spelling + key) ; N=10k -> ~1 MB
+```
+
+No frontier. Nothing grows with runtime or solution count. This is the entire
+point of the design (summary §8 "memory ceases to be the constraint").
+
+## CLI and wiring
+
+- New executable `dfs-anagrams` in `source/meson.build`, linked against
+  `optparse_lib` and `index_lib` (it does **not** need `search_lib` — it uses
+  neither `SearchDriver` nor `AnagramFilter`; the score model is reimplemented
+  from counts). Mirror the `measure-f` executable stanza, but `install: true`.
+- Flags, reusing `optparse` and matching `find-anagrams` where they overlap:
+  - positional `input.index letters`
+  - `-u/--used-letters` (subtract letters already placed), same semantics as
+    `find-anagrams`
+  - `-m/--min-word-length`, default 4 (`DEFAULT_MIN_WORD_LEN`); the word cap is
+    derived from it, not a flag
+  - `-n/--top` N, the heap size / number of results (new; default e.g. 10000)
+  - `-p/--progress-factor` for progress lines on stderr, same convention as
+    `find-anagrams` (`# ` prefix so one filter drops them)
+  - **not** `-c` (canonicalisation is structural and always on) and **not** `-x`
+- Emit a `# ...` header line like `find-anagrams.cpp:310` stating the bag, `-m`,
+  and the derived word cap, since `-m` has a default and the search run is not
+  always what the command line spells out.
+- Progress: report phase-1 word/class counts, then phase-2 node count and
+  solutions found, on stderr.
+
+## Verification
+
+- **Soundness against `find-anagrams`.** On small bags (8, 12 letters), the set
+  of word *sets* `dfs-anagrams` reports must be a superset of what `find-anagrams`
+  reports (`find-anagrams` never completes at large sizes, but small bags it
+  does). Every word set in the reference run must appear; A additionally finds
+  sets the streaming tool never reached before OOM. Compare via the sorted
+  word-set key.
+- **Score agreement.** For a shared word set, `dfs-anagrams`' score must match
+  `find-anagrams`' to the float tolerance both already carry. In particular
+  reproduce `7.000 pen built` (contiguous) and the 2.1e-05 split, per
+  `measure-f -d` and `find-anagrams` itself.
+- **Zero duplicate word sets** in `dfs-anagrams` output at 12 letters (the
+  forced-letter property; summary "measured": 35,041 solutions = 35,041 sets).
+- **Node-count target** from Phase 0 (5,488,296 at 19 letters, words only) still
+  holds once phase 2 is productionised.
+- **Flat memory**: peak RSS at 14 / 19 / 21 letters should track the prototype's
+  93 / 177 / 220 MB (careless) and not grow with N or runtime.
+- **Exhaustive completion**: 19 letters ≤4-equivalent finishes in a few seconds
+  (~3.25 s prototype); 21 letters in tens of seconds (~37 s). The uncapped depth
+  (§"Word cap") may push these up.
+
+## Build order
+
+1. **Phase 0** — DFS node count in `measure-f`, validate against 5,488,296,
+   report the phrase-included multiplier, decision gate on B. *(De-risks
+   everything; cheap.)*
+2. **Phase 1** — productionise `Extractor` into the class list with
+   count-descending members. Reuse `measure-f`'s scoring.
+3. **Phase 2** — the collapsing forced-letter DFS emitting solutions. This is
+   the code Phase 0 prototyped, cleaned up and producing solutions rather than
+   just counting nodes.
+4. **Output** — lazy expansion, top-N heap, word-set dedup, printing.
+5. **CLI + wiring** — the `dfs-anagrams` binary, flags, header, progress.
+6. **Verification** — the checks above.
+
+## Explicitly out of scope (deferred, not forgotten)
+
+- **`--max-words`** — the summary's capped §8 ceilings need it; derived cap for
+  now (§"Word cap").
+- **Parallelising the DFS** — mechanical ~12x over depth-1 branches, no semantic
+  change, do it last if at all (summary §9 item 5). Single-threaded now.
+- **The `h` pruning bound** (summary §7) — the only lever with no ceiling, and it
+  drops in cheaply here (carry accumulated log-score `g`, prune when
+  `g + h(bag) < heap floor`; `h(bag) = Σ_c best_rate_containing[c]`). Worth a
+  follow-up plan of its own; it is an accelerator, not a correctness requirement,
+  and the top-N heap already supplies the `floor` it needs. Not in this plan.
+- **Packing the class list** to ~5–23 MB — do it only if 220 MB flat proves
+  annoying (summary §2).
+- **Top-N-solutions-fully-expanded** output mode (summary §6) — the user chose
+  top-N spellings; the other mode is the same lazy expansion with a different
+  cutoff and can be added later behind a flag.
+
+## Related
+
+- `findings/ancc-inspiration-summary.md` — the digest that selects A; §2 (design
+  A), §5 (phrases required), §6 (lazy expansion / output modes), §7 (`h`), §8
+  (ceilings), §9 (order of work).
+- `findings/phrase-recovery-cost.md` — the F measurement that unblocked A; §3 is
+  the node-count gap Phase 0 closes.
+- `findings/ancc-inspiration.md` — ancc's techniques T1–T7 and the designs in
+  full; §C is the forced-letter / `entry_point` mechanics phase 2 implements.
+- `source/measure-f.cpp` — the working phase-1 prototype and score model this
+  plan productionises.
+- `source/search-driver.cpp` — `step()` (the score model), `make_seen_key` (the
+  dedup key), `out_of_order` (the canonical-order tie-break phase 2 mirrors).
