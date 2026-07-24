@@ -19,7 +19,7 @@ and
 is phase-2 setup. `DfsAnagramSearch::run()`:
 
 1. Encodes the remaining letter bag as a mixed-radix integer key.
-2. Builds the packed `HotClass` representation.
+2. Builds separate packed `FitClass` and `ScoreClass` arrays.
 3. Allocates the score-bound and fitting-candidate caches.
 4. Recursively computes a memoized completion-score bound from the full bag.
 5. Resets the phase-2 node counters and starts the reported DFS.
@@ -42,6 +42,11 @@ must never underestimate a real completion.
 The prepass also populates the fitting-candidate cache. The subsequent DFS can
 reuse both the bound and candidate list for a remaining bag. This is why the
 search can become extremely fast after a noticeable setup pause.
+
+The index file is not accessed during this setup. `IndexReader` mmaps the
+index, but phase 1 extracts all data needed by `DfsClassList` before the phase-1
+completion message. Locking the index mapping in memory therefore cannot speed
+up this phase-2 prepass.
 
 Setup is excluded from phase-2 node and solution counts, which are reset after
 `compute_score_bound()` returns. The bound-state count is now reported in the
@@ -136,6 +141,16 @@ Work completed on 2026-07-24:
 - Replaced per-edge `long double` evaluation with `double` plus an explicit
   conservative error envelope.
 - Reconfirmed sparse-table exhaustion on the 30-letter workload.
+- Profiled the post-change setup path with Callgrind instruction, cache, and
+  branch simulation.
+- Split each 32-byte class record into separate 16-byte fit and score records,
+  so support-mask scans touch four fit records per cache line.
+- Made the bag-mask update after class subtraction branchless.
+- Wrote fitting candidate IDs directly into the aligned cache arena instead of
+  staging them in a vector and copying them.
+- Used the existing descending class-length order to binary-search past classes
+  that are too long for the remaining bag.
+- Measured the corrected 28-letter workload.
 
 The CLI reports setup at the phase boundary:
 
@@ -149,18 +164,73 @@ and detailed counters after the search:
 # phase 2 timing: 3.714487 s setup, 0.399275 s search, 43424967 successful bound transitions, 345673 nextafter calls
 ```
 
-One warm run of each reference workload measured:
+One warm run of each reference workload before and after the follow-up changes
+measured:
 
-| Normalized bag | Letters | States | Successful transitions | `nextafter()` calls | Precompute |
-|---|---:|---:|---:|---:|---:|
-| `aadeeefiimnorsstttu` | 19 | 18,380 | 2,744,344 | 44,121 | 0.189 s |
-| `aabdeeefiimnorsstttu` | 20 | 34,845 | 7,489,507 | 84,441 | 0.508 s |
-| `aaabeeeeghhiimnrrrsttwwww` | 25 | 143,693 | 43,424,967 | 345,673 | 3.714 s |
+| Normalized bag | Letters | States | Transitions | Before | After | Reduction |
+|---|---:|---:|---:|---:|---:|---:|
+| `aadeeefiimnorsstttu` | 19 | 18,380 | 2,744,344 | 0.189 s | 0.139 s | 26.5% |
+| `aabdeeefiimnorsstttu` | 20 | 34,845 | 7,489,507 | 0.508 s | 0.382 s | 24.8% |
+| `aaabeeeeghhiimnrrrsttwwww` | 25 | 143,693 | 43,424,967 | 3.714 s | 2.831 s | 23.8% |
 
-The 25-letter call count fell from 107,003,050 to 345,673. Stdout was
-byte-identical to the pre-change binary for all three workloads. Dense and
-sparse score-bound tests also compare retained spellings with an exhaustive
-search, and the full indexed test suite passed.
+Across three interleaved development measurements of the 25-letter workload,
+the median fell from 3.675 seconds to 2.771 seconds, a 24.6% reduction. The
+state, transition, and `nextafter()` counts were unchanged. Stdout remained
+byte-identical, dense and sparse score-bound tests compared retained spellings
+with exhaustive search, and the indexed CLI differential test passed.
+
+### Profile findings
+
+An instruction-only Callgrind run on the 25-letter workload attributed 94.4%
+of all executed instructions to bound construction. A cache-and-branch
+simulation on the 20-letter workload found:
+
+- candidate-list construction was 34.1% of all instructions;
+- it caused 82.7% of L1 data-read misses;
+- the support-mask scan tested 216.1 million class records, of which only
+  9.3 million ultimately fit;
+- the conditional bag-mask update after subtraction was highly unpredictable.
+
+Splitting the class layout reduced simulated L1 data misses from 144.1 million
+to 92.1 million, a 36.1% reduction, without increasing last-level misses.
+Replacing the conditional bag-mask update removed 51.5 million conditional
+branches and 11.34 million mispredictions; the simulated misprediction rate
+fell from 4.3% to 3.6%.
+
+Native 25-letter medians for the individual cumulative prototypes were:
+
+| Version | Precompute | Change from previous |
+|---|---:|---:|
+| Committed baseline | 3.675 s | — |
+| Split fit/score layout | 3.612 s | -1.7% |
+| Branchless bag-mask update | 2.921 s | -19.1% |
+| Direct candidate-arena writes | 2.854 s | -2.3% |
+| Skip too-long class prefix | 2.771 s | -2.9% |
+
+The remaining obvious CPU target is support-mask screening. Many
+mixed-radix states have different multiplicities but the same presence mask,
+yet candidate construction rescans the same rare-letter bucket for every
+state. A support-only cache keyed by `bag_mask` could reuse that first-stage
+filter. It needs careful arena-budget accounting and must retain ascending
+class order for the canonical phase-2 traversal.
+
+### Corrected 28-letter measurement
+
+For the normalized bag
+
+```text
+aaaabeeeeghhiilmnnrrrstttwww
+```
+
+phase 1 produced 288,713 entries, 96,508 classes, and 1,904,614 trie
+nodes. Phase-2 setup retained 533,865 bounded states after 387,268,276
+successful transitions:
+
+```text
+# phase 2: precomputed 533865 bounded states in 26.949s
+```
+
+With `-n 1`, the subsequent search took 0.001431 seconds.
 
 For the normalized 30-letter bag
 
@@ -174,13 +244,19 @@ phase 1 produced:
 459162 entries, 166852 classes, 3054340 trie nodes
 ```
 
-The sparse table again filled and was discarded. The boundary message reported
-32.975 seconds of precompute before unpruned DFS began; the validation run was
-stopped after 45 seconds. This confirms exhaustion, but does not mitigate it.
+The sparse table again filled and was discarded. Before the follow-up changes,
+the boundary message reported 32.975 seconds of precompute. It now reports:
 
-Against the original seven-step measurement sequence, steps 1--4 and 6 are
-complete. Step 5's call recount is complete, but profiling the remaining setup
-cost is not. Step 7 confirmed exhaustion, while the policy change remains open.
+```text
+# phase 2: precomputed 524288 bounded states in 21.307s
+```
+
+That is a 35.4% reduction in discarded setup work, but it does not mitigate the
+failure mode. A 40-second bounded validation run was stopped after the unpruned
+search reached 543.1 million nodes and 70.1 million solutions.
+
+Against the original seven-step measurement sequence, steps 1--6 are complete.
+Step 7 confirmed exhaustion, while the policy change remains open.
 
 ## Historical experiments
 
@@ -283,14 +359,11 @@ doomed prepass faster, but still loses all score pruning when the table fills.
 
 ## Remaining work
 
-1. Profile the post-change precompute path to identify the remaining costs.
-   The `nextafter()` recount is done; this is the unfinished part of the
-   original step 5.
-2. Strengthen the floating-point justification and tests. In particular,
+1. Strengthen the floating-point justification and tests. In particular,
    document supported rounding/compiler assumptions and add adversarial tests
    around rounding boundaries and recursive depth.
-3. Choose and validate a sparse-exhaustion policy: predict or avoid
+2. Choose and validate a sparse-exhaustion policy: predict or avoid
    exhaustion, increase the bound budget, or retain a useful partial table
    instead of discarding all bounds.
-4. Run and record the corrected 28-letter workload measurement using the
-   normalized bag `aaaabeeeeghhiilmnnrrrstttwww`.
+3. Prototype a budgeted support-only candidate cache keyed by `bag_mask`, then
+   compare its setup savings against its memory use and phase-2 search cost.
