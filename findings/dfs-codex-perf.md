@@ -232,8 +232,9 @@ structures DFS deliberately eliminated.
 
 ## What to do after candidate caching
 
-These are ordered by likely value. Only item 1 above (candidate caching) and the
-bitset tradeoff were prototyped end to end.
+These were originally ordered by likely value. Items 1--5 and the candidate
+cache have since landed; item 6 is now implemented as the memoized score bound
+described below.
 
 1. **Add a cheap top-N early exit in `DfsTopN::emit()`.**
 
@@ -286,15 +287,108 @@ bitset tradeoff were prototyped end to end.
    best-member log score, and perhaps a 32-bit class ID contiguously. Keep
    strings and member vectors cold for phase 3.
 
-6. **Only then pursue algorithmic top-N pruning.**
+6. **Memoize an exact relaxed completion-score bound. — Implemented**
 
-   Caching makes the documented 70.6-million-node exhaustive traversal about
-   three seconds, but node count will still grow rapidly on larger bags. A safe
-   upper bound of the form already suggested in `plans/dfs.md`,
-   `current_score + h(remaining_bag) <= heap_floor`, could prune whole
-   subtrees. Ordering candidates by their bound would establish a useful floor
-   earlier. This needs careful proof around restart penalties, phrase classes,
-   and the fact that the output heap deduplicates word sets.
+   Caching removes repeated fit tests but deliberately leaves the exhaustive
+   path tree intact. The next large reduction comes from collapsing the scoring
+   question onto the same small remaining-bag state graph used by the candidate
+   cache.
+
+   For a remaining bag `B`, define:
+
+   ```
+   H(empty) = 0
+
+   H(B) = max over classes c fitting B:
+              best_member_log_score[c]
+            + restart_log_rate
+            + H(B - c)
+   ```
+
+   `H(B)` is memoized by the existing collision-free mixed-radix bag key. It
+   intentionally ignores `entry_point`: the unrestricted recurrence may admit
+   suffixes that canonical DFS would reject, so it can only raise the result.
+   At every non-root DFS node, once the top-N heap is full:
+
+   ```
+   if (representative_log_score + H(remaining_bag) <= heap_floor)
+       return;
+   ```
+
+   This is exact pruning, not a heuristic. Each class contributes its
+   maximum-member score, phrases remain one class and therefore pay no internal
+   restart, and every class after the already-chosen prefix pays exactly one
+   restart. Every spelling below the node is bounded by the representative
+   class path. Heap dedup does not weaken the proof: a spelling no better than
+   the current floor cannot enter the retained top N whether its word-set key is
+   new, retained, or was previously evicted.
+
+   The root is special. `H` charges a restart to every class it adds, while the
+   first class in a complete search does not pay one. The implementation uses
+   `H` to prove a root dead but does not compare the root score against the heap
+   floor.
+
+   ### Measured effect
+
+   The production implementation was compared with the post-cache binary on the
+   same machine and index as the headline measurements. Output was
+   byte-identical in every comparison:
+
+   | Top-10k workload | Cached exhaustive DFS | Memoized bound | Node reduction | Wall-time speedup |
+   |---|---:|---:|---:|---:|
+   | 19 letters, `firestationteamused` | 70,608,083 nodes, 2.08 s | 802,917 nodes, 0.44--0.45 s | **87.9x** | **4.6--4.7x** |
+   | 20 letters, `firestationteamusedb` | 957,821,082 nodes, 15.62 s | 1,409,052 nodes, 1.19 s median | **679.8x** | **13.1x** |
+
+   The 19-letter top-1 and top-100 prototypes were about 5.0x and 4.6x faster
+   respectively. The 9- and 14-letter results also matched byte for byte. The
+   bound changes the number of class solutions *visited* in a top-N run because
+   losing subtrees are no longer enumerated; `-n 0` remains exhaustive and
+   retains its exact 70,608,083-node / 29,783,883-solution statistics.
+
+   ### Why the earlier per-letter `h` was rejected
+
+   The bound proposed in `plans/dfs.md`,
+   `sum(best_rate_containing[letter])`, is admissible but far too relaxed for
+   this class list. A faithful prototype pruned **zero nodes** on the 19-letter
+   workload and made the run slightly slower. It lets every remaining letter
+   independently choose a different ideal class, even when those choices cannot
+   coexist. The bag DP prices complete compatible class partitions instead.
+
+   ### Bounded storage and cache integration
+
+   Score memoization shares `--candidate-cache-mib`'s existing hard budget. Up
+   to one quarter is available to score bounds and the rest remains candidate
+   metadata and IDs.
+
+   - If one `double` per theoretical mixed-radix state fits, use an aligned dense
+     array. This is the path for the documented 55,296-state workload.
+   - Otherwise use a fixed, open-addressed sparse table with separate key and
+     value arrays and a 50% maximum load factor.
+   - If the sparse table fills, discard it, restore the candidate cache's full
+     budget, and run without score pruning. Exhaustion changes performance only.
+   - Build `H` only for a score-aware sink. Count-only and ordinary solution
+     sinks neither allocate nor compute it.
+
+   Bound construction obtains fitting classes through the candidate cache and
+   populates cache misses as it goes. The subsequent DFS therefore does not
+   repeat the bound pass's bucket scans. A memoized `-infinity` means the bag has
+   no completion and is an unconditional dead-state prune, even before the heap
+   fills.
+
+   The recurrence is evaluated in `long double` and rounded upward into the
+   stored `double`, with extra ulps for the production score's two additions.
+   The final comparison also includes a depth-scaled floating-point margin. A
+   rounding discrepancy can therefore suppress a prune, never invent one.
+
+   ### Candidate ordering was measured and rejected
+
+   Sorting the first two DFS levels by
+   `class_score + H(child_bag)` reduced the 19-letter node count slightly
+   further, from about 803k to 694k, but it found a worse spelling-heap floor:
+   spelling expansions rose from 23,604 to 72,429 and wall time rose from about
+   0.44 s to 0.62 s. Representative class-path order is not the same as the best
+   order after spelling expansion and word-set dedup. The implementation keeps
+   the existing class-index order.
 
 ## Recommended implementation order
 
@@ -304,7 +398,8 @@ bitset tradeoff were prototyped end to end.
 3. Add the exact `DfsTopN::emit()` pre-allocation cutoff.
 4. Precompute per-class bag-key deltas and replace progress modulo.
 5. Re-profile before changing class layout or adding masks.
-6. Treat branch-and-bound as a separate algorithmic pass.
+6. Add the memoized remaining-bag score bound; retain class-index traversal
+   order.
 
 The first item is large enough that optimizing the current fit loop in place
 before caching would target work that should almost entirely disappear.

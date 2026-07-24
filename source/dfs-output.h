@@ -22,6 +22,8 @@ class DfsTopN: public DfsSolutionSink {
 
   void emit(std::vector<size_t> const& class_indexes,
             double representative_log_score);
+  bool supports_score_pruning() const { return result_limit != 0; }
+  bool score_floor(double* floor) const;
 
   size_t size() const { return heap.size(); }
   size_t limit() const { return result_limit; }

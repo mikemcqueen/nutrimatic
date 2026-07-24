@@ -1,6 +1,7 @@
 #include "dfs-search.h"
 
 #include <assert.h>
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <new>
@@ -22,6 +23,7 @@ namespace {
 uint64_t const CACHE_UNSEEN = UINT64_MAX;
 uint64_t const CACHE_BYPASSED = UINT64_MAX - 1;
 size_t const CACHE_ALIGNMENT = 64;
+size_t const SCORE_BOUND_BUDGET_DIVISOR = 4;
 
 static double make_restart_log_rate(double restart, int64_t corpus_total) {
   assert(restart > 0.0);
@@ -115,6 +117,19 @@ static uint32_t hot_repeated_count(uint32_t packed) {
   return packed >> 24;
 }
 
+static double round_score_bound_up(long double value) {
+  if (value == -HUGE_VALL) return -HUGE_VAL;
+  if (value == HUGE_VALL) return HUGE_VAL;
+  double rounded = double(value);
+  if (static_cast<long double>(rounded) < value)
+    rounded = nextafter(rounded, HUGE_VAL);
+  // A production score adds restart and class score in two double operations.
+  // Keep two extra ulps so regrouping the same additions cannot lower the
+  // supposedly optimistic memoized value.
+  rounded = nextafter(rounded, HUGE_VAL);
+  return nextafter(rounded, HUGE_VAL);
+}
+
 }  // namespace
 
 void DfsAnagramSearch::AlignedFree::operator()(void* pointer) const {
@@ -130,9 +145,17 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     restart_log_rate(make_restart_log_rate(restart, corpus_total)),
     max_depth(derived_max_depth(classes, letters.size())),
     candidate_cache_budget(candidate_cache_bytes),
+    active_candidate_cache_budget(candidate_cache_bytes),
     bag_mask(0),
     current_bag_key(0),
     hot_classes_ready(false),
+    bound_mode(SCORE_BOUND_OFF),
+    bound_capacity(0),
+    bound_max_entries(0),
+    bound_entries(0),
+    bound_charged_bytes(0),
+    bound_aborted(false),
+    bound_prunes(0),
     cache_mode(CANDIDATE_CACHE_OFF),
     cache_capacity(0),
     sparse_max_entries(0),
@@ -248,6 +271,132 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   return true;
 }
 
+void DfsAnagramSearch::clear_score_bounds() {
+  bound_mode = SCORE_BOUND_OFF;
+  bound_values.reset();
+  bound_keys.reset();
+  bound_capacity = 0;
+  bound_max_entries = 0;
+  bound_entries = 0;
+  bound_charged_bytes = 0;
+  bound_aborted = false;
+}
+
+void DfsAnagramSearch::prepare_score_bounds(
+    uint64_t state_count, DfsSolutionSink* sink) {
+  clear_score_bounds();
+  active_candidate_cache_budget = candidate_cache_budget;
+  if (!hot_classes_ready || sink == NULL ||
+      !sink->supports_score_pruning() ||
+      candidate_cache_budget < CACHE_ALIGNMENT *
+          SCORE_BOUND_BUDGET_DIVISOR)
+    return;
+
+  size_t const budget =
+      candidate_cache_budget / SCORE_BOUND_BUDGET_DIVISOR;
+  size_t dense_bytes = 0;
+  bool const dense_size_ok =
+      state_count <= SIZE_MAX / sizeof(double) &&
+      round_up_alignment(size_t(state_count) * sizeof(double),
+                         &dense_bytes);
+  if (dense_size_ok && dense_bytes <= budget) {
+    double* values = static_cast<double*>(allocate_aligned(dense_bytes));
+    if (values == NULL) return;
+    std::fill(values, values + size_t(state_count), NAN);
+    bound_values.reset(values);
+    bound_capacity = size_t(state_count);
+    bound_mode = SCORE_BOUND_DENSE;
+    bound_charged_bytes = dense_bytes;
+  } else {
+    size_t capacity = largest_power_of_two(
+        budget / (sizeof(uint64_t) + sizeof(double)));
+    if (state_count <= SIZE_MAX / 2) {
+      size_t const desired =
+          next_power_of_two_at_least(size_t(state_count) * 2);
+      if (desired != 0) capacity = std::min(capacity, desired);
+    }
+    if (capacity < 2) return;
+
+    size_t array_bytes;
+    if (!round_up_alignment(capacity * sizeof(uint64_t), &array_bytes) ||
+        array_bytes > budget / 2)
+      return;
+    uint64_t* keys = static_cast<uint64_t*>(
+        allocate_aligned(array_bytes));
+    if (keys == NULL) return;
+    std::unique_ptr<uint64_t, AlignedFree> new_keys(keys);
+    double* values = static_cast<double*>(
+        allocate_aligned(array_bytes));
+    if (values == NULL) return;
+    std::fill(keys, keys + capacity, UINT64_MAX);
+
+    bound_keys = std::move(new_keys);
+    bound_values.reset(values);
+    bound_capacity = capacity;
+    bound_max_entries = capacity / 2;
+    bound_mode = SCORE_BOUND_SPARSE;
+    bound_charged_bytes = array_bytes * 2;
+  }
+
+  active_candidate_cache_budget =
+      candidate_cache_budget - bound_charged_bytes;
+}
+
+bool DfsAnagramSearch::load_score_bound(
+    uint64_t key, double* value) const {
+  if (bound_mode == SCORE_BOUND_DENSE) {
+    assert(key < bound_capacity);
+    double const stored = bound_values.get()[size_t(key)];
+    if (isnan(stored)) return false;
+    *value = stored;
+    return true;
+  }
+  if (bound_mode == SCORE_BOUND_SPARSE) {
+    size_t const mask = bound_capacity - 1;
+    size_t position = size_t(mix_key(key)) & mask;
+    for (;;) {
+      uint64_t const stored_key = bound_keys.get()[position];
+      if (stored_key == key) {
+        *value = bound_values.get()[position];
+        return true;
+      }
+      if (stored_key == UINT64_MAX) return false;
+      position = (position + 1) & mask;
+    }
+  }
+  return false;
+}
+
+bool DfsAnagramSearch::store_score_bound(uint64_t key, double value) {
+  if (bound_mode == SCORE_BOUND_DENSE) {
+    assert(key < bound_capacity);
+    double& stored = bound_values.get()[size_t(key)];
+    if (isnan(stored)) ++bound_entries;
+    stored = value;
+    return true;
+  }
+  if (bound_mode == SCORE_BOUND_SPARSE) {
+    size_t const mask = bound_capacity - 1;
+    size_t position = size_t(mix_key(key)) & mask;
+    for (;;) {
+      uint64_t const stored_key = bound_keys.get()[position];
+      if (stored_key == key) {
+        bound_values.get()[position] = value;
+        return true;
+      }
+      if (stored_key == UINT64_MAX) {
+        if (bound_entries >= bound_max_entries) return false;
+        bound_values.get()[position] = value;
+        bound_keys.get()[position] = key;
+        ++bound_entries;
+        return true;
+      }
+      position = (position + 1) & mask;
+    }
+  }
+  return false;
+}
+
 void DfsAnagramSearch::clear_cache() {
   cache_mode = CANDIDATE_CACHE_OFF;
   cache_metadata.reset();
@@ -265,7 +414,8 @@ void DfsAnagramSearch::clear_cache() {
 
 void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
   clear_cache();
-  if (!hot_classes_ready || candidate_cache_budget < CACHE_ALIGNMENT)
+  if (!hot_classes_ready ||
+      active_candidate_cache_budget < CACHE_ALIGNMENT)
     return;
 
   size_t dense_bytes = 0;
@@ -273,7 +423,8 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
       state_count <= SIZE_MAX / sizeof(uint64_t) &&
       round_up_alignment(size_t(state_count) * sizeof(uint64_t),
                          &dense_bytes);
-  if (dense_size_ok && dense_bytes <= candidate_cache_budget / 2) {
+  if (dense_size_ok &&
+      dense_bytes <= active_candidate_cache_budget / 2) {
     uint64_t* metadata = static_cast<uint64_t*>(
         allocate_aligned(dense_bytes));
     if (metadata == NULL) return;
@@ -283,7 +434,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
     cache_mode = CANDIDATE_CACHE_DENSE;
     charged_bytes = dense_bytes;
   } else {
-    size_t const metadata_share = candidate_cache_budget / 2;
+    size_t const metadata_share = active_candidate_cache_budget / 2;
     size_t capacity = largest_power_of_two(
         metadata_share / (2 * sizeof(uint64_t)));
     if (state_count <= SIZE_MAX / 2) {
@@ -295,7 +446,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
 
     size_t array_bytes;
     if (!round_up_alignment(capacity * sizeof(uint64_t), &array_bytes) ||
-        array_bytes > candidate_cache_budget / 2)
+        array_bytes > active_candidate_cache_budget / 2)
       return;
     uint64_t* keys = static_cast<uint64_t*>(
         allocate_aligned(array_bytes));
@@ -314,7 +465,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
     charged_bytes = array_bytes * 2;
   }
 
-  size_t remaining = candidate_cache_budget - charged_bytes;
+  size_t remaining = active_candidate_cache_budget - charged_bytes;
   size_t arena_bytes = remaining & ~(CACHE_ALIGNMENT - 1);
   size_t const max_candidate_ids = std::min(
       size_t(UINT32_MAX - 1), SIZE_MAX / sizeof(uint32_t));
@@ -382,7 +533,21 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       bag_mask |= UINT64_C(1) << rank;
   current_bag_key = encodable ? state_count - 1 : 0;
   hot_classes_ready = encodable && prepare_hot_classes();
+  prepare_score_bounds(state_count, sink);
   prepare_cache(state_count);
+  if (bound_mode != SCORE_BOUND_OFF) {
+    if (cache_mode == CANDIDATE_CACHE_DENSE)
+      compute_score_bound<WALK_DENSE>();
+    else if (cache_mode == CANDIDATE_CACHE_SPARSE)
+      compute_score_bound<WALK_SPARSE>();
+    else
+      compute_score_bound<WALK_UNCACHED>();
+    if (bound_aborted) {
+      clear_score_bounds();
+      active_candidate_cache_budget = candidate_cache_budget;
+      prepare_cache(state_count);
+    }
+  }
 
   path.clear();
   path.reserve(letters.size());
@@ -392,6 +557,7 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   next_progress = progress_interval;
   nodes = 0;
   solutions = 0;
+  bound_prunes = 0;
 
   if (!hot_classes_ready) {
     walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
@@ -480,6 +646,129 @@ uint64_t DfsAnagramSearch::sparse_lookup(
 }
 
 template<DfsAnagramSearch::WalkMode mode>
+void DfsAnagramSearch::consider_bound_candidate(
+    uint32_t class_index, double* best) {
+  HotClass const& candidate = hot_classes.get()[class_index];
+  uint32_t const* requirements =
+      packed_letters.get() + candidate.letters_offset;
+  uint32_t const requirement_count =
+      hot_requirement_count(candidate.packed_length_and_count);
+  uint64_t const parent_bag_mask = bag_mask;
+  for (uint32_t i = 0; i < requirement_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    uint32_t const requirement_rank = packed_rank(requirement);
+    bag[requirement_rank] -= packed_count(requirement);
+    if (bag[requirement_rank] == 0)
+      bag_mask &= ~(UINT64_C(1) << requirement_rank);
+  }
+  current_bag_key -= candidate.bag_key_delta;
+  double const child = compute_score_bound<mode>();
+  current_bag_key += candidate.bag_key_delta;
+  for (uint32_t i = 0; i < requirement_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    bag[packed_rank(requirement)] += packed_count(requirement);
+  }
+  bag_mask = parent_bag_mask;
+
+  if (bound_aborted || child == -HUGE_VAL) return;
+  double const candidate_bound = round_score_bound_up(
+      static_cast<long double>(candidate.best_member_log_score) +
+      static_cast<long double>(restart_log_rate) +
+      static_cast<long double>(child));
+  *best = std::max(*best, candidate_bound);
+}
+
+template<DfsAnagramSearch::WalkMode mode>
+double DfsAnagramSearch::compute_score_bound() {
+  if (bound_aborted) return HUGE_VAL;
+
+  double cached;
+  if (load_score_bound(current_bag_key, &cached)) return cached;
+  if (bag_mask == 0) {
+    if (!store_score_bound(current_bag_key, 0.0))
+      bound_aborted = true;
+    return bound_aborted ? HUGE_VAL : 0.0;
+  }
+
+  int const rank = __builtin_ctzll(bag_mask);
+  int const forced_symbol =
+      class_list->rank_to_symbol()[size_t(rank)];
+  size_t const begin = class_list->candidate_begin(forced_symbol);
+  size_t const end = class_list->candidate_end(forced_symbol);
+
+  uint64_t metadata = CACHE_BYPASSED;
+  size_t sparse_slot = 0;
+  bool sparse_may_insert = false;
+  if (mode == WALK_DENSE) {
+    metadata = cache_metadata.get()[size_t(current_bag_key)];
+  } else if (mode == WALK_SPARSE) {
+    metadata = sparse_lookup(
+        current_bag_key, &sparse_slot, &sparse_may_insert);
+  }
+
+  if (mode == WALK_DENSE && metadata == CACHE_UNSEEN) {
+    build_candidate_entry(begin, end, &metadata);
+    publish_dense(current_bag_key, metadata);
+  } else if (mode == WALK_SPARSE && metadata == CACHE_UNSEEN) {
+    if (sparse_may_insert) {
+      build_candidate_entry(begin, end, &metadata);
+      publish_sparse(sparse_slot, current_bag_key, metadata);
+    } else {
+      metadata = CACHE_BYPASSED;
+    }
+  }
+
+  double best = -HUGE_VAL;
+  if (mode != WALK_UNCACHED && metadata != CACHE_BYPASSED) {
+    uint32_t const count = entry_count(metadata);
+    uint32_t const* first =
+        candidate_ids.get() + entry_offset(metadata);
+    uint32_t const* last = first + count;
+    for (; first != last && !bound_aborted; ++first)
+      consider_bound_candidate<mode>(*first, &best);
+  } else {
+    for (size_t class_index = begin;
+         class_index < end && !bound_aborted; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (!hot_class_fits(id)) continue;
+      consider_bound_candidate<mode>(id, &best);
+    }
+  }
+
+  if (bound_aborted) return HUGE_VAL;
+  if (!store_score_bound(current_bag_key, best)) {
+    bound_aborted = true;
+    return HUGE_VAL;
+  }
+  return best;
+}
+
+bool DfsAnagramSearch::should_prune(
+    double representative_log_score, DfsSolutionSink* sink) const {
+  if (bound_mode == SCORE_BOUND_OFF) return false;
+  double remaining_bound;
+  if (!load_score_bound(current_bag_key, &remaining_bound)) return false;
+  if (remaining_bound == -HUGE_VAL) return true;
+  // H charges a restart to every class it adds. That is exact below the first
+  // chosen class, but the root's first class does not pay a restart.
+  if (path.empty()) return false;
+
+  double floor;
+  if (sink == NULL || !sink->score_floor(&floor)) return false;
+  long double const upper =
+      static_cast<long double>(representative_log_score) +
+      static_cast<long double>(remaining_bound);
+  long double const magnitude =
+      fabsl(static_cast<long double>(representative_log_score)) +
+      fabsl(static_cast<long double>(remaining_bound)) +
+      fabsl(static_cast<long double>(floor)) + 1.0L;
+  long double const padding =
+      magnitude * static_cast<long double>(DBL_EPSILON) *
+      (static_cast<long double>(max_depth) + 2.0L) * 16.0L;
+  return upper + padding <= static_cast<long double>(floor);
+}
+
+template<DfsAnagramSearch::WalkMode mode>
 void DfsAnagramSearch::visit_fitting_class(
     uint32_t class_index, size_t letters_left,
     double representative_log_score, DfsSolutionSink* sink) {
@@ -553,6 +842,11 @@ void DfsAnagramSearch::walk(size_t letters_left, size_t entry_point,
   }
 
   if (DFS_UNLIKELY(bag_mask == 0)) return;
+  if (DFS_UNLIKELY(should_prune(
+          representative_log_score, sink))) {
+    ++bound_prunes;
+    return;
+  }
 
   uint64_t metadata = CACHE_BYPASSED;
   size_t sparse_slot = 0;
