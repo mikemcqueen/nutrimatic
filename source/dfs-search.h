@@ -60,6 +60,9 @@ class DfsAnagramSearch {
   size_t candidate_cache_bytes_charged() const { return charged_bytes; }
   ScoreBoundMode score_bound_mode() const { return bound_mode; }
   size_t score_bound_entries() const { return bound_entries; }
+  size_t score_bound_states_computed() const {
+    return bound_states_computed;
+  }
   size_t score_bound_bytes_charged() const { return bound_charged_bytes; }
   int64_t score_bound_prunes() const { return bound_prunes; }
 
@@ -142,6 +145,7 @@ class DfsAnagramSearch {
   size_t bound_capacity;
   size_t bound_max_entries;
   size_t bound_entries;
+  size_t bound_states_computed;
   size_t bound_charged_bytes;
   bool bound_aborted;
   int64_t bound_prunes;

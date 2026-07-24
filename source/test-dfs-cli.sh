@@ -51,6 +51,8 @@ grep -q '^# phase 1 complete:' "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
 grep -q '^# phase 2 complete:' "$test_dir/all.stderr" ||
   fail "phase-2 statistics are missing from stderr"
+grep -q 'bound states computed$' "$test_dir/all.stderr" ||
+  fail "score-bound state count is missing from stderr"
 
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 2 \
   > "$test_dir/top.stdout" 2> "$test_dir/top.stderr"
