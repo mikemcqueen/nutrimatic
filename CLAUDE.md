@@ -5,5 +5,5 @@ conan build .
 
 ## INDEX FILE
 
-idx/wiki-merged.5.index
+export IDX=~/code/nutrimatic/idx/wiki-merged.5.index
 
