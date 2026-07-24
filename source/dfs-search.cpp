@@ -34,8 +34,7 @@ uint64_t const CACHE_BYPASSED = UINT64_MAX - 1;
 uint64_t const BOUND_UNSEEN = UINT64_C(0x7ff8000000000001);
 uint64_t const BOUND_COMPUTING = UINT64_C(0x7ff8000000000002);
 size_t const CACHE_ALIGNMENT = 64;
-size_t const SPARSE_SCORE_BOUND_BUDGET_DIVISOR = 4;
-size_t const DENSE_SCORE_BOUND_BUDGET_DIVISOR = 2;
+size_t const MIB = size_t(1024) * size_t(1024);
 // Presence masks are far fewer than multiplicity states. Measurements on the
 // reference bags found that 1/16 retains every useful support list without
 // materially shrinking the full candidate arena used by the later DFS.
@@ -70,6 +69,17 @@ static bool round_up_alignment(size_t bytes, size_t* rounded) {
   if (bytes > SIZE_MAX - (CACHE_ALIGNMENT - 1)) return false;
   *rounded = (bytes + CACHE_ALIGNMENT - 1) &
       ~(CACHE_ALIGNMENT - 1);
+  return true;
+}
+
+static bool dense_bound_requirements(
+    uint64_t state_count, size_t* dense_bytes,
+    size_t* minimum_total_bytes) {
+  if (state_count > SIZE_MAX / sizeof(double) ||
+      !round_up_alignment(
+          size_t(state_count) * sizeof(double), dense_bytes))
+    return false;
+  *minimum_total_bytes = *dense_bytes;
   return true;
 }
 
@@ -198,6 +208,32 @@ static bool score_bound_arithmetic_supported() {
 #endif
 }
 
+static char const* score_bound_mode_name(
+    DfsAnagramSearch::ScoreBoundMode mode) {
+  switch (mode) {
+    case DfsAnagramSearch::SCORE_BOUND_DENSE:
+      return "dense";
+    case DfsAnagramSearch::SCORE_BOUND_SPARSE:
+      return "sparse";
+    case DfsAnagramSearch::SCORE_BOUND_OFF:
+      return "off";
+  }
+  return "unknown";
+}
+
+static char const* candidate_cache_mode_name(
+    DfsAnagramSearch::CandidateCacheMode mode) {
+  switch (mode) {
+    case DfsAnagramSearch::CANDIDATE_CACHE_DENSE:
+      return "dense";
+    case DfsAnagramSearch::CANDIDATE_CACHE_SPARSE:
+      return "sparse";
+    case DfsAnagramSearch::CANDIDATE_CACHE_OFF:
+      return "off";
+  }
+  return "unknown";
+}
+
 }  // namespace
 
 void DfsAnagramSearch::AlignedFree::operator()(void* pointer) const {
@@ -208,13 +244,15 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    std::string const& letters,
                                    double restart, int64_t corpus_total,
                                    size_t candidate_cache_bytes,
-                                   size_t preprocess_threads):
+                                   size_t preprocess_threads,
+                                   bool enable_candidate_cache):
     class_list(classes),
     letters(letters),
     restart_log_rate(make_restart_log_rate(restart, corpus_total)),
     max_depth(derived_max_depth(classes, letters.size())),
     candidate_cache_budget(candidate_cache_bytes),
     requested_preprocess_threads(std::max(size_t(1), preprocess_threads)),
+    candidate_cache_enabled(enable_candidate_cache),
     active_candidate_cache_budget(candidate_cache_bytes),
     bag_mask(0),
     current_bag_key(0),
@@ -388,23 +426,18 @@ void DfsAnagramSearch::prepare_score_bounds(
   if (!hot_classes_ready || sink == NULL ||
       !sink->supports_score_pruning() ||
       !score_bound_arithmetic_supported() ||
-      candidate_cache_budget < CACHE_ALIGNMENT *
-          SPARSE_SCORE_BOUND_BUDGET_DIVISOR)
+      candidate_cache_budget < CACHE_ALIGNMENT)
     return;
 
-  size_t const sparse_budget =
-      candidate_cache_budget / SPARSE_SCORE_BOUND_BUDGET_DIVISOR;
-  // A dense table spends every byte on a bound and can make an otherwise
-  // unusable search practical. Let it borrow more of the shared budget.
-  // Sparse tables retain the smaller cap so an eventual fail-open does not
-  // first consume twice as much setup time and candidate-cache space.
-  size_t const dense_budget =
-      candidate_cache_budget / DENSE_SCORE_BOUND_BUDGET_DIVISOR;
+  // Score bounds have priority over candidate caching. A dense table is
+  // admitted whenever it fits the total budget. Otherwise sparse storage
+  // reserves the entire budget and retains completed entries if it fills.
+  size_t const sparse_budget = candidate_cache_budget;
+  size_t const dense_budget = candidate_cache_budget;
   size_t dense_bytes = 0;
-  bool const dense_size_ok =
-      state_count <= SIZE_MAX / sizeof(double) &&
-      round_up_alignment(size_t(state_count) * sizeof(double),
-                         &dense_bytes);
+  size_t minimum_total_bytes = 0;
+  bool const dense_size_ok = dense_bound_requirements(
+      state_count, &dense_bytes, &minimum_total_bytes);
   if (dense_size_ok && dense_bytes <= dense_budget) {
     AtomicWord* values = static_cast<AtomicWord*>(
         allocate_aligned(dense_bytes));
@@ -425,7 +458,7 @@ void DfsAnagramSearch::prepare_score_bounds(
           next_power_of_two_at_least(size_t(state_count) * 2);
       if (desired != 0) capacity = std::min(capacity, desired);
     }
-    if (capacity < 2) return;
+    if (capacity < 4) return;
 
     size_t array_bytes;
     if (!round_up_alignment(capacity * sizeof(uint64_t), &array_bytes) ||
@@ -445,13 +478,14 @@ void DfsAnagramSearch::prepare_score_bounds(
     bound_keys = std::move(new_keys);
     bound_values.reset(values);
     bound_capacity = capacity;
-    bound_max_entries = capacity / 2;
+    bound_max_entries = capacity - capacity / 4;
     bound_mode = SCORE_BOUND_SPARSE;
     bound_charged_bytes = array_bytes * 2;
   }
 
-  active_candidate_cache_budget =
-      candidate_cache_budget - bound_charged_bytes;
+  active_candidate_cache_budget = bound_mode == SCORE_BOUND_SPARSE
+      ? size_t(0)
+      : candidate_cache_budget - bound_charged_bytes;
 }
 
 bool DfsAnagramSearch::load_score_bound(
@@ -603,7 +637,7 @@ void DfsAnagramSearch::prepare_support_cache(size_t* remaining_budget) {
 
 void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
   clear_cache();
-  if (!hot_classes_ready ||
+  if (!candidate_cache_enabled || !hot_classes_ready ||
       active_candidate_cache_budget < CACHE_ALIGNMENT)
     return;
 
@@ -724,6 +758,40 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   hot_classes_ready = encodable && prepare_hot_classes();
   prepare_score_bounds(state_count, sink);
   prepare_cache(state_count);
+  if (progress != NULL) {
+    size_t dense_bytes = 0;
+    size_t minimum_total_bytes = 0;
+    if (!encodable) {
+      fputs("# phase 2 preflight: theoretical state count exceeds the "
+            "supported range; dense score-table size and minimum -C "
+            "unavailable\n", progress);
+    } else if (dense_bound_requirements(
+                   state_count, &dense_bytes, &minimum_total_bytes)) {
+      size_t const minimum_mib =
+          minimum_total_bytes / MIB +
+          size_t(minimum_total_bytes % MIB != 0);
+      fprintf(progress,
+              "# phase 2 preflight: %llu theoretical states, "
+              "%zu dense score-table bytes, "
+              "minimum -C %zu MiB (%zu bytes)\n",
+              (unsigned long long) state_count, dense_bytes,
+              minimum_mib, minimum_total_bytes);
+    } else {
+      fprintf(progress,
+              "# phase 2 preflight: %llu theoretical states; "
+              "dense score-table size and minimum -C exceed the "
+              "supported range\n",
+              (unsigned long long) state_count);
+    }
+    fprintf(progress, "# phase 2 preflight: score-bound mode %s",
+            score_bound_mode_name(bound_mode));
+    if (bound_mode == SCORE_BOUND_SPARSE)
+      fprintf(progress, " (capacity %zu, admission limit %zu)",
+              bound_capacity, bound_max_entries);
+    fprintf(progress, "; candidate-cache mode %s\n",
+            candidate_cache_mode_name(cache_mode));
+    fflush(progress);
+  }
   if (bound_mode != SCORE_BOUND_OFF) {
     bool const ran_parallel =
         compute_score_bound_parallel(requested_preprocess_threads);
@@ -734,9 +802,19 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
     else if (!ran_parallel)
       compute_score_bound<WALK_UNCACHED>();
     if (bound_aborted) {
-      clear_score_bounds();
-      active_candidate_cache_budget = candidate_cache_budget;
-      prepare_cache(state_count);
+      assert(bound_mode == SCORE_BOUND_SPARSE);
+      if (progress != NULL) {
+        fprintf(progress,
+                "# phase 2 warning: sparse score-bound cache exhausted "
+                "after %zu states; retaining %zu completed bounds, "
+                "and cache misses will run unpruned\n",
+                bound_states_computed, bound_entries);
+        fflush(progress);
+      }
+      // Sparse entries are published only after their complete dependency
+      // subtree has been evaluated, so every retained value remains an
+      // admissible bound. Missing entries simply suppress pruning.
+      bound_aborted = false;
     }
   }
 

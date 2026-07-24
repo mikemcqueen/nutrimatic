@@ -94,6 +94,16 @@ static void check_same_spellings(
   }
 }
 
+static std::string read_stream(FILE* fp) {
+  check(fflush(fp) == 0, "could not flush diagnostic stream");
+  rewind(fp);
+  std::string result;
+  char buffer[512];
+  while (fgets(buffer, sizeof(buffer), fp) != NULL)
+    result += buffer;
+  return result;
+}
+
 static int smoke_test() {
   FILE* fp = tmpfile();
   check(fp != NULL, "could not create temporary index");
@@ -185,6 +195,30 @@ static int smoke_test() {
         expected_spellings, bounded_spellings,
         "score bound changed the retained spellings");
 
+    DfsTopN isolated_output(&classes, 2);
+    size_t const score_only_budget = 128;
+    DfsAnagramSearch isolated(
+        &classes, "aabb", 1e-6, reader.count(),
+        score_only_budget, 1, false);
+    isolated.run(&isolated_output);
+    check(isolated.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_DENSE,
+          "candidate-cache gate disabled dense score memo");
+    check(isolated.candidate_cache_mode() ==
+              DfsAnagramSearch::CANDIDATE_CACHE_OFF,
+          "candidate-cache gate did not disable candidate storage");
+    check(isolated.candidate_cache_entries() == 0 &&
+              isolated.candidate_cache_bytes_charged() == 0,
+          "disabled candidate cache retained storage");
+    check(isolated.support_cache_entries() == 0 &&
+              isolated.support_cache_bytes_charged() == 0,
+          "disabled candidate cache retained support storage");
+    check(isolated.score_bound_bytes_charged() == score_only_budget,
+          "score-only mode did not use the full cache budget");
+    check_same_spellings(
+        expected_spellings, isolated_output.take_sorted_results(),
+        "candidate-cache gate changed retained spellings");
+
     DfsTopN threaded_output(&classes, 2);
     DfsAnagramSearch threaded(
         &classes, "aabb", 1e-6, reader.count(), bound_budget, 4);
@@ -223,18 +257,23 @@ static int smoke_test() {
         exhausted_expected_output.take_sorted_results();
 
     DfsTopN expanded_dense_output(&classes, 2);
+    size_t const exact_dense_budget = 320;
     DfsAnagramSearch expanded_dense(
-        &classes, exhausted_letters, 1e-6, reader.count(), 768);
+        &classes, exhausted_letters, 1e-6, reader.count(),
+        exact_dense_budget);
     expanded_dense.run(&expanded_dense_output);
     check(expanded_dense.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_DENSE,
-          "half-budget dense score memo was not selected");
+          "full-budget dense score memo was not selected");
+    check(expanded_dense.score_bound_bytes_charged() ==
+              exact_dense_budget,
+          "dense score memo did not use its exact full-budget fit");
     check(expanded_dense.score_bound_prunes() > 0,
           "deep dense score memo did not prune");
     check_same_spellings(
         exhausted_expected_spellings,
         expanded_dense_output.take_sorted_results(),
-        "half-budget dense score memo changed retained spellings");
+        "full-budget dense score memo changed retained spellings");
 
     CollectSolutions boundary_expected(&classes);
     DfsAnagramSearch boundary_exhaustive(
@@ -275,16 +314,52 @@ static int smoke_test() {
     }
 
     DfsTopN exhausted_output(&classes, 2);
+    size_t const exhausted_budget = 256;
     DfsAnagramSearch exhausted(
-        &classes, exhausted_letters, 1e-6, reader.count(), 512);
-    exhausted.run(&exhausted_output);
+        &classes, exhausted_letters, 1e-6, reader.count(),
+        exhausted_budget);
+    FILE* exhausted_diagnostics = tmpfile();
+    check(exhausted_diagnostics != NULL,
+          "could not create exhaustion diagnostic stream");
+    exhausted.run(&exhausted_output, exhausted_diagnostics);
+    std::string const exhaustion_message =
+        read_stream(exhausted_diagnostics);
+    fclose(exhausted_diagnostics);
     std::vector<DfsSpelling> const exhausted_spellings =
         exhausted_output.take_sorted_results();
     check(exhausted.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_OFF,
-          "exhausted sparse score memo did not fail open");
+              DfsAnagramSearch::SCORE_BOUND_SPARSE,
+          "exhausted sparse score memo was not retained");
     check(exhausted.score_bound_states_computed() > 0,
           "sparse score memo was disabled instead of exhausted");
+    check(exhausted.score_bound_entries() ==
+              exhausted.score_bound_states_computed(),
+          "exhausted sparse score memo lost completed bounds");
+    check(exhausted.score_bound_bytes_charged() > 0,
+          "exhausted sparse score memo released its storage");
+    check(exhausted.score_bound_bytes_charged() +
+              exhausted.candidate_cache_bytes_charged() +
+              exhausted.support_cache_bytes_charged() <=
+              exhausted_budget,
+          "retained sparse bounds exceeded the shared cache budget");
+    check(exhausted.score_bound_bytes_charged() == exhausted_budget,
+          "sparse score memo did not use the full cache budget");
+    check(exhausted.candidate_cache_mode() ==
+              DfsAnagramSearch::CANDIDATE_CACHE_OFF &&
+              exhausted.candidate_cache_bytes_charged() == 0 &&
+              exhausted.support_cache_bytes_charged() == 0,
+          "sparse score memo left budget for candidate caching");
+    check(exhaustion_message.find(
+              "score-bound mode sparse (capacity 16, admission limit 12)") !=
+              std::string::npos,
+          "sparse score capacity diagnostic is missing");
+    check(exhaustion_message.find(
+              "sparse score-bound cache exhausted") !=
+              std::string::npos &&
+          exhaustion_message.find(
+              "retaining 12 completed bounds, and cache misses will run "
+              "unpruned") != std::string::npos,
+          "sparse score exhaustion diagnostic is missing");
     check_same_spellings(
         exhausted_expected_spellings, exhausted_spellings,
         "exhausted score memo changed the retained spellings");

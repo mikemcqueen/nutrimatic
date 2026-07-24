@@ -62,6 +62,12 @@ grep -q '^# 4 letters "abcd", words of 2+, at most 2 words$' \
   fail "search header is missing from stderr"
 grep -q '^# phase 1 complete:' "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
+grep -q '^# phase 2 preflight: 16 theoretical states, 128 dense score-table bytes, minimum -C 1 MiB (128 bytes)$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 cache sizing diagnostics are missing from stderr"
+grep -Eq '^# phase 2 preflight: score-bound mode (off|dense|sparse)( \\(capacity [0-9]+, admission limit [0-9]+\\))?; candidate-cache mode (off|dense|sparse)$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 cache mode diagnostics are missing from stderr"
 grep -Eq '^# phase 2: precomputed [0-9]+ bounded states in [0-9.]+s$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 precompute timing is missing from stderr"
