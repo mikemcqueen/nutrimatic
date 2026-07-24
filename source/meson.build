@@ -70,7 +70,7 @@ index_lib = library(
 
 dfs_class_list_lib = library(
   'dfs-class-list',
-  ['dfs-class-list.cpp', 'dfs-search.cpp'],
+  ['dfs-class-list.cpp', 'dfs-search.cpp', 'dfs-output.cpp'],
   link_with: index_lib,
 )
 
@@ -126,6 +126,13 @@ test(
   args: ['--validate-14'],
   timeout: 120,
 )
+
+test_dfs_output = executable(
+  'test-dfs-output', 'test-dfs-output.cpp',
+  link_with: [dfs_class_list_lib, index_lib],
+  install: false,
+)
+test('dfs-output', test_dfs_output)
 
 foreach p : ['find-phone-words']
   executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)
