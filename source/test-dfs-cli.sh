@@ -35,8 +35,21 @@ expect_status() {
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --candidate-cache-mib 0 \
   > "$test_dir/uncached.stdout" 2> "$test_dir/uncached.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --preprocess-threads 1 \
+  > "$test_dir/thread-one.stdout" 2> "$test_dir/thread-one.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --preprocess-threads 4 \
+  > "$test_dir/threaded.stdout" 2> "$test_dir/threaded.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/uncached.stdout" ||
   fail "candidate cache changed stdout"
+cmp "$test_dir/all.stdout" "$test_dir/thread-one.stdout" ||
+  fail "--preprocess-threads 1 changed stdout"
+cmp "$test_dir/all.stdout" "$test_dir/threaded.stdout" ||
+  fail "threaded preprocessing changed stdout"
+grep -Eq '^# phase 2: preprocessing used [2-4] threads$' \
+  "$test_dir/threaded.stderr" ||
+  fail "threaded preprocessing diagnostic is missing"
 [[ $(wc -l < "$test_dir/all.stdout") -eq 4 ]] ||
   fail "full synthetic search did not print four word sets"
 [[ $(grep -c '^70.00 ab cd$' "$test_dir/all.stdout") -eq 1 ]] ||
@@ -81,4 +94,6 @@ expect_status 2 "$dfs_anagrams" "$index_file" 'ab!'
 expect_status 2 "$dfs_anagrams" "$index_file" abc -p 0
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --candidate-cache-mib nope
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --preprocess-threads nope
 expect_status 1 "$dfs_anagrams" "$test_dir/missing.index" abcd

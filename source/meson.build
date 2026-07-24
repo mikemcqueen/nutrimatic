@@ -53,6 +53,7 @@ add_project_arguments(
 fst_dep = dependency('openfst')
 tre_dep = dependency('tre')
 xml2_dep = dependency('libxml-2.0')
+thread_dep = dependency('threads')
 
 # Public-domain getopt_long work-alike (https://github.com/skeeto/optparse),
 # vendored because getopt.h is POSIX-only.  Built with warnings off since it
@@ -72,6 +73,7 @@ dfs_class_list_lib = library(
   'dfs-class-list',
   ['dfs-class-list.cpp', 'dfs-search.cpp', 'dfs-output.cpp'],
   link_with: index_lib,
+  dependencies: thread_dep,
 )
 
 search_lib = library(
@@ -104,7 +106,9 @@ find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
 
 dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
-  link_with: [optparse_lib, dfs_class_list_lib, index_lib], install: true)
+  link_with: [optparse_lib, dfs_class_list_lib, index_lib],
+  dependencies: thread_dep,
+  install: true)
 
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
 executable('measure-f', 'measure-f.cpp',
@@ -113,6 +117,7 @@ executable('measure-f', 'measure-f.cpp',
 test_dfs_class_list = executable(
   'test-dfs-class-list', 'test-dfs-class-list.cpp',
   link_with: [dfs_class_list_lib, index_lib],
+  dependencies: thread_dep,
   install: false,
 )
 test('dfs-class-list', test_dfs_class_list)
@@ -120,6 +125,7 @@ test('dfs-class-list', test_dfs_class_list)
 test_dfs_search = executable(
   'test-dfs-search', 'test-dfs-search.cpp',
   link_with: [dfs_class_list_lib, index_lib],
+  dependencies: thread_dep,
   install: false,
 )
 test('dfs-search', test_dfs_search)
@@ -133,6 +139,7 @@ test(
 test_dfs_output = executable(
   'test-dfs-output', 'test-dfs-output.cpp',
   link_with: [dfs_class_list_lib, index_lib],
+  dependencies: thread_dep,
   install: false,
 )
 test('dfs-output', test_dfs_output)
