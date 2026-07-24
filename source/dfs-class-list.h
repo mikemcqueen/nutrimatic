@@ -33,12 +33,15 @@ class DfsClassList {
  public:
   // letters must contain only lowercase a-z and digits. Phrases are extracted
   // by default, up to the cap implied by min_word_len and the bag length.
+  // include_phrases=false exists for words-only validation against the phase-0
+  // reference counts; dfs-anagrams leaves it at its production default.
   DfsClassList(IndexReader const* reader, std::string const& letters,
-               int min_word_len);
+               int min_word_len, bool include_phrases = true);
 
   std::vector<DfsAnagramClass> const& classes() const { return class_list; }
   size_t entry_count() const { return entries; }
   int64_t nodes_visited() const { return nodes; }
+  int min_word_length() const { return minimum_word_len; }
 
   // Dictionary frequency: occurrences across distinct extracted spellings,
   // not corpus-weighted counts.
@@ -63,6 +66,7 @@ class DfsClassList {
   std::array<int, DFS_SYMBOL_COUNT> symbols_by_rank;
   std::array<int, DFS_SYMBOL_COUNT> ranks_by_symbol;
   std::array<size_t, DFS_SYMBOL_COUNT + 1> bucket_starts;
+  int minimum_word_len;
   size_t entries;
   int64_t nodes;
 };
