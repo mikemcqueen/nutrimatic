@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_DFS_SEARCH_H
 #define NUTRIMATIC_DFS_SEARCH_H
 
+#include <stdio.h>
 #include <stdint.h>
 
 #include <array>
@@ -29,7 +30,9 @@ class DfsAnagramSearch {
                    double restart, int64_t corpus_total);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
-  void run(DfsSolutionSink* sink);
+  // When progress is non-null, report every 100k * progress_factor nodes.
+  void run(DfsSolutionSink* sink, FILE* progress = NULL,
+           int progress_factor = 1);
 
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
@@ -46,6 +49,8 @@ class DfsAnagramSearch {
 
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
   std::vector<size_t> path;
+  FILE* progress_stream;
+  int64_t progress_interval;
   int64_t nodes;
   int64_t solutions;
 };

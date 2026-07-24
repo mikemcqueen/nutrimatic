@@ -100,8 +100,11 @@ foreach p : ['make-index', 'merge-indexes', 'dump-index', 'explore-index']
   executable(p, p + '.cpp', link_with: index_lib, install: true)
 endforeach
 
-executable('find-anagrams', 'find-anagrams.cpp',
+find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
+
+dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
+  link_with: [optparse_lib, dfs_class_list_lib, index_lib], install: true)
 
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
 executable('measure-f', 'measure-f.cpp',
@@ -133,6 +136,32 @@ test_dfs_output = executable(
   install: false,
 )
 test('dfs-output', test_dfs_output)
+
+make_dfs_test_index = executable(
+  'make-dfs-test-index', 'make-dfs-test-index.cpp',
+  link_with: index_lib,
+  install: false,
+)
+bash = find_program('bash')
+test(
+  'dfs-cli',
+  bash,
+  args: [
+    files('test-dfs-cli.sh'),
+    dfs_anagrams,
+    make_dfs_test_index,
+  ],
+)
+test(
+  'dfs-cli-differential',
+  bash,
+  args: [
+    files('test-dfs-cli-differential.sh'),
+    dfs_anagrams,
+    find_anagrams,
+  ],
+  timeout: 30,
+)
 
 foreach p : ['find-phone-words']
   executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)

@@ -24,6 +24,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     letters(letters),
     restart_log_rate(make_restart_log_rate(restart, corpus_total)),
     max_depth(derived_max_depth(classes, letters.size())),
+    progress_stream(NULL),
+    progress_interval(0),
     nodes(0),
     solutions(0) {
   assert(class_list != NULL);
@@ -38,7 +40,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   }
 }
 
-void DfsAnagramSearch::run(DfsSolutionSink* sink) {
+void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
+                           int progress_factor) {
   bag.fill(0);
   for (size_t i = 0; i < letters.size(); ++i) {
     int const symbol = dfs_symbol_index((unsigned char) letters[i]);
@@ -48,6 +51,9 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink) {
 
   path.clear();
   path.reserve(letters.size());
+  progress_stream = progress;
+  progress_interval =
+      int64_t(100000) * int64_t(std::max(progress_factor, 1));
   nodes = 0;
   solutions = 0;
   walk(letters.size(), 0, 0, 0.0, sink);
@@ -58,6 +64,12 @@ void DfsAnagramSearch::walk(size_t letters_left, int old_rarest_rank,
                             double representative_log_score,
                             DfsSolutionSink* sink) {
   ++nodes;
+  if (progress_stream != NULL && nodes % progress_interval == 0) {
+    fprintf(progress_stream,
+            "# phase 2: %lld nodes, %lld solutions\n",
+            (long long) nodes, (long long) solutions);
+    fflush(progress_stream);
+  }
 
   // Removing letters can only advance this rank, so resume at the parent's
   // forced symbol instead of rescanning the whole priority order.
