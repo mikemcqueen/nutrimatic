@@ -27,10 +27,10 @@ static std::string make_class_key(std::string const& text) {
 class DfsExtractor {
  public:
   DfsExtractor(IndexReader const* reader, std::string const& letters,
-               int min_word_len):
+               int min_word_len, bool include_phrases):
       reader(reader),
       min_len(std::max(min_word_len, 1)),
-      max_words(int(letters.size()) / min_len),
+      max_words(include_phrases ? int(letters.size()) / min_len : 1),
       letters_left(int(letters.size())),
       nodes(0) {
     bag.fill(0);
@@ -120,11 +120,12 @@ static bool same_member(DfsClassMember const& a, DfsClassMember const& b) {
 
 DfsClassList::DfsClassList(IndexReader const* reader,
                            std::string const& letters,
-                           int min_word_len):
-    entries(0), nodes(0) {
+                           int min_word_len, bool include_phrases):
+    minimum_word_len(std::max(min_word_len, 1)), entries(0), nodes(0) {
   frequencies.fill(0);
 
-  DfsExtractor extractor(reader, letters, min_word_len);
+  DfsExtractor extractor(
+      reader, letters, minimum_word_len, include_phrases);
   extractor.run();
   nodes = extractor.nodes_visited();
 
