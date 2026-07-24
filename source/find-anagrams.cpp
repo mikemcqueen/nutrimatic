@@ -176,10 +176,17 @@ static bool parse_count(char const* in, char const* what, int* out) {
   return true;
 }
 
+// Words shorter than this are what makes a long bag hopeless: they multiply the
+// arrangements without using up letters, and "fifteen two-letter words" paths
+// sit at the head of the queue forever (findings/anagram-perf.md).  Four is the
+// value every measurement in findings/ancc-inspiration-summary.md was taken at.
+static int const DEFAULT_MIN_WORD_LEN = 4;
+
 struct Args {
   char const* index_file;
   std::string letters;  // the bag, with any used letters already removed
   int min_word_len;
+  int max_words;        // implied by min_word_len; 0 = unlimited
   int progress_factor;  // multiplies the 100k-step progress interval
   bool canonical_order;
 };
@@ -188,8 +195,9 @@ static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
       " [-u used-letters] [-m min-word-length] [-p progress-factor]"
-      " [-c]\n",
-      program);
+      " [-c]\n"
+      "  -m defaults to %d; 0 for no minimum\n",
+      program, DEFAULT_MIN_WORD_LEN);
 }
 
 static struct optparse_long const long_options[] = {
@@ -201,7 +209,7 @@ static struct optparse_long const long_options[] = {
 };
 
 static bool parse_args(char *argv[], Args* out) {
-  out->min_word_len = 0;
+  out->min_word_len = DEFAULT_MIN_WORD_LEN;
   out->progress_factor = 1;
   out->canonical_order = false;
 
@@ -209,6 +217,7 @@ static bool parse_args(char *argv[], Args* out) {
   optparse_init(&options, argv);
 
   std::string used;
+  bool min_word_len_given = false;
   int opt;
   while ((opt = optparse_long(&options, long_options, NULL)) != -1) {
     switch (opt) {
@@ -219,6 +228,7 @@ static bool parse_args(char *argv[], Args* out) {
         if (!parse_count(options.optarg, "--min-word-length",
                          &out->min_word_len))
           return false;
+        min_word_len_given = true;
         break;
       case 'p':
         if (!parse_count(options.optarg, "--progress-factor",
@@ -254,12 +264,33 @@ static bool parse_args(char *argv[], Args* out) {
   out->index_file = index_file;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
 
+  // A bag too small for the *default* minimum is a bag the user never asked to
+  // constrain, so back the default off instead of refusing to search at all.
+  // An explicit -m that doesn't fit is still an error worth reporting.
+  if (!min_word_len_given && out->min_word_len > (int) out->letters.size())
+    out->min_word_len = (int) out->letters.size();
+
   if (out->min_word_len > (int) out->letters.size()) {
     fprintf(stderr,
         "error: no word of %d letters fits in the %zu left in \"%s\"\n",
         out->min_word_len, out->letters.size(), out->letters.c_str());
     return false;
   }
+
+  // The word cap is a consequence of -m, not an independent knob: every word
+  // spends at least min_word_len of the bag, so no path -- accepted or still in
+  // progress -- can hold more than floor(letters / min_word_len) of them, and a
+  // path that has finished k words has already spent k * min_word_len letters.
+  // AnagramFilter therefore enforces this bound at exactly the depth a separate
+  // -x/--max-words counter would, which is why there isn't one.  This is the
+  // number to quote when reproducing a measurement, and the bound any
+  // fixed-width word-set key would have to be sized for.
+  //
+  // Below 2 the minimum is no constraint (empty words can't occur), so the cap
+  // is unlimited -- 0, matching min_word_len's own "off" value.
+  out->max_words = (out->min_word_len > 1)
+      ? (int) out->letters.size() / out->min_word_len
+      : 0;
   return true;
 }
 
@@ -271,6 +302,18 @@ int main(int argc, char *argv[]) {
   if (fp == NULL) {
     fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
     return 1;
+  }
+
+  // Same '#' prefix as the progress lines, on the same stream, so one filter
+  // drops both.  Worth printing because -m now has a default: the search being
+  // run is not always the search the command line spells out.
+  if (args.max_words > 0) {
+    fprintf(stderr, "# %zu letters \"%s\", words of %d+, at most %d word%s\n",
+        args.letters.size(), args.letters.c_str(), args.min_word_len,
+        args.max_words, args.max_words == 1 ? "" : "s");
+  } else {
+    fprintf(stderr, "# %zu letters \"%s\", no minimum word length\n",
+        args.letters.size(), args.letters.c_str());
   }
 
   IndexReader reader(fp);
