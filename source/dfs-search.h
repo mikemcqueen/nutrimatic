@@ -79,12 +79,15 @@ class DfsAnagramSearch {
     void operator()(void* pointer) const;
   };
 
-  struct alignas(32) HotClass {
-    double best_member_log_score;
-    uint64_t bag_key_delta;
+  struct alignas(16) FitClass {
     uint64_t support_mask;
     uint32_t letters_offset;
     uint32_t packed_length_and_count;
+  };
+
+  struct alignas(16) ScoreClass {
+    double best_member_log_score;
+    uint64_t bag_key_delta;
   };
 
   enum WalkMode {
@@ -107,6 +110,8 @@ class DfsAnagramSearch {
                         DfsSolutionSink* sink);
 
   bool hot_class_fits(uint32_t class_index) const;
+  size_t first_length_candidate(
+      size_t begin, size_t end, size_t letters_left) const;
   template<WalkMode mode>
   double compute_score_bound();
   template<WalkMode mode>
@@ -143,8 +148,10 @@ class DfsAnagramSearch {
   std::array<uint64_t, DFS_SYMBOL_COUNT> multipliers;
   uint64_t bag_mask;
   uint64_t current_bag_key;
+  size_t current_letters_left;
 
-  std::unique_ptr<HotClass, AlignedFree> hot_classes;
+  std::unique_ptr<FitClass, AlignedFree> fit_classes;
+  std::unique_ptr<ScoreClass, AlignedFree> score_classes;
   std::unique_ptr<uint32_t, AlignedFree> packed_letters;
   bool hot_classes_ready;
 
@@ -172,7 +179,6 @@ class DfsAnagramSearch {
   size_t candidate_used;
   size_t admitted_entries;
   size_t charged_bytes;
-  std::vector<uint32_t> candidate_build_buffer;
 
   std::vector<size_t> path;
   FILE* progress_stream;

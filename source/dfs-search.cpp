@@ -4,9 +4,7 @@
 #include <float.h>
 #include <limits.h>
 #include <math.h>
-#include <new>
 #include <stdlib.h>
-#include <string.h>
 
 #include <algorithm>
 #include <chrono>
@@ -166,6 +164,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     active_candidate_cache_budget(candidate_cache_bytes),
     bag_mask(0),
     current_bag_key(0),
+    current_letters_left(0),
     hot_classes_ready(false),
     bound_mode(SCORE_BOUND_OFF),
     bound_capacity(0),
@@ -205,14 +204,18 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
 }
 
 bool DfsAnagramSearch::prepare_hot_classes() {
-  static_assert(sizeof(HotClass) == 32,
-                "HotClass must remain two per cache line");
-  hot_classes.reset();
+  static_assert(sizeof(FitClass) == 16,
+                "FitClass must remain four per cache line");
+  static_assert(sizeof(ScoreClass) == 16,
+                "ScoreClass must remain four per cache line");
+  fit_classes.reset();
+  score_classes.reset();
   packed_letters.reset();
 
   std::vector<DfsAnagramClass> const& classes = class_list->classes();
   if (classes.empty() || classes.size() > UINT32_MAX ||
-      classes.size() > SIZE_MAX / sizeof(HotClass) ||
+      classes.size() > SIZE_MAX / sizeof(FitClass) ||
+      classes.size() > SIZE_MAX / sizeof(ScoreClass) ||
       letters.size() > UINT16_MAX)
     return false;
 
@@ -225,10 +228,15 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   }
   if (requirements > SIZE_MAX / sizeof(uint32_t)) return false;
 
-  HotClass* hot = static_cast<HotClass*>(
-      allocate_aligned(classes.size() * sizeof(HotClass)));
-  if (hot == NULL) return false;
-  std::unique_ptr<HotClass, AlignedFree> new_hot(hot);
+  FitClass* fit = static_cast<FitClass*>(
+      allocate_aligned(classes.size() * sizeof(FitClass)));
+  if (fit == NULL) return false;
+  std::unique_ptr<FitClass, AlignedFree> new_fit(fit);
+
+  ScoreClass* score = static_cast<ScoreClass*>(
+      allocate_aligned(classes.size() * sizeof(ScoreClass)));
+  if (score == NULL) return false;
+  std::unique_ptr<ScoreClass, AlignedFree> new_score(score);
 
   uint32_t* packed = NULL;
   if (requirements != 0) {
@@ -278,18 +286,19 @@ bool DfsAnagramSearch::prepare_hot_classes() {
       delta = next;
     }
 
-    hot[ci].best_member_log_score = best_member_log_scores[ci];
-    hot[ci].bag_key_delta = delta;
-    hot[ci].support_mask = support;
-    hot[ci].letters_offset = uint32_t(offset);
-    hot[ci].packed_length_and_count =
+    fit[ci].support_mask = support;
+    fit[ci].letters_offset = uint32_t(offset);
+    fit[ci].packed_length_and_count =
         uint32_t(source.key.size()) |
         (uint32_t(source.letters.size()) << 16) |
         (repeated << 24);
+    score[ci].best_member_log_score = best_member_log_scores[ci];
+    score[ci].bag_key_delta = delta;
     offset = write;
   }
 
-  hot_classes = std::move(new_hot);
+  fit_classes = std::move(new_fit);
+  score_classes = std::move(new_score);
   packed_letters = std::move(new_packed);
   return true;
 }
@@ -436,7 +445,6 @@ void DfsAnagramSearch::clear_cache() {
   candidate_used = 0;
   admitted_entries = 0;
   charged_bytes = 0;
-  candidate_build_buffer.clear();
 }
 
 void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
@@ -510,22 +518,6 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
     candidate_capacity = arena_bytes / sizeof(uint32_t);
   }
 
-  size_t largest_bucket = 0;
-  std::array<int, DFS_SYMBOL_COUNT> const& rank_to_symbol =
-      class_list->rank_to_symbol();
-  for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
-    int const symbol = rank_to_symbol[size_t(rank)];
-    largest_bucket = std::max(
-        largest_bucket,
-        class_list->candidate_end(symbol) -
-            class_list->candidate_begin(symbol));
-  }
-  try {
-    candidate_build_buffer.reserve(
-        std::min(largest_bucket, candidate_capacity));
-  } catch (std::bad_alloc const&) {
-    clear_cache();
-  }
 }
 
 void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
@@ -566,6 +558,7 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
     if (bag[size_t(rank)] != 0)
       bag_mask |= UINT64_C(1) << rank;
   current_bag_key = encodable ? state_count - 1 : 0;
+  current_letters_left = letters.size();
   hot_classes_ready = encodable && prepare_hot_classes();
   prepare_score_bounds(state_count, sink);
   prepare_cache(state_count);
@@ -616,7 +609,7 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
 }
 
 bool DfsAnagramSearch::hot_class_fits(uint32_t class_index) const {
-  HotClass const& candidate = hot_classes.get()[class_index];
+  FitClass const& candidate = fit_classes.get()[class_index];
   if ((candidate.support_mask & ~bag_mask) != 0) return false;
   uint32_t const* requirements =
       packed_letters.get() + candidate.letters_offset;
@@ -630,27 +623,35 @@ bool DfsAnagramSearch::hot_class_fits(uint32_t class_index) const {
   return true;
 }
 
+size_t DfsAnagramSearch::first_length_candidate(
+    size_t begin, size_t end, size_t letters_left) const {
+  while (begin < end) {
+    size_t const middle = begin + (end - begin) / 2;
+    size_t const candidate_length = hot_letter_length(
+        fit_classes.get()[middle].packed_length_and_count);
+    if (candidate_length > letters_left)
+      begin = middle + 1;
+    else
+      end = middle;
+  }
+  return begin;
+}
+
 bool DfsAnagramSearch::build_candidate_entry(
     size_t begin, size_t end, uint64_t* metadata) {
-  candidate_build_buffer.clear();
-  size_t const available = candidate_capacity - candidate_used;
+  size_t write = candidate_used;
   for (size_t class_index = begin; class_index < end; ++class_index) {
     uint32_t const id = uint32_t(class_index);
     if (!hot_class_fits(id)) continue;
-    if (candidate_build_buffer.size() == available) {
+    if (write == candidate_capacity) {
       *metadata = CACHE_BYPASSED;
       return false;
     }
-    candidate_build_buffer.push_back(id);
+    candidate_ids.get()[write++] = id;
   }
 
   uint32_t const offset = uint32_t(candidate_used);
-  uint32_t const count = uint32_t(candidate_build_buffer.size());
-  if (count != 0) {
-    memcpy(candidate_ids.get() + candidate_used,
-           candidate_build_buffer.data(),
-           size_t(count) * sizeof(uint32_t));
-  }
+  uint32_t const count = uint32_t(write - candidate_used);
   candidate_used += count;
   charged_bytes += size_t(count) * sizeof(uint32_t);
   ++admitted_entries;
@@ -693,22 +694,27 @@ uint64_t DfsAnagramSearch::sparse_lookup(
 template<DfsAnagramSearch::WalkMode mode>
 void DfsAnagramSearch::consider_bound_candidate(
     uint32_t class_index, double* best, double* max_rounding_error) {
-  HotClass const& candidate = hot_classes.get()[class_index];
+  FitClass const& fit = fit_classes.get()[class_index];
+  ScoreClass const& score = score_classes.get()[class_index];
   uint32_t const* requirements =
-      packed_letters.get() + candidate.letters_offset;
+      packed_letters.get() + fit.letters_offset;
   uint32_t const requirement_count =
-      hot_requirement_count(candidate.packed_length_and_count);
+      hot_requirement_count(fit.packed_length_and_count);
+  size_t const candidate_length =
+      hot_letter_length(fit.packed_length_and_count);
   uint64_t const parent_bag_mask = bag_mask;
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
-    bag[requirement_rank] -= packed_count(requirement);
-    if (bag[requirement_rank] == 0)
-      bag_mask &= ~(UINT64_C(1) << requirement_rank);
+    uint32_t& remaining = bag[requirement_rank];
+    remaining -= packed_count(requirement);
+    bag_mask &= ~(uint64_t(remaining == 0) << requirement_rank);
   }
-  current_bag_key -= candidate.bag_key_delta;
+  current_bag_key -= score.bag_key_delta;
+  current_letters_left -= candidate_length;
   double const child = compute_score_bound<mode>();
-  current_bag_key += candidate.bag_key_delta;
+  current_letters_left += candidate_length;
+  current_bag_key += score.bag_key_delta;
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     bag[packed_rank(requirement)] += packed_count(requirement);
@@ -718,13 +724,13 @@ void DfsAnagramSearch::consider_bound_candidate(
   if (bound_aborted || child == -HUGE_VAL) return;
   ++bound_transitions;
   double const partial =
-      candidate.best_member_log_score + restart_log_rate;
+      score.best_member_log_score + restart_log_rate;
   double const candidate_bound = partial + child;
   *best = std::max(*best, candidate_bound);
   *max_rounding_error = std::max(
       *max_rounding_error,
       score_candidate_rounding_error(
-          candidate.best_member_log_score, restart_log_rate, child));
+          score.best_member_log_score, restart_log_rate, child));
 }
 
 template<DfsAnagramSearch::WalkMode mode>
@@ -742,7 +748,10 @@ double DfsAnagramSearch::compute_score_bound() {
   int const rank = __builtin_ctzll(bag_mask);
   int const forced_symbol =
       class_list->rank_to_symbol()[size_t(rank)];
-  size_t const begin = class_list->candidate_begin(forced_symbol);
+  size_t const begin = first_length_candidate(
+      class_list->candidate_begin(forced_symbol),
+      class_list->candidate_end(forced_symbol),
+      current_letters_left);
   size_t const end = class_list->candidate_end(forced_symbol);
 
   uint64_t metadata = CACHE_BYPASSED;
@@ -835,9 +844,10 @@ template<DfsAnagramSearch::WalkMode mode>
 void DfsAnagramSearch::visit_fitting_class(
     uint32_t class_index, size_t letters_left,
     double representative_log_score, DfsSolutionSink* sink) {
-  HotClass const& candidate = hot_classes.get()[class_index];
+  FitClass const& fit = fit_classes.get()[class_index];
+  ScoreClass const& score = score_classes.get()[class_index];
   size_t const candidate_length =
-      hot_letter_length(candidate.packed_length_and_count);
+      hot_letter_length(fit.packed_length_and_count);
   assert(candidate_length <= letters_left);
   size_t const next_letters_left = letters_left - candidate_length;
   bool const first_class = path.empty();
@@ -846,9 +856,9 @@ void DfsAnagramSearch::visit_fitting_class(
   if (DFS_UNLIKELY(next_letters_left == 0)) {
     double const next_log_score =
         first_class
-            ? candidate.best_member_log_score
+            ? score.best_member_log_score
             : representative_log_score + restart_log_rate +
-                  candidate.best_member_log_score;
+                  score.best_member_log_score;
     ++solutions;
     if (sink != NULL) sink->emit(path, next_log_score);
     path.pop_back();
@@ -861,24 +871,24 @@ void DfsAnagramSearch::visit_fitting_class(
 
   double const next_log_score =
       first_class
-          ? candidate.best_member_log_score
+          ? score.best_member_log_score
           : representative_log_score + restart_log_rate +
-                candidate.best_member_log_score;
+                score.best_member_log_score;
   uint32_t const* requirements =
-      packed_letters.get() + candidate.letters_offset;
+      packed_letters.get() + fit.letters_offset;
   uint32_t const requirement_count =
-      hot_requirement_count(candidate.packed_length_and_count);
+      hot_requirement_count(fit.packed_length_and_count);
   uint64_t const parent_bag_mask = bag_mask;
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
-    bag[requirement_rank] -= packed_count(requirement);
-    if (bag[requirement_rank] == 0)
-      bag_mask &= ~(UINT64_C(1) << requirement_rank);
+    uint32_t& remaining = bag[requirement_rank];
+    remaining -= packed_count(requirement);
+    bag_mask &= ~(uint64_t(remaining == 0) << requirement_rank);
   }
-  current_bag_key -= candidate.bag_key_delta;
+  current_bag_key -= score.bag_key_delta;
   walk<mode>(next_letters_left, class_index, next_log_score, sink);
-  current_bag_key += candidate.bag_key_delta;
+  current_bag_key += score.bag_key_delta;
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
@@ -939,7 +949,10 @@ void DfsAnagramSearch::walk(size_t letters_left, size_t entry_point,
   int const rank = __builtin_ctzll(bag_mask);
   int const forced_symbol =
       class_list->rank_to_symbol()[size_t(rank)];
-  size_t const begin = class_list->candidate_begin(forced_symbol);
+  size_t const begin = first_length_candidate(
+      class_list->candidate_begin(forced_symbol),
+      class_list->candidate_end(forced_symbol),
+      letters_left);
   size_t const end = class_list->candidate_end(forced_symbol);
 
   if (mode == WALK_DENSE && metadata == CACHE_UNSEEN) {
