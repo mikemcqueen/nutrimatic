@@ -1,4 +1,5 @@
 #include "dfs-class-list.h"
+#include "dfs-output.h"
 #include "dfs-search.h"
 #include "index.h"
 
@@ -61,6 +62,17 @@ static void check_same_run(CollectSolutions const& expected,
   check(actual.ordered_scores == expected.ordered_scores, message);
 }
 
+static void check_same_spellings(
+    std::vector<DfsSpelling> const& expected,
+    std::vector<DfsSpelling> const& actual, char const* message) {
+  check(actual.size() == expected.size(), message);
+  for (size_t i = 0; i < expected.size(); ++i) {
+    check(actual[i].log_score == expected[i].log_score, message);
+    check(actual[i].text == expected[i].text, message);
+    check(actual[i].word_set_key == expected[i].word_set_key, message);
+  }
+}
+
 static int smoke_test() {
   FILE* fp = tmpfile();
   check(fp != NULL, "could not create temporary index");
@@ -107,11 +119,90 @@ static int smoke_test() {
             "candidate cache exceeded its byte budget");
       check_same_run(sink, search, cached_sink, cached,
                      "candidate cache changed ordered DFS results");
+      check(cached.score_bound_mode() ==
+                DfsAnagramSearch::SCORE_BOUND_OFF,
+            "non-score sink unexpectedly enabled score pruning");
     }
+
+    DfsTopN expected_output(&classes, 2);
+    DfsAnagramSearch exhaustive(
+        &classes, "aabb", 1e-6, reader.count(), 0);
+    exhaustive.run(&expected_output);
+    std::vector<DfsSpelling> const expected_spellings =
+        expected_output.take_sorted_results();
+
+    size_t const bound_budget = 4096;
+    DfsTopN bounded_output(&classes, 2);
+    DfsAnagramSearch bounded(
+        &classes, "aabb", 1e-6, reader.count(), bound_budget);
+    bounded.run(&bounded_output);
+    std::vector<DfsSpelling> const bounded_spellings =
+        bounded_output.take_sorted_results();
+    check(bounded.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_DENSE,
+          "small score memo did not use dense storage");
+    check(bounded.score_bound_entries() > 0,
+          "dense score memo stored no states");
+    check(bounded.score_bound_bytes_charged() +
+              bounded.candidate_cache_bytes_charged() <=
+              bound_budget,
+          "combined caches exceeded their byte budget");
+    check(bounded.nodes_visited() <= exhaustive.nodes_visited(),
+          "score bound visited more nodes than exhaustive DFS");
+    check_same_spellings(
+        expected_spellings, bounded_spellings,
+        "score bound changed the retained spellings");
+
+    DfsTopN exhausted_output(&classes, 2);
+    DfsAnagramSearch exhausted(
+        &classes, "aabb", 1e-6, reader.count(), 256);
+    exhausted.run(&exhausted_output);
+    std::vector<DfsSpelling> const exhausted_spellings =
+        exhausted_output.take_sorted_results();
+    check(exhausted.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_OFF,
+          "exhausted sparse score memo did not fail open");
+    check_same_spellings(
+        expected_spellings, exhausted_spellings,
+        "exhausted score memo changed the retained spellings");
   }
 
   fclose(fp);
   return 0;
+}
+
+static void sparse_score_bound_test() {
+  FILE* fp = tmpfile();
+  check(fp != NULL, "could not create sparse-bound test index");
+  {
+    IndexWriter writer(fp);
+    writer.next("abcdefgh ", 0, 10);
+    writer.next(NULL, 0, 0);
+  }
+  fflush(fp);
+  rewind(fp);
+
+  {
+    IndexReader reader(fp);
+    std::string const letters = "abcdefgh";
+    DfsClassList classes(&reader, letters, 1, false);
+    DfsTopN output(&classes, 1);
+    size_t const budget = 1024;
+    DfsAnagramSearch search(
+        &classes, letters, 1e-6, reader.count(), budget);
+    search.run(&output);
+    check(search.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_SPARSE,
+          "large theoretical state space did not use sparse score memo");
+    check(search.score_bound_entries() == 2,
+          "sparse score memo stored the wrong states");
+    check(search.score_bound_bytes_charged() +
+              search.candidate_cache_bytes_charged() <= budget,
+          "sparse score and candidate caches exceeded their budget");
+    check(output.size() == 1, "sparse score bound lost its solution");
+  }
+
+  fclose(fp);
 }
 
 static void entry_point_cache_test() {
@@ -207,6 +298,7 @@ int main(int argc, char* argv[]) {
   if (argc == 1) {
     smoke_test();
     entry_point_cache_test();
+    sparse_score_bound_test();
     return 0;
   }
   if (argc == 2 && strcmp(argv[1], "--validate-14") == 0)

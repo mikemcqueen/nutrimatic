@@ -70,6 +70,12 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
   positions.reserve(result_limit);
 }
 
+bool DfsTopN::score_floor(double* floor) const {
+  if (result_limit == 0 || !full()) return false;
+  *floor = floor_log_score();
+  return true;
+}
+
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_log_score) {
   if (result_limit == 0 || class_indexes.empty()) return;
