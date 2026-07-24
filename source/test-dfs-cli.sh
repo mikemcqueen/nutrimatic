@@ -32,6 +32,11 @@ expect_status() {
 
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --candidate-cache-mib 0 \
+  > "$test_dir/uncached.stdout" 2> "$test_dir/uncached.stderr"
+cmp "$test_dir/all.stdout" "$test_dir/uncached.stdout" ||
+  fail "candidate cache changed stdout"
 [[ $(wc -l < "$test_dir/all.stdout") -eq 4 ]] ||
   fail "full synthetic search did not print four word sets"
 [[ $(grep -c '^70.00 ab cd$' "$test_dir/all.stdout") -eq 1 ]] ||
@@ -62,4 +67,6 @@ cmp "$test_dir/used.stdout" "$test_dir/left.stdout" ||
 
 expect_status 2 "$dfs_anagrams" "$index_file" 'ab!'
 expect_status 2 "$dfs_anagrams" "$index_file" abc -p 0
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --candidate-cache-mib nope
 expect_status 1 "$dfs_anagrams" "$test_dir/missing.index" abcd
