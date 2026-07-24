@@ -72,8 +72,9 @@ Two phases, no frontier anywhere:
 phase 1  trie DFS under bag filter  ->  entry list (words + contiguous phrases)
                                         grouped into anagram classes
 phase 2  bag-subtraction DFS over    ->  solutions (ordered lists of classes)
-         classes, rarest-letter          in canonical order, no duplicates
-         forcing + collapsing
+         classes, rarest-letter          in canonical order, no permutation
+         forcing + collapsing            dupes (segmentation variants stay
+                                         distinct, collapse at output)
 output   lazy per-solution spelling  ->  bounded top-N heap over spellings,
          expansion in score order         deduped by sorted word set
 ```
@@ -132,6 +133,11 @@ searches:
   whole class list at every node. Without this, rarest-letter forcing degrades to
   a linear sweep per DFS node and the 306x evaporates. This is a phase-1 output,
   not something phase 2 can reconstruct cheaply.
+  - Note the build-order dependency: "rarest" is defined by the priority order
+    (phase 2, §"The search"), and that order is itself computed from these
+    classes' letter frequencies. So phase 1 runs in passes — extract and group
+    into classes, tally letter frequencies to fix the priority order, *then* key
+    each class into the index by its rarest letter under that order.
 
 ### Representation
 
@@ -163,8 +169,10 @@ spellings — that is the 306x.
 
 ### The search
 
-- State: the remaining letter bag (26 counts) and the depth (segments chosen so
-  far). Stack depth is O(word cap); the whole live state is kilobytes.
+- State: the remaining letter bag (a small per-letter count array — up to 36
+  distinct symbols, since `a`–`z` *and* `0`–`9` are bag characters, matching
+  `measure-f`'s `is_bag_char`) and the depth. Stack depth is O(word cap); the
+  whole live state is kilobytes.
 - **Rarest-letter forcing (T2, = approach C).** Fix a global letter priority
   order, computed once. At each node, L = the highest-priority letter still in
   the bag; only classes *containing L* are candidates (via the per-letter index
@@ -331,15 +339,24 @@ point of the design (summary §8 "memory ceases to be the constraint").
   `find-anagrams`' to the float tolerance both already carry. In particular
   reproduce `7.000 pen built` (contiguous) and the 2.1e-05 split, per
   `measure-f -d` and `find-anagrams` itself.
-- **Zero duplicate word sets** in `dfs-anagrams` output at 12 letters (the
-  forced-letter property; summary "measured": 35,041 solutions = 35,041 sets).
+- **Zero duplicate word sets, words-only, at 12 letters** (the forced-letter
+  property; summary "measured": 35,041 solutions = 35,041 sets). This is the way
+  to test forcing in isolation, so run it with phrases *off*: with phrases on,
+  phase 2 legitimately emits two solutions for one word set (`{pen built}` vs
+  `{pen}{built}`), which are distinct class-sequences with distinct scores and
+  are collapsed at *output*, not in phase 2 — so the phase-2 solution count then
+  exceeds the distinct-word-set count by design, and only the final printed
+  output is one row per word set.
 - **Node-count target** from Phase 0 (5,488,296 at 19 letters, words only) still
   holds once phase 2 is productionised.
 - **Flat memory**: peak RSS at 14 / 19 / 21 letters should track the prototype's
   93 / 177 / 220 MB (careless) and not grow with N or runtime.
-- **Exhaustive completion**: 19 letters ≤4-equivalent finishes in a few seconds
-  (~3.25 s prototype); 21 letters in tens of seconds (~37 s). The uncapped depth
-  (§"Word cap") may push these up.
+- **Exhaustive completion**: at 19 letters the emergent cap `floor(19/4) = 4`
+  equals the prototype's hard 4-word cap, so the ~3.25 s / 156,138-solution
+  figures should reproduce closely (phrases add a little). At 21 the emergent cap
+  is `floor(21/4) = 5`, one deeper than the prototype's hard 4, so expect the
+  ~37 s / 1.47M-solution figures to come in *higher*, not match — that is the
+  §"Word cap" divergence showing up, not a regression.
 
 ## Build order
 
