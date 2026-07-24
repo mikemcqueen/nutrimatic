@@ -97,6 +97,10 @@ endforeach
 executable('find-anagrams', 'find-anagrams.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
 
+# Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
+executable('measure-f', 'measure-f.cpp',
+  link_with: [optparse_lib, index_lib], install: false)
+
 foreach p : ['find-phone-words']
   executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)
 endforeach
