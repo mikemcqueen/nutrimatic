@@ -516,6 +516,7 @@ void DfsAnagramSearch::visit_fitting_class(
       packed_letters.get() + candidate.letters_offset;
   uint32_t const requirement_count =
       hot_requirement_count(candidate.packed_length_and_count);
+  uint64_t const parent_bag_mask = bag_mask;
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
@@ -530,8 +531,8 @@ void DfsAnagramSearch::visit_fitting_class(
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
     bag[requirement_rank] += packed_count(requirement);
-    bag_mask |= UINT64_C(1) << requirement_rank;
   }
+  bag_mask = parent_bag_mask;
   path.pop_back();
 }
 
@@ -570,7 +571,7 @@ void DfsAnagramSearch::walk(size_t letters_left, size_t entry_point,
       uint32_t const* first =
           candidate_ids.get() + entry_offset(metadata);
       uint32_t const* last = first + count;
-      first = std::lower_bound(first, last, uint32_t(entry_point));
+      while (first != last && *first < uint32_t(entry_point)) ++first;
       for (; first != last; ++first)
         visit_fitting_class<mode>(
             *first, letters_left, representative_log_score, sink);
@@ -602,7 +603,7 @@ void DfsAnagramSearch::walk(size_t letters_left, size_t entry_point,
     if (count == 0) return;
     uint32_t const* first = candidate_ids.get() + entry_offset(metadata);
     uint32_t const* last = first + count;
-    first = std::lower_bound(first, last, uint32_t(entry_point));
+    while (first != last && *first < uint32_t(entry_point)) ++first;
     for (; first != last; ++first)
       visit_fitting_class<mode>(
           *first, letters_left, representative_log_score, sink);

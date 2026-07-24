@@ -73,6 +73,7 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_log_score) {
   if (result_limit == 0 || class_indexes.empty()) return;
+  if (full() && representative_log_score <= floor_log_score()) return;
 
   std::vector<DfsAnagramClass> const& classes = class_list->classes();
   ExpansionCandidate first;
