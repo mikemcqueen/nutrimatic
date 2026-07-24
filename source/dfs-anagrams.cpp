@@ -4,6 +4,7 @@
 #include "index.h"
 #include "optparse.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -65,6 +66,25 @@ static bool parse_count(char const* in, char const* what, int* out) {
 
 static int const DEFAULT_MIN_WORD_LEN = 4;
 static int const DEFAULT_TOP = 10000;
+static size_t const DEFAULT_CANDIDATE_CACHE_MIB = 64;
+static size_t const MIB = size_t(1024) * size_t(1024);
+
+static bool parse_mib(char const* in, char const* what, size_t* out) {
+  if (*in == '\0' || *in == '-') {
+    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    return false;
+  }
+  errno = 0;
+  char* end;
+  unsigned long long const value = strtoull(in, &end, 10);
+  if (*end != '\0' || errno == ERANGE ||
+      value > static_cast<unsigned long long>(SIZE_MAX / MIB)) {
+    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    return false;
+  }
+  *out = size_t(value) * MIB;
+  return true;
+}
 
 struct Args {
   char const* index_file;
@@ -73,16 +93,19 @@ struct Args {
   int max_words;
   int top;
   int progress_factor;
+  size_t candidate_cache_bytes;
 };
 
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
       " [-u used-letters] [-m min-word-length] [-n top]"
-      " [-p progress-factor]\n"
+      " [-p progress-factor] [--candidate-cache-mib MiB]\n"
       "  -m defaults to %d; 0 for no minimum\n"
-      "  -n defaults to %d\n",
-      program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP);
+      "  -n defaults to %d\n"
+      "  --candidate-cache-mib defaults to %zu; 0 disables it\n",
+      program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
+      DEFAULT_CANDIDATE_CACHE_MIB);
 }
 
 static struct optparse_long const long_options[] = {
@@ -90,6 +113,7 @@ static struct optparse_long const long_options[] = {
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
   { "top", 'n', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
+  { "candidate-cache-mib", 'C', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -97,6 +121,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->min_word_len = DEFAULT_MIN_WORD_LEN;
   out->top = DEFAULT_TOP;
   out->progress_factor = 1;
+  out->candidate_cache_bytes = DEFAULT_CANDIDATE_CACHE_MIB * MIB;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -127,6 +152,11 @@ static bool parse_args(char* argv[], Args* out) {
           fputs("error: --progress-factor must be at least 1\n", stderr);
           return false;
         }
+        break;
+      case 'C':
+        if (!parse_mib(options.optarg, "--candidate-cache-mib",
+                       &out->candidate_cache_bytes))
+          return false;
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
@@ -197,9 +227,10 @@ int main(int argc, char* argv[]) {
 
   double const restart = 1e-6;
   DfsAnagramSearch search(
-      &classes, args.letters, restart, reader.count());
+      &classes, args.letters, restart, reader.count(),
+      args.candidate_cache_bytes);
   DfsTopN output(&classes, size_t(args.top));
-  search.run(&output, stderr, args.progress_factor);
+  search.run(args.top == 0 ? NULL : &output, stderr, args.progress_factor);
   fprintf(stderr,
           "# phase 2 complete: %lld nodes, %lld solutions, "
           "%zu spellings expanded, %zu retained\n",

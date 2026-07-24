@@ -48,6 +48,11 @@ normalize() {
 
 "$dfs_anagrams" "$IDX" penbuilt -m 3 -n 100000 \
   > "$test_dir/dfs.stdout" 2> "$test_dir/dfs.stderr"
+"$dfs_anagrams" "$IDX" penbuilt -m 3 -n 100000 \
+  --candidate-cache-mib 0 \
+  > "$test_dir/dfs-uncached.stdout" 2> "$test_dir/dfs-uncached.stderr"
+cmp "$test_dir/dfs.stdout" "$test_dir/dfs-uncached.stdout" ||
+  fail "cached and uncached dfs-anagrams output differs"
 "$find_anagrams" "$IDX" penbuilt -m 3 -c \
   > "$test_dir/find.stdout" 2> "$test_dir/find.stderr"
 

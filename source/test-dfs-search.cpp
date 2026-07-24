@@ -24,6 +24,8 @@ class CollectSolutions: public DfsSolutionSink {
   explicit CollectSolutions(DfsClassList const* classes): classes(classes) { }
 
   void emit(std::vector<size_t> const& indexes, double log_score) {
+    ordered_indexes.push_back(indexes);
+    ordered_scores.push_back(log_score);
     std::vector<std::string> keys;
     for (size_t i = 0; i < indexes.size(); ++i)
       keys.push_back(classes->classes()[indexes[i]].key);
@@ -40,8 +42,24 @@ class CollectSolutions: public DfsSolutionSink {
 
   DfsClassList const* classes;
   std::set<std::string> solutions;
+  std::vector<std::vector<size_t> > ordered_indexes;
+  std::vector<double> ordered_scores;
   double ab_ab_log_score = 0.0;
 };
+
+static void check_same_run(CollectSolutions const& expected,
+                           DfsAnagramSearch const& expected_search,
+                           CollectSolutions const& actual,
+                           DfsAnagramSearch const& actual_search,
+                           char const* message) {
+  check(actual_search.nodes_visited() == expected_search.nodes_visited(),
+        message);
+  check(actual_search.solutions_found() ==
+            expected_search.solutions_found(),
+        message);
+  check(actual.ordered_indexes == expected.ordered_indexes, message);
+  check(actual.ordered_scores == expected.ordered_scores, message);
+}
 
 static int smoke_test() {
   FILE* fp = tmpfile();
@@ -71,10 +89,67 @@ static int smoke_test() {
         2.0 * log(5.0) + log(1e-6) - log(double(reader.count()));
     check(fabs(sink.ab_ab_log_score - expected) < 1e-12,
           "wrong representative score");
+
+    size_t const budgets[] = { 1024, 192, 128 };
+    DfsAnagramSearch::CandidateCacheMode const modes[] = {
+      DfsAnagramSearch::CANDIDATE_CACHE_DENSE,
+      DfsAnagramSearch::CANDIDATE_CACHE_SPARSE,
+      DfsAnagramSearch::CANDIDATE_CACHE_SPARSE,
+    };
+    for (size_t i = 0; i < sizeof(budgets) / sizeof(budgets[0]); ++i) {
+      CollectSolutions cached_sink(&classes);
+      DfsAnagramSearch cached(
+          &classes, "aabb", 1e-6, reader.count(), budgets[i]);
+      cached.run(&cached_sink);
+      check(cached.candidate_cache_mode() == modes[i],
+            "wrong candidate cache mode");
+      check(cached.candidate_cache_bytes_charged() <= budgets[i],
+            "candidate cache exceeded its byte budget");
+      check_same_run(sink, search, cached_sink, cached,
+                     "candidate cache changed ordered DFS results");
+    }
   }
 
   fclose(fp);
   return 0;
+}
+
+static void entry_point_cache_test() {
+  FILE* fp = tmpfile();
+  check(fp != NULL, "could not create entry-point test index");
+  {
+    IndexWriter writer(fp);
+    writer.next("a ", 0, 2);
+    writer.next("aa ", 0, 3);
+    writer.next("aaa ", 0, 5);
+    writer.next("aaaa ", 0, 7);
+    writer.next(NULL, 0, 0);
+  }
+  fflush(fp);
+  rewind(fp);
+
+  {
+    IndexReader reader(fp);
+    std::string const letters = "aaaaaaaa";
+    DfsClassList classes(&reader, letters, 1);
+
+    CollectSolutions expected(&classes);
+    DfsAnagramSearch uncached(
+        &classes, letters, 1e-6, reader.count(), 0);
+    uncached.run(&expected);
+
+    CollectSolutions actual(&classes);
+    DfsAnagramSearch cached(
+        &classes, letters, 1e-6, reader.count(), 2048);
+    cached.run(&actual);
+    check(cached.candidate_cache_mode() ==
+              DfsAnagramSearch::CANDIDATE_CACHE_DENSE,
+          "entry-point regression did not use dense cache");
+    check_same_run(expected, uncached, actual, cached,
+                   "entry-point-dependent cache reuse changed DFS results");
+  }
+
+  fclose(fp);
 }
 
 static void check_count(int64_t actual, int64_t expected,
@@ -129,7 +204,11 @@ static int validate_14_letters() {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc == 1) return smoke_test();
+  if (argc == 1) {
+    smoke_test();
+    entry_point_cache_test();
+    return 0;
+  }
   if (argc == 2 && strcmp(argv[1], "--validate-14") == 0)
     return validate_14_letters();
   fprintf(stderr, "usage: %s [--validate-14]\n", argv[0]);
