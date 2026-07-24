@@ -53,11 +53,13 @@ score order and stop at the current N-th best. That yields the true top N over t
 full 10^9 while touching one or two spellings per solution, discards nothing, and
 keeps the intermediate file useful as a file of *solutions* (60 MB at 21 letters).
 
-**In-corpus word adjacency is a requirement, which promotes §5 from optional to
-blocking.** Approach A only preserves adjacency if phase 1 extracts contiguous
-phrases, and that costs F^depth for an unmeasured F. If F is bad, **approach B is
-the answer** — it preserves adjacency natively with nothing to measure. This is
-now the decision the work order turns on.
+**In-corpus word adjacency is a requirement, which promoted §5 from optional to
+blocking — and §5 has now been measured.** Approach A only preserves adjacency if
+phase 1 extracts contiguous phrases, and that costs F^depth in the class-count
+growth F. **F is 1.12–1.80 across 14–26 letters (M), and F^depth is a ceiling
+rather than an estimate**, because the classes phrases add are all ≥ `2*min_len`
+letters and so cannot be picked at the depths where a four-word solution lives.
+**That selects approach A.** `findings/phrase-recovery-cost.md`.
 
 **The relaxed streaming requirement changed the order of work (§9).** It removes
 the reason design C came first and deletes the IDA\*/threshold-restart machinery
@@ -66,12 +68,15 @@ branch-and-bound.
 
 **The two weakest parts of this analysis**, stated up front rather than buried:
 
-- **The phrase-recovery cost is worse than `ancc-inspiration.md` implies.** That
-  document asserts it is "bounded by the bag filter"; the cost is actually
-  F^depth in the class-count growth F, so it is either nearly free or it eats
-  most of the collapsing win. §5 has a cheap mitigation and makes measuring it
-  step 3 in the work order, because it decides whether design B needs to exist
-  at all.
+- ~~**The phrase-recovery cost is worse than `ancc-inspiration.md` implies.**~~
+  **Resolved, and it landed nearer that document's position than this one's.**
+  It asserted "bounded by the bag filter"; this document countered with F^depth
+  for an unmeasured F. Measured, F is 1.12–1.80 and lands at the *cheap* end of
+  the bracket §5 drew — and the F^depth framing itself proved too pessimistic,
+  since phrase classes are all long and unavailable at depth. The cheap
+  mitigation §5 proposed turned out to be a tautology, for a reason worth
+  keeping: its formula was missing a `/total` per restart, which is 9 orders of
+  magnitude. See `findings/phrase-recovery-cost.md`.
 - **Design C's standalone value is unquantified**, and is left that way here
   rather than given a number. Its measured benefit is already baked into
   approach A's 3.25 s / 37 s — the prototype used forced-letter DFS throughout —
@@ -174,12 +179,14 @@ worth building.)*
 - **Loses contiguous corpus phrases.** `pen built` scores 7 today as a real
   phrase found in one trie descent; as two independent words it scores 2.1e-05.
   A word-list search cannot see phrases at all. This is recoverable — see §5 —
-  but the recovery has an unmeasured price.
-- **Needs `-x/--max-words`, which does not exist.** Every measurement above used
-  ≤4 words. That cap is load-bearing: at 26 letters with `-m 4` the uncapped
-  search is 6 words deep, and two extra levels at a branching factor in the
-  thousands is not a rounding error. Build the flag first
-  (`findings/reduce-permutations.md` §5).
+  and the recovery has now been priced: F = 1.12–1.80 in class count, ≤ 1.3
+  letters of reach at 19 letters and probably much less **(M)**.
+- **Needs a cap on the word count.** Every measurement above used ≤4 words. That
+  cap is load-bearing: at 26 letters with `-m 4` the uncapped search is 6 words
+  deep, and two extra levels at a branching factor in the thousands is not a
+  rounding error. `find-anagrams` now derives one from `-m` rather than taking a
+  flag (§9 item 1) — but the derived cap at 26 letters is 6, not 4, so
+  reproducing the 26-letter rows still needs something else.
 
 ### Details
 
@@ -302,9 +309,14 @@ component being replaced. Build it as part of A or B, not before them.
 In-corpus word adjacency is a stated requirement: `pen built` scoring 7 as a real
 corpus phrase, rather than 2.1e-05 as two independent words, is a feature that
 has to survive. That makes this section a **precondition on approach A**, not an
-enhancement, and it makes the F measurement below a blocking unknown rather than
-a nice-to-have. If F turns out to be bad, **approach B is the answer**, because B
-preserves adjacency natively with nothing to measure.
+enhancement, and it made the F measurement below the blocking unknown the whole
+work order turned on.
+
+> **F has since been measured: 1.12–1.80 across 14–26 letters, and the `F^depth`
+> model below is an upper bound that the bag's geometry works hard against. It
+> selects approach A.** Full results, method, and three corrections to what this
+> section assumed are in `findings/phrase-recovery-cost.md`; the summary is
+> folded into "The cost" below.
 
 ### Here's the win
 
@@ -313,25 +325,57 @@ past the first space and emits multi-segment strings as additional "words"
 carrying their true phrase count; phase 2 then finds `pen built` with no special
 handling at all.
 
-### The cost — and this is the one thing worth measuring before committing
+### The cost — measured
 
-The original document asserts the cost is "bounded by the bag filter". That
-understates it. **Phase-2 node count scales as F^depth**, where F is the growth
-in the number of distinct *multiset classes*, not the raw list:
+The original document asserts the cost is "bounded by the bag filter". The model
+that replaced that claim here was **phase-2 node count scaling as F^depth**,
+where F is the growth in the number of distinct *multiset classes*, not the raw
+list. Measured **(M)**, at `-m 4`:
 
-| Class growth F | Node cost at depth 4 | Letters lost |
-|---|---|---|
-| 1.2x | 2x | -0.6 |
-| 1.5x | 5x | -1.4 |
-| 3x | 81x | -3.8 |
+| Bag | Word classes | + phrases | F | F^4 | Letters lost |
+|---|---|---|---|---|---|
+| 14 letters | 2,458 | 2,760 | **1.123** | 1.6x | -0.4 |
+| 19 letters | 16,396 | 23,735 | **1.448** | 4.4x | -1.3 |
+| 21 letters | 22,811 | 36,053 | **1.581** | 6.2x | -1.6 |
+| 23 letters | 38,900 | 70,030 | **1.800** | 10.5x | -2.0 |
+| 26 letters | 229,222 | 378,178 | **1.650** | 7.4x | -1.7 |
 
-So this is either nearly free or it eats most of the collapsing win, and which
-one is an empirical question nobody has answered.
+That sits in the lower half of the 1.2x–3x range this section originally
+bracketed — nearer "nearly free" than "eats most of the collapsing win". The
+last two columns then overstate even that, for two reasons:
 
-**Cheap mitigation:** only keep a phrase if being contiguous actually *helps* —
-i.e. `count(phrase) > count(w1) × count(w2) × restart_penalty`. A phrase that
-does not beat its own words scored separately adds a class for nothing. This
-should prune the phrase list hard, and it is a one-line test in phase 1.
+**F does not compound with depth.** All of it arrives at two-word phrases: 19
+letters goes 16,396 → 23,604 classes at a two-word cap and then 23,735 and flat
+forever. Three-word contiguous phrases whose every word is ≥ 4 letters are
+almost nonexistent in the corpus — 239 extra entries at 19 letters, 2,466 at 26.
+
+**F does not apply at every level.** Phrases add *exactly zero* classes at 4–7
+letters, which is structural rather than a corpus accident: two words of ≥
+`min_len` is ≥ `2*min_len` letters. The multiplier at 19 letters is 1.00x through
+length 7, 1.21x at 8, 2.30x at 10, and 33.8x at 14. A four-word 19-letter
+solution averages 4.75 letters per word — squarely where F is 1.0 — so the added
+classes can only be picked at depth 1–2, and picking one consumes 8–17 letters
+and shortens the remaining search. `F^depth` assumes availability at every level
+and is therefore a ceiling, not an estimate.
+
+**The proposed mitigation is vacuous.** It was: keep a phrase only if being
+contiguous actually helps, `count(phrase) > count(w1) × count(w2) × restart`.
+That formula drops a `/total` per restart — from `SearchDriver::step()`, k
+segments score `prod(count(w_i)) × (restart / total)^(k-1)`, so each split costs
+~15 orders of magnitude against a corpus total of 3.59e9, not 6. Against the
+model the search actually implements, **every one of 462,730 phrases measured
+passes**, by 6.7–7.3 orders of magnitude; the closest is 2.9 and only two
+anywhere are within three. There is no phrase list to prune, and F as measured
+is F.
+
+**Multi-segment extraction is cheap**, closing the cost `ancc-inspiration.md`
+left unverified: walking past the space costs 3.9x the nodes and 2.4x the time of
+the word-only walk, and all 26 letters finish in under 3 s.
+
+**What is still open:** nobody has converted the class-length distribution into
+an actual phase-2 node count, which needs the ancc DFS over the class list. The
+honest statement at 19 letters is "between 1.0x and 4.4x, and much closer to
+1.0x". See `findings/phrase-recovery-cost.md` §3.
 
 ---
 
@@ -430,8 +474,11 @@ leverage untouched item.
 ## 8. How far can each combination actually go?
 
 Extrapolated from the measured prototype at **3.2x nodes/letter** and **1.54M
-nodes/s**, at `-m 4 -x 4`. All memory figures are *flat* — they do not grow with
-runtime or solution count.
+nodes/s**, at `-m 4` and a hard cap of 4 words. All memory figures are *flat* —
+they do not grow with runtime or solution count. Every A row is words-only:
+subtract up to 1.3 letters for phrase recovery (§5), and less than that wherever
+the solution depth is 4, since the classes phrases add are too long to appear
+there.
 
 ### Time to exhaust a bag
 
@@ -467,12 +514,15 @@ and only with phrase recovery included:
 
 | Configuration | Max bag | Peak memory |
 |---|---|---|
-| **A + phrase recovery**, tuned + 20 cores | **~23–26 letters**, depending entirely on F **(U)** | ~100–300 MB |
+| **A + phrase recovery**, tuned + 20 cores | **~25–26 letters**, F now measured **(P)** | ~100–300 MB |
 | **B**, tuned + 20 cores | **~21–23 letters**, no unknowns **(P)** | < 10 MB + `seen` |
 
 That is the real choice: A-with-phrases is worth roughly **+2 to +4 letters over
-B**, but only if F lands at the low end, and F is unmeasured. B's number is the
-safe one.
+B**. When this table was written that depended entirely on an unmeasured F, and
+the A row spanned 23–26 accordingly. F came in at the low end (§5): ≤1.3 letters
+off the words-only figure and likely well under that, so the A row is now the
+top of its old range rather than the bottom. B's number is still the one with no
+projections in it at all.
 
 ### The two conclusions worth taking away
 
@@ -494,34 +544,43 @@ large number.
 
 Changed from `ancc-inspiration.md` on two counts: in-order streaming is no longer
 required (which removes the reason C came first, and removes IDA\* entirely), and
-**word adjacency is required** (which moves the phrase-recovery measurement to
-the front, because it decides the architecture).
+**word adjacency is required** (which moved the phrase-recovery measurement to
+the front, because it decided the architecture).
 
-1. **`-x/--max-words`.** Prerequisite for reproducing any measurement here, and
-   independently useful today. `findings/reduce-permutations.md` §5.
-2. **Measure F — the phrase-recovery cost (§5).** Extend the throwaway phase-1
-   extractor to walk past the first space, apply the
-   `count(phrase) > count(w1) × count(w2) × restart` filter, and count the
-   resulting **multiset classes** against the word-only baseline (95,629 words at
-   19 letters, so ~16.5k classes at the measured 5.8x ratio). One afternoon of
-   prototype work, and it decides
-   whether the next item is A or B. Do not build either first.
-3. **Then whichever F selects:**
-   - *F ≲ 1.5* → **approach A** with phrase extraction: phase-1 extraction,
-     ancc's DFS with rarest-letter forcing (C) and anagram collapsing (D), lazy
-     spelling expansion (§6), bounded top-N heap. Reaches ~23–26 letters.
-   - *F ≳ 2* → **approach B**: DFS driver over the trie, deleting `nexts`,
-     `crumbs`, and `collect()`. Keeps every current feature, reaches ~21–23
-     letters, no unknowns.
+1. ~~**`-x/--max-words`.**~~ **Done**, though not as a flag. `-m` now defaults to
+   4 and `find-anagrams` derives the cap as `floor(letters / min_word_len)`,
+   which is exactly the bound `AnagramFilter` already enforces — every word
+   spends at least `min_word_len`, so a path that has finished k words has spent
+   k·`min_word_len`, and a separate counter would prune at the same depth. The
+   number is reported on the `#` line beside the progress output. Caveat that
+   matters for reproducing §8: the derived cap is **6 at 26 letters, not 4**, so
+   a hard 4 there still needs an independent cap.
+2. ~~**Measure F — the phrase-recovery cost (§5).**~~ **Done: F = 1.12–1.80,
+   which selects approach A.** `source/measure-f.cpp`; results and method in
+   `findings/phrase-recovery-cost.md`. Its word-only pass reproduces every
+   phase-1 figure in `ancc-inspiration.md` exactly, so the extractor is
+   trustworthy, and the score model is now verified against
+   `SearchDriver::step()` rather than assumed.
+3. **Approach A**, which F selects: phase-1 extraction — `source/measure-f.cpp`
+   is a working prototype of it, phrases included — plus ancc's DFS with
+   rarest-letter forcing (C) and anagram collapsing (D), lazy spelling expansion
+   (§6), and a bounded top-N heap. Reaches ~25–26 letters (§8).
+
+   **Do the phase-2 node count first**, as the opening move of A rather than as
+   a separate measurement: the class list already exists, the DFS is ~100 lines,
+   and it both closes §5's remaining gap and checks against a known target
+   (5,488,296 nodes at 19 letters, words only). If it comes back far worse than
+   the class-length distribution predicts, B is still there.
 4. **The `h` bound (§7)** — small, pays off in both designs, and the only lever
    with no ceiling.
 5. **Parallelise the DFS.** Mechanical, ~12x, do it last since it changes no
    semantics.
 
-Note that B is now a perfectly respectable destination rather than a fallback:
+Note that B remains a perfectly respectable destination rather than a fallback:
 it gives up ~2–4 letters versus the best case for A, needs no measurement to
 de-risk, preserves adjacency and exact scoring by construction, and is a smaller
-change to code that already exists.
+change to code that already exists. What F settles is that A is no longer
+*blocked* — not that B was a bad idea.
 
 ---
 
@@ -530,14 +589,25 @@ change to code that already exists.
 Measured on `~/code/nutrimatic/idx/wiki-merged.5.index`: everything in §1, the
 93/177/220 MB and 0.03/3.25/37.2 s figures, the 306x, the collapse ratios, the
 solution and node counts, the 3.2x/letter and 3.07x/letter scaling constants,
-and the zero-duplicate result at 12 letters.
+the zero-duplicate result at 12 letters, and — since this document was first
+written — **§5's F, the class-length distribution behind it, and the
+multi-segment extraction cost**.
 
 Projected or unmeasured: the 5x tuning factor, the 12x parallel factor, B's
-100–1000x penalty, the phrase-recovery cost F, the value of `h`, C's standalone
-benefit, the spelling-expansion volumes in §6, and every row of §8 marked (P) or
-(U). The prototype was throwaway code; its spelling-expansion counts over-count
-by ~10% (node and solution counts are exact), and the score model was not
-verified against `SearchDriver::step()`'s restart constants.
+100–1000x penalty, the value of `h`, C's standalone benefit, the
+spelling-expansion volumes in §6, every row of §8 marked (P) or (U), and the
+phase-2 node count that would turn §5's class counts into a time.
+
+Two caveats on the original prototype no longer apply in full: its
+spelling-expansion counts still over-count by ~10% (node and solution counts are
+exact), but the score model *has* now been verified against
+`SearchDriver::step()`'s restart constants — the check is what exposed the
+missing `/total` in §5's mitigation, and it reproduces `pen built` at 7
+contiguous versus 2.147e-05 split.
+
+Corrected after measurement: §5's cost table and mitigation, and §9's first two
+items, both of which are now done — see the strikethroughs there for what
+changed and why.
 
 Corrected in this document after an earlier draft: §6 originally proposed
 emitting one best-scoring spelling per solution, which would silently drop
@@ -550,6 +620,9 @@ requirement rather than a nice-to-have.
 
 - `findings/ancc-inspiration.md` — full reasoning, ancc's technique breakdown
   (T1–T7), and the designs in detail. This document is a digest of it.
+- `findings/phrase-recovery-cost.md` — §5's F, measured: the tool, the bags, the
+  class-length distribution, and the three things §5 assumed that turned out not
+  to hold.
 - `findings/anagram-perf.md` — idea #3 is the `h` bound; idea #7 is approach A.
 - `findings/reduce-permutations.md` — `-x/--max-words`, and why `-c` orders by
   trie node.
