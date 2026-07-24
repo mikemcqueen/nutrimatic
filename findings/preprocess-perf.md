@@ -20,7 +20,7 @@ is phase-2 setup. `DfsAnagramSearch::run()`:
 
 1. Encodes the remaining letter bag as a mixed-radix integer key.
 2. Builds separate packed `FitClass` and `ScoreClass` arrays.
-3. Allocates the score-bound and fitting-candidate caches.
+3. Allocates the score-bound, support-only, and fitting-candidate caches.
 4. Recursively computes a memoized completion-score bound from the full bag.
 5. Resets the phase-2 node counters and starts the reported DFS.
 
@@ -39,9 +39,12 @@ H(B) = max over classes c fitting B:
 relaxed upper bound: it may admit completions the real search will reject, but
 must never underestimate a real completion.
 
-The prepass also populates the fitting-candidate cache. The subsequent DFS can
-reuse both the bound and candidate list for a remaining bag. This is why the
-search can become extremely fast after a noticeable setup pause.
+The prepass also populates the fitting-candidate cache. Before testing repeated
+letter counts, candidate construction consults a smaller cache keyed by the
+bag's presence mask. Bags with different multiplicities but the same symbols
+therefore reuse the support-mask screening result. The subsequent DFS can reuse
+the bound and full candidate list for a remaining bag. This is why the search
+can become extremely fast after a noticeable setup pause.
 
 The index file is not accessed during this setup. `IndexReader` mmaps the
 index, but phase 1 extracts all data needed by `DfsClassList` before the phase-1
@@ -79,13 +82,26 @@ upward to `double`, and adds two defensive ulps. Thus `long double` and
 `nextafter()` work are paid once per non-dead state, not once per transition.
 The memo table itself stores one 8-byte `double` per state.
 
-This argument assumes IEEE-754 binary64 operations in round-to-nearest mode,
-the default round-to-nearest behavior on the final `long double` path, finite
-score operands, and no compiler transformation that violates the stated
-evaluation model. Let `H*` be the exact-arithmetic relaxed bound and suppose
-inductively that every stored child bound is at least `H*` for that child. The
-base case is exact: the empty bag stores zero. For every edge `i`, the error
-allowance guarantees
+Score pruning now fails open unless `double` is IEEE-754 binary64,
+`long double` has at least binary64 precision, the runtime rounding mode is
+round-to-nearest, and the translation unit was not compiled with
+`__FAST_MATH__`. Supported builds must also leave reassociation and other
+unsafe math transformations disabled, as the Meson build does.
+
+For finite operands without overflow, let `u = DBL_EPSILON / 2`. The two
+round-to-nearest additions have absolute error bounded by the corresponding
+exact operand magnitudes times `u`; the second bound also includes the first
+addition's error. The implementation calculates the sum of the three absolute
+operand magnitudes, adds one to dominate subnormal absolute error, and
+multiplies by `4 * DBL_EPSILON = 8u`. This covers the two additions plus
+rounding while the magnitude itself is accumulated. If the magnitude or score
+calculation overflows, the allowance or candidate becomes positive infinity,
+which is conservative.
+
+Let `H*` be the exact-arithmetic relaxed bound and suppose inductively that
+every stored child bound is at least `H*` for that child. The base case is
+exact: the empty bag stores zero. For every edge `i`, the error allowance
+guarantees
 
 ```text
 exact_sum_i <= computed_i + error_allowance_i
@@ -100,21 +116,28 @@ monotone, so that exact sum is at least the same edge evaluated with
 exact_sum_i <= computed_i + error_allowance_i <= C + E
 ```
 
-Upward conversion and the extra ulps make the stored parent at least `C + E`.
-It therefore bounds every edge and, by induction on the number of letters
-remaining, is an admissible recursive bound. The final prune comparison retains
-its separate depth-scaled padding for regrouping with the accumulated path
-score.
+The `long double` addition is evaluated with at least binary64 precision.
+Conditional upward conversion followed by two unconditional upward ulps makes
+the stored parent at least `C + E`, including the final addition/conversion
+error. It therefore bounds every edge and, by induction on the number of
+letters remaining, is an admissible recursive bound. The final prune comparison
+retains its separate depth-scaled padding for regrouping with the accumulated
+path score.
 
-This is a short implementation argument, not yet a complete cross-platform
-floating-point proof. Stronger justification and targeted rounding tests remain
-work.
+Tests exercise a multi-level bound with a floor one ulp below the best
+exhaustive score and verify that the best path is not pruned. They also switch
+the runtime to downward rounding and verify that score-bound construction is
+disabled, then restore round-to-nearest. Dense and sparse retained-result tests
+continue to compare with exhaustive search.
 
-### Sparse-table exhaustion
+### Score-table allocation and sparse exhaustion
 
-The default 64 MiB cache budget gives score bounds at most one quarter of the
-budget. When dense storage does not fit, the sparse score table has 1,048,576
-slots and a 50% load limit: 524,288 stored states.
+The default 64 MiB cache budget now permits a dense score array to use up to
+one half of the budget. Dense storage has no hash keys or empty slots, and a
+retained table is substantially more valuable than candidate-cache capacity.
+When dense storage does not fit, the sparse score table retains its previous
+one-quarter budget. At the default budget it has 1,048,576 slots and a 50%
+load limit: 524,288 stored states.
 
 If that table fills during eager construction, the implementation discards the
 entire score table, returns its memory to the candidate cache, and runs phase 2
@@ -151,8 +174,13 @@ Work completed on 2026-07-24:
 - Used the existing descending class-length order to binary-search past classes
   that are too long for the remaining bag.
 - Measured the corrected 28-letter workload.
+- Added a budgeted support-only candidate cache keyed by `bag_mask`.
+- Measured its setup savings, memory use, and effect on the subsequent DFS.
+- Allowed a dense score table, but not a sparse one, to use up to half of the
+  total cache budget.
+- Re-ran the 30-letter workload and retained its complete bound graph.
 
-The CLI reports setup at the phase boundary:
+At that stage, the CLI reported setup at the phase boundary:
 
 ```text
 # phase 2: precomputed 143693 bounded states in 3.714s
@@ -207,12 +235,45 @@ Native 25-letter medians for the individual cumulative prototypes were:
 | Direct candidate-arena writes | 2.854 s | -2.3% |
 | Skip too-long class prefix | 2.771 s | -2.9% |
 
-The remaining obvious CPU target is support-mask screening. Many
-mixed-radix states have different multiplicities but the same presence mask,
-yet candidate construction rescans the same rare-letter bucket for every
-state. A support-only cache keyed by `bag_mask` could reuse that first-stage
-filter. It needs careful arena-budget accounting and must retain ascending
-class order for the canonical phase-2 traversal.
+### Support-only candidate cache
+
+Candidate construction now reuses support-mask screening across multiplicity
+states. The support cache is a fixed sparse hash table keyed by `bag_mask` plus
+an aligned arena of 32-bit global class IDs. Each entry scans the complete
+rarest-symbol bucket and retains the classes whose support is a subset of the
+mask. The IDs remain in global class order and therefore also retain descending
+class-length order. Full per-bag candidate construction binary-searches past
+too-long support candidates and tests only repeated-letter requirements.
+
+The support cache reserves 1/16 of the candidate-cache budget after the score
+table is allocated. One quarter of that reservation is the maximum metadata
+share; the rest is the ID arena. Allocation and admission failures retain the
+original support-and-multiplicity scan. Cache statistics are reported
+separately:
+
+```text
+# phase 2 caches: 2048 support masks, 2164816 support bytes, 89739 candidate entries, 60322556 candidate bytes, 143693 bound entries, 2764800 bound bytes
+```
+
+The 1/16 split was selected against 1/8, 1/24, and 1/32 prototypes. The 1/32
+version made the 25-letter setup a few milliseconds faster but exhausted its
+support arena after 2,026 of 2,048 masks and slowed the real DFS. The 1/16
+version retained all masks while returning roughly 4 MiB more to the full
+candidate arena than 1/8.
+
+Three interleaved warm runs used `-m 4 -n 10000`. "Before" is the immediately
+preceding implementation and "after" includes the 1/16 support cache:
+
+| Normalized bag | Before setup | After setup | Setup reduction | Before search | After search |
+|---|---:|---:|---:|---:|---:|
+| `aadeeefiimnorsstttu` | 0.134780 s | 0.091227 s | 32.3% | 0.034154 s | 0.035017 s |
+| `aabdeeefiimnorsstttu` | 0.369778 s | 0.244672 s | 33.8% | 0.074303 s | 0.077663 s |
+| `aaabeeeeghhiimnrrrsttwwww` | 2.793691 s | 2.012010 s | 28.0% | 0.299393 s | 0.306876 s |
+
+The small search-time increases are the cost of reserving space that would
+otherwise hold full per-bag candidate lists. On the 25-letter workload, total
+phase-2 time still fell from 3.093084 to 2.318886 seconds, or 25.0%. Stdout was
+byte-identical for every comparison.
 
 ### Corrected 28-letter measurement
 
@@ -224,13 +285,15 @@ aaaabeeeeghhiilmnnrrrstttwww
 
 phase 1 produced 288,713 entries, 96,508 classes, and 1,904,614 trie
 nodes. Phase-2 setup retained 533,865 bounded states after 387,268,276
-successful transitions:
+successful transitions. The support cache reduced a warm `-n 1` setup from
+27.271 to 21.550 seconds, or 21.0%:
 
 ```text
-# phase 2: precomputed 533865 bounded states in 26.949s
+# phase 2: precomputed 533865 bounded states in 21.550s
 ```
 
-With `-n 1`, the subsequent search took 0.001431 seconds.
+The subsequent search took 0.001654 seconds. The cache retained 3,328 support
+masks using 3,503,080 charged bytes.
 
 For the normalized 30-letter bag
 
@@ -244,19 +307,30 @@ phase 1 produced:
 459162 entries, 166852 classes, 3054340 trie nodes
 ```
 
-The sparse table again filled and was discarded. Before the follow-up changes,
-the boundary message reported 32.975 seconds of precompute. It now reports:
+Under the old quarter-budget policy, the sparse table filled at 524,288 states
+and was discarded. The support cache reduced that doomed prepass from 21.307 to
+15.561 seconds, after which an unpruned 30-second validation still reached 430
+million nodes and 49.96 million solutions without completing.
+
+The theoretical dense table is 27,648,000 bytes, so it fits inside half of the
+existing 64 MiB total budget. Allowing dense score storage to use that half
+retains the complete 1,406,323-state graph:
 
 ```text
-# phase 2: precomputed 524288 bounded states in 21.307s
+# phase 2: precomputed 1406323 bounded states in 89.761s
+# phase 2 timing: 89.760621 s setup, 0.003205 s search, 1501837804 successful bound transitions, 3502860 nextafter calls
+# phase 2 caches: 3213 support masks, 2466304 support bytes, 82576 candidate entries, 36994560 candidate bytes, 1406323 bound entries, 27648000 bound bytes
 ```
 
-That is a 35.4% reduction in discarded setup work, but it does not mitigate the
-failure mode. A 40-second bounded validation run was stopped after the unpruned
-search reached 543.1 million nodes and 70.1 million solutions.
+The prepass is much longer because it now computes the entire reachable graph
+and its 1.50 billion fitting transitions instead of stopping at the sparse
+limit. It converts a non-terminating practical failure into a bounded one-time
+setup: the subsequent top-1 DFS visited 62,432 nodes, found 13 solutions, and
+finished in 0.003 seconds. All cache charges still total exactly 64 MiB.
 
 Against the original seven-step measurement sequence, steps 1--6 are complete.
-Step 7 confirmed exhaustion, while the policy change remains open.
+Step 7 first confirmed exhaustion and now validates the dense-allocation
+policy.
 
 ## Historical experiments
 
@@ -354,16 +428,13 @@ after:
 351,578,227 solutions
 ```
 
-No final output had yet been written. The current implementation makes the
-doomed prepass faster, but still loses all score pruning when the table fills.
+No final output had yet been written. That observation predates the expanded
+dense-table allowance, which now avoids sparse mode for this bag. Inputs whose
+dense table exceeds half of the total budget can still enter the sparse
+fail-open path described above.
 
-## Remaining work
+## Validation status
 
-1. Strengthen the floating-point justification and tests. In particular,
-   document supported rounding/compiler assumptions and add adversarial tests
-   around rounding boundaries and recursive depth.
-2. Choose and validate a sparse-exhaustion policy: predict or avoid
-   exhaustion, increase the bound budget, or retain a useful partial table
-   instead of discarding all bounds.
-3. Prototype a budgeted support-only candidate cache keyed by `bag_mask`, then
-   compare its setup savings against its memory use and phase-2 search cost.
+The optimization, cache-budget policy, rounding preconditions, and reference
+workloads described above are implemented and covered by the smoke, deep-bound,
+14-letter, CLI, and indexed differential tests.

@@ -57,6 +57,9 @@ grep -q '^# phase 2 complete:' "$test_dir/all.stderr" ||
 grep -Eq '^# phase 2 timing: [0-9.]+ s setup, [0-9.]+ s search, [0-9]+ successful bound transitions, [0-9]+ nextafter calls$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 timing or transition statistics are missing from stderr"
+grep -Eq '^# phase 2 caches: [0-9]+ support masks, [0-9]+ support bytes, [0-9]+ candidate entries, [0-9]+ candidate bytes, [0-9]+ bound entries, [0-9]+ bound bytes$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 cache statistics are missing from stderr"
 grep -Eq '^[#] phase 2 complete: .* [0-9]+ retained$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 completion statistics have the wrong format"

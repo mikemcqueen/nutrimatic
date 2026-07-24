@@ -3,6 +3,7 @@
 #include "dfs-search.h"
 #include "index.h"
 
+#include <fenv.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +47,26 @@ class CollectSolutions: public DfsSolutionSink {
   std::vector<std::vector<size_t> > ordered_indexes;
   std::vector<double> ordered_scores;
   double ab_ab_log_score = 0.0;
+};
+
+class FixedFloorSolutions: public DfsSolutionSink {
+ public:
+  explicit FixedFloorSolutions(double floor): floor(floor) { }
+
+  void emit(std::vector<size_t> const& indexes, double log_score) {
+    ordered_indexes.push_back(indexes);
+    ordered_scores.push_back(log_score);
+  }
+
+  bool supports_score_pruning() const { return true; }
+  bool score_floor(double* out) const {
+    *out = floor;
+    return true;
+  }
+
+  double floor;
+  std::vector<std::vector<size_t> > ordered_indexes;
+  std::vector<double> ordered_scores;
 };
 
 static void check_same_run(CollectSolutions const& expected,
@@ -152,26 +173,91 @@ static int smoke_test() {
     check(bounded.phase_two_search_seconds() >= 0.0,
           "phase-2 search time was negative");
     check(bounded.score_bound_bytes_charged() +
-              bounded.candidate_cache_bytes_charged() <=
+              bounded.candidate_cache_bytes_charged() +
+              bounded.support_cache_bytes_charged() <=
               bound_budget,
           "combined caches exceeded their byte budget");
+    check(bounded.support_cache_entries() > 0,
+          "support cache admitted no entries");
     check(bounded.nodes_visited() <= exhaustive.nodes_visited(),
           "score bound visited more nodes than exhaustive DFS");
     check_same_spellings(
         expected_spellings, bounded_spellings,
         "score bound changed the retained spellings");
 
+    std::string const exhausted_letters = "aaaaabbbbb";
+    DfsTopN exhausted_expected_output(&classes, 2);
+    DfsAnagramSearch exhausted_expected(
+        &classes, exhausted_letters, 1e-6, reader.count(), 0);
+    exhausted_expected.run(&exhausted_expected_output);
+    std::vector<DfsSpelling> const exhausted_expected_spellings =
+        exhausted_expected_output.take_sorted_results();
+
+    DfsTopN expanded_dense_output(&classes, 2);
+    DfsAnagramSearch expanded_dense(
+        &classes, exhausted_letters, 1e-6, reader.count(), 768);
+    expanded_dense.run(&expanded_dense_output);
+    check(expanded_dense.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_DENSE,
+          "half-budget dense score memo was not selected");
+    check(expanded_dense.score_bound_prunes() > 0,
+          "deep dense score memo did not prune");
+    check_same_spellings(
+        exhausted_expected_spellings,
+        expanded_dense_output.take_sorted_results(),
+        "half-budget dense score memo changed retained spellings");
+
+    CollectSolutions boundary_expected(&classes);
+    DfsAnagramSearch boundary_exhaustive(
+        &classes, exhausted_letters, 1e-6, reader.count(), 0);
+    boundary_exhaustive.run(&boundary_expected);
+    check(!boundary_expected.ordered_scores.empty(),
+          "rounding-boundary test found no solutions");
+    size_t const best_position = size_t(std::max_element(
+        boundary_expected.ordered_scores.begin(),
+        boundary_expected.ordered_scores.end()) -
+        boundary_expected.ordered_scores.begin());
+    double const best_score =
+        boundary_expected.ordered_scores[best_position];
+    std::vector<size_t> const& best_path =
+        boundary_expected.ordered_indexes[best_position];
+    FixedFloorSolutions boundary_output(
+        nextafter(best_score, -HUGE_VAL));
+    DfsAnagramSearch boundary(
+        &classes, exhausted_letters, 1e-6, reader.count(), 768);
+    boundary.run(&boundary_output);
+    check(std::find(
+              boundary_output.ordered_indexes.begin(),
+              boundary_output.ordered_indexes.end(),
+              best_path) != boundary_output.ordered_indexes.end(),
+          "one-ulp score floor pruned the best deep solution");
+
+    int const original_rounding = fegetround();
+    if (original_rounding != -1 && fesetround(FE_DOWNWARD) == 0) {
+      DfsTopN downward_output(&classes, 2);
+      DfsAnagramSearch downward(
+          &classes, exhausted_letters, 1e-6, reader.count(), 768);
+      downward.run(&downward_output);
+      check(downward.score_bound_mode() ==
+                DfsAnagramSearch::SCORE_BOUND_OFF,
+            "score memo ignored a non-nearest rounding mode");
+      check(fesetround(original_rounding) == 0,
+            "could not restore floating-point rounding mode");
+    }
+
     DfsTopN exhausted_output(&classes, 2);
     DfsAnagramSearch exhausted(
-        &classes, "aabb", 1e-6, reader.count(), 256);
+        &classes, exhausted_letters, 1e-6, reader.count(), 512);
     exhausted.run(&exhausted_output);
     std::vector<DfsSpelling> const exhausted_spellings =
         exhausted_output.take_sorted_results();
     check(exhausted.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_OFF,
           "exhausted sparse score memo did not fail open");
+    check(exhausted.score_bound_states_computed() > 0,
+          "sparse score memo was disabled instead of exhausted");
     check_same_spellings(
-        expected_spellings, exhausted_spellings,
+        exhausted_expected_spellings, exhausted_spellings,
         "exhausted score memo changed the retained spellings");
   }
 
@@ -216,7 +302,8 @@ static void sparse_score_bound_test() {
     check(search.score_bound_nextafter_calls() >= 2,
           "sparse score memo counted too few nextafter calls");
     check(search.score_bound_bytes_charged() +
-              search.candidate_cache_bytes_charged() <= budget,
+              search.candidate_cache_bytes_charged() +
+              search.support_cache_bytes_charged() <= budget,
           "sparse score and candidate caches exceeded their budget");
     check(output.size() == 1, "sparse score bound lost its solution");
     check_same_spellings(

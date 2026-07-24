@@ -239,6 +239,16 @@ int main(int argc, char* argv[]) {
           (unsigned long long) search.score_bound_transitions(),
           (unsigned long long) search.score_bound_nextafter_calls());
   fprintf(stderr,
+          "# phase 2 caches: %zu support masks, %zu support bytes, "
+          "%zu candidate entries, %zu candidate bytes, "
+          "%zu bound entries, %zu bound bytes\n",
+          search.support_cache_entries(),
+          search.support_cache_bytes_charged(),
+          search.candidate_cache_entries(),
+          search.candidate_cache_bytes_charged(),
+          search.score_bound_entries(),
+          search.score_bound_bytes_charged());
+  fprintf(stderr,
           "# phase 2 complete: %lld nodes, %lld solutions, "
           "%zu spellings expanded, %zu retained\n",
           (long long) search.nodes_visited(),

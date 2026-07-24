@@ -1,6 +1,7 @@
 #include "dfs-search.h"
 
 #include <assert.h>
+#include <fenv.h>
 #include <float.h>
 #include <limits.h>
 #include <math.h>
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 #if defined(__GNUC__) || defined(__clang__)
 #define DFS_LIKELY(value) __builtin_expect(!!(value), 1)
@@ -22,7 +24,13 @@ namespace {
 uint64_t const CACHE_UNSEEN = UINT64_MAX;
 uint64_t const CACHE_BYPASSED = UINT64_MAX - 1;
 size_t const CACHE_ALIGNMENT = 64;
-size_t const SCORE_BOUND_BUDGET_DIVISOR = 4;
+size_t const SPARSE_SCORE_BOUND_BUDGET_DIVISOR = 4;
+size_t const DENSE_SCORE_BOUND_BUDGET_DIVISOR = 2;
+// Presence masks are far fewer than multiplicity states. Measurements on the
+// reference bags found that 1/16 retains every useful support list without
+// materially shrinking the full candidate arena used by the later DFS.
+size_t const SUPPORT_CACHE_BUDGET_DIVISOR = 16;
+size_t const SUPPORT_CACHE_METADATA_DIVISOR = 4;
 
 static double make_restart_log_rate(double restart, int64_t corpus_total) {
   assert(restart > 0.0);
@@ -146,6 +154,17 @@ static double score_candidate_rounding_error(
   return magnitude * DBL_EPSILON * 4.0;
 }
 
+static bool score_bound_arithmetic_supported() {
+#if defined(__FAST_MATH__)
+  return false;
+#else
+  return std::numeric_limits<double>::is_iec559 &&
+      FLT_RADIX == 2 && DBL_MANT_DIG == 53 &&
+      LDBL_MANT_DIG >= DBL_MANT_DIG &&
+      fegetround() == FE_TONEAREST;
+#endif
+}
+
 }  // namespace
 
 void DfsAnagramSearch::AlignedFree::operator()(void* pointer) const {
@@ -184,6 +203,13 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     candidate_used(0),
     admitted_entries(0),
     charged_bytes(0),
+    support_capacity(0),
+    support_max_entries(0),
+    support_filled(0),
+    support_candidate_capacity(0),
+    support_candidate_used(0),
+    support_admitted_entries(0),
+    support_charged_bytes(0),
     progress_stream(NULL),
     progress_interval(0),
     next_progress(0),
@@ -320,18 +346,25 @@ void DfsAnagramSearch::prepare_score_bounds(
   active_candidate_cache_budget = candidate_cache_budget;
   if (!hot_classes_ready || sink == NULL ||
       !sink->supports_score_pruning() ||
+      !score_bound_arithmetic_supported() ||
       candidate_cache_budget < CACHE_ALIGNMENT *
-          SCORE_BOUND_BUDGET_DIVISOR)
+          SPARSE_SCORE_BOUND_BUDGET_DIVISOR)
     return;
 
-  size_t const budget =
-      candidate_cache_budget / SCORE_BOUND_BUDGET_DIVISOR;
+  size_t const sparse_budget =
+      candidate_cache_budget / SPARSE_SCORE_BOUND_BUDGET_DIVISOR;
+  // A dense table spends every byte on a bound and can make an otherwise
+  // unusable search practical. Let it borrow more of the shared budget.
+  // Sparse tables retain the smaller cap so an eventual fail-open does not
+  // first consume twice as much setup time and candidate-cache space.
+  size_t const dense_budget =
+      candidate_cache_budget / DENSE_SCORE_BOUND_BUDGET_DIVISOR;
   size_t dense_bytes = 0;
   bool const dense_size_ok =
       state_count <= SIZE_MAX / sizeof(double) &&
       round_up_alignment(size_t(state_count) * sizeof(double),
                          &dense_bytes);
-  if (dense_size_ok && dense_bytes <= budget) {
+  if (dense_size_ok && dense_bytes <= dense_budget) {
     double* values = static_cast<double*>(allocate_aligned(dense_bytes));
     if (values == NULL) return;
     std::fill(values, values + size_t(state_count), NAN);
@@ -341,7 +374,7 @@ void DfsAnagramSearch::prepare_score_bounds(
     bound_charged_bytes = dense_bytes;
   } else {
     size_t capacity = largest_power_of_two(
-        budget / (sizeof(uint64_t) + sizeof(double)));
+        sparse_budget / (sizeof(uint64_t) + sizeof(double)));
     if (state_count <= SIZE_MAX / 2) {
       size_t const desired =
           next_power_of_two_at_least(size_t(state_count) * 2);
@@ -351,7 +384,7 @@ void DfsAnagramSearch::prepare_score_bounds(
 
     size_t array_bytes;
     if (!round_up_alignment(capacity * sizeof(uint64_t), &array_bytes) ||
-        array_bytes > budget / 2)
+        array_bytes > sparse_budget / 2)
       return;
     uint64_t* keys = static_cast<uint64_t*>(
         allocate_aligned(array_bytes));
@@ -445,6 +478,69 @@ void DfsAnagramSearch::clear_cache() {
   candidate_used = 0;
   admitted_entries = 0;
   charged_bytes = 0;
+  support_metadata.reset();
+  support_keys.reset();
+  support_candidate_ids.reset();
+  support_capacity = 0;
+  support_max_entries = 0;
+  support_filled = 0;
+  support_candidate_capacity = 0;
+  support_candidate_used = 0;
+  support_admitted_entries = 0;
+  support_charged_bytes = 0;
+}
+
+void DfsAnagramSearch::prepare_support_cache(size_t* remaining_budget) {
+  size_t const budget =
+      *remaining_budget / SUPPORT_CACHE_BUDGET_DIVISOR;
+  if (budget < 3 * CACHE_ALIGNMENT) return;
+
+  size_t capacity = largest_power_of_two(
+      (budget / SUPPORT_CACHE_METADATA_DIVISOR) /
+      (2 * sizeof(uint64_t)));
+  size_t const distinct_symbols = size_t(__builtin_popcountll(bag_mask));
+  if (distinct_symbols < sizeof(size_t) * CHAR_BIT - 1) {
+    size_t const possible_masks = size_t(1) << distinct_symbols;
+    size_t const desired =
+        possible_masks <= SIZE_MAX / 2 ? possible_masks * 2 : 0;
+    if (desired != 0) capacity = std::min(capacity, desired);
+  }
+  if (capacity < 2) return;
+
+  size_t array_bytes;
+  if (!round_up_alignment(capacity * sizeof(uint64_t), &array_bytes) ||
+      array_bytes > budget / 2)
+    return;
+  size_t const metadata_bytes = array_bytes * 2;
+  size_t arena_bytes =
+      (budget - metadata_bytes) & ~(CACHE_ALIGNMENT - 1);
+  size_t const max_candidate_ids = std::min(
+      size_t(UINT32_MAX - 1), SIZE_MAX / sizeof(uint32_t));
+  arena_bytes = std::min(
+      arena_bytes, max_candidate_ids * sizeof(uint32_t));
+  if (arena_bytes == 0) return;
+
+  uint64_t* keys = static_cast<uint64_t*>(
+      allocate_aligned(array_bytes));
+  if (keys == NULL) return;
+  std::unique_ptr<uint64_t, AlignedFree> new_keys(keys);
+  uint64_t* metadata = static_cast<uint64_t*>(
+      allocate_aligned(array_bytes));
+  if (metadata == NULL) return;
+  std::unique_ptr<uint64_t, AlignedFree> new_metadata(metadata);
+  uint32_t* ids = static_cast<uint32_t*>(
+      allocate_aligned(arena_bytes));
+  if (ids == NULL) return;
+
+  std::fill(keys, keys + capacity, UINT64_MAX);
+  support_keys = std::move(new_keys);
+  support_metadata = std::move(new_metadata);
+  support_candidate_ids.reset(ids);
+  support_capacity = capacity;
+  support_max_entries = capacity / 2;
+  support_candidate_capacity = arena_bytes / sizeof(uint32_t);
+  support_charged_bytes = metadata_bytes;
+  *remaining_budget -= metadata_bytes + arena_bytes;
 }
 
 void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
@@ -453,13 +549,20 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
       active_candidate_cache_budget < CACHE_ALIGNMENT)
     return;
 
+  size_t cache_budget = active_candidate_cache_budget;
+  prepare_support_cache(&cache_budget);
+  if (cache_budget < CACHE_ALIGNMENT) {
+    clear_cache();
+    return;
+  }
+
   size_t dense_bytes = 0;
   bool const dense_size_ok =
       state_count <= SIZE_MAX / sizeof(uint64_t) &&
       round_up_alignment(size_t(state_count) * sizeof(uint64_t),
                          &dense_bytes);
   if (dense_size_ok &&
-      dense_bytes <= active_candidate_cache_budget / 2) {
+      dense_bytes <= cache_budget / 2) {
     uint64_t* metadata = static_cast<uint64_t*>(
         allocate_aligned(dense_bytes));
     if (metadata == NULL) return;
@@ -469,7 +572,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
     cache_mode = CANDIDATE_CACHE_DENSE;
     charged_bytes = dense_bytes;
   } else {
-    size_t const metadata_share = active_candidate_cache_budget / 2;
+    size_t const metadata_share = cache_budget / 2;
     size_t capacity = largest_power_of_two(
         metadata_share / (2 * sizeof(uint64_t)));
     if (state_count <= SIZE_MAX / 2) {
@@ -481,7 +584,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
 
     size_t array_bytes;
     if (!round_up_alignment(capacity * sizeof(uint64_t), &array_bytes) ||
-        array_bytes > active_candidate_cache_budget / 2)
+        array_bytes > cache_budget / 2)
       return;
     uint64_t* keys = static_cast<uint64_t*>(
         allocate_aligned(array_bytes));
@@ -500,7 +603,7 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
     charged_bytes = array_bytes * 2;
   }
 
-  size_t remaining = active_candidate_cache_budget - charged_bytes;
+  size_t remaining = cache_budget - charged_bytes;
   size_t arena_bytes = remaining & ~(CACHE_ALIGNMENT - 1);
   size_t const max_candidate_ids = std::min(
       size_t(UINT32_MAX - 1), SIZE_MAX / sizeof(uint32_t));
@@ -611,6 +714,12 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
 bool DfsAnagramSearch::hot_class_fits(uint32_t class_index) const {
   FitClass const& candidate = fit_classes.get()[class_index];
   if ((candidate.support_mask & ~bag_mask) != 0) return false;
+  return hot_class_multiplicity_fits(class_index);
+}
+
+bool DfsAnagramSearch::hot_class_multiplicity_fits(
+    uint32_t class_index) const {
+  FitClass const& candidate = fit_classes.get()[class_index];
   uint32_t const* requirements =
       packed_letters.get() + candidate.letters_offset;
   uint32_t const repeated =
@@ -637,17 +746,126 @@ size_t DfsAnagramSearch::first_length_candidate(
   return begin;
 }
 
-bool DfsAnagramSearch::build_candidate_entry(
+uint32_t const* DfsAnagramSearch::first_length_support_candidate(
+    uint32_t const* begin, uint32_t const* end,
+    size_t letters_left) const {
+  while (begin < end) {
+    uint32_t const* middle = begin + (end - begin) / 2;
+    size_t const candidate_length = hot_letter_length(
+        fit_classes.get()[*middle].packed_length_and_count);
+    if (candidate_length > letters_left)
+      begin = middle + 1;
+    else
+      end = middle;
+  }
+  return begin;
+}
+
+uint64_t DfsAnagramSearch::support_lookup(
+    uint64_t key, size_t* slot, bool* may_insert) const {
+  if (support_capacity == 0) {
+    *slot = 0;
+    *may_insert = false;
+    return CACHE_BYPASSED;
+  }
+  size_t const mask = support_capacity - 1;
+  size_t position = size_t(mix_key(key)) & mask;
+  for (;;) {
+    uint64_t const stored_key = support_keys.get()[position];
+    if (stored_key == key) {
+      *slot = position;
+      *may_insert = false;
+      return support_metadata.get()[position];
+    }
+    if (stored_key == UINT64_MAX) {
+      *slot = position;
+      *may_insert = support_filled < support_max_entries;
+      return CACHE_UNSEEN;
+    }
+    position = (position + 1) & mask;
+  }
+}
+
+void DfsAnagramSearch::publish_support(
+    size_t slot, uint64_t key, uint64_t metadata) {
+  support_metadata.get()[slot] = metadata;
+  support_keys.get()[slot] = key;
+  ++support_filled;
+}
+
+bool DfsAnagramSearch::build_support_entry(
     size_t begin, size_t end, uint64_t* metadata) {
-  size_t write = candidate_used;
+  size_t write = support_candidate_used;
+  // The bucket and its support-filtered subsequence are both in ascending
+  // global class order. This also preserves descending class-length order.
   for (size_t class_index = begin; class_index < end; ++class_index) {
-    uint32_t const id = uint32_t(class_index);
-    if (!hot_class_fits(id)) continue;
-    if (write == candidate_capacity) {
+    FitClass const& candidate = fit_classes.get()[class_index];
+    if ((candidate.support_mask & ~bag_mask) != 0) continue;
+    if (write == support_candidate_capacity) {
       *metadata = CACHE_BYPASSED;
       return false;
     }
-    candidate_ids.get()[write++] = id;
+    support_candidate_ids.get()[write++] = uint32_t(class_index);
+  }
+
+  uint32_t const offset = uint32_t(support_candidate_used);
+  uint32_t const count = uint32_t(write - support_candidate_used);
+  support_candidate_used += count;
+  support_charged_bytes += size_t(count) * sizeof(uint32_t);
+  ++support_admitted_entries;
+  *metadata = pack_entry(offset, count);
+  return true;
+}
+
+bool DfsAnagramSearch::build_candidate_entry(
+    size_t begin, size_t end, uint64_t* metadata) {
+  size_t write = candidate_used;
+
+  size_t support_slot = 0;
+  bool support_may_insert = false;
+  uint64_t support_entry = support_lookup(
+      bag_mask, &support_slot, &support_may_insert);
+  if (support_entry == CACHE_UNSEEN) {
+    if (support_may_insert) {
+      size_t const forced_begin =
+          class_list->candidate_begin(
+              class_list->rank_to_symbol()[
+                  size_t(__builtin_ctzll(bag_mask))]);
+      build_support_entry(forced_begin, end, &support_entry);
+      publish_support(
+          support_slot, bag_mask, support_entry);
+    } else {
+      support_entry = CACHE_BYPASSED;
+    }
+  }
+
+  if (support_entry != CACHE_BYPASSED) {
+    uint32_t const* first =
+        support_candidate_ids.get() + entry_offset(support_entry);
+    uint32_t const* last = first + entry_count(support_entry);
+    first = first_length_support_candidate(
+        first, last, current_letters_left);
+    for (; first != last; ++first) {
+      uint32_t const id = *first;
+      // Presence was proved when the support entry was built. Only repeated
+      // letter requirements can distinguish bags sharing this mask.
+      if (!hot_class_multiplicity_fits(id)) continue;
+      if (write == candidate_capacity) {
+        *metadata = CACHE_BYPASSED;
+        return false;
+      }
+      candidate_ids.get()[write++] = id;
+    }
+  } else {
+    for (size_t class_index = begin; class_index < end; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (!hot_class_fits(id)) continue;
+      if (write == candidate_capacity) {
+        *metadata = CACHE_BYPASSED;
+        return false;
+      }
+      candidate_ids.get()[write++] = id;
+    }
   }
 
   uint32_t const offset = uint32_t(candidate_used);

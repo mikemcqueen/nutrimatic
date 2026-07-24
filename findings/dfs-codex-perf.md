@@ -356,9 +356,10 @@ described below.
 
    ### Bounded storage and cache integration
 
-   Score memoization shares `--candidate-cache-mib`'s existing hard budget. Up
-   to one quarter is available to score bounds and the rest remains candidate
-   metadata and IDs.
+   Score memoization shares `--candidate-cache-mib`'s existing hard budget.
+   Dense bounds may use up to one half because every byte stores a value;
+   sparse bounds retain a one-quarter cap. The rest remains candidate metadata
+   and IDs.
 
    - If one `double` per theoretical mixed-radix state fits, use an aligned dense
      array. This is the path for the documented 55,296-state workload.
