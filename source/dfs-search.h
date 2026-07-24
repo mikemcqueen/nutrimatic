@@ -58,6 +58,10 @@ class DfsAnagramSearch {
   CandidateCacheMode candidate_cache_mode() const { return cache_mode; }
   size_t candidate_cache_entries() const { return admitted_entries; }
   size_t candidate_cache_bytes_charged() const { return charged_bytes; }
+  size_t support_cache_entries() const { return support_admitted_entries; }
+  size_t support_cache_bytes_charged() const {
+    return support_charged_bytes;
+  }
   ScoreBoundMode score_bound_mode() const { return bound_mode; }
   size_t score_bound_entries() const { return bound_entries; }
   size_t score_bound_states_computed() const {
@@ -110,8 +114,12 @@ class DfsAnagramSearch {
                         DfsSolutionSink* sink);
 
   bool hot_class_fits(uint32_t class_index) const;
+  bool hot_class_multiplicity_fits(uint32_t class_index) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
+  uint32_t const* first_length_support_candidate(
+      uint32_t const* begin, uint32_t const* end,
+      size_t letters_left) const;
   template<WalkMode mode>
   double compute_score_bound();
   template<WalkMode mode>
@@ -122,6 +130,11 @@ class DfsAnagramSearch {
   bool should_prune(double representative_log_score,
                     DfsSolutionSink* sink) const;
   bool build_candidate_entry(size_t begin, size_t end, uint64_t* metadata);
+  bool build_support_entry(size_t begin, size_t end, uint64_t* metadata);
+  uint64_t support_lookup(uint64_t key, size_t* slot,
+                          bool* may_insert) const;
+  void publish_support(size_t slot, uint64_t key, uint64_t metadata);
+  void prepare_support_cache(size_t* remaining_budget);
   void publish_dense(uint64_t key, uint64_t metadata);
   void publish_sparse(size_t slot, uint64_t key, uint64_t metadata);
   uint64_t sparse_lookup(uint64_t key, size_t* slot,
@@ -179,6 +192,17 @@ class DfsAnagramSearch {
   size_t candidate_used;
   size_t admitted_entries;
   size_t charged_bytes;
+
+  std::unique_ptr<uint64_t, AlignedFree> support_metadata;
+  std::unique_ptr<uint64_t, AlignedFree> support_keys;
+  std::unique_ptr<uint32_t, AlignedFree> support_candidate_ids;
+  size_t support_capacity;
+  size_t support_max_entries;
+  size_t support_filled;
+  size_t support_candidate_capacity;
+  size_t support_candidate_used;
+  size_t support_admitted_entries;
+  size_t support_charged_bytes;
 
   std::vector<size_t> path;
   FILE* progress_stream;
