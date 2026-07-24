@@ -232,13 +232,18 @@ int main(int argc, char* argv[]) {
   DfsTopN output(&classes, size_t(args.top));
   search.run(args.top == 0 ? NULL : &output, stderr, args.progress_factor);
   fprintf(stderr,
+          "# phase 2 timing: %.6f s setup, %.6f s search, "
+          "%llu successful bound transitions, %llu nextafter calls\n",
+          search.phase_two_setup_seconds(),
+          search.phase_two_search_seconds(),
+          (unsigned long long) search.score_bound_transitions(),
+          (unsigned long long) search.score_bound_nextafter_calls());
+  fprintf(stderr,
           "# phase 2 complete: %lld nodes, %lld solutions, "
-          "%zu spellings expanded, %zu retained, "
-          "%zu bound states computed\n",
+          "%zu spellings expanded, %zu retained\n",
           (long long) search.nodes_visited(),
           (long long) search.solutions_found(),
-          output.spellings_expanded(), output.size(),
-          search.score_bound_states_computed());
+          output.spellings_expanded(), output.size());
   fflush(stderr);
 
   std::vector<DfsSpelling> const results = output.take_sorted_results();

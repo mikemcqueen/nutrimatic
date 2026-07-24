@@ -49,10 +49,17 @@ grep -q '^# 4 letters "abcd", words of 2+, at most 2 words$' \
   fail "search header is missing from stderr"
 grep -q '^# phase 1 complete:' "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
+grep -Eq '^# phase 2: precomputed [0-9]+ bounded states in [0-9.]+s$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 precompute timing is missing from stderr"
 grep -q '^# phase 2 complete:' "$test_dir/all.stderr" ||
   fail "phase-2 statistics are missing from stderr"
-grep -q 'bound states computed$' "$test_dir/all.stderr" ||
-  fail "score-bound state count is missing from stderr"
+grep -Eq '^# phase 2 timing: [0-9.]+ s setup, [0-9.]+ s search, [0-9]+ successful bound transitions, [0-9]+ nextafter calls$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 timing or transition statistics are missing from stderr"
+grep -Eq '^[#] phase 2 complete: .* [0-9]+ retained$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 completion statistics have the wrong format"
 
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 2 \
   > "$test_dir/top.stdout" 2> "$test_dir/top.stderr"

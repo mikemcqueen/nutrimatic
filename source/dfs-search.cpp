@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <chrono>
 
 #if defined(__GNUC__) || defined(__clang__)
 #define DFS_LIKELY(value) __builtin_expect(!!(value), 1)
@@ -117,17 +118,34 @@ static uint32_t hot_repeated_count(uint32_t packed) {
   return packed >> 24;
 }
 
-static double round_score_bound_up(long double value) {
+static double round_score_bound_up(
+    long double value, uint64_t* nextafter_calls) {
   if (value == -HUGE_VALL) return -HUGE_VAL;
   if (value == HUGE_VALL) return HUGE_VAL;
   double rounded = double(value);
-  if (static_cast<long double>(rounded) < value)
+  if (static_cast<long double>(rounded) < value) {
     rounded = nextafter(rounded, HUGE_VAL);
-  // A production score adds restart and class score in two double operations.
-  // Keep two extra ulps so regrouping the same additions cannot lower the
-  // supposedly optimistic memoized value.
+    ++*nextafter_calls;
+  }
+  // The candidate calculation supplies an explicit absolute-error envelope.
+  // Keep two additional ulps as defense against conversion and later
+  // regrouping with the path's accumulated score.
   rounded = nextafter(rounded, HUGE_VAL);
-  return nextafter(rounded, HUGE_VAL);
+  rounded = nextafter(rounded, HUGE_VAL);
+  *nextafter_calls += 2;
+  return rounded;
+}
+
+// Bound the error in fl(fl(class_score + restart) + child). IEEE double
+// round-to-nearest incurs less than one DBL_EPSILON times the sum of operand
+// magnitudes here. The factor of four also covers rounding while calculating
+// the magnitude and subnormal results (the added 1 dominates their error).
+static double score_candidate_rounding_error(
+    double class_score, double restart, double child) {
+  double magnitude = fabs(class_score) + fabs(restart);
+  magnitude += fabs(child);
+  magnitude += 1.0;
+  return magnitude * DBL_EPSILON * 4.0;
 }
 
 }  // namespace
@@ -154,6 +172,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     bound_max_entries(0),
     bound_entries(0),
     bound_states_computed(0),
+    bound_transitions(0),
+    bound_nextafter_calls(0),
     bound_charged_bytes(0),
     bound_aborted(false),
     bound_prunes(0),
@@ -169,7 +189,9 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     progress_interval(0),
     next_progress(0),
     nodes(0),
-    solutions(0) {
+    solutions(0),
+    setup_seconds(0.0),
+    search_seconds(0.0) {
   assert(class_list != NULL);
 
   std::vector<DfsAnagramClass> const& all_classes = class_list->classes();
@@ -508,7 +530,13 @@ void DfsAnagramSearch::prepare_cache(uint64_t state_count) {
 
 void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
                            int progress_factor) {
+  typedef std::chrono::steady_clock PhaseClock;
+  PhaseClock::time_point const setup_start = PhaseClock::now();
   bound_states_computed = 0;
+  bound_transitions = 0;
+  bound_nextafter_calls = 0;
+  setup_seconds = 0.0;
+  search_seconds = 0.0;
   bag.fill(0);
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
@@ -565,6 +593,15 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   solutions = 0;
   bound_prunes = 0;
 
+  PhaseClock::time_point const search_start = PhaseClock::now();
+  setup_seconds =
+      std::chrono::duration<double>(search_start - setup_start).count();
+  if (progress_stream != NULL) {
+    fprintf(progress_stream,
+            "# phase 2: precomputed %zu bounded states in %.3fs\n",
+            bound_states_computed, setup_seconds);
+    fflush(progress_stream);
+  }
   if (!hot_classes_ready) {
     walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
   } else if (cache_mode == CANDIDATE_CACHE_DENSE) {
@@ -574,6 +611,8 @@ void DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   } else {
     walk<WALK_UNCACHED>(letters.size(), 0, 0.0, sink);
   }
+  search_seconds =
+      std::chrono::duration<double>(PhaseClock::now() - search_start).count();
 }
 
 bool DfsAnagramSearch::hot_class_fits(uint32_t class_index) const {
@@ -653,7 +692,7 @@ uint64_t DfsAnagramSearch::sparse_lookup(
 
 template<DfsAnagramSearch::WalkMode mode>
 void DfsAnagramSearch::consider_bound_candidate(
-    uint32_t class_index, double* best) {
+    uint32_t class_index, double* best, double* max_rounding_error) {
   HotClass const& candidate = hot_classes.get()[class_index];
   uint32_t const* requirements =
       packed_letters.get() + candidate.letters_offset;
@@ -677,11 +716,15 @@ void DfsAnagramSearch::consider_bound_candidate(
   bag_mask = parent_bag_mask;
 
   if (bound_aborted || child == -HUGE_VAL) return;
-  double const candidate_bound = round_score_bound_up(
-      static_cast<long double>(candidate.best_member_log_score) +
-      static_cast<long double>(restart_log_rate) +
-      static_cast<long double>(child));
+  ++bound_transitions;
+  double const partial =
+      candidate.best_member_log_score + restart_log_rate;
+  double const candidate_bound = partial + child;
   *best = std::max(*best, candidate_bound);
+  *max_rounding_error = std::max(
+      *max_rounding_error,
+      score_candidate_rounding_error(
+          candidate.best_member_log_score, restart_log_rate, child));
 }
 
 template<DfsAnagramSearch::WalkMode mode>
@@ -725,28 +768,42 @@ double DfsAnagramSearch::compute_score_bound() {
   }
 
   double best = -HUGE_VAL;
+  double max_rounding_error = 0.0;
   if (mode != WALK_UNCACHED && metadata != CACHE_BYPASSED) {
     uint32_t const count = entry_count(metadata);
     uint32_t const* first =
         candidate_ids.get() + entry_offset(metadata);
     uint32_t const* last = first + count;
     for (; first != last && !bound_aborted; ++first)
-      consider_bound_candidate<mode>(*first, &best);
+      consider_bound_candidate<mode>(
+          *first, &best, &max_rounding_error);
   } else {
     for (size_t class_index = begin;
          class_index < end && !bound_aborted; ++class_index) {
       uint32_t const id = uint32_t(class_index);
       if (!hot_class_fits(id)) continue;
-      consider_bound_candidate<mode>(id, &best);
+      consider_bound_candidate<mode>(
+          id, &best, &max_rounding_error);
     }
   }
 
   if (bound_aborted) return HUGE_VAL;
-  if (!store_score_bound(current_bag_key, best)) {
+  // For every edge i, exact_i <= computed_i + error_i. Therefore
+  // max(computed_i) + max(error_i) bounds even an unselected edge whose
+  // computed value rounded down. Do this inflation and the long-double work
+  // once per state, after selecting the computed maximum.
+  double const stored_best =
+      best == -HUGE_VAL
+          ? -HUGE_VAL
+          : round_score_bound_up(
+                static_cast<long double>(best) +
+                static_cast<long double>(max_rounding_error),
+                &bound_nextafter_calls);
+  if (!store_score_bound(current_bag_key, stored_best)) {
     bound_aborted = true;
     return HUGE_VAL;
   }
-  return best;
+  return stored_best;
 }
 
 bool DfsAnagramSearch::should_prune(
