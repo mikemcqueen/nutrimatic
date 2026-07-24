@@ -63,8 +63,16 @@ class DfsAnagramSearch {
   size_t score_bound_states_computed() const {
     return bound_states_computed;
   }
+  uint64_t score_bound_transitions() const {
+    return bound_transitions;
+  }
+  uint64_t score_bound_nextafter_calls() const {
+    return bound_nextafter_calls;
+  }
   size_t score_bound_bytes_charged() const { return bound_charged_bytes; }
   int64_t score_bound_prunes() const { return bound_prunes; }
+  double phase_two_setup_seconds() const { return setup_seconds; }
+  double phase_two_search_seconds() const { return search_seconds; }
 
  private:
   struct AlignedFree {
@@ -102,7 +110,8 @@ class DfsAnagramSearch {
   template<WalkMode mode>
   double compute_score_bound();
   template<WalkMode mode>
-  void consider_bound_candidate(uint32_t class_index, double* best);
+  void consider_bound_candidate(uint32_t class_index, double* best,
+                                double* max_rounding_error);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   bool should_prune(double representative_log_score,
@@ -146,6 +155,8 @@ class DfsAnagramSearch {
   size_t bound_max_entries;
   size_t bound_entries;
   size_t bound_states_computed;
+  uint64_t bound_transitions;
+  uint64_t bound_nextafter_calls;
   size_t bound_charged_bytes;
   bool bound_aborted;
   int64_t bound_prunes;
@@ -169,6 +180,8 @@ class DfsAnagramSearch {
   int64_t next_progress;
   int64_t nodes;
   int64_t solutions;
+  double setup_seconds;
+  double search_seconds;
 };
 
 #endif

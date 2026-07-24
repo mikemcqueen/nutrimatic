@@ -143,6 +143,14 @@ static int smoke_test() {
           "small score memo did not use dense storage");
     check(bounded.score_bound_entries() > 0,
           "dense score memo stored no states");
+    check(bounded.score_bound_transitions() > 0,
+          "dense score memo counted no successful transitions");
+    check(bounded.score_bound_nextafter_calls() > 0,
+          "dense score memo counted no nextafter calls");
+    check(bounded.phase_two_setup_seconds() >= 0.0,
+          "phase-2 setup time was negative");
+    check(bounded.phase_two_search_seconds() >= 0.0,
+          "phase-2 search time was negative");
     check(bounded.score_bound_bytes_charged() +
               bounded.candidate_cache_bytes_charged() <=
               bound_budget,
@@ -186,6 +194,13 @@ static void sparse_score_bound_test() {
     IndexReader reader(fp);
     std::string const letters = "abcdefgh";
     DfsClassList classes(&reader, letters, 1, false);
+    DfsTopN expected_output(&classes, 1);
+    DfsAnagramSearch exhaustive(
+        &classes, letters, 1e-6, reader.count(), 0);
+    exhaustive.run(&expected_output);
+    std::vector<DfsSpelling> const expected_spellings =
+        expected_output.take_sorted_results();
+
     DfsTopN output(&classes, 1);
     size_t const budget = 1024;
     DfsAnagramSearch search(
@@ -196,10 +211,17 @@ static void sparse_score_bound_test() {
           "large theoretical state space did not use sparse score memo");
     check(search.score_bound_entries() == 2,
           "sparse score memo stored the wrong states");
+    check(search.score_bound_transitions() == 1,
+          "sparse score memo counted the wrong transitions");
+    check(search.score_bound_nextafter_calls() >= 2,
+          "sparse score memo counted too few nextafter calls");
     check(search.score_bound_bytes_charged() +
               search.candidate_cache_bytes_charged() <= budget,
           "sparse score and candidate caches exceeded their budget");
     check(output.size() == 1, "sparse score bound lost its solution");
+    check_same_spellings(
+        expected_spellings, output.take_sorted_results(),
+        "sparse score bound changed the retained spellings");
   }
 
   fclose(fp);
