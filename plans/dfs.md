@@ -92,8 +92,11 @@ the collapsing DFS over the *phrase-included* class list actually cost what §3 
 - Extend `measure-f` (or a sibling throwaway) with ancc's `check_dict` DFS over
   the class list it already builds — ~100 lines, no output, just a node counter.
 - **Validate against the known target**: words-only at 19 letters must reproduce
-  **5,488,296 nodes** (`ancc-inspiration.md`). If it doesn't, the DFS is wrong
-  and nothing downstream is trustworthy.
+  **5,488,296 nodes** (`ancc-inspiration.md`). Reproducing it requires matching
+  the prototype's config — **words only (no phrases) and a hard 4-word cap** —
+  even though the shipped tool has neither, so Phase 0's DFS needs both knobs
+  temporarily. If it doesn't hit the number, the DFS is wrong and nothing
+  downstream is trustworthy.
 - Then run it with phrases included and report the real node multiplier. §3
   predicts "between 1.0x and 4.4x at 19 letters, much closer to 1.0x". 
 - **Decision gate**: if phrases-included comes back far worse than the
@@ -122,6 +125,13 @@ searches:
   descending** (this ordering is what makes lazy expansion in §output cheap — do
   it once here). A member is a distinct spelling; two entries with equal spelling
   and count are one member.
+- Also build the **per-letter candidate index** phase 2's forcing needs: a map
+  from each letter to the classes containing it. ancc's T2 keys this on each
+  class's *own* rarest letter (`let_hash[]`), so a class lands in exactly one
+  bucket and "the classes covering L" is an O(1) lookup rather than a scan of the
+  whole class list at every node. Without this, rarest-letter forcing degrades to
+  a linear sweep per DFS node and the 306x evaporates. This is a phase-1 output,
+  not something phase 2 can reconstruct cheaply.
 
 ### Representation
 
@@ -155,14 +165,21 @@ spellings — that is the 306x.
 
 - State: the remaining letter bag (26 counts) and the depth (segments chosen so
   far). Stack depth is O(word cap); the whole live state is kilobytes.
-- **Rarest-letter forcing (T2, = approach C).** Fix a global letter priority by
-  ascending corpus frequency, computed once from the index. At each node, L =
-  the highest-priority letter still in the bag. Only classes *containing L* are
-  candidates. This is both fail-first pruning (the hardest letter is resolved at
-  depth 1, where the candidate list is tiny) and **free canonicalisation**: the
-  class covering L is forced now, so the k! orderings of a solution collapse to 1
-  with no dedup structure at all. This is why the prototype emitted zero
+- **Rarest-letter forcing (T2, = approach C).** Fix a global letter priority
+  order, computed once. At each node, L = the highest-priority letter still in
+  the bag; only classes *containing L* are candidates (via the per-letter index
+  from phase 1). This is both fail-first pruning (the hardest letter is resolved
+  at depth 1, where the candidate list is tiny) and **free canonicalisation**:
+  the class covering L is forced now, so the k! orderings of a solution collapse
+  to 1 with no dedup structure at all. This is why the prototype emitted zero
   duplicate word sets at 12 letters (summary "measured").
+  - **Any fixed total order on letters is correct** — canonicalisation only needs
+    the order to be consistent, not meaningful. The *choice* of order is purely a
+    fail-first performance lever: put the letter that constrains hardest first.
+    ancc uses least-frequent-**in-dictionary** (over the extracted list), which
+    prunes better than raw corpus frequency because it reflects what phase 1
+    actually found. Start with dictionary frequency; it is cheap to compute from
+    the class list and needs no correctness argument.
 - **`entry_point` tie-break.** When L occurs more than once in the bag the choice
   is ambiguous; require non-decreasing class index *among classes covering the
   same forced letter* to keep one arrangement. This is the same ordering `-c`
@@ -172,8 +189,15 @@ spellings — that is the 306x.
   it is always on and always free.
 - **Subset test and subtraction** per candidate class: it fits if every letter's
   count is ≤ the bag's. Subtract, recurse; on return, add back.
-- **Depth cap** = the derived word cap (§"Word cap"). Prune when adding a segment
-  would exceed it. A solution is complete when the bag is empty.
+- **Depth is bounded emergently, not by a counter.** Every extracted class is
+  ≥ `min_len` letters (≥ `2*min_len` for phrases), so after k segments the bag
+  has lost ≥ `k·min_len` and no path can exceed `floor(letters / min_len)`
+  segments — the cap falls out of the extraction and never needs checking. This
+  mirrors `find-anagrams`, which computes `max_words` for its header line but
+  does **not** pass it to the driver (`find-anagrams.cpp:321`); the limit there
+  is likewise emergent from `AnagramFilter`'s `min_len`. Keep an explicit guard
+  if you like, but know it never binds — see §"Word cap" for why that matters at
+  26 letters. A solution is complete when the bag is empty.
 - A **solution** is the ordered list of classes chosen (canonical order). Phase 2
   emits solutions; it does not expand spellings — that is the output stage's job,
   done lazily.
@@ -198,31 +222,48 @@ at 19 letters). Writing them all is ~7 GB at 19 letters, ~46 GB at 21 (summary
 
 ### The mechanism
 
-- Maintain a **bounded min-heap of the best N spellings**, ordered by score. N is
-  a CLI flag (default e.g. 10,000 → ~0.5 MB).
-- Keep an **`unordered_map<word-set-key, score>`** alongside it for dedup. The
-  key is built exactly like `make_seen_key`: split every segment of the spelling
-  on spaces, sort the words, rejoin. This makes `{pen built}` and `{pen}{built}`
-  collide on `built pen`, and — because A already collapses permutations — it
-  otherwise leaves distinct member choices (`yacht` vs `cathy`) as distinct rows,
-  which is what "top-N spellings" wants.
+The dedup is the subtle part, and it must not reintroduce unbounded memory —
+that is the whole point of A, so the structure has to bound the *map* as tightly
+as the heap.
+
+- Maintain a **bounded top-N over word sets** as an **indexed min-heap**: each
+  entry holds `(score, word-set-key)`, and a `key → heap-position` map lets us
+  find an existing key in O(1) for the update case *and* erase a key when it is
+  evicted. Both the heap and the map are therefore capped at N entries. N is a
+  CLI flag (default e.g. 10,000 → ~1 MB including keys).
+  - **A plain `unordered_map<key, score>` plus lazy heap deletion does not
+    bound memory** — nothing would remove a map entry when its word set is
+    pushed out of the top-N as the heap fills, so the map grows with the number
+    of *distinct word sets ever briefly in the top N*, which over a 1.47M-solution
+    search is unbounded. The `key → position` index that erases on eviction is
+    what closes this; do not skip it.
+- The **word-set key** is built exactly like `make_seen_key`: split every segment
+  of the spelling on spaces, sort the words, rejoin. This makes `{pen built}` and
+  `{pen}{built}` collide on `built pen`, and — because A already collapses
+  permutations — it otherwise leaves distinct member choices (`yacht` vs `cathy`)
+  as distinct rows, which is what "top-N spellings" wants.
 - **When phase 2 emits a solution**, generate its spellings **in descending score
   order on demand** — the standard k-best-combination heap over member-index
   tuples, cheap because each class's members are already sorted descending
   (Phase 1). Stop at the first spelling whose score is ≤ the current N-th best
   (the heap's min once full): every later spelling of this solution is worse, so
   none can enter. Typically one or two spellings per solution are touched.
-- **Insertion with dedup**: for a candidate spelling with key k and score s:
-  - if k not in the map → insert into heap and map;
-  - if k in the map with score ≥ s → skip (a better arrangement already held);
-  - if k in the map with score < s → this is a higher-scoring segmentation of the
-    same word set (the phrase form arriving after the split, or vice versa);
-    update the map to s and push the new entry, marking the old heap entry stale
-    (lazy deletion: skip stale entries when they surface at the heap top). This
-    keeps live memory O(N).
+- **Insertion with dedup**, for a candidate spelling with key k and score s
+  (heap not yet full → treat the floor as −∞):
+  - if k not in the map and s > floor → insert; if the heap was full, evict its
+    min first and erase that key from the map;
+  - if k in the map with stored score ≥ s → skip (a better arrangement is held);
+  - if k in the map with stored score < s → a higher-scoring segmentation of the
+    same word set arrived (the phrase form after the split, or vice versa):
+    **increase-key in place** at its heap position and update the map. No new
+    slot is consumed, so this never grows past N.
 - After the search completes, drain the heap into a sorted list and print
   `score text` descending, matching `find-anagrams`' output format
   (`search-printer.cpp` / `PrintAll`).
+
+The cutoff is safe under cross-solution dedup: a spelling scoring ≤ floor can
+only match a key already held at a score ≥ floor ≥ its own, so it would be
+skipped regardless — nothing below the floor ever needs to enter.
 
 ### Why this is exact
 
@@ -280,12 +321,12 @@ point of the design (summary §8 "memory ceases to be the constraint").
 
 ## Verification
 
-- **Soundness against `find-anagrams`.** On small bags (8, 12 letters), the set
-  of word *sets* `dfs-anagrams` reports must be a superset of what `find-anagrams`
-  reports (`find-anagrams` never completes at large sizes, but small bags it
-  does). Every word set in the reference run must appear; A additionally finds
-  sets the streaming tool never reached before OOM. Compare via the sorted
-  word-set key.
+- **Soundness against `find-anagrams`.** On small bags (8, 12 letters) that
+  `find-anagrams` runs to completion, both tools are exhaustive over the same
+  trie and phrases at the same `min_len` and both dedup by word set, so the sets
+  of word *sets* must be **equal** — a missing *or* extra set is a bug. Compare
+  via the sorted word-set key. (On large bags the claim weakens to superset,
+  because `find-anagrams` OOMs before finishing and A reaches sets it never did.)
 - **Score agreement.** For a shared word set, `dfs-anagrams`' score must match
   `find-anagrams`' to the float tolerance both already carry. In particular
   reproduce `7.000 pen built` (contiguous) and the 2.1e-05 split, per
