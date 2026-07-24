@@ -49,7 +49,8 @@ class DfsAnagramSearch {
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
                    double restart, int64_t corpus_total,
                    size_t candidate_cache_bytes = 0,
-                   size_t preprocess_threads = 1);
+                   size_t preprocess_threads = 1,
+                   bool enable_candidate_cache = true);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When progress is non-null, report every 100k * progress_factor nodes.
@@ -189,6 +190,7 @@ class DfsAnagramSearch {
   size_t const max_depth;
   size_t const candidate_cache_budget;
   size_t const requested_preprocess_threads;
+  bool const candidate_cache_enabled;
   size_t active_candidate_cache_budget;
 
   // The hot bag and all masks use rarest-rank order.

@@ -2,6 +2,7 @@
 /build/
 /.env/
 tmp/
+/s.sh
 
 # Python
 *.pyc

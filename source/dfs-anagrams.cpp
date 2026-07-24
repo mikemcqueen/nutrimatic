@@ -71,6 +71,9 @@ static int const DEFAULT_TOP = 10000;
 static size_t const DEFAULT_CANDIDATE_CACHE_MIB = 64;
 static unsigned int const DEFAULT_MAX_PREPROCESS_THREADS = 20;
 static size_t const MIB = size_t(1024) * size_t(1024);
+// Temporary experiment: isolate score-bound behavior from the support-mask and
+// full fitting-candidate caches. This can become a CLI option later.
+static bool const ENABLE_CANDIDATE_CACHE = false;
 
 static bool parse_mib(char const* in, char const* what, size_t* out) {
   if (*in == '\0' || *in == '-') {
@@ -253,7 +256,8 @@ int main(int argc, char* argv[]) {
   }
   DfsAnagramSearch search(
       &classes, args.letters, restart, reader.count(),
-      args.candidate_cache_bytes, preprocess_threads);
+      args.candidate_cache_bytes, preprocess_threads,
+      ENABLE_CANDIDATE_CACHE);
   DfsTopN output(&classes, size_t(args.top));
   search.run(args.top == 0 ? NULL : &output, stderr, args.progress_factor);
   fprintf(stderr,
