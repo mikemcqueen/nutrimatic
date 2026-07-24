@@ -309,6 +309,10 @@ committing.
 
 ### Related
 
+- `findings/ancc-inspiration-summary.md` — digest of this document: what each
+  multiplier above actually measures, projected bag-length and memory ceilings
+  per design, and a revised order of work for the case where score ranking
+  matters but in-order streaming does not.
 - `findings/anagram-perf.md` — idea #3 (`h`, above) and idea #7 (design A).
 - `findings/reduce-permutations.md` — why `-c` orders by trie node, and the
   segment-identity argument that design C's tie-break reuses.
