@@ -68,6 +68,12 @@ index_lib = library(
   ['index-reader.cpp', 'index-walker.cpp', 'index-writer.cpp'],
 )
 
+dfs_class_list_lib = library(
+  'dfs-class-list',
+  ['dfs-class-list.cpp'],
+  link_with: index_lib,
+)
+
 search_lib = library(
   'search',
   ['search-driver.cpp', 'search-printer.cpp'],
@@ -100,6 +106,13 @@ executable('find-anagrams', 'find-anagrams.cpp',
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
 executable('measure-f', 'measure-f.cpp',
   link_with: [optparse_lib, index_lib], install: false)
+
+test_dfs_class_list = executable(
+  'test-dfs-class-list', 'test-dfs-class-list.cpp',
+  link_with: [dfs_class_list_lib, index_lib],
+  install: false,
+)
+test('dfs-class-list', test_dfs_class_list)
 
 foreach p : ['find-phone-words']
   executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)
