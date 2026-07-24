@@ -5,7 +5,9 @@
 #include <stdint.h>
 
 #include <array>
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -46,7 +48,8 @@ class DfsAnagramSearch {
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
                    double restart, int64_t corpus_total,
-                   size_t candidate_cache_bytes = 0);
+                   size_t candidate_cache_bytes = 0,
+                   size_t preprocess_threads = 1);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When progress is non-null, report every 100k * progress_factor nodes.
@@ -77,10 +80,17 @@ class DfsAnagramSearch {
   int64_t score_bound_prunes() const { return bound_prunes; }
   double phase_two_setup_seconds() const { return setup_seconds; }
   double phase_two_search_seconds() const { return search_seconds; }
+  size_t preprocess_threads_used() const {
+    return actual_preprocess_threads;
+  }
 
  private:
   struct AlignedFree {
     void operator()(void* pointer) const;
+  };
+
+  struct AtomicWord {
+    std::atomic<uint64_t> value;
   };
 
   struct alignas(16) FitClass {
@@ -100,6 +110,18 @@ class DfsAnagramSearch {
     WALK_SPARSE,
   };
 
+  struct BoundWorker {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    uint64_t bag_mask;
+    uint64_t bag_key;
+    size_t letters_left;
+    size_t states_computed;
+    uint64_t transitions;
+    uint64_t nextafter_calls;
+    double best;
+    double max_rounding_error;
+  };
+
   bool prepare_hot_classes();
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void prepare_cache(uint64_t state_count);
@@ -115,6 +137,10 @@ class DfsAnagramSearch {
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;
+  bool hot_class_fits(uint32_t class_index,
+                      BoundWorker const& worker) const;
+  bool hot_class_multiplicity_fits(
+      uint32_t class_index, BoundWorker const& worker) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
   uint32_t const* first_length_support_candidate(
@@ -125,12 +151,20 @@ class DfsAnagramSearch {
   template<WalkMode mode>
   void consider_bound_candidate(uint32_t class_index, double* best,
                                 double* max_rounding_error);
+  double compute_parallel_score_bound(BoundWorker* worker);
+  void consider_parallel_bound_candidate(
+      uint32_t class_index, BoundWorker* worker, double* best,
+      double* max_rounding_error);
+  bool compute_score_bound_parallel(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   bool should_prune(double representative_log_score,
                     DfsSolutionSink* sink) const;
   bool build_candidate_entry(size_t begin, size_t end, uint64_t* metadata);
-  bool build_support_entry(size_t begin, size_t end, uint64_t* metadata);
+  bool build_support_entry(size_t begin, size_t end, uint64_t candidate_mask,
+                           uint64_t* metadata);
+  uint64_t parallel_support_entry(
+      BoundWorker const& worker, size_t end);
   uint64_t support_lookup(uint64_t key, size_t* slot,
                           bool* may_insert) const;
   void publish_support(size_t slot, uint64_t key, uint64_t metadata);
@@ -154,6 +188,7 @@ class DfsAnagramSearch {
   std::vector<double> best_member_log_scores;
   size_t const max_depth;
   size_t const candidate_cache_budget;
+  size_t const requested_preprocess_threads;
   size_t active_candidate_cache_budget;
 
   // The hot bag and all masks use rarest-rank order.
@@ -169,7 +204,7 @@ class DfsAnagramSearch {
   bool hot_classes_ready;
 
   ScoreBoundMode bound_mode;
-  std::unique_ptr<double, AlignedFree> bound_values;
+  std::unique_ptr<AtomicWord, AlignedFree> bound_values;
   std::unique_ptr<uint64_t, AlignedFree> bound_keys;
   size_t bound_capacity;
   size_t bound_max_entries;
@@ -194,15 +229,17 @@ class DfsAnagramSearch {
   size_t charged_bytes;
 
   std::unique_ptr<uint64_t, AlignedFree> support_metadata;
-  std::unique_ptr<uint64_t, AlignedFree> support_keys;
+  std::unique_ptr<AtomicWord, AlignedFree> support_keys;
   std::unique_ptr<uint32_t, AlignedFree> support_candidate_ids;
   size_t support_capacity;
   size_t support_max_entries;
-  size_t support_filled;
+  std::atomic<size_t> support_filled;
   size_t support_candidate_capacity;
   size_t support_candidate_used;
   size_t support_admitted_entries;
   size_t support_charged_bytes;
+  std::mutex support_build_mutex;
+  std::atomic<bool> parallel_support_exhausted;
 
   std::vector<size_t> path;
   FILE* progress_stream;
@@ -212,6 +249,7 @@ class DfsAnagramSearch {
   int64_t solutions;
   double setup_seconds;
   double search_seconds;
+  size_t actual_preprocess_threads;
 };
 
 #endif

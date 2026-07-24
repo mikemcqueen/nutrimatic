@@ -10,7 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <algorithm>
 #include <string>
+#include <thread>
 #include <vector>
 
 static bool clean_letters(char const* in, char const* what, std::string* out) {
@@ -67,6 +69,7 @@ static bool parse_count(char const* in, char const* what, int* out) {
 static int const DEFAULT_MIN_WORD_LEN = 4;
 static int const DEFAULT_TOP = 10000;
 static size_t const DEFAULT_CANDIDATE_CACHE_MIB = 64;
+static unsigned int const DEFAULT_MAX_PREPROCESS_THREADS = 20;
 static size_t const MIB = size_t(1024) * size_t(1024);
 
 static bool parse_mib(char const* in, char const* what, size_t* out) {
@@ -94,16 +97,20 @@ struct Args {
   int top;
   int progress_factor;
   size_t candidate_cache_bytes;
+  int preprocess_threads;
 };
 
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
       " [-u used-letters] [-m min-word-length] [-n top]"
-      " [-p progress-factor] [--candidate-cache-mib MiB]\n"
+      " [-p progress-factor] [--candidate-cache-mib MiB]"
+      " [--preprocess-threads N]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
-      "  --candidate-cache-mib defaults to %zu; 0 disables it\n",
+      "  --candidate-cache-mib defaults to %zu; 0 disables it\n"
+      "  --preprocess-threads defaults to 0: automatic for 30+ letters;"
+      " 1 disables it\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
       DEFAULT_CANDIDATE_CACHE_MIB);
 }
@@ -114,6 +121,7 @@ static struct optparse_long const long_options[] = {
   { "top", 'n', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "candidate-cache-mib", 'C', OPTPARSE_REQUIRED },
+  { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -122,6 +130,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->top = DEFAULT_TOP;
   out->progress_factor = 1;
   out->candidate_cache_bytes = DEFAULT_CANDIDATE_CACHE_MIB * MIB;
+  out->preprocess_threads = 0;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -156,6 +165,11 @@ static bool parse_args(char* argv[], Args* out) {
       case 'C':
         if (!parse_mib(options.optarg, "--candidate-cache-mib",
                        &out->candidate_cache_bytes))
+          return false;
+        break;
+      case 'T':
+        if (!parse_count(options.optarg, "--preprocess-threads",
+                         &out->preprocess_threads))
           return false;
         break;
       default:
@@ -226,9 +240,20 @@ int main(int argc, char* argv[]) {
   fflush(stderr);
 
   double const restart = 1e-6;
+  size_t preprocess_threads = size_t(args.preprocess_threads);
+  if (preprocess_threads == 0) {
+    preprocess_threads = 1;
+    if (args.letters.size() >= 30) {
+      unsigned int const available = std::thread::hardware_concurrency();
+      if (available > 1) {
+        preprocess_threads = size_t(std::min(
+            available, DEFAULT_MAX_PREPROCESS_THREADS));
+      }
+    }
+  }
   DfsAnagramSearch search(
       &classes, args.letters, restart, reader.count(),
-      args.candidate_cache_bytes);
+      args.candidate_cache_bytes, preprocess_threads);
   DfsTopN output(&classes, size_t(args.top));
   search.run(args.top == 0 ? NULL : &output, stderr, args.progress_factor);
   fprintf(stderr,

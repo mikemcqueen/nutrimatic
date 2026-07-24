@@ -185,6 +185,35 @@ static int smoke_test() {
         expected_spellings, bounded_spellings,
         "score bound changed the retained spellings");
 
+    DfsTopN threaded_output(&classes, 2);
+    DfsAnagramSearch threaded(
+        &classes, "aabb", 1e-6, reader.count(), bound_budget, 4);
+    threaded.run(&threaded_output);
+    std::vector<DfsSpelling> const threaded_spellings =
+        threaded_output.take_sorted_results();
+    check(threaded.preprocess_threads_used() > 1,
+          "dense score memo did not use requested preprocessing threads");
+    check(threaded.score_bound_mode() == bounded.score_bound_mode(),
+          "threading changed score-bound mode");
+    check(threaded.score_bound_entries() == bounded.score_bound_entries(),
+          "threading changed score-bound entry count");
+    check(threaded.score_bound_states_computed() ==
+              bounded.score_bound_states_computed(),
+          "threading changed computed bound-state count");
+    check(threaded.score_bound_transitions() ==
+              bounded.score_bound_transitions(),
+          "threading changed successful bound transitions");
+    check(threaded.score_bound_nextafter_calls() ==
+              bounded.score_bound_nextafter_calls(),
+          "threading changed bound nextafter calls");
+    check(threaded.nodes_visited() == bounded.nodes_visited(),
+          "threading changed phase-2 node count");
+    check(threaded.solutions_found() == bounded.solutions_found(),
+          "threading changed phase-2 solution count");
+    check_same_spellings(
+        bounded_spellings, threaded_spellings,
+        "threaded score bound changed the retained spellings");
+
     std::string const exhausted_letters = "aaaaabbbbb";
     DfsTopN exhausted_expected_output(&classes, 2);
     DfsAnagramSearch exhausted_expected(
