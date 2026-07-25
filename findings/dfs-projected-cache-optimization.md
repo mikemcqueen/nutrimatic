@@ -15,6 +15,11 @@ The implementation now builds one action per distinct projected delta and
 forced-exact-letter bucket. It retains the highest class score for that action.
 This changes preprocessing work without changing the projected bound.
 
+The measurements below establish that this optimization is real, but they are
+not the main subject of the remaining work. The research question is now how
+to avoid constructing so many action/state edges and abstract states in the
+first place, rather than which adjacent projection depth wins a timing sweep.
+
 ## Measurements
 
 All measurements use `idx/wiki-merged.5.index`, prefixes of `S6`,
@@ -51,6 +56,30 @@ billion.
 The output SHA-256 was identical for the measured `d=13`, `d=14`, `d=15`, and
 `d=16` runs.
 
+### Timing reproducibility
+
+The transition counts are deterministic, but the wall-clock measurements are
+not a permanent baseline. A newer local `d=15`, 40-letter run recorded
+47.757s setup and 36.558s search with the same 5,919,322,956 successful
+transitions, 342,949,072 final DFS nodes, and 24,804 solutions as the 29.736s
+setup run above. The algorithmic comparisons should therefore use transition
+and node counts alongside controlled paired timing runs.
+
+The current `results/s6*` files contain this newer timing set:
+
+| letters | `-C` | `d` | actions | states built | setup | search | phase 2 | transitions | final DFS nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 38 | 32 MiB | 15 | 124,513 | 2,984,149 | 32.796s | 9.979s | 42.775s | 4,159,322,534 | 105,067,790 |
+| 40 | 32 MiB | 15 | 151,440 | 3,411,183 | 47.757s | 36.558s | 84.315s | 5,919,322,956 | 342,949,072 |
+| 40 | 128 MiB | 16 | 222,643 | 8,787,405 | 169.550s | 19.446s | 188.996s | 18,670,931,559 | 183,381,681 |
+
+All three runs report 20 preprocessing workers. The two 40-letter runs form
+the most useful comparison within this set: `d=16` halves neither setup nor
+search. It reduces final DFS nodes by 46.5% and search time by 46.8%, but
+increases construction transitions by 3.15x and setup time by 3.55x. Total
+phase 2 is consequently 2.24x slower than `d=15`, despite using the larger
+cache and producing the tighter bound.
+
 ## Data layout and hot-loop changes
 
 The action metadata is split into two 16-byte, 64-byte-aligned arrays:
@@ -81,6 +110,27 @@ target that path:
 The host's WSL kernel has no usable `perf` PMU support, so hardware cache and
 branch-miss counters were not available.
 
+## What remains in the current recurrence
+
+The action reduction implemented here recognizes only single-action
+equivalence: actions with the same forced bucket and projected delta reach the
+same child, so only their maximum score survives.
+
+After that reduction, every fitting action is still evaluated. A successful
+evaluation mutates the projected bag, loads or recursively constructs the
+child, restores the bag, and contributes to the maximum. On the 40-letter
+`d=15` workload this is still 5.919 billion successful transitions over
+3.411 million constructed states, or roughly 1,735 successful transitions per
+constructed state.
+
+Projected construction also remains eager. It starts from every fitting root
+action and constructs the resulting abstract dependency closure before the
+concrete DFS has produced a score floor. Consequently, the current
+implementation has not exhausted either of the two main ways to reduce setup:
+
+1. prove that fewer action-to-child transitions need evaluation; or
+2. construct bounds for fewer abstract states.
+
 ## Correctness argument
 
 A projected flat delta uniquely identifies the exact-letter consumption vector
@@ -99,23 +149,506 @@ magnitude and maximum child magnitude independently. Their sum is at least
 the magnitude sum for every individual edge, so the resulting stored bound
 remains upward-conservative.
 
-## Remaining opportunities
+## Research inventory
 
-The optimized builder is still transition-volume-bound. The most useful next
-work is:
+The following are unmeasured hypotheses unless explicitly described as
+implemented. "Exact" below means exact with respect to the selected projected
+recurrence, not exact with respect to the concrete bag.
 
-1. Replace "largest projection that fits" with an end-to-end shape selector.
-   On the 40-letter workload, `d=16` uses the larger cache but is much slower
-   overall than `d=15`. The measured `d=13`, `d=14`, and `d=15` phase-two
-   totals were approximately 94.0s, 59.6s, and 50.5s respectively.
-2. Prototype lazy projected construction after the score floor becomes
-   available. The eager root recurrence computes abstract states that may
-   never be queried by the concrete DFS.
-3. Compare the recursive atomic scheduler with a total-letter-layered
-   bottom-up scheduler. Layering eliminates dependency spinning and locked
-   first-owner operations, but may compute more unreachable table cells.
-4. Measure a one-exact-requirement specialization and narrower packed
-   requirements. These are secondary until transition count falls further.
-5. Explore arbitrary exact-letter masks or multiple wildcard groups. Better
-   projection quality at the same state/action count could reduce both
-   preprocessing and final DFS work.
+| lever | main idea | guarantee | first useful discriminator |
+|---|---|---|---|
+| remove edges | certify losing actions with a cheaper upper bound | exact, if every skipped edge has a certificate | fraction of fitting edges rejected in shadow mode |
+| remove actions | single- and multi-action dominance | exact | actions removed, weighted by how often their bucket is scanned |
+| remove states | refine only states requested by the concrete DFS | admissible fallback; exact entries optional | projected-key query frequency and bound gap |
+| avoid dead work | build backward from the empty bag | exact over generated finite states | fitting edges to `-infinity` children and forward/reverse state overlap |
+| regularize the DP | layered max-plus shift-and-reduce | exact | reachable density by total-letter layer |
+| improve the abstraction | complementary, cost-partitioned, or adaptively split projections | admissible | pruning gain per constructed transition |
+| share state sets | decision diagrams or repeated-subtable compression | exact or conservatively quantized | repeated-subtable and value-delta entropy |
+| cheapen an edge | packed state arithmetic, fixed-point scores, and fit indexes | exact or conservatively rounded | cycles per successful and rejected transition |
+| amortize setup | background construction and persistent reuse | exact ready entries plus admissible fallback | repeated-query rate and overlap with final DFS |
+
+The categories matter because they require different evidence. A faster fit
+test will not help much if almost all time is in successful edges, while a
+reverse builder is attractive only if dead descendants are common enough to
+offset the finite states it generates that the root traversal would never
+visit.
+
+## Reduce action-to-child edges
+
+### Hierarchical candidate certificates
+
+Construct a very cheap coarser projection before constructing the selected
+rich projection. The simplest is the `d=0` length-only table: it has one state
+per remaining length and at most one deduplicated action per consumed length.
+
+If `U` is an upward-conservative coarse bound, then for every rich projected
+action `a`:
+
+```text
+candidate(a, state)
+    <= action_score(a) + restart + U(project(child(a, state)))
+```
+
+Evaluate one promising action fully to obtain an exact feasible incumbent
+`best`. Any other action whose upper envelope is no greater than `best` can be
+discarded without loading or constructing its rich child. The fully evaluated
+candidates themselves provide the lower incumbent; a separate lower-bound
+table is optional. Group actions by consumed length and order each group by
+descending score. For a length-only `U`, the child term is constant within the
+group, so one failed threshold rejects the rest of that score-ordered group.
+
+A cascade of progressively stronger projections could certify more losers.
+There are two safe stopping modes:
+
+- continue until every omitted action is certified, preserving the exact rich
+  recurrence; or
+- stop early and store the coarse envelope for the unresolved portion,
+  producing a weaker but still admissible bound.
+
+Never store the maximum of only the expanded candidates as an upper bound. It
+is a lower bound on the projected maximum and can prune valid results.
+
+This is the highest-priority construction experiment because it can reduce the
+measured successful-transition volume. The first implementation should be
+shadow-only: retain the current result but count edges and whole score-ordered
+suffixes that the coarse certificate would have skipped.
+
+### Composite action dominance
+
+The current deduplication compares only actions with identical single-action
+deltas. An action `a` is also globally dominated if a sequence of other actions
+has the same total projected delta and at least its adjusted score:
+
+```text
+delta(a) = sum(delta(b_i))
+
+score(a) + restart
+    <= sum(score(b_i) + restart)
+```
+
+Consider any complete projected solution that uses `a`. Replacing `a` with the
+other actions preserves the solution's total consumption and does not decrease
+its score. The whole replacement solution can then be put into canonical
+forced-letter order, because some remaining action always consumes the rarest
+remaining exact letter. The replacement actions alone need not be executable
+consecutively at the point where `a` appeared; they may interleave with the
+original suffix. This whole-solution argument is what makes the removal exact.
+
+The restart charge on every replacement action may make domination uncommon.
+Run a bounded offline decomposition DP over action-sized deltas first and
+report both raw removals and expected scan-weighted removals. The latter is
+more informative because deleting an action in a rarely reached bucket has
+little construction value.
+
+### Conditional and local dominance
+
+Global equal-delta dominance is deliberately strict. A coarse table can prove
+additional dominance for one state even when no global replacement exists:
+
+```text
+upper(a, state) <= exact_candidate(b, state)
+```
+
+This is the same certificate mechanism applied pairwise. Cache the winning
+action ID temporarily with each constructed state, try winners from neighboring
+mixed-radix states first, and then certify the other actions. If winner regions
+are stable, this becomes a cheap policy-plus-certificate computation rather
+than a full maximum over every edge.
+
+A raw Pareto rule such as "consume fewer letters with a higher score" is not
+safe. Consuming fewer letters leaves more negative-cost work for the child.
+Any such dominance test needs either an equal-delta replacement or an explicit
+bound on the residual consumption.
+
+## Construct fewer states
+
+### Search-driven bounded refinement
+
+Lazy construction can go further than delaying the current recursive closure:
+
+1. Start concrete DFS with a nearly free length-only or other complete coarse
+   bound.
+2. Once the top-N sink has a score floor, record projected states for which the
+   coarse bound failed to prune.
+3. Refine states according to query count, bound gap, and estimated subtree
+   leverage.
+4. Limit refinement work and retain a coarse upper envelope for every
+   unresolved action and state.
+
+Every lookup therefore has an admissible answer. Ready rich entries improve
+the bound; missing or unfinished entries fall back to the coarse table. This
+does not recreate the coverage holes of the old partial exact cache.
+
+The refinement can also run on otherwise idle preprocessing threads while the
+single-threaded concrete DFS proceeds. The concrete search must never spin on
+a `COMPUTING` rich entry: it uses the fallback, optionally enqueues the key,
+and continues. Completed entries are already published child-first, so they
+can be consumed safely. This changes wall-clock structure as well as work
+selection: useful construction overlaps search, and irrelevant construction
+can be cancelled when the DFS completes.
+
+If a parent is computed using fallback child values, it remains admissible but
+must be marked inexact and revisited after its children improve. Keeping exact
+and fallback-derived entry states distinct avoids silently treating a stale
+upper envelope as the exact rich recurrence.
+
+### Backward construction from completable states
+
+The recurrence is a shortest-path problem after negating scores, with the empty
+bag as its goal. The current top-down builder starts at the projected root and
+visits forward-reachable states, including states whose eventual value is
+`-infinity`. Reverse construction starts with the empty bag and adds actions,
+so it generates only states with a finite completion.
+
+The forced-letter canonicalization has a simple reverse condition. If an
+action's bucket is `b`, it may be added to a child only when the child contains
+no exact letter rarer than `b`. Wildcard-only actions may be added only while
+the child has no exact letters. Processing increasing total-letter layers then
+finalizes every child before its parents.
+
+This direction is not automatically better. It can generate finite states
+within the root box that are not reachable by subtracting actions from the
+root. The comparison is:
+
+```text
+current builder: forward-reachable, including dead states
+reverse builder: goal-reachable, including root-irrelevant states
+ideal work set:  intersection of the two
+```
+
+The existing counter omits fitting transitions whose child is `-infinity`, so
+it cannot estimate this tradeoff. Count those edges and finite/dead states
+before implementing a full reverse builder. A small shadow reverse reachability
+bitset by total-letter layer can then estimate the intersection.
+
+### Bidirectional relevance and a perimeter
+
+If neither direction is sparse enough, keep compact reachability marks from
+both sides and evaluate values only in their intersection. Another variant
+builds a small reverse perimeter of completable states and lets top-down
+construction stop when it reaches that perimeter.
+
+This resembles a partial pattern database, but its fallback contract is
+important here: a state outside the selected intersection still needs the
+coarse admissible bound. The perimeter is a work-selection device, not
+permission to return "no bound."
+
+## Change the dynamic-programming organization
+
+### Max-plus shift-and-reduce
+
+For a fixed projected action, `child_key = parent_key - delta` is a shifted
+dense-array access over a rectangular mixed-radix region. The recurrence can
+therefore be viewed as a max-plus shift-and-reduce:
+
+```text
+H[parent] = max over eligible a of
+    adjusted_score[a] + H[parent - delta[a]]
+```
+
+Rather than recursively scanning actions for one state, process total-letter
+layers and apply an action to a run or tile of eligible parent states. The
+mixed-radix digit limits describe those runs without per-state requirement
+loops. Tile ownership avoids atomic maximum updates, and the shifted child
+loads become predictable enough for vectorization and prefetching.
+
+This does not reduce the mathematical edge count. It is attractive if the
+reachable/finite density within a layer is high, because it replaces recursive
+bag mutation, cache-miss calls, and atomic first-owner synchronization with
+streaming work. It is unattractive for sparse layers. Report per-layer density
+and valid-edge density before choosing between parent-major, action-major, and
+tiled traversal.
+
+The small maximum number of words suggests another formulation,
+`F[k][delta] = best score using k actions`, followed by a maximum over `k`.
+That is also a sequence of max-plus convolutions. It is worth keeping in the
+inventory for SIMD or accelerator experiments, but it does not obviously
+remove more work than the layered recurrence on a CPU.
+
+### Nonblocking task-DAG scheduling
+
+Within the existing recursive traversal, a worker that encounters a child
+owned by another worker spins. If spin time is material, replace waiting with a
+continuation: register the parent as dependent on the child, work on another
+ready state, and resume the parent when the child publishes.
+
+This retains sparse top-down construction and exact values, unlike a dense
+layered pass. It is substantially more complex than the current recursion, so
+instrument ownership failures and spin cycles first. If those are small, edge
+reduction or packed arithmetic has more leverage.
+
+## Improve the abstraction per unit of construction
+
+### Several small complementary projections
+
+Instead of paying the Cartesian-product cost of one large table, build two or
+more small projections over different letter sets:
+
+```text
+bound(bag) = min(P1(project1(bag)),
+                 P2(project2(bag)),
+                 ...)
+```
+
+Each `Pi` is independently an upper bound, so their minimum remains admissible.
+Complementary projections can retain different constraints while their total
+state and action counts remain below those of one large projection. During
+concrete DFS, check the empirically strongest table first and stop as soon as
+one table proves a prune.
+
+The selection objective should be estimated nodes avoided per construction
+transition, not average bound value or table bytes alone. A second projection
+should be chosen specifically on sampled states where the existing projection
+is weak, rather than by another independent rare-letter rule.
+
+### Additive cost-partitioned projections
+
+Complementary projections can potentially combine more strongly than a
+minimum. Every future action has negative adjusted log score:
+
+```text
+weight(a) = class_score(a) + restart < 0
+cost(a) = -weight(a) > 0
+```
+
+Split each action cost among projections:
+
+```text
+cost(a) = sum(cost_i(a)), with cost_i(a) >= 0
+```
+
+Let each relaxed projection compute the minimum completion cost under its
+assigned `cost_i`. For any concrete completion, the sum of the projected
+minimum costs is no greater than that completion's exact cost. Negating the
+sum therefore gives an admissible score upper bound:
+
+```text
+score_bound(bag) = -sum(projected_min_cost_i(project_i(bag)))
+```
+
+Positive cost assigned to a projection where the action delta is zero is
+unexploitable: the abstract optimizer can omit that self-loop. It is still
+admissible, but it wastes cost that another projection could use, so a useful
+partition should assign that component zero. Uniform splitting is therefore
+only a correctness baseline, not necessarily a sensible allocation. Saturated
+or post-hoc cost partitioning may preserve more useful cost in each
+abstraction, but its own construction overhead must be included.
+
+### Adaptive group splitting
+
+The current automatic shape is a corpus-rarest exact prefix and one wildcard
+group. More general shapes include arbitrary exact masks, several wildcard
+groups, and exact dimensions for common but high-impact letters.
+
+Treat this as counterexample-guided abstraction refinement:
+
+1. build a very small projection;
+2. sample concrete states where its bound narrowly failed to prune;
+3. identify the wildcard letter or group split that most separates the
+   high-scoring aliased actions on those states;
+4. refine only while predicted pruning value exceeds construction cost.
+
+Useful split scores include reduction in projected-action collisions, reduction
+in the candidate upper-envelope gap, and separation of the current winning
+action from its competitors. This targets the actual query distribution and
+avoids using projection depth as the research variable.
+
+### Weighted and modular scalar projections
+
+A broader cheap family maps the bag to a nonnegative weighted sum:
+
+```text
+key_w(bag) = sum(weight_w[letter] * count[letter])
+```
+
+Every concrete transition maps to subtraction of its weighted delta. Allowing
+all abstract sequences that fit the scalar key is a relaxation, so a complete
+one-dimensional table is an upper bound. Moderate integer weights distinguish
+some letter mixtures while preserving a small contiguous table and strong
+action deduplication.
+
+Several weight vectors can be combined by minimum or cost partitioning. A
+related quotient tracks total letters plus a modular multiset signature; total
+letters supplies the acyclic layer while signature collisions weaken the
+bound safely. Random weights are useful only as a baseline. Better weights
+should be selected to separate high-score actions that collide in the current
+projection.
+
+## Share work across many states
+
+### Symbolic or decision-diagram construction
+
+Many mixed-radix states may have the same finite/dead status, the same winning
+action, or bound values differing only by a shared offset. A multi-valued or
+edge-valued decision diagram can represent such state sets or value functions
+without visiting each state independently. Transition application then acts
+on sets of states rather than scalar keys.
+
+This is a genuine construction-time idea, not just table compression, but it
+is high risk. Dictionary scores may destroy value sharing even when
+reachability compresses well, and decision-diagram variable order is critical.
+Before implementing a package, measure:
+
+- hashes of repeated subtables along each mixed-radix dimension;
+- run lengths of equal finite/dead status and winning action;
+- entropy of `H_rich - U_coarse` after conservative quantization; and
+- decision-diagram node counts for reachability alone.
+
+If only reachability compresses, use a symbolic finite-state mask to guide an
+ordinary numeric DP. If value residuals also compress, an edge-valued diagram
+becomes plausible.
+
+### Coarse baseline plus residual
+
+Store or construct the difference from a cheap complete table rather than the
+absolute rich value:
+
+```text
+gap(state) = U_coarse(state) - H_rich(state) >= 0
+```
+
+The gap is likely to have more repeated zeros and small values than `H_rich`.
+By itself this saves storage, not edge work. Its construction value appears
+only when combined with conservative quantization, repeated-subtable sharing,
+or bounded refinement that stops once the gap is large enough to prove a
+concrete prune.
+
+## Cheapen the remaining transition kernel
+
+### Packed projected-state arithmetic
+
+The successful kernel currently subtracts every exact requirement from the
+worker bag, updates the support mask, recurses or loads, and restores the bag.
+For the modest number of exact dimensions, pack counts into byte or guarded
+nibble lanes and pack each action's exact delta in the same format. One or two
+word/SIMD subtracts can then update the state; guard bits detect underflow, and
+lane-zero detection reconstructs the support needed for the next bucket.
+
+The mixed-radix score key still subtracts by one scalar delta. A prototype
+should compare packed subtract/restore with the current support-mask plus
+repeated-requirement fit path on the successful kernel, not only on rejected
+actions.
+
+### Fixed-point conservative scores
+
+Quantize every adjusted action score upward to a fixed-point integer and run
+the projected DP entirely in integer max-plus arithmetic. If at most `K`
+actions can remain, either round each action toward positive infinity or add a
+single `K`-dependent error allowance at lookup. The result is a slightly
+looser but admissible bound.
+
+This removes per-state floating error envelopes and `nextafter`, makes values
+deterministic, and may make tiled SIMD reductions simpler. It is secondary
+unless arithmetic or vectorization is shown to matter; atomic child loads and
+memory traffic remain.
+
+### Fit indexes and specializations
+
+Smaller experiments within the recursive builder include:
+
+- specialize zero- and one-exact-requirement actions;
+- narrow packed requirements;
+- sub-bucket by wildcard length and repeated-count shape;
+- intersect precomputed action bitsets for count thresholds;
+- cache support-compatible action lists by exact presence mask; and
+- prefetch likely child slots after coarse score ordering.
+
+These target scanned-but-rejected actions. Bitset or trie indexes can make a
+multidimensional fit query cheaper, but they do not reduce the number of
+successful child transitions. Promote them only if the new scan/failure
+counters identify enough headroom.
+
+## Amortize or reuse construction
+
+For repeated identical queries, persist a completed projected table keyed by
+the root bag, extraction options, restart score, projection definition, and an
+index/version fingerprint. A long-lived process can also reuse immutable
+per-class score and letter metadata, but root filtering, projection deltas, and
+action deduplication remain query-specific.
+
+Persistence does not help a one-shot command and invalidation is easy to get
+wrong, so it should not displace algorithmic work without evidence of a
+repeated-query workload. Background refinement is more generally useful
+because it can exploit otherwise idle cores even for one query.
+
+## Measurements needed before choosing
+
+The existing successful-transition counter cannot distinguish the proposed
+levers. Add diagnostics for:
+
+- all scanned actions and fit failures by reason;
+- fitting actions whose child eventually returns `-infinity`;
+- projected cache hits, misses, first-owner successes, ownership failures, and
+  dependency-spin cycles;
+- finite versus dead constructed states by total-letter layer;
+- the winning action's position in score and coarse-envelope order;
+- shadow coarse-envelope rejects, including whole rejected suffixes;
+- projected states queried by concrete DFS, unique keys, frequency, bound gap,
+  and whether the lookup actually pruned;
+- overlap among forward-reachable, reverse-completable, and final-query states;
+  and
+- per-bucket action, state, scan, fit, and winner distributions.
+
+Counters should be thread-local and merged after construction so the
+instrumentation does not add contention to the path being measured.
+
+The best initial probes do not require a new production builder:
+
+1. Build a shadow length-only envelope and count certified losing edges while
+   leaving the current maximum unchanged.
+2. Run composite-dominance analysis during action preparation without deleting
+   actions.
+3. Count fitting-to-dead edges and layer densities.
+4. Record projected keys requested by concrete DFS and whether a ready rich
+   value would have changed the prune decision.
+5. Hash value and reachability subtables to reject or justify symbolic work.
+
+## Research order
+
+The recommended order is based on ability to remove work and cost of learning,
+not on additional projection-depth timings:
+
+1. Add the scan, dead-child, ownership, winner-order, layer-density, and
+   final-query diagnostics.
+2. Prototype hierarchical candidate certificates in shadow mode. Enable exact
+   edge rejection only if the shadow rate is material.
+3. Measure composite action dominance and the forward/reverse state overlap.
+4. Prototype search-driven lookup with an always-available coarse fallback;
+   then allow nonblocking background refinement.
+5. Compare the existing forward recursion with reverse finite-state generation
+   and a layered max-plus kernel on a small representative case.
+6. Use actual prune misses to select a complementary projection or one adaptive
+   group split. Evaluate construction transitions per useful prune.
+7. Try packed state arithmetic and fixed-point values on whichever scheduler
+   survives the higher-level experiments.
+8. Pursue symbolic value construction only if repeated-subtable measurements
+   show substantial structure.
+9. Add persistent reuse only for a demonstrated repeated-query workload.
+
+## Related research directions
+
+The terminology above comes from pattern databases and abstraction heuristics,
+but the proposals still need local validation:
+
+- [Searching Without a Heuristic: Efficient Use of Abstraction][switchback]
+  motivates on-demand hierarchical abstraction rather than exhaustive
+  precomputation.
+- [Online Saturated Cost Partitioning for Classical Planning][online-scp]
+  is a useful analogue for moving abstraction work online and extending it
+  during search.
+- [On Creating Complementary Pattern Databases][complementary-pdb] selects new
+  projections to complement observed weaknesses of existing ones.
+- [Automated Pattern Database Design][automated-pdb] treats projection choice
+  as an optimization problem and uses symbolic PDB construction.
+- [External Symbolic Heuristic Search with Pattern Databases][symbolic-pdb]
+  describes decision-diagram state-set operations for PDBs.
+- [Counterexample-guided Cartesian abstraction refinement and saturated cost
+  partitioning][cegar] supplies the closest research vocabulary for adaptive
+  wildcard-group splitting.
+
+[switchback]: https://ojs.aaai.org/index.php/AAAI/article/download/7563/7424
+[online-scp]: https://ojs.aaai.org/index.php/ICAPS/article/view/15976
+[complementary-pdb]: https://www.ijcai.org/proceedings/2017/601
+[automated-pdb]: https://dl.aaai.org/Papers/Workshops/2006/WS-06-08/WS06-08-003.pdf
+[symbolic-pdb]: https://cdn.aaai.org/ICAPS/2005/ICAPS05-006.pdf
+[cegar]: https://edoc.unibas.ch/entities/publication/d96e1300-319e-4c33-9607-ebe5cea1517c
