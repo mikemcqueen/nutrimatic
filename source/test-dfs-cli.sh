@@ -48,7 +48,8 @@ cmp "$test_dir/all.stdout" "$test_dir/thread-one.stdout" ||
   fail "--preprocess-threads 1 changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/threaded.stdout" ||
   fail "threaded preprocessing changed stdout"
-grep -Eq '^# phase 2: preprocessing used [2-4] threads$' \
+grep -Eq \
+  '^# phase 2: using [2-4] threads to calculate dense score bounds$' \
   "$test_dir/threaded.stderr" ||
   fail "threaded preprocessing diagnostic is missing"
 [[ $(wc -l < "$test_dir/all.stdout") -eq 4 ]] ||

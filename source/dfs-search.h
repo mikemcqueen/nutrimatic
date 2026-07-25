@@ -175,12 +175,14 @@ class DfsAnagramSearch {
   void consider_parallel_bound_candidate(
       uint32_t class_index, BoundWorker* worker, double* best,
       double* max_rounding_error);
-  bool compute_score_bound_parallel(size_t requested_threads);
+  bool compute_score_bound_parallel(
+      size_t requested_threads, FILE* progress);
   double compute_projected_score_bound(BoundWorker* worker);
   void consider_projected_bound_candidate(
       uint32_t class_index, BoundWorker* worker, double* best,
       double* max_rounding_error);
-  bool compute_projected_score_bound_parallel(size_t requested_threads);
+  bool compute_projected_score_bound_parallel(
+      size_t requested_threads, FILE* progress);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
