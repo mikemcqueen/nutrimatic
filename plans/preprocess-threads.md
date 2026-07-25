@@ -81,7 +81,7 @@ Add:
 with these CLI semantics:
 
 - `0` (the default) selects an automatic count;
-- automatic mode uses one thread below 30 remaining letters;
+- automatic mode uses one thread below 26 remaining letters;
 - for 30+ letters, automatic mode uses up to 20 threads, capped by
   `std::thread::hardware_concurrency()`; 20 was the best measured count on the
   development machine;

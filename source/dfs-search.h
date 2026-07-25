@@ -43,7 +43,7 @@ class DfsAnagramSearch {
   enum ScoreBoundMode {
     SCORE_BOUND_OFF,
     SCORE_BOUND_DENSE,
-    SCORE_BOUND_SPARSE,
+    SCORE_BOUND_PREFIX,
   };
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
@@ -54,8 +54,10 @@ class DfsAnagramSearch {
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When progress is non-null, report every 100k * progress_factor nodes.
-  void run(DfsSolutionSink* sink, FILE* progress = NULL,
-           int progress_factor = 1);
+  // When cache fallback is disallowed, return false instead of using a partial
+  // score table when the configured cache cannot hold the complete table.
+  bool run(DfsSolutionSink* sink, FILE* progress = NULL,
+           int progress_factor = 1, bool allow_cache_fallback = true);
 
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
@@ -78,6 +80,9 @@ class DfsAnagramSearch {
     return bound_nextafter_calls;
   }
   size_t score_bound_bytes_charged() const { return bound_charged_bytes; }
+  size_t score_bound_capacity() const { return bound_capacity; }
+  size_t score_bound_value_bytes() const { return bound_value_bytes; }
+  bool score_bound_complete() const { return bound_complete; }
   int64_t score_bound_prunes() const { return bound_prunes; }
   double phase_two_setup_seconds() const { return setup_seconds; }
   double phase_two_search_seconds() const { return search_seconds; }
@@ -92,6 +97,10 @@ class DfsAnagramSearch {
 
   struct AtomicWord {
     std::atomic<uint64_t> value;
+  };
+
+  struct AtomicFloatWord {
+    std::atomic<uint32_t> value;
   };
 
   struct alignas(16) FitClass {
@@ -114,7 +123,7 @@ class DfsAnagramSearch {
   struct BoundWorker {
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     uint64_t bag_mask;
-    uint64_t bag_key;
+    uint64_t score_key;
     size_t letters_left;
     size_t states_computed;
     uint64_t transitions;
@@ -159,8 +168,10 @@ class DfsAnagramSearch {
   bool compute_score_bound_parallel(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
+  void publish_parallel_score_bound(uint64_t key, double value);
+  template<WalkMode mode>
   bool should_prune(double representative_log_score,
-                    DfsSolutionSink* sink) const;
+                    DfsSolutionSink* sink);
   bool build_candidate_entry(size_t begin, size_t end, uint64_t* metadata);
   bool build_support_entry(size_t begin, size_t end, uint64_t candidate_mask,
                            uint64_t* metadata);
@@ -196,26 +207,31 @@ class DfsAnagramSearch {
   // The hot bag and all masks use rarest-rank order.
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
   std::array<uint64_t, DFS_SYMBOL_COUNT> multipliers;
+  std::array<uint64_t, DFS_SYMBOL_COUNT> score_multipliers;
   uint64_t bag_mask;
   uint64_t current_bag_key;
+  uint64_t current_score_key;
   size_t current_letters_left;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
   std::unique_ptr<ScoreClass, AlignedFree> score_classes;
+  std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
   std::unique_ptr<uint32_t, AlignedFree> packed_letters;
   bool hot_classes_ready;
 
   ScoreBoundMode bound_mode;
   std::unique_ptr<AtomicWord, AlignedFree> bound_values;
-  std::unique_ptr<uint64_t, AlignedFree> bound_keys;
+  std::unique_ptr<AtomicFloatWord, AlignedFree> bound_float_values;
   size_t bound_capacity;
-  size_t bound_max_entries;
+  size_t bound_value_bytes;
+  bool bound_complete;
+  double root_score_bound;
+  bool root_score_bound_ready;
   size_t bound_entries;
   size_t bound_states_computed;
   uint64_t bound_transitions;
   uint64_t bound_nextafter_calls;
   size_t bound_charged_bytes;
-  bool bound_aborted;
   int64_t bound_prunes;
 
   CandidateCacheMode cache_mode;

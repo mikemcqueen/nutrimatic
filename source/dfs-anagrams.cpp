@@ -101,6 +101,7 @@ struct Args {
   int progress_factor;
   size_t candidate_cache_bytes;
   int preprocess_threads;
+  bool allow_cache_fallback;
 };
 
 static void usage(char const* program) {
@@ -108,12 +109,14 @@ static void usage(char const* program) {
       "usage: %s input.index letters"
       " [-u used-letters] [-m min-word-length] [-n top]"
       " [-p progress-factor] [--candidate-cache-mib MiB]"
-      " [--preprocess-threads N]\n"
+      " [--preprocess-threads N] [-F|--allow-cache-fallback]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
-      "  --candidate-cache-mib defaults to %zu; 0 disables it\n"
-      "  --preprocess-threads defaults to 0: automatic for 30+ letters;"
-      " 1 disables it\n",
+      "  --candidate-cache-mib defaults to %zu; 0 disables it with -F\n"
+      "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
+      " 1 disables it\n"
+      "  -F, --allow-cache-fallback allows score-cache fallback when the"
+      " dense table does not fit\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
       DEFAULT_CANDIDATE_CACHE_MIB);
 }
@@ -125,6 +128,7 @@ static struct optparse_long const long_options[] = {
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "candidate-cache-mib", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
+  { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -134,6 +138,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->progress_factor = 1;
   out->candidate_cache_bytes = DEFAULT_CANDIDATE_CACHE_MIB * MIB;
   out->preprocess_threads = 0;
+  out->allow_cache_fallback = false;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -174,6 +179,9 @@ static bool parse_args(char* argv[], Args* out) {
         if (!parse_count(options.optarg, "--preprocess-threads",
                          &out->preprocess_threads))
           return false;
+        break;
+      case 'F':
+        out->allow_cache_fallback = true;
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
@@ -246,7 +254,7 @@ int main(int argc, char* argv[]) {
   size_t preprocess_threads = size_t(args.preprocess_threads);
   if (preprocess_threads == 0) {
     preprocess_threads = 1;
-    if (args.letters.size() >= 30) {
+    if (args.letters.size() >= 26) {
       unsigned int const available = std::thread::hardware_concurrency();
       if (available > 1) {
         preprocess_threads = size_t(std::min(
@@ -259,7 +267,9 @@ int main(int argc, char* argv[]) {
       args.candidate_cache_bytes, preprocess_threads,
       ENABLE_CANDIDATE_CACHE);
   DfsTopN output(&classes, size_t(args.top));
-  search.run(args.top == 0 ? NULL : &output, stderr, args.progress_factor);
+  if (!search.run(args.top == 0 ? NULL : &output, stderr,
+                  args.progress_factor, args.allow_cache_fallback))
+    return 2;
   fprintf(stderr,
           "# phase 2 timing: %.6f s setup, %.6f s search, "
           "%llu successful bound transitions, %llu nextafter calls\n",
