@@ -2,6 +2,22 @@
 
 ## Result
 
+The largest measured win in this whole area is not in the projected builder at
+all. It is a length-group certificate in the concrete DFS, which exactly
+removes 49--91% of the class fit tests phase 2 performs — 84--96% with its
+optional score-descending refinement — using about 15 KiB of tables. It is
+implemented behind `NUTRIMATIC_LENGTH_CERTIFICATE=1` and
+`NUTRIMATIC_LENGTH_CERTIFICATE_SUFFIX=1` and is measured in
+"Concrete-search length-group certificates" below. On the four measured
+workloads it improves total phase 2 by 1.04x, 2.4x, 3.7x, and 32x relative to
+the current production shape selector, and it moves the best projection depth
+down by one to six dimensions. Every run reproduced its established output
+SHA-256.
+
+That result subsumes most of what follows: the setup-versus-search tradeoff
+that the depth sweeps below measure was measured with an uncertified search,
+and the certificate halves to quarters the search side of it.
+
 The projected recurrence should operate on projected actions, not concrete
 anagram classes.
 
@@ -922,7 +938,189 @@ time, and whether immediately final low-layer children improve certificate
 scheduling. General reverse recursion is unnecessary unless a later
 experiment moves the perimeter to eight or more letters.
 
-The revised near-term recommendation is:
+### Concrete-search length-group certificates
+
+`ideas/index-of-index.md` measured that the concrete DFS spends its time in
+candidate generation rather than in bound evaluation: at 40 letters it performs
+9.73 billion class fit tests to produce 343 million children, of which 181
+thousand survive their bound test. Its Proposal D — one coarse test per
+consumed-length group instead of a test per class — is now implemented and
+timed.
+
+At an expanding node with `letters_left` remaining and representative score
+`rep`, and for the group of classes in the forced-symbol bucket that consume
+`len` letters, the test is
+
+```text
+rep + restart + max_score[rank][len] + U[letters_left - len] + padding
+    <= floor
+```
+
+`max_score[rank][len]` is the largest class score in that bucket at that
+length and `U` is the existing length-only tail bound
+(`prepare_projected_length_bounds`). Both are upper estimates over everything
+the group can do, so a group that fails the test cannot contain a class whose
+subtree reaches the sink's floor. The argument does not involve the rich
+projected table, so the certificate stays exact whatever projection depth is
+selected. `padding` reuses the `should_prune` error envelope.
+
+The bucket for a rank is already contiguous and ordered by decreasing key
+length, so a length group is an index range and a rejected group is a range
+skip. Preparation is one pass over the class list: 15,304 bytes and 8ms at 40
+letters, including the 41-entry `U`.
+
+Two flags exist. `NUTRIMATIC_LENGTH_CERTIFICATE_SHADOW=1` counts what the test
+would skip while still scanning everything, so its node, transition, and
+solution counts remain identical to an uncertified run.
+`NUTRIMATIC_LENGTH_CERTIFICATE=1` performs the skip.
+
+| workload | group tests | rejected | class scans skipped | of |
+|---|---:|---:|---:|---:|
+| 40 letters, `d=15` | 1,805,219 | 60.79% | 6,723,180,516 | 9,732,285,204 (69.08%) |
+| 38 letters, `d=13` | 5,343,154 | 82.77% | 18,182,854,317 | 20,445,709,628 (88.93%) |
+| 38 letters, `d=12` | 9,354,516 | 85.82% | 32,988,335,020 | 36,105,059,800 (91.37%) |
+| unrelated 29, `d=13` | 256,722 | 57.25% | 516,204,006 | 1,049,278,427 (49.20%) |
+
+The shadow run at 40 letters `d=15` retained 342,949,072 final nodes, 24,804
+solutions, 5,919,322,956 construction transitions, and the established output
+hash, confirming the counters are non-intrusive. Its scan total agrees with the
+independent scratch-patch count in `ideas/index-of-index.md` to 0.003%.
+
+Skipping is worth about half the search on the workload the production selector
+picks. Gated 40-letter `d=15`, `-C 32`, 20 threads, two paired runs:
+
+| variant | setup | search | final DFS nodes |
+|---|---:|---:|---:|
+| baseline | 24.724s / 28.780s | 22.380s / 22.920s | 342,949,072 |
+| group certificate | 28.335s / 30.118s | 10.679s / 11.026s | 203,098,015 |
+
+Search falls 52.3% and 51.9%; the 6.8ms preparation is inside the setup noise.
+Final nodes fall 40.8% because a certified child never becomes a node at all,
+which makes node count no longer comparable across certificate settings.
+Retained top-1000 output is byte-identical; the raw `solutions` count falls
+from 24,804 to 24,767 because some skipped subtrees contained complete
+solutions below the floor.
+
+#### Score-descending suffix rejection
+
+Proposal D's third item resolves the group into individual classes. Solving the
+same envelope for the class score gives a per-group threshold, so a group
+visited in score-descending order can stop at its first failure. Rather than
+reorder the shared class list, `NUTRIMATIC_LENGTH_CERTIFICATE_SUFFIX=1` builds
+a permutation confined to each length group: index order is preserved across
+groups, so the entry-point tie-break survives as a per-class filter in the one
+group that contains the scan start. The permutation costs four bytes per class
+(2.0 MiB at 40 letters).
+
+| workload | classes examined, group only | with suffix rejection | total candidates |
+|---|---:|---:|---:|
+| 40 letters, `d=15` | 3,009,104,688 | 1,565,110,632 | 9,728,325,702 |
+| 40 letters, `d=13` | 11,215,058,092 | 3,854,218,790 | 60,913,150,354 |
+| 38 letters, `d=13` | 2,262,855,311 | 1,197,791,376 | 20,444,384,799 |
+| unrelated 29, `d=12` | 858,405,421 | 139,117,757 | 1,850,249,009 |
+
+Two checks make these counters self-validating, and both are worth re-running
+after any change to `walk_certified`. The three buckets — group skips, suffix
+skips, scanned — are disjoint and must sum exactly to the reported total. And
+the suffix-mode total must land *below* the shadow-mode total for the same
+workload, because suffix mode visits strictly fewer nodes; at 40 letters
+`d=15` that is 9,728,325,702 against 9,732,285,204. An earlier revision
+counted below-entry-point ids among the suffix skips and produced a total
+*above* shadow, which is how the miscount was found.
+
+One caveat applies to `_SUFFIX` and not to the group test. `DfsTopN::offer` rejects
+on `log_score <= heap[0].log_score`, so among distinct spellings whose scores
+are exactly equal at the N-th position, whichever arrives first is retained.
+Visiting a group in score-descending order changes arrival order, so a workload
+with an exact tie at the cutoff can return a different — equally scoring —
+spelling. No measured workload did, but this means an unchanged output hash is
+evidence for `_SUFFIX`, not a proof of equivalence the way it is for the group
+test and for `_SHADOW`.
+
+#### Depth sweeps under certification
+
+Because the certificate makes search much cheaper, the setup-versus-search knee
+moves. All runs use `-m 4 -n 1000 -C 32`, support-subset traversal, 20
+preprocessing threads, and were gated against another `dfs-anagrams` process
+before launch and every 2--3 seconds while active. Every run in every table
+reproduced its workload's established output SHA-256. "none" repeats the
+uncertified figures measured earlier in this document.
+
+38-letter `S6` prefix, total phase 2 seconds (final DFS nodes):
+
+| `d` | none | group | group + suffix |
+|---:|---:|---:|---:|
+| 10 | | | 8.900 (111,897,322) |
+| 11 | | | 8.118 (111,188,522) |
+| 12 | | 7.967 (147,363,472) | 8.229 (109,245,187) |
+| 13 | 51.837 (540,441,307) | **7.701** (134,652,495) | **7.396** (103,587,733) |
+| 14 | **22.248** (203,485,601) | 8.872 (98,491,550) | 9.402 (81,931,370) |
+| 15 | 27.621 (105,067,790) | 22.886 (63,518,076) | |
+
+40-letter `S6` prefix:
+
+| `d` | none | group | group + suffix |
+|---:|---:|---:|---:|
+| 11 | | | 23.856 (262,107,858) |
+| 12 | | 30.681 (441,712,322) | 20.923 (258,014,200) |
+| 13 | | 24.347 (372,554,960) | 20.043 (248,719,761) |
+| 14 | | **21.984** (315,453,554) | **19.818** (227,097,702) |
+| 15 | 47.104 (342,949,072) | 41.144 (203,098,015) | 39.664 (165,817,891) |
+
+Unrelated 29-letter bag `firestationteamusedquickbrown`:
+
+| `d` | none | group | group + suffix |
+|---:|---:|---:|---:|
+| 8 | | | 1.655 (11,074,843) |
+| 9 | | | 1.403 (10,934,732) |
+| 10 | | | 1.381 (10,584,204) |
+| 11 | | 4.868 (89,934,447) | **1.268** (9,270,228) |
+| 12 | 7.068 (78,432,288) | 3.433 (59,045,518) | 1.475 (8,018,918) |
+| 13 | **5.080** (47,935,597) | **2.991** (38,344,142) | 1.725 (6,810,029) |
+| 14 | 6.493 (25,143,714) | 4.954 (21,393,265) | |
+| 17 | 40.923 (8,078,253) | | |
+
+The 28-letter `d=14` case is setup-dominated and gains little: search falls
+from 0.168s to 0.122s (group) and 0.104s (suffix), and final nodes from
+3,086,650 to 2,636,902 and 1,493,982, on a 1.0s setup.
+
+Four things follow.
+
+1. **Enable the group certificate unconditionally.** It is exact, costs
+   kilobytes and milliseconds, needs no scheduler change, and never loses on
+   any measured workload.
+2. **Suffix rejection is not free.** It halves to quarters the surviving scans
+   everywhere, but at 40 letters `d=15` search rose from 11.03s to 12.08s
+   despite examining half as many classes. That reproduces the wildcard-length
+   ordering result above: within-group reordering costs successful-edge
+   locality. It wins at the depths a certified search should actually select,
+   and loses at over-rich ones.
+3. **The certificate substitutes for projection richness.** On the unrelated
+   bag the certified node count only falls from 11.1M at `d=8` to 6.8M at
+   `d=13`, against 78.4M at uncertified `d=12`. The depth curve flattens: the
+   best certified point uses a 276 KiB table where the production selector
+   chose 23.9 MiB, and the whole `d=9`--`d=13` range is within 24% of optimal.
+   Bound quality has stopped being the binding constraint on that workload.
+4. **The best depth moves down** by one dimension at 38 and 40 letters and by
+   six on the unrelated bag. Every conclusion in the depth-selection sections
+   above was measured against an uncertified search and should be re-derived,
+   including the retrospective cost proxy's 6ns/transition and 80ns/node
+   constants.
+
+End to end, against the shape the current production selector picks:
+
+| workload | production selector | best certified | ratio |
+|---|---:|---:|---:|
+| 28-letter `S6` | 1.164s (`d=14`) | 1.118s (`d=14`) | 1.04x |
+| 38-letter `S6` | 27.621s (`d=15`) | 7.396s (`d=13`) | 3.73x |
+| 40-letter `S6` | 47.104s (`d=15`) | 19.818s (`d=14`) | 2.38x |
+| unrelated 29 | 40.923s (`d=17`) | 1.268s (`d=11`) | 32.3x |
+
+## Revised near-term recommendations
+
+0. Promote the length-group certificate to a default, not an experiment, and
+   re-run the depth-selection sweeps underneath it. Decide suffix ordering by
+   workload: enable it with small tables, not with over-rich ones.
 
 1. Do not select the largest `d` that fits the cache, and do not replace that
    rule with a fixed decrement in `d`.
@@ -959,7 +1157,55 @@ The revised near-term recommendation is:
    1.84s of standalone search; on the 38-letter case, `d=15` spends 13.98s
    more setup to save 8.61s of search.
 
+## Reproducing the length-group certificate
+
+```sh
+export IDX=idx/wiki-merged.5.index
+source ./s.sh
+
+# non-intrusive shadow counters: identical nodes, transitions, and output
+NUTRIMATIC_PROJECTED_SCORE=1 NUTRIMATIC_PROJECTED_SUPPORT_GROUPS=1 \
+NUTRIMATIC_LENGTH_CERTIFICATE_SHADOW=1 \
+  build/dfs-anagrams "$IDX" "${S6:0:40}" -m 4 -n 1000 -C 32 -F -T 20
+
+# live skipping, and the score-descending refinement, at a chosen depth
+NUTRIMATIC_PROJECTED_SCORE_D=14 NUTRIMATIC_PROJECTED_SUPPORT_GROUPS=1 \
+NUTRIMATIC_LENGTH_CERTIFICATE_SUFFIX=1 \
+  build/dfs-anagrams "$IDX" "${S6:0:40}" -m 4 -n 1000 -C 32 -F -T 20
+```
+
+`NUTRIMATIC_LENGTH_CERTIFICATE_SUFFIX` implies `NUTRIMATIC_LENGTH_CERTIFICATE`;
+`NUTRIMATIC_LENGTH_CERTIFICATE_SHADOW` suppresses both skipping and the
+permutation so that its counters describe the uncertified traversal. All three
+require a projected bound, because they reuse `projected_length_bounds`.
+
+They also require `bound_mode != SCORE_BOUND_OFF`. The certificate prunes on
+the same floating-point contract as `should_prune`, so it honours the same
+guards: a sink that cannot prune, a cache below one alignment unit, and — the
+load-bearing one — `score_bound_arithmetic_supported()`, which disables
+FP-based pruning under `__FAST_MATH__` or a non-`FE_TONEAREST` rounding mode.
+Without that gate a `-ffast-math` build could reassociate the
+`upper + padding <= floor` comparison and silently drop valid solutions.
+
 ## Correctness argument
+
+The length-group certificate is exact independently of the projected table.
+Every class in a `(rarest rank, consumed length)` group consumes exactly `len`
+letters and scores at most `max_score[rank][len]`; every completion of the
+residual scores at most `U[letters_left - len]`, because `U` is the complete
+length-only relaxation of the same action set. So
+
+```text
+rep + restart + max_score[rank][len] + U[letters_left - len]
+```
+
+is an upper bound on every solution reachable through every member of the
+group, and rejecting the group when that envelope cannot reach the sink's floor
+cannot discard a retained solution. The score-descending form solves the same
+inequality for the class score; its threshold uses the group's largest score
+for the error padding, which is at least every member's magnitude, and is
+rounded down twice. Both changes shrink the threshold and therefore make
+rejection strictly harder.
 
 A projected flat delta uniquely identifies the exact-letter consumption vector
 and wildcard consumption. Classes with the same bucket and delta reach the
@@ -985,6 +1231,7 @@ recurrence, not exact with respect to the concrete bag.
 
 | lever | main idea | guarantee | first useful discriminator |
 |---|---|---|---|
+| certify concrete candidates | reject whole consumed-length groups in phase 2 with `max_score` + length tail | exact; implemented and measured | class fit tests removed, and the depth at which total phase 2 is minimized |
 | remove edges | certify losing actions with a cheaper upper bound | exact, if every skipped edge has a certificate | fraction of fitting edges rejected in shadow mode |
 | remove actions | single- and multi-action dominance | exact | actions removed, weighted by how often their bucket is scanned |
 | remove states | refine only states requested by the concrete DFS | admissible fallback; exact entries optional | projected-key query frequency and bound gap |
@@ -1465,6 +1712,12 @@ The best initial probes do not require a new production builder:
 
 The recommended order is based on ability to remove work and cost of learning,
 not on additional projection-depth timings:
+
+0. Make the length-group certificate the default concrete-search loop and
+   re-measure depth selection underneath it. It changes the cost model every
+   other item in this list is optimizing against, and on the unrelated bag it
+   already removes bound quality as the binding constraint. Then decide when to
+   pay for the score-descending permutation, whose locality cost is real.
 
 1. Replace synchronous rich-miss construction in the certificate prototype
    with a parallel layered or nonblocking demand scheduler. Use a complete

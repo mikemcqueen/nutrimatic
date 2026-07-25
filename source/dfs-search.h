@@ -180,6 +180,40 @@ class DfsAnagramSearch {
   ProjectedDiagnostics const& projected_diagnostics() const {
     return projected_diagnostic_counts;
   }
+  bool length_certificate_enabled() const {
+    return length_certificate_ready;
+  }
+  bool length_certificate_skipping() const {
+    return length_certificate_ready && !length_certificate_shadow;
+  }
+  uint64_t length_certificate_group_tests() const {
+    return certificate_group_tests;
+  }
+  uint64_t length_certificate_group_rejects() const {
+    return certificate_group_rejects;
+  }
+  uint64_t length_certificate_scans_skipped() const {
+    return certificate_scans_skipped;
+  }
+  uint64_t length_certificate_scans_kept() const {
+    return certificate_scans_kept;
+  }
+  uint64_t length_certificate_suffix_skips() const {
+    return certificate_suffix_skips;
+  }
+  bool length_certificate_suffix_enabled() const {
+    return !certificate_order.empty();
+  }
+  double length_certificate_prepare_seconds() const {
+    return certificate_prepare_seconds;
+  }
+  size_t length_certificate_table_bytes() const {
+    return certificate_max_score.size() * sizeof(double) +
+        certificate_group_end.size() * sizeof(uint32_t) +
+        certificate_group_begin.size() * sizeof(uint32_t) +
+        certificate_order.size() * sizeof(uint32_t) +
+        projected_length_bounds.size() * sizeof(double);
+  }
   std::vector<ProjectedLayerDiagnostics> const&
   projected_layer_diagnostics() const {
     return projected_layer_diagnostic_counts;
@@ -239,6 +273,13 @@ class DfsAnagramSearch {
   bool prepare_projected_support_groups();
   bool prepare_projected_length_bounds();
   bool prepare_projected_modular_bounds();
+  bool prepare_length_certificate();
+  bool length_certificate_rejects(
+      size_t base, size_t length, size_t letters_left,
+      double representative_log_score, double floor) const;
+  double length_certificate_threshold(
+      size_t base, size_t length, size_t letters_left,
+      double representative_log_score, double floor) const;
   uint16_t projected_modular_class_delta(
       size_t class_index, size_t table) const;
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
@@ -246,6 +287,10 @@ class DfsAnagramSearch {
 
   void walk(size_t letters_left, size_t entry_point,
             double representative_log_score, DfsSolutionSink* sink);
+  void walk_certified(int rank, size_t start, size_t end,
+                      size_t letters_left,
+                      double representative_log_score, double floor,
+                      DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
@@ -326,6 +371,10 @@ class DfsAnagramSearch {
   bool projected_certificate_fallback_requested;
   bool projected_query_diagnostics_requested;
   bool projected_support_groups_requested;
+  bool length_certificate_requested;
+  bool length_certificate_shadow;
+  bool length_certificate_suffix_requested;
+  bool length_certificate_ready;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
   std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
@@ -340,6 +389,23 @@ class DfsAnagramSearch {
   std::vector<float> projected_lower_bounds;
   std::vector<uint64_t> projected_query_bits;
   std::vector<double> projected_length_bounds;
+  // Static per-(rarest-symbol rank, consumed length) group certificate. The
+  // class bucket for a rank is already contiguous and descending in length, so
+  // one test per group either rejects a whole index range or admits it.
+  size_t certificate_stride;
+  std::vector<double> certificate_max_score;
+  std::vector<uint32_t> certificate_group_end;
+  std::vector<uint32_t> certificate_group_begin;
+  // Optional score-descending permutation within each length group. Class
+  // index order is preserved across groups, so the entry-point tie-break only
+  // needs a per-class filter in the one partially scanned group.
+  std::vector<uint32_t> certificate_order;
+  uint64_t certificate_suffix_skips;
+  uint64_t certificate_group_tests;
+  uint64_t certificate_group_rejects;
+  uint64_t certificate_scans_skipped;
+  uint64_t certificate_scans_kept;
+  double certificate_prepare_seconds;
   size_t modular_bound_bits;
   size_t modular_bound_count;
   size_t projected_modular_bound_span;

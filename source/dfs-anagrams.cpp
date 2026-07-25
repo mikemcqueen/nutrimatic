@@ -328,6 +328,43 @@ int main(int argc, char* argv[]) {
             (unsigned long long)
                 diagnostics.coarse_certificate_skips);
   }
+  if (search.length_certificate_enabled()) {
+    unsigned long long const tests =
+        (unsigned long long) search.length_certificate_group_tests();
+    unsigned long long const rejects =
+        (unsigned long long) search.length_certificate_group_rejects();
+    unsigned long long const skipped =
+        (unsigned long long) search.length_certificate_scans_skipped();
+    unsigned long long const kept =
+        (unsigned long long) search.length_certificate_scans_kept();
+    unsigned long long const suffix =
+        (unsigned long long) search.length_certificate_suffix_skips();
+    // Group skips and suffix skips are disjoint, so both belong in the
+    // denominator; otherwise the percentages are not comparable between modes.
+    unsigned long long const total = skipped + suffix + kept;
+    fprintf(stderr,
+            "# phase 2 length certificate: %s, %zu table bytes, "
+            "%.6f s prepare\n"
+            "# phase 2 length certificate: %llu group tests, "
+            "%llu rejected (%.2f%%), %llu class scans skipped of %llu "
+            "(%.2f%%)\n",
+            search.length_certificate_skipping() ? "skipping" : "shadow",
+            search.length_certificate_table_bytes(),
+            search.length_certificate_prepare_seconds(),
+            tests, rejects,
+            tests == 0 ? 0.0 : 100.0 * double(rejects) / double(tests),
+            skipped, total,
+            total == 0 ? 0.0 : 100.0 * double(skipped) / double(total));
+    if (search.length_certificate_suffix_enabled())
+      fprintf(stderr,
+              "# phase 2 length certificate: %llu further class scans "
+              "skipped by score-descending suffix rejection; %llu scanned "
+              "(%.2f%% of all candidates removed)\n",
+              suffix, kept,
+              total == 0
+                  ? 0.0
+                  : 100.0 * double(skipped + suffix) / double(total));
+  }
   if (search.projected_query_diagnostics_enabled()) {
     DfsAnagramSearch::ProjectedDiagnostics const& diagnostics =
         search.projected_diagnostics();
