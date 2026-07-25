@@ -322,6 +322,113 @@ count while reporting rich-prune coverage per table byte and per final-query
 operation. If coverage saturates well below 100%, a small exact-letter
 projection is a better fallback candidate.
 
+### Modular-signature parameter sweep
+
+The modular diagnostic now accepts:
+
+```sh
+NUTRIMATIC_PROJECTED_MODULAR_BITS=3..10
+NUTRIMATIC_PROJECTED_MODULAR_COUNT=1..8
+NUTRIMATIC_PROJECTED_MODULAR_SEED=unsigned-integer
+```
+
+The defaults remain four 6-bit tables with seed zero. The diagnostic reports
+cumulative pruning after each table, table and per-class-delta bytes,
+preparation time, distinct relaxed actions, and deterministic candidate scans.
+Per-class deltas use one byte per class and table through eight bits and two
+bytes for nine- and ten-bit signatures.
+
+The first sweep used the 28-letter `d=14` final-query stream above and eight
+tables of each width. Every run retained 430,123 rich states, 213,302,595 rich
+construction transitions, 3,086,650 final DFS nodes, 3,652 solutions, and the
+same shadow-only final-search behavior. The runs were checked for another
+`dfs-anagrams` process before launch. Timing is omitted because both the host
+and the amount of shadow diagnostic work vary; the prune counts are
+deterministic.
+
+| bits | table bytes | table + delta bytes | rich prunes preserved | rich prunes missed |
+|---:|---:|---:|---:|---:|
+| 4 | 29,696 | 771,248 | 86.06% | 429,563 |
+| 5 | 59,392 | 800,944 | 90.26% | 299,987 |
+| 6 | 118,784 | 860,336 | 93.57% | 198,011 |
+| 7 | 237,568 | 979,120 | 95.84% | 128,257 |
+| 8 | 475,136 | 1,216,688 | 97.31% | 82,895 |
+| 9 | 950,272 | 2,433,376 | 98.29% | 52,588 |
+
+Width and table count should not be selected independently. At approximately
+equal table storage, fewer wider tables consistently did better:
+
+| table storage | configuration | rich prunes missed | lookup loads |
+|---:|---|---:|---:|
+| 118,784 B | 6-bit x 8 | 198,011 | 8 |
+| 118,784 B | 7-bit x 4 | 163,022 | 4 |
+| 118,784 B | 8-bit x 2 | 151,149 | 2 |
+| 118,784 B | 9-bit x 1 | 172,129 | 1 |
+| 237,568 B | 7-bit x 8 | 128,257 | 8 |
+| 237,568 B | 8-bit x 4 | 106,174 | 4 |
+| 237,568 B | 9-bit x 2 | 97,643 | 2 |
+| 237,568 B | 10-bit x 1 | 116,675 | 1 |
+| 475,136 B | 8-bit x 8 | 82,895 | 8 |
+| 475,136 B | 9-bit x 4 | 67,076 | 4 |
+| 475,136 B | 10-bit x 2 | 63,214 | 2 |
+| 950,272 B | 9-bit x 8 | 52,588 | 8 |
+| 950,272 B | 10-bit x 4 | 43,524 | 4 |
+
+The comparison is even more favorable to fewer tables when delta storage is
+included: each table adds 92,694 bytes of class deltas through eight bits and
+185,388 bytes at nine or ten bits on this workload.
+The best point depends on how many final-query loads and how much construction
+work are acceptable, but the original 6-bit x 4 configuration is not on the
+measured storage/operation frontier.
+
+Nine-bit x 2 is the best cheap measured point. It preserves 96.83% of rich
+prunes using 608,344 total bytes and two final-query loads. It deduplicates to
+6,261 and 6,284 relaxed actions, performs 179,845,120 deterministic candidate
+scans, and prepared in 0.216s in its gated run. Ten-bit x 2 improves
+preservation to 97.95% and uses 845,912 total bytes, but expands to 669,261,824
+candidate scans and took 0.819s. That is 3.72x the construction scans for
+34,429 additional matched rich prunes. Ten-bit x 4 preserves 98.59% but already
+performs 1.334 billion candidate scans and took 1.631s, comparable to the rich
+builder itself on this small case. Wider is therefore not free even though
+the final tables remain small.
+
+Changing the deterministic hash seed did little. For 9-bit x 4, seeds zero
+through three missed 67,076, 68,071, 68,027, and 68,162 rich prunes. The full
+range is only 1.6% of the best miss count. Random seed search is therefore a
+low-priority way to improve this quotient. A deliberately selected weight
+vector should be judged by whether it separates the actual remaining
+rich-only states, not by generic hash quality.
+
+The wider quotient improves the fallback conclusion but does not reverse it.
+Even 9-bit x 4 misses 67,076 rich prunes on this small query stream, and 9-bit
+x 8 misses 52,588; 10-bit x 4 still misses 43,524. Those misses can expose
+more than one concrete node each when the fallback is used for real.
+
+The launch- and construction-gated 40-letter `d=16` validation makes that
+limitation clearer:
+
+| fallback | table bytes | delta bytes | prepare | candidate scans | rich prunes preserved | rich prunes missed |
+|---|---:|---:|---:|---:|---:|---:|
+| 6-bit x 4 | 83,968 | 1,961,316 | not separately timed | not recorded | 78.87% | 38,727,956 |
+| 9-bit x 1 | 167,936 | 980,658 | included below | 173,690,880 | 84.74% | 27,965,638 |
+| 9-bit x 2 | 335,872 | 1,961,316 | 0.480s | 347,402,240 | 89.37% | 19,492,901 |
+
+The rich run retained 8,787,405 states, performed 18,670,931,559 rich
+construction transitions, visited 183,381,681 final DFS nodes, and issued
+183,381,299 bound lookups. The two modular tables additionally proved 11,955
+prunes that the rich projection missed. Phase 2 reported 110.671s setup
+(including 0.480s modular preparation) and the instrumented final search
+20.437s, but the deterministic work and prune counts are more portable than
+those host timings.
+
+Cutting rich-only misses in half relative to 6-bit x 4 is useful, but leaving
+19.5 million misses rules out even the improved modular quotient as the only
+large-workload fallback. Use 9-bit x 2 as a cheap complement and as one stage
+in a fallback cascade. The next fallback comparison should be a small
+exact-letter projection, and it should actually control pruning in a shadow
+or replayed search so the measurement reports concrete nodes exposed rather
+than only per-lookup disagreement.
+
 ## Correctness argument
 
 A projected flat delta uniquely identifies the exact-letter consumption vector

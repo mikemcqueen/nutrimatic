@@ -242,10 +242,18 @@ static int smoke_test() {
           "could not enable projected score-bound diagnostics");
     check(setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0,
           "could not enable projected support-group experiment");
+    check(setenv("NUTRIMATIC_PROJECTED_MODULAR_BITS", "3", 1) == 0 &&
+              setenv("NUTRIMATIC_PROJECTED_MODULAR_COUNT", "2", 1) == 0 &&
+              setenv("NUTRIMATIC_PROJECTED_MODULAR_SEED", "7", 1) == 0,
+          "could not configure projected modular diagnostics");
     DfsTopN projected_output(&classes, 2);
     DfsAnagramSearch projected(
         &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
     projected.run(&projected_output);
+    check(setenv("NUTRIMATIC_PROJECTED_MODULAR_BITS", "9", 1) == 0 &&
+              setenv("NUTRIMATIC_PROJECTED_MODULAR_COUNT", "1", 1) == 0 &&
+              setenv("NUTRIMATIC_PROJECTED_MODULAR_SEED", "8", 1) == 0,
+          "could not reconfigure projected modular diagnostics");
     DfsTopN reused_projected_output(&classes, 2);
     DfsAnagramSearch reused_projected(
         &classes, "a", 1e-6, reader.count(), 64, 2);
@@ -256,6 +264,10 @@ static int smoke_test() {
           "could not disable projected score-bound diagnostics");
     check(unsetenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS") == 0,
           "could not disable projected support-group experiment");
+    check(unsetenv("NUTRIMATIC_PROJECTED_MODULAR_BITS") == 0 &&
+              unsetenv("NUTRIMATIC_PROJECTED_MODULAR_COUNT") == 0 &&
+              unsetenv("NUTRIMATIC_PROJECTED_MODULAR_SEED") == 0,
+          "could not disable projected modular diagnostics");
     check(projected.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
               projected.score_bound_complete(),
@@ -273,6 +285,14 @@ static int smoke_test() {
           "projected score memo did not merge equivalent actions");
     DfsAnagramSearch::ProjectedDiagnostics const& diagnostics =
         projected.projected_diagnostics();
+    check(projected.projected_modular_bound_bits() == 3 &&
+              projected.projected_modular_bound_count() == 2 &&
+              projected.projected_modular_bound_seed() == 7 &&
+              projected.projected_modular_bound_actions(0) > 0 &&
+              projected.projected_modular_bound_actions(1) > 0 &&
+              projected.projected_modular_bound_candidate_scans(0) > 0 &&
+              projected.projected_modular_bound_candidate_scans(1) > 0,
+          "projected modular diagnostic configuration was not applied");
     check(projected.projected_diagnostics_enabled() &&
               diagnostics.action_scans > 0 &&
               diagnostics.fitting_edges > 0,
@@ -311,6 +331,15 @@ static int smoke_test() {
                   diagnostics.final_modular_only_prunes +
                   diagnostics.final_modular_rich_only_prunes ==
                   diagnostics.final_bound_prunes &&
+              diagnostics.final_modular_prefix_bound_prunes[
+                  projected.projected_modular_bound_count() - 1] ==
+                  diagnostics.final_modular_bound_prunes &&
+              diagnostics.final_modular_prefix_rich_only_prunes[
+                  projected.projected_modular_bound_count() - 1] ==
+                  diagnostics.final_modular_rich_only_prunes &&
+              diagnostics.final_modular_prefix_only_prunes[
+                  projected.projected_modular_bound_count() - 1] ==
+                  diagnostics.final_modular_only_prunes &&
               diagnostics.final_modular_bound_prunes >=
                   diagnostics.final_length_bound_prunes,
           "projected final-query diagnostics are inconsistent");
@@ -322,6 +351,10 @@ static int smoke_test() {
         reused_expected_output.take_sorted_results(),
         reused_projected_output.take_sorted_results(),
         "projected score memo mishandled a reused class list");
+    check(reused_projected.projected_modular_bound_bits() == 9 &&
+              reused_projected.projected_modular_bound_count() == 1 &&
+              reused_projected.projected_modular_bound_seed() == 8,
+          "wide projected modular diagnostics were not applied");
 
     check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "2", 1) == 0 &&
               setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0,

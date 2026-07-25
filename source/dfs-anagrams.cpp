@@ -319,7 +319,34 @@ int main(int argc, char* argv[]) {
             (unsigned long long)
                 diagnostics.final_length_only_prunes);
     fprintf(stderr,
-            "# phase 2 projected modular fallback: %llu pruned, "
+            "# phase 2 projected modular fallback: %zu-bit signatures, "
+            "%zu tables, seed %u, %zu table bytes, %zu delta bytes, "
+            "prepared in %.6fs\n",
+            search.projected_modular_bound_bits(),
+            search.projected_modular_bound_count(),
+            unsigned(search.projected_modular_bound_seed()),
+            search.projected_modular_bound_table_bytes(),
+            search.projected_modular_bound_delta_bytes(),
+            search.projected_modular_bound_prepare_seconds());
+    for (size_t i = 0;
+         i < search.projected_modular_bound_count(); ++i) {
+      fprintf(stderr,
+              "# phase 2 projected modular prefix %zu: %llu pruned, "
+              "%llu rich-only pruned, %llu modular-only pruned, "
+              "%zu actions, %llu candidate scans\n",
+              i + 1,
+              (unsigned long long)
+                  diagnostics.final_modular_prefix_bound_prunes[i],
+              (unsigned long long)
+                  diagnostics.final_modular_prefix_rich_only_prunes[i],
+              (unsigned long long)
+                  diagnostics.final_modular_prefix_only_prunes[i],
+              search.projected_modular_bound_actions(i),
+              (unsigned long long)
+                  search.projected_modular_bound_candidate_scans(i));
+    }
+    fprintf(stderr,
+            "# phase 2 projected modular fallback total: %llu pruned, "
             "%llu rich-only pruned, %llu modular-only pruned\n",
             (unsigned long long)
                 diagnostics.final_modular_bound_prunes,

@@ -33,6 +33,8 @@ class DfsSolutionSink {
 // than once.
 class DfsAnagramSearch {
  public:
+  static size_t const MAX_MODULAR_BOUND_COUNT = 8;
+
   struct ProjectedDiagnostics {
     uint64_t action_scans;
     uint64_t wild_length_rejects;
@@ -56,6 +58,12 @@ class DfsAnagramSearch {
     uint64_t final_modular_bound_prunes;
     uint64_t final_modular_rich_only_prunes;
     uint64_t final_modular_only_prunes;
+    std::array<uint64_t, MAX_MODULAR_BOUND_COUNT>
+        final_modular_prefix_bound_prunes;
+    std::array<uint64_t, MAX_MODULAR_BOUND_COUNT>
+        final_modular_prefix_rich_only_prunes;
+    std::array<uint64_t, MAX_MODULAR_BOUND_COUNT>
+        final_modular_prefix_only_prunes;
   };
 
   enum ScoreBoundMode {
@@ -118,6 +126,35 @@ class DfsAnagramSearch {
   bool projected_query_diagnostics_enabled() const {
     return projected_query_diagnostics_requested;
   }
+  size_t projected_modular_bound_bits() const {
+    return modular_bound_bits;
+  }
+  size_t projected_modular_bound_count() const {
+    return modular_bound_count;
+  }
+  uint32_t projected_modular_bound_seed() const {
+    return modular_bound_seed;
+  }
+  size_t projected_modular_bound_table_bytes() const {
+    return modular_bound_count * projected_modular_bound_span *
+        (letters.size() + 1) * sizeof(double);
+  }
+  size_t projected_modular_bound_delta_bytes() const {
+    return projected_modular_class_deltas8.size() *
+            sizeof(uint8_t) +
+        projected_modular_class_deltas16.size() *
+            sizeof(uint16_t);
+  }
+  double projected_modular_bound_prepare_seconds() const {
+    return modular_bound_prepare_seconds;
+  }
+  size_t projected_modular_bound_actions(size_t table) const {
+    return modular_bound_action_counts[table];
+  }
+  uint64_t projected_modular_bound_candidate_scans(
+      size_t table) const {
+    return modular_bound_candidate_scans[table];
+  }
   ProjectedDiagnostics const& projected_diagnostics() const {
     return projected_diagnostic_counts;
   }
@@ -174,6 +211,8 @@ class DfsAnagramSearch {
   bool prepare_projected_support_groups();
   bool prepare_projected_length_bounds();
   bool prepare_projected_modular_bounds();
+  uint16_t projected_modular_class_delta(
+      size_t class_index, size_t table) const;
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void clear_score_bounds();
 
@@ -266,13 +305,20 @@ class DfsAnagramSearch {
   std::vector<uint32_t> projected_support_actions;
   std::vector<uint64_t> projected_query_bits;
   std::vector<double> projected_length_bounds;
-  static size_t const MODULAR_BOUND_COUNT = 4;
-  static size_t const MODULAR_BOUND_SPAN = 64;
-  std::array<uint8_t, MODULAR_BOUND_COUNT>
+  size_t modular_bound_bits;
+  size_t modular_bound_count;
+  size_t projected_modular_bound_span;
+  uint32_t modular_bound_seed;
+  std::array<uint16_t, MAX_MODULAR_BOUND_COUNT>
       current_modular_signatures;
-  std::vector<uint32_t> projected_modular_class_deltas;
-  std::array<std::vector<double>, MODULAR_BOUND_COUNT>
+  std::vector<uint8_t> projected_modular_class_deltas8;
+  std::vector<uint16_t> projected_modular_class_deltas16;
+  std::array<std::vector<double>, MAX_MODULAR_BOUND_COUNT>
       projected_modular_bounds;
+  std::array<size_t, MAX_MODULAR_BOUND_COUNT>
+      modular_bound_action_counts;
+  std::array<uint64_t, MAX_MODULAR_BOUND_COUNT>
+      modular_bound_candidate_scans;
   bool hot_classes_ready;
 
   ScoreBoundMode bound_mode;
@@ -300,6 +346,7 @@ class DfsAnagramSearch {
   double setup_seconds;
   double search_seconds;
   double support_group_prepare_seconds;
+  double modular_bound_prepare_seconds;
   size_t actual_preprocess_threads;
 };
 

@@ -230,6 +230,21 @@ static bool environment_flag_enabled(char const* name) {
       strcmp(value, "0") != 0;
 }
 
+static bool environment_unsigned(
+    char const* name, uint64_t minimum, uint64_t maximum,
+    uint64_t* result) {
+  char const* value = getenv(name);
+  if (value == NULL || value[0] == '\0') return false;
+  errno = 0;
+  char* end = NULL;
+  unsigned long long const parsed = strtoull(value, &end, 10);
+  if (errno != 0 || end == value || *end != '\0' ||
+      parsed < minimum || parsed > maximum)
+    return false;
+  *result = uint64_t(parsed);
+  return true;
+}
+
 static void add_projected_diagnostics(
     DfsAnagramSearch::ProjectedDiagnostics const& source,
     DfsAnagramSearch::ProjectedDiagnostics* target) {
@@ -262,6 +277,15 @@ static void add_projected_diagnostics(
       source.final_modular_rich_only_prunes;
   target->final_modular_only_prunes +=
       source.final_modular_only_prunes;
+  for (size_t i = 0;
+       i < DfsAnagramSearch::MAX_MODULAR_BOUND_COUNT; ++i) {
+    target->final_modular_prefix_bound_prunes[i] +=
+        source.final_modular_prefix_bound_prunes[i];
+    target->final_modular_prefix_rich_only_prunes[i] +=
+        source.final_modular_prefix_rich_only_prunes[i];
+    target->final_modular_prefix_only_prunes[i] +=
+        source.final_modular_prefix_only_prunes[i];
+  }
 }
 
 static char const* score_bound_mode_name(
@@ -279,20 +303,29 @@ static char const* score_bound_mode_name(
   return "unknown";
 }
 
-static uint8_t modular_bound_weight(
-    size_t projection, uint32_t rank) {
+static uint16_t modular_bound_weight(
+    size_t projection, uint32_t rank, uint32_t seed,
+    uint32_t mask) {
   static uint32_t const salts[] = {
     UINT32_C(0x9e3779b9), UINT32_C(0x85ebca6b),
-    UINT32_C(0xc2b2ae35), UINT32_C(0x27d4eb2f)
+    UINT32_C(0xc2b2ae35), UINT32_C(0x27d4eb2f),
+    UINT32_C(0x165667b1), UINT32_C(0xd3a2646c),
+    UINT32_C(0xfd7046c5), UINT32_C(0xb55a4f09)
   };
   assert(projection < sizeof(salts) / sizeof(salts[0]));
-  uint32_t mixed = rank + salts[projection];
+  uint32_t seed_mix = seed;
+  seed_mix ^= seed_mix >> 16;
+  seed_mix *= UINT32_C(0x7feb352d);
+  seed_mix ^= seed_mix >> 15;
+  seed_mix *= UINT32_C(0x846ca68b);
+  seed_mix ^= seed_mix >> 16;
+  uint32_t mixed = rank + (salts[projection] ^ seed_mix);
   mixed ^= mixed >> 16;
   mixed *= UINT32_C(0x7feb352d);
   mixed ^= mixed >> 15;
   mixed *= UINT32_C(0x846ca68b);
   mixed ^= mixed >> 16;
-  return uint8_t(mixed & 63U);
+  return uint16_t(mixed & mask);
 }
 
 }  // namespace
@@ -326,6 +359,10 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     projected_diagnostics_requested(false),
     projected_query_diagnostics_requested(false),
     projected_support_groups_requested(false),
+    modular_bound_bits(6),
+    modular_bound_count(4),
+    projected_modular_bound_span(size_t(1) << 6),
+    modular_bound_seed(0),
     hot_classes_ready(false),
     bound_mode(SCORE_BOUND_OFF),
     bound_capacity(0),
@@ -348,6 +385,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     setup_seconds(0.0),
     search_seconds(0.0),
     support_group_prepare_seconds(0.0),
+    modular_bound_prepare_seconds(0.0),
     actual_preprocess_threads(1) {
   assert(class_list != NULL);
   static_assert(sizeof(AtomicWord) == sizeof(uint64_t),
@@ -365,6 +403,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   projected_action_offsets.fill(0);
   score_support_bits.fill(0);
   current_modular_signatures.fill(0);
+  modular_bound_action_counts.fill(0);
+  modular_bound_candidate_scans.fill(0);
 
   std::vector<DfsAnagramClass> const& all_classes = class_list->classes();
   best_member_log_scores.reserve(all_classes.size());
@@ -782,57 +822,89 @@ bool DfsAnagramSearch::prepare_projected_length_bounds() {
 }
 
 bool DfsAnagramSearch::prepare_projected_modular_bounds() {
-  projected_modular_class_deltas.clear();
-  for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p)
+  projected_modular_class_deltas8.clear();
+  projected_modular_class_deltas16.clear();
+  for (size_t p = 0; p < MAX_MODULAR_BOUND_COUNT; ++p)
     projected_modular_bounds[p].clear();
   current_modular_signatures.fill(0);
+  modular_bound_action_counts.fill(0);
+  modular_bound_candidate_scans.fill(0);
   if (!projected_query_diagnostics_requested) return true;
 
   try {
+    modular_bound_bits = 6;
+    modular_bound_count = 4;
+    modular_bound_seed = 0;
+    uint64_t configured = 0;
+    if (environment_unsigned(
+            "NUTRIMATIC_PROJECTED_MODULAR_BITS", 3, 10,
+            &configured))
+      modular_bound_bits = size_t(configured);
+    if (environment_unsigned(
+            "NUTRIMATIC_PROJECTED_MODULAR_COUNT", 1,
+            MAX_MODULAR_BOUND_COUNT, &configured))
+      modular_bound_count = size_t(configured);
+    if (environment_unsigned(
+            "NUTRIMATIC_PROJECTED_MODULAR_SEED", 0,
+            UINT32_MAX, &configured))
+      modular_bound_seed = uint32_t(configured);
+    projected_modular_bound_span =
+        size_t(1) << modular_bound_bits;
+    uint32_t const modular_mask =
+        uint32_t(projected_modular_bound_span - 1);
+
     size_t const class_count = class_list->classes().size();
-    projected_modular_class_deltas.assign(class_count, 0);
+    if (modular_bound_bits <= 8)
+      projected_modular_class_deltas8.assign(
+          class_count * modular_bound_count, 0);
+    else
+      projected_modular_class_deltas16.assign(
+          class_count * modular_bound_count, 0);
     for (size_t i = 0; i < class_count; ++i) {
       FitClass const& fit = fit_classes.get()[i];
       uint32_t const* requirements =
           packed_letters.get() + fit.letters_offset;
       uint32_t const count =
           hot_requirement_count(fit.packed_length_and_count);
-      uint32_t packed_delta = 0;
-      for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p) {
+      for (size_t p = 0; p < modular_bound_count; ++p) {
         uint32_t delta = 0;
         for (uint32_t j = 0; j < count; ++j) {
           uint32_t const requirement = requirements[j];
           delta += packed_count(requirement) *
               modular_bound_weight(
-                  p, packed_rank(requirement));
+                  p, packed_rank(requirement),
+                  modular_bound_seed, modular_mask);
         }
-        packed_delta |=
-            (delta & uint32_t(MODULAR_BOUND_SPAN - 1)) <<
-            (p * 6);
+        size_t const index = i * modular_bound_count + p;
+        if (modular_bound_bits <= 8)
+          projected_modular_class_deltas8[index] =
+              uint8_t(delta & modular_mask);
+        else
+          projected_modular_class_deltas16[index] =
+              uint16_t(delta & modular_mask);
       }
-      projected_modular_class_deltas[i] = packed_delta;
     }
 
     // Every concrete completion maps to the same total length and modular
     // signature changes in these relaxed tables. Each table is therefore an
     // upper bound; taking their minimum remains admissible.
-    for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p) {
+    for (size_t p = 0; p < modular_bound_count; ++p) {
       struct ModularAction {
         uint16_t length;
-        uint8_t delta;
+        uint16_t delta;
         double score;
       };
       std::vector<double> best_scores(
-          (letters.size() + 1) * MODULAR_BOUND_SPAN,
+          (letters.size() + 1) * projected_modular_bound_span,
           -HUGE_VAL);
       for (size_t i = 0; i < class_count; ++i) {
         size_t const length = hot_letter_length(
             fit_classes.get()[i].packed_length_and_count);
         uint32_t const delta =
-            (projected_modular_class_deltas[i] >> (p * 6)) &
-            uint32_t(MODULAR_BOUND_SPAN - 1);
+            projected_modular_class_delta(i, p);
         double& best =
-            best_scores[length * MODULAR_BOUND_SPAN + delta];
+            best_scores[
+                length * projected_modular_bound_span + delta];
         best = std::max(best, best_member_log_scores[i]);
       }
 
@@ -840,41 +912,48 @@ bool DfsAnagramSearch::prepare_projected_modular_bounds() {
       double max_score_magnitude = 0.0;
       for (size_t length = 1; length <= letters.size(); ++length) {
         for (size_t delta = 0;
-             delta < MODULAR_BOUND_SPAN; ++delta) {
+             delta < projected_modular_bound_span; ++delta) {
           double const score =
-              best_scores[length * MODULAR_BOUND_SPAN + delta];
+              best_scores[
+                  length * projected_modular_bound_span + delta];
           if (score == -HUGE_VAL) continue;
           ModularAction const action = {
-            uint16_t(length), uint8_t(delta), score
+            uint16_t(length), uint16_t(delta), score
           };
           actions.push_back(action);
           max_score_magnitude =
               std::max(max_score_magnitude, fabs(score));
         }
       }
+      modular_bound_action_counts[p] = actions.size();
+      modular_bound_candidate_scans[p] =
+          uint64_t(actions.size()) *
+          uint64_t(letters.size()) *
+          uint64_t(projected_modular_bound_span);
 
       std::vector<double>& bounds =
           projected_modular_bounds[p];
       bounds.assign(
-          (letters.size() + 1) * MODULAR_BOUND_SPAN,
+          (letters.size() + 1) * projected_modular_bound_span,
           -HUGE_VAL);
       bounds[0] = 0.0;
       uint64_t ignored_nextafter_calls = 0;
       for (size_t left = 1; left <= letters.size(); ++left) {
         for (size_t signature = 0;
-             signature < MODULAR_BOUND_SPAN; ++signature) {
+             signature < projected_modular_bound_span;
+             ++signature) {
           double best = -HUGE_VAL;
           double max_child_magnitude = 0.0;
           for (size_t i = 0; i < actions.size(); ++i) {
             ModularAction const& action = actions[i];
             if (action.length > left) continue;
             size_t const child_signature =
-                (signature + MODULAR_BOUND_SPAN -
+                (signature + projected_modular_bound_span -
                  action.delta) &
-                (MODULAR_BOUND_SPAN - 1);
+                modular_mask;
             double const child =
                 bounds[(left - action.length) *
-                       MODULAR_BOUND_SPAN +
+                       projected_modular_bound_span +
                        child_signature];
             if (child == -HUGE_VAL) continue;
             best = std::max(
@@ -887,7 +966,8 @@ bool DfsAnagramSearch::prepare_projected_modular_bounds() {
               score_candidate_rounding_error(
                   max_score_magnitude, restart_log_rate,
                   max_child_magnitude);
-          bounds[left * MODULAR_BOUND_SPAN + signature] =
+          bounds[left * projected_modular_bound_span +
+                 signature] =
               round_score_bound_up(
                   static_cast<long double>(best) +
                       static_cast<long double>(rounding_error),
@@ -896,22 +976,36 @@ bool DfsAnagramSearch::prepare_projected_modular_bounds() {
       }
     }
 
-    for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p) {
+    for (size_t p = 0; p < modular_bound_count; ++p) {
       uint32_t signature = 0;
       for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
         signature += bag[rank] *
-            modular_bound_weight(p, uint32_t(rank));
+            modular_bound_weight(
+                p, uint32_t(rank), modular_bound_seed,
+                modular_mask);
       current_modular_signatures[p] =
-          uint8_t(signature & (MODULAR_BOUND_SPAN - 1));
+          uint16_t(signature & modular_mask);
     }
   } catch (...) {
-    projected_modular_class_deltas.clear();
-    for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p)
+    projected_modular_class_deltas8.clear();
+    projected_modular_class_deltas16.clear();
+    for (size_t p = 0; p < MAX_MODULAR_BOUND_COUNT; ++p)
       projected_modular_bounds[p].clear();
     current_modular_signatures.fill(0);
     return false;
   }
   return true;
+}
+
+uint16_t DfsAnagramSearch::projected_modular_class_delta(
+    size_t class_index, size_t table) const {
+  size_t const index = class_index * modular_bound_count + table;
+  if (!projected_modular_class_deltas8.empty()) {
+    assert(index < projected_modular_class_deltas8.size());
+    return projected_modular_class_deltas8[index];
+  }
+  assert(index < projected_modular_class_deltas16.size());
+  return projected_modular_class_deltas16[index];
 }
 
 void DfsAnagramSearch::clear_score_bounds() {
@@ -1101,13 +1195,15 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   projected_diagnostic_counts = ProjectedDiagnostics();
   projected_query_bits.clear();
   projected_length_bounds.clear();
-  projected_modular_class_deltas.clear();
-  for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p)
+  projected_modular_class_deltas8.clear();
+  projected_modular_class_deltas16.clear();
+  for (size_t p = 0; p < MAX_MODULAR_BOUND_COUNT; ++p)
     projected_modular_bounds[p].clear();
   current_modular_signatures.fill(0);
   setup_seconds = 0.0;
   search_seconds = 0.0;
   support_group_prepare_seconds = 0.0;
+  modular_bound_prepare_seconds = 0.0;
   actual_preprocess_threads = 1;
   bag.fill(0);
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
@@ -1285,11 +1381,18 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   if (hot_classes_ready && score_projection_requested &&
       !prepare_projected_length_bounds())
     projected_length_bounds.clear();
-  if (hot_classes_ready && score_projection_requested &&
-      !prepare_projected_modular_bounds()) {
-    projected_modular_class_deltas.clear();
-    for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p)
-      projected_modular_bounds[p].clear();
+  if (hot_classes_ready && score_projection_requested) {
+    PhaseClock::time_point const modular_bound_start =
+        PhaseClock::now();
+    if (!prepare_projected_modular_bounds()) {
+      projected_modular_class_deltas8.clear();
+      projected_modular_class_deltas16.clear();
+      for (size_t p = 0; p < MAX_MODULAR_BOUND_COUNT; ++p)
+        projected_modular_bounds[p].clear();
+    }
+    modular_bound_prepare_seconds =
+        std::chrono::duration<double>(
+            PhaseClock::now() - modular_bound_start).count();
   }
   uint64_t effective_states = 0;
   size_t double_bytes = 0;
@@ -2354,13 +2457,23 @@ bool DfsAnagramSearch::should_prune(
     }
     if (!projected_modular_bounds[0].empty()) {
       double modular_bound = HUGE_VAL;
-      for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p) {
+      for (size_t p = 0; p < modular_bound_count; ++p) {
         size_t const index =
-            letters_left * MODULAR_BOUND_SPAN +
+            letters_left * projected_modular_bound_span +
             current_modular_signatures[p];
         assert(index < projected_modular_bounds[p].size());
         modular_bound = std::min(
             modular_bound, projected_modular_bounds[p][index]);
+        bool const prefix_prune = bound_prunes(modular_bound);
+        if (prefix_prune)
+          ++projected_diagnostic_counts
+              .final_modular_prefix_bound_prunes[p];
+        if (prune && !prefix_prune)
+          ++projected_diagnostic_counts
+              .final_modular_prefix_rich_only_prunes[p];
+        if (prefix_prune && !prune)
+          ++projected_diagnostic_counts
+              .final_modular_prefix_only_prunes[p];
       }
       bool const modular_prune = bound_prunes(modular_bound);
       if (modular_prune)
@@ -2420,21 +2533,21 @@ void DfsAnagramSearch::visit_fitting_class(
     bag_mask &= ~(uint64_t(remaining == 0) << requirement_rank);
   }
   current_score_key -= score_key_deltas.get()[class_index];
-  std::array<uint8_t, MODULAR_BOUND_COUNT> const
+  std::array<uint16_t, MAX_MODULAR_BOUND_COUNT> const
       parent_modular_signatures = current_modular_signatures;
   if (DFS_UNLIKELY(
           projected_query_diagnostics_requested &&
-          !projected_modular_class_deltas.empty())) {
-    uint32_t const packed_delta =
-        projected_modular_class_deltas[class_index];
-    for (size_t p = 0; p < MODULAR_BOUND_COUNT; ++p) {
+          (!projected_modular_class_deltas8.empty() ||
+           !projected_modular_class_deltas16.empty()))) {
+    uint32_t const modular_mask =
+        uint32_t(projected_modular_bound_span - 1);
+    for (size_t p = 0; p < modular_bound_count; ++p) {
       uint32_t const delta =
-          (packed_delta >> (p * 6)) &
-          uint32_t(MODULAR_BOUND_SPAN - 1);
-      current_modular_signatures[p] = uint8_t(
+          projected_modular_class_delta(class_index, p);
+      current_modular_signatures[p] = uint16_t(
           (current_modular_signatures[p] +
-           MODULAR_BOUND_SPAN - delta) &
-          (MODULAR_BOUND_SPAN - 1));
+           projected_modular_bound_span - delta) &
+          modular_mask);
     }
   }
   walk(next_letters_left, class_index, next_log_score, sink);
