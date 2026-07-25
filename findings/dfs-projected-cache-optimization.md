@@ -65,7 +65,7 @@ transitions, 342,949,072 final DFS nodes, and 24,804 solutions as the 29.736s
 setup run above. The algorithmic comparisons should therefore use transition
 and node counts alongside controlled paired timing runs.
 
-The current `results/s6*` files contain this newer timing set:
+A later local timing set recorded:
 
 | letters | `-C` | `d` | actions | states built | setup | search | phase 2 | transitions | final DFS nodes |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -130,6 +130,95 @@ implementation has not exhausted either of the two main ways to reduce setup:
 
 1. prove that fewer action-to-child transitions need evaluation; or
 2. construct bounds for fewer abstract states.
+
+## Support-subset traversal experiment
+
+The first diagnostics and fit-index prototype are opt-in:
+
+```sh
+NUTRIMATIC_PROJECTED_DIAGNOSTICS=1
+NUTRIMATIC_PROJECTED_SUPPORT_GROUPS=1
+```
+
+Diagnostics partition action scans into wildcard-length, exact-support, and
+multiplicity rejections, and partition fitting edges into successful and dead
+children. They also count ready child loads, first-owner state claims,
+ownership conflicts, dependency-spin iterations, and finite/dead constructed
+states. Counters are worker-local during construction and merged afterward.
+The ordinary projected loop remains unchanged when diagnostics are disabled.
+
+The support-group prototype compresses the selected exact-letter support into
+a `d`-bit key and groups action IDs by their exact support. At a state with
+support `M`, it enumerates only submasks of `M` containing the forced rarest
+bit. Those are exactly the action-support groups that can pass the existing
+support test and obey forced-letter canonicalization. When no exact letter
+remains it visits only the wildcard-only group.
+
+The group index is temporary preprocessing metadata. On the 28-letter,
+`d=14` case it contains 16,385 offsets and 73,522 action IDs: 425,168 bytes
+(415.2 KiB) with the current 8-byte offsets. It is released with the other
+projected action metadata before the concrete DFS.
+
+### 28-letter measurement
+
+These are paired runs on the same `S6` prefix with `-m 4 -n 1000 -C 8 -F`.
+Every variant constructed 430,123 states, performed 213,302,595 successful
+transitions and 994,904 `nextafter` calls, visited 3,086,650 final DFS nodes,
+and produced byte-identical top-1000 output.
+
+| traversal | threads | diagnostics | setup | search | action scans |
+|---|---:|---|---:|---:|---:|
+| bucket scan | 20 | off | 1.994s | 0.237s | not counted |
+| support subsets | 20 | off | 1.397s | 0.208s | not counted |
+| bucket scan | 20 | on | 2.365s | 0.211s | 4,787,820,579 |
+| support subsets | 20 | on | 1.481s | 0.213s | 473,063,458 |
+| bucket scan | 1 | off | 20.367s | 0.211s | not counted |
+| support subsets | 1 | off | 10.538s | 0.209s | not counted |
+
+Support grouping removes 90.1% of actual per-action fit checks. Setup improves
+29.9% in the clean 20-thread pair and 48.3% in the clean serial pair. The
+larger serial improvement is consistent with parallel construction hiding
+some scan cost.
+
+The ungrouped diagnostic partition was:
+
+| outcome | count | share of scans |
+|---|---:|---:|
+| wildcard length rejected | 1,086,369,610 | 22.7% |
+| exact support rejected | 3,332,842,204 | 69.6% |
+| exact multiplicity rejected | 132,125,145 | 2.8% |
+| fitting edge | 236,483,620 | 4.9% |
+
+Of the fitting edges, 23,181,025 (9.8%) reached a dead child. Only 11,615 of
+430,123 constructed states (2.7%) were dead. Reverse-only construction is
+therefore unlikely to remove much state work on this case by itself, although
+dead-child certificates could still avoid a meaningful fraction of fitting
+edges.
+
+The ungrouped run recorded 25,527 ownership conflicts among 236.5 million
+child lookups, so conflicts are rare. The same conflicts accumulated
+124,055,861 pause-loop iterations, which means a blocked lookup can wait a
+long time; elapsed wait cycles are still needed before justifying a
+continuation scheduler. Support grouping changed traversal order and recorded
+98,301 conflicts but fewer pause iterations (101,767,621), while still
+finishing sooner. Conflict frequency alone is not a useful optimization
+objective.
+
+The 38-letter, `d=15`, 20-thread validation also produced byte-identical
+top-1000 output and identical state, transition, final-node, and solution
+counts. Support grouping reduced setup from 30.367s to 23.852s (21.5%). The
+two runs' search times were 7.895s and 19.063s despite identical node counts,
+another example of the host's timing variability. The `nextafter` count
+differed by two out of about 7.26 million because the group traversal changes
+action order.
+
+The evidence promotes support-subset traversal from a speculative fit index to
+a strong candidate for the projected builder. A `d=16` validation remains
+useful; the support offset table has 65,537 entries there. Index-build time
+should also be reported separately from recurrence construction.
+Wildcard-length sub-buckets are the next inexpensive scan reduction: after
+support grouping, 104,454,693 of 473,063,458 remaining checks still fail on
+wildcard length.
 
 ## Correctness argument
 
@@ -571,16 +660,14 @@ wrong, so it should not displace algorithmic work without evidence of a
 repeated-query workload. Background refinement is more generally useful
 because it can exploit otherwise idle cores even for one query.
 
-## Measurements needed before choosing
+## Measurements still needed
 
-The existing successful-transition counter cannot distinguish the proposed
-levers. Add diagnostics for:
+The opt-in diagnostics now cover total action scans, fit failures by reason,
+fitting-to-dead edges, ready child hits, first-owner claims, ownership
+conflicts, dependency-spin iterations, and aggregate finite/dead states.
+The remaining useful diagnostics are:
 
-- all scanned actions and fit failures by reason;
-- fitting actions whose child eventually returns `-infinity`;
-- projected cache hits, misses, first-owner successes, ownership failures, and
-  dependency-spin cycles;
-- finite versus dead constructed states by total-letter layer;
+- finite versus dead constructed states split by total-letter layer;
 - the winning action's position in score and coarse-envelope order;
 - shadow coarse-envelope rejects, including whole rejected suffixes;
 - projected states queried by concrete DFS, unique keys, frequency, bound gap,
@@ -589,8 +676,8 @@ levers. Add diagnostics for:
   and
 - per-bucket action, state, scan, fit, and winner distributions.
 
-Counters should be thread-local and merged after construction so the
-instrumentation does not add contention to the path being measured.
+New hot-path counters should follow the implemented worker-local pattern and
+be merged after construction so instrumentation does not add contention.
 
 The best initial probes do not require a new production builder:
 
@@ -598,7 +685,7 @@ The best initial probes do not require a new production builder:
    leaving the current maximum unchanged.
 2. Run composite-dominance analysis during action preparation without deleting
    actions.
-3. Count fitting-to-dead edges and layer densities.
+3. Extend the aggregate fitting-to-dead counts to layer densities.
 4. Record projected keys requested by concrete DFS and whether a ready rich
    value would have changed the prune decision.
 5. Hash value and reachability subtables to reject or justify symbolic work.
@@ -608,8 +695,8 @@ The best initial probes do not require a new production builder:
 The recommended order is based on ability to remove work and cost of learning,
 not on additional projection-depth timings:
 
-1. Add the scan, dead-child, ownership, winner-order, layer-density, and
-   final-query diagnostics.
+1. Extend the implemented scan, dead-child, and ownership diagnostics with
+   winner order, layer density, and final-query diagnostics.
 2. Prototype hierarchical candidate certificates in shadow mode. Enable exact
    edge rejection only if the shadow rate is material.
 3. Measure composite action dominance and the forward/reverse state overlap.

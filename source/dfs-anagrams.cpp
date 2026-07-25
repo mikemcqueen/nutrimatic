@@ -273,6 +273,30 @@ int main(int argc, char* argv[]) {
           search.phase_two_search_seconds(),
           (unsigned long long) search.score_bound_transitions(),
           (unsigned long long) search.score_bound_nextafter_calls());
+  if (search.projected_diagnostics_enabled()) {
+    DfsAnagramSearch::ProjectedDiagnostics const& diagnostics =
+        search.projected_diagnostics();
+    fprintf(stderr,
+            "# phase 2 projected edges: %llu scans, %llu wild-length "
+            "rejects, %llu support rejects, %llu multiplicity rejects, "
+            "%llu fitting, %llu dead-child\n",
+            (unsigned long long) diagnostics.action_scans,
+            (unsigned long long) diagnostics.wild_length_rejects,
+            (unsigned long long) diagnostics.support_rejects,
+            (unsigned long long) diagnostics.multiplicity_rejects,
+            (unsigned long long) diagnostics.fitting_edges,
+            (unsigned long long) diagnostics.dead_child_edges);
+    fprintf(stderr,
+            "# phase 2 projected cache: %llu ready-child hits, %llu states "
+            "claimed, %llu ownership conflicts, %llu dependency spins, "
+            "%llu finite states, %llu dead states\n",
+            (unsigned long long) diagnostics.ready_child_hits,
+            (unsigned long long) diagnostics.states_claimed,
+            (unsigned long long) diagnostics.ownership_conflicts,
+            (unsigned long long) diagnostics.dependency_spins,
+            (unsigned long long) diagnostics.finite_states,
+            (unsigned long long) diagnostics.dead_states);
+  }
   fprintf(stderr,
           "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
           search.score_bound_entries(),

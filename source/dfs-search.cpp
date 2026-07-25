@@ -224,6 +224,29 @@ static bool projected_score_experiment(
       strcmp(enabled, "0") != 0;
 }
 
+static bool environment_flag_enabled(char const* name) {
+  char const* value = getenv(name);
+  return value != NULL && value[0] != '\0' &&
+      strcmp(value, "0") != 0;
+}
+
+static void add_projected_diagnostics(
+    DfsAnagramSearch::ProjectedDiagnostics const& source,
+    DfsAnagramSearch::ProjectedDiagnostics* target) {
+  target->action_scans += source.action_scans;
+  target->wild_length_rejects += source.wild_length_rejects;
+  target->support_rejects += source.support_rejects;
+  target->multiplicity_rejects += source.multiplicity_rejects;
+  target->fitting_edges += source.fitting_edges;
+  target->dead_child_edges += source.dead_child_edges;
+  target->ready_child_hits += source.ready_child_hits;
+  target->states_claimed += source.states_claimed;
+  target->ownership_conflicts += source.ownership_conflicts;
+  target->dependency_spins += source.dependency_spins;
+  target->finite_states += source.finite_states;
+  target->dead_states += source.dead_states;
+}
+
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
@@ -267,6 +290,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_wild_span(1),
     projected_max_class_score_magnitude(0.0),
     score_projection_requested(false),
+    projected_diagnostics_requested(false),
+    projected_support_groups_requested(false),
     hot_classes_ready(false),
     bound_mode(SCORE_BOUND_OFF),
     bound_capacity(0),
@@ -278,6 +303,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     bound_states_computed(0),
     bound_transitions(0),
     bound_nextafter_calls(0),
+    projected_diagnostic_counts(),
     bound_charged_bytes(0),
     bound_prunes(0),
     progress_stream(NULL),
@@ -302,6 +328,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   static_assert(sizeof(ProjectedValue) == 16,
                 "ProjectedValue must remain four per cache line");
   projected_action_offsets.fill(0);
+  score_support_bits.fill(0);
 
   std::vector<DfsAnagramClass> const& all_classes = class_list->classes();
   best_member_log_scores.reserve(all_classes.size());
@@ -447,6 +474,8 @@ bool DfsAnagramSearch::prepare_projected_actions() {
   projected_values.reset();
   projected_requirements.reset();
   projected_action_offsets.fill(0);
+  projected_support_offsets.clear();
+  projected_support_actions.clear();
 
   size_t const class_count = class_list->classes().size();
   if (class_count == 0 || class_count > UINT32_MAX) return false;
@@ -609,6 +638,54 @@ bool DfsAnagramSearch::prepare_projected_actions() {
   projected_values = std::move(new_values);
   projected_requirements = std::move(new_requirements);
   score_wild_lengths.reset();
+  return true;
+}
+
+bool DfsAnagramSearch::prepare_projected_support_groups() {
+  projected_support_offsets.clear();
+  projected_support_actions.clear();
+  if (!projected_support_groups_requested) return true;
+  assert(score_exact_letters < 64);
+  uint64_t const support_count = UINT64_C(1) << score_exact_letters;
+  size_t const action_count = projected_action_count();
+  if (support_count > SIZE_MAX - 1 ||
+      action_count > UINT32_MAX)
+    return false;
+
+  try {
+    projected_support_offsets.assign(
+        size_t(support_count) + 1, size_t(0));
+    projected_support_actions.resize(action_count);
+    for (size_t i = 0; i < action_count; ++i) {
+      uint64_t support = projected_fits.get()[i].exact_support_mask;
+      uint64_t key = 0;
+      while (support != 0) {
+        int const rank = __builtin_ctzll(support);
+        key |= score_support_bits[size_t(rank)];
+        support &= support - 1;
+      }
+      assert(key < support_count);
+      ++projected_support_offsets[size_t(key) + 1];
+    }
+    for (size_t i = 1; i < projected_support_offsets.size(); ++i)
+      projected_support_offsets[i] +=
+          projected_support_offsets[i - 1];
+    std::vector<size_t> next = projected_support_offsets;
+    for (size_t i = 0; i < action_count; ++i) {
+      uint64_t support = projected_fits.get()[i].exact_support_mask;
+      uint64_t key = 0;
+      while (support != 0) {
+        int const rank = __builtin_ctzll(support);
+        key |= score_support_bits[size_t(rank)];
+        support &= support - 1;
+      }
+      projected_support_actions[next[size_t(key)]++] = uint32_t(i);
+    }
+  } catch (...) {
+    projected_support_offsets.clear();
+    projected_support_actions.clear();
+    return false;
+  }
   return true;
 }
 
@@ -796,6 +873,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   bound_states_computed = 0;
   bound_transitions = 0;
   bound_nextafter_calls = 0;
+  projected_diagnostic_counts = ProjectedDiagnostics();
   setup_seconds = 0.0;
   search_seconds = 0.0;
   actual_preprocess_threads = 1;
@@ -830,6 +908,13 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   bool has_forced_exact_letters = false;
   score_projection_requested = projected_score_experiment(
       &forced_exact_letters, &has_forced_exact_letters);
+  projected_diagnostics_requested =
+      score_projection_requested &&
+      environment_flag_enabled("NUTRIMATIC_PROJECTED_DIAGNOSTICS");
+  projected_support_groups_requested =
+      score_projection_requested &&
+      environment_flag_enabled("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS");
+  score_support_bits.fill(0);
   score_exact_mask = bag_mask;
   score_exact_letters = size_t(__builtin_popcountll(bag_mask));
   score_wild_letters = 0;
@@ -889,6 +974,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
     for (size_t i = 0; i < selected_exact_letters; ++i) {
       int const rank = present_ranks[i];
       score_exact_mask |= UINT64_C(1) << rank;
+      score_support_bits[size_t(rank)] = UINT64_C(1) << i;
       exact_total += bag[size_t(rank)];
     }
     score_exact_letters = selected_exact_letters;
@@ -949,6 +1035,9 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   hot_classes_ready = encodable && prepare_hot_classes();
   if (hot_classes_ready && score_projection_requested &&
       !prepare_projected_actions())
+    hot_classes_ready = false;
+  if (hot_classes_ready && score_projection_requested &&
+      !prepare_projected_support_groups())
     hot_classes_ready = false;
   uint64_t effective_states = 0;
   size_t double_bytes = 0;
@@ -1016,6 +1105,11 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
                 "anagram classes\n",
                 projected_action_count(),
                 class_list->classes().size());
+      if (hot_classes_ready && projected_support_groups_requested)
+        fprintf(progress,
+                "# phase 2 experiment: support-subset traversal uses %zu "
+                "action groups\n",
+                projected_support_offsets.size() - 1);
     }
     fflush(progress);
   }
@@ -1077,6 +1171,8 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   projected_fits.reset();
   projected_values.reset();
   projected_requirements.reset();
+  std::vector<size_t>().swap(projected_support_offsets);
+  std::vector<uint32_t>().swap(projected_support_actions);
 
   path.clear();
   path.reserve(letters.size());
@@ -1173,6 +1269,75 @@ bool DfsAnagramSearch::projected_action_fits(
         packed_count(requirement))
       return false;
   }
+  return true;
+}
+
+bool DfsAnagramSearch::diagnose_projected_action_fit(
+    uint32_t action_index, BoundWorker* worker) const {
+  ProjectedDiagnostics& diagnostics = worker->projected_diagnostics;
+  ++diagnostics.action_scans;
+  ProjectedFit const& fit = projected_fits.get()[action_index];
+  if (fit.wild_length > worker->wild_left) {
+    ++diagnostics.wild_length_rejects;
+    return false;
+  }
+  if ((fit.exact_support_mask & ~worker->bag_mask) != 0) {
+    ++diagnostics.support_rejects;
+    return false;
+  }
+  uint32_t const* requirements = projected_requirements.get();
+  if (fit.repeated_count != 0)
+    requirements += fit.requirements_offset;
+  for (uint32_t i = 0; i < fit.repeated_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    if (worker->bag[packed_rank(requirement)] <
+        packed_count(requirement)) {
+      ++diagnostics.multiplicity_rejects;
+      return false;
+    }
+  }
+  ++diagnostics.fitting_edges;
+  return true;
+}
+
+bool DfsAnagramSearch::projected_grouped_action_fits(
+    uint32_t action_index, BoundWorker const& worker) const {
+  ProjectedFit const& fit = projected_fits.get()[action_index];
+  if (fit.wild_length > worker.wild_left)
+    return false;
+  uint32_t const* requirements = projected_requirements.get();
+  if (fit.repeated_count != 0)
+    requirements += fit.requirements_offset;
+  for (uint32_t i = 0; i < fit.repeated_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    if (worker.bag[packed_rank(requirement)] <
+        packed_count(requirement))
+      return false;
+  }
+  return true;
+}
+
+bool DfsAnagramSearch::diagnose_projected_grouped_action_fit(
+    uint32_t action_index, BoundWorker* worker) const {
+  ProjectedDiagnostics& diagnostics = worker->projected_diagnostics;
+  ++diagnostics.action_scans;
+  ProjectedFit const& fit = projected_fits.get()[action_index];
+  if (fit.wild_length > worker->wild_left) {
+    ++diagnostics.wild_length_rejects;
+    return false;
+  }
+  uint32_t const* requirements = projected_requirements.get();
+  if (fit.repeated_count != 0)
+    requirements += fit.requirements_offset;
+  for (uint32_t i = 0; i < fit.repeated_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    if (worker->bag[packed_rank(requirement)] <
+        packed_count(requirement)) {
+      ++diagnostics.multiplicity_rejects;
+      return false;
+    }
+  }
+  ++diagnostics.fitting_edges;
   return true;
 }
 
@@ -1414,6 +1579,7 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   if (fit.requirement_count != 0)
     requirements += fit.requirements_offset;
   uint64_t const parent_bag_mask = worker->bag_mask;
+  uint64_t const parent_support_key = worker->projected_support_key;
   for (uint32_t i = 0; i < fit.requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const rank = packed_rank(requirement);
@@ -1421,6 +1587,9 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
     remaining -= packed_count(requirement);
     worker->bag_mask &=
         ~(uint64_t(remaining == 0) << rank);
+    if (remaining == 0)
+      worker->projected_support_key &=
+          ~score_support_bits[size_t(rank)];
   }
   worker->score_key -= value.score_delta;
   worker->wild_left -= fit.wild_length;
@@ -1428,11 +1597,15 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
       bound_float_values.get()[size_t(worker->score_key)];
   uint32_t const stored =
       child_slot.value.load(std::memory_order_acquire);
-  double const child =
-      DFS_LIKELY(stored != FLOAT_BOUND_UNSEEN &&
-                 stored != FLOAT_BOUND_COMPUTING)
-          ? double(bits_to_float(stored))
-          : compute_projected_score_bound(worker);
+  double child;
+  if (DFS_LIKELY(stored != FLOAT_BOUND_UNSEEN &&
+                 stored != FLOAT_BOUND_COMPUTING)) {
+    if (DFS_UNLIKELY(projected_diagnostics_requested))
+      ++worker->projected_diagnostics.ready_child_hits;
+    child = double(bits_to_float(stored));
+  } else {
+    child = compute_projected_score_bound(worker);
+  }
   worker->wild_left += fit.wild_length;
   worker->score_key += value.score_delta;
   for (uint32_t i = 0; i < fit.requirement_count; ++i) {
@@ -1440,8 +1613,13 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
     worker->bag[packed_rank(requirement)] += packed_count(requirement);
   }
   worker->bag_mask = parent_bag_mask;
+  worker->projected_support_key = parent_support_key;
 
-  if (child == -HUGE_VAL) return;
+  if (child == -HUGE_VAL) {
+    if (DFS_UNLIKELY(projected_diagnostics_requested))
+      ++worker->projected_diagnostics.dead_child_edges;
+    return;
+  }
   ++worker->transitions;
   double const partial = value.class_score + restart_log_rate;
   double const candidate_bound = partial + child;
@@ -1458,17 +1636,31 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
   AtomicFloatWord& slot =
       bound_float_values.get()[size_t(worker->score_key)];
   uint32_t stored = slot.value.load(std::memory_order_acquire);
+  bool saw_ownership_conflict = false;
   for (;;) {
     if (stored != FLOAT_BOUND_UNSEEN &&
-        stored != FLOAT_BOUND_COMPUTING)
+        stored != FLOAT_BOUND_COMPUTING) {
+      if (DFS_UNLIKELY(projected_diagnostics_requested))
+        ++worker->projected_diagnostics.ready_child_hits;
       return double(bits_to_float(stored));
+    }
     if (stored == FLOAT_BOUND_UNSEEN &&
         slot.value.compare_exchange_weak(
             stored, FLOAT_BOUND_COMPUTING,
             std::memory_order_acq_rel,
-            std::memory_order_acquire))
+            std::memory_order_acquire)) {
+      if (DFS_UNLIKELY(projected_diagnostics_requested))
+        ++worker->projected_diagnostics.states_claimed;
       break;
+    }
     if (stored == FLOAT_BOUND_COMPUTING) {
+      if (DFS_UNLIKELY(projected_diagnostics_requested)) {
+        if (!saw_ownership_conflict) {
+          ++worker->projected_diagnostics.ownership_conflicts;
+          saw_ownership_conflict = true;
+        }
+        ++worker->projected_diagnostics.dependency_spins;
+      }
       bound_wait_backoff(&wait_spins);
       stored = slot.value.load(std::memory_order_acquire);
     }
@@ -1477,6 +1669,8 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
   if (worker->bag_mask == 0 && worker->wild_left == 0) {
     publish_parallel_score_bound(worker->score_key, 0.0);
     ++worker->states_computed;
+    if (DFS_UNLIKELY(projected_diagnostics_requested))
+      ++worker->projected_diagnostics.finite_states;
     return 0.0;
   }
 
@@ -1487,12 +1681,52 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
       : size_t(__builtin_ctzll(worker->bag_mask));
   size_t const begin = projected_action_offsets[bucket];
   size_t const end = projected_action_offsets[bucket + 1];
-  for (size_t action_index = begin;
-       action_index < end; ++action_index) {
-    uint32_t const id = uint32_t(action_index);
-    if (!projected_action_fits(id, *worker)) continue;
-    consider_projected_bound_candidate(
-        id, worker, &best, &max_child_magnitude);
+  if (DFS_UNLIKELY(projected_support_groups_requested)) {
+    auto scan_group = [&](uint64_t support) {
+      size_t const group_begin =
+          projected_support_offsets[size_t(support)];
+      size_t const group_end =
+          projected_support_offsets[size_t(support) + 1];
+      for (size_t position = group_begin;
+           position < group_end; ++position) {
+        uint32_t const id = projected_support_actions[position];
+        bool const fits = projected_diagnostics_requested
+            ? diagnose_projected_grouped_action_fit(id, worker)
+            : projected_grouped_action_fits(id, *worker);
+        if (!fits) continue;
+        consider_projected_bound_candidate(
+            id, worker, &best, &max_child_magnitude);
+      }
+    };
+    uint64_t const support = worker->projected_support_key;
+    if (support == 0) {
+      scan_group(0);
+    } else {
+      uint64_t const forced = support & (~support + 1);
+      uint64_t const optional = support ^ forced;
+      uint64_t subset = optional;
+      for (;;) {
+        scan_group(subset | forced);
+        if (subset == 0) break;
+        subset = (subset - 1) & optional;
+      }
+    }
+  } else if (DFS_UNLIKELY(projected_diagnostics_requested)) {
+    for (size_t action_index = begin;
+         action_index < end; ++action_index) {
+      uint32_t const id = uint32_t(action_index);
+      if (!diagnose_projected_action_fit(id, worker)) continue;
+      consider_projected_bound_candidate(
+          id, worker, &best, &max_child_magnitude);
+    }
+  } else {
+    for (size_t action_index = begin;
+         action_index < end; ++action_index) {
+      uint32_t const id = uint32_t(action_index);
+      if (!projected_action_fits(id, *worker)) continue;
+      consider_projected_bound_candidate(
+          id, worker, &best, &max_child_magnitude);
+    }
   }
 
   double const rounding_error = score_candidate_rounding_error(
@@ -1507,6 +1741,12 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
                 &worker->nextafter_calls);
   publish_parallel_score_bound(worker->score_key, result);
   ++worker->states_computed;
+  if (DFS_UNLIKELY(projected_diagnostics_requested)) {
+    if (result == -HUGE_VAL)
+      ++worker->projected_diagnostics.dead_states;
+    else
+      ++worker->projected_diagnostics.finite_states;
+  }
   return result;
 }
 
@@ -1519,6 +1759,10 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   BoundWorker root;
   root.bag = bag;
   root.bag_mask = bag_mask & score_exact_mask;
+  root.projected_support_key =
+      score_exact_letters == 0
+          ? 0
+          : (UINT64_C(1) << score_exact_letters) - 1;
   root.score_key = current_score_key;
   root.letters_left = current_letters_left;
   root.wild_left = score_wild_letters;
@@ -1527,6 +1771,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   root.nextafter_calls = 0;
   root.best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
+  root.projected_diagnostics = ProjectedDiagnostics();
 
   std::vector<uint32_t> root_candidates;
   size_t const root_bucket = root.bag_mask == 0
@@ -1534,17 +1779,45 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
       : size_t(__builtin_ctzll(root.bag_mask));
   size_t const root_begin = projected_action_offsets[root_bucket];
   size_t const root_end = projected_action_offsets[root_bucket + 1];
-  for (size_t action_index = root_begin;
-       action_index < root_end; ++action_index) {
-    uint32_t const id = uint32_t(action_index);
-    if (projected_action_fits(id, root))
-      root_candidates.push_back(id);
+  if (projected_support_groups_requested) {
+    uint64_t const support = root.projected_support_key;
+    uint64_t const forced =
+        support == 0 ? 0 : support & (~support + 1);
+    uint64_t const optional = support ^ forced;
+    uint64_t subset = optional;
+    for (;;) {
+      uint64_t const group = subset | forced;
+      size_t const begin =
+          projected_support_offsets[size_t(group)];
+      size_t const end =
+          projected_support_offsets[size_t(group) + 1];
+      for (size_t position = begin; position < end; ++position) {
+        uint32_t const id = projected_support_actions[position];
+        bool const fits = projected_diagnostics_requested
+            ? diagnose_projected_grouped_action_fit(id, &root)
+            : projected_grouped_action_fits(id, root);
+        if (fits) root_candidates.push_back(id);
+      }
+      if (subset == 0) break;
+      subset = (subset - 1) & optional;
+    }
+  } else {
+    for (size_t action_index = root_begin;
+         action_index < root_end; ++action_index) {
+      uint32_t const id = uint32_t(action_index);
+      bool const fits = projected_diagnostics_requested
+          ? diagnose_projected_action_fit(id, &root)
+          : projected_action_fits(id, root);
+      if (fits)
+        root_candidates.push_back(id);
+    }
   }
 
   if (root_candidates.empty()) {
     root_score_bound = -HUGE_VAL;
     root_score_bound_ready = true;
     actual_preprocess_threads = 1;
+    projected_diagnostic_counts = root.projected_diagnostics;
     return true;
   }
 
@@ -1552,6 +1825,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
       std::max(size_t(1), requested_threads),
       root_candidates.size());
   std::vector<BoundWorker> workers(worker_count, root);
+  for (size_t i = 0; i < workers.size(); ++i)
+    workers[i].projected_diagnostics = ProjectedDiagnostics();
   std::vector<std::thread> background;
   try {
     background.reserve(worker_count - 1);
@@ -1595,6 +1870,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   uint64_t nextafter_calls = 0;
   double best = -HUGE_VAL;
   double max_child_magnitude = 0.0;
+  ProjectedDiagnostics diagnostics = root.projected_diagnostics;
   size_t const active_workers = background.size() + 1;
   for (size_t i = 0; i < active_workers; ++i) {
     states += workers[i].states_computed;
@@ -1603,6 +1879,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
     best = std::max(best, workers[i].best);
     max_child_magnitude = std::max(
         max_child_magnitude, workers[i].max_rounding_error);
+    add_projected_diagnostics(
+        workers[i].projected_diagnostics, &diagnostics);
   }
 
   double const rounding_error = score_candidate_rounding_error(
@@ -1620,6 +1898,10 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   bound_states_computed = states;
   bound_transitions = transitions;
   bound_nextafter_calls = nextafter_calls;
+  projected_diagnostic_counts = diagnostics;
+  assert(!projected_diagnostics_requested ||
+         diagnostics.fitting_edges ==
+             transitions + diagnostics.dead_child_edges);
   actual_preprocess_threads = active_workers;
   return true;
 }
@@ -1638,6 +1920,7 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
   BoundWorker root;
   root.bag = bag;
   root.bag_mask = bag_mask;
+  root.projected_support_key = 0;
   root.score_key = current_score_key;
   root.letters_left = current_letters_left;
   root.wild_left = 0;
@@ -1646,6 +1929,7 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
   root.nextafter_calls = 0;
   root.best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
+  root.projected_diagnostics = ProjectedDiagnostics();
 
   int const rank = __builtin_ctzll(root.bag_mask);
   int const forced_symbol =

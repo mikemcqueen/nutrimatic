@@ -33,6 +33,21 @@ class DfsSolutionSink {
 // than once.
 class DfsAnagramSearch {
  public:
+  struct ProjectedDiagnostics {
+    uint64_t action_scans;
+    uint64_t wild_length_rejects;
+    uint64_t support_rejects;
+    uint64_t multiplicity_rejects;
+    uint64_t fitting_edges;
+    uint64_t dead_child_edges;
+    uint64_t ready_child_hits;
+    uint64_t states_claimed;
+    uint64_t ownership_conflicts;
+    uint64_t dependency_spins;
+    uint64_t finite_states;
+    uint64_t dead_states;
+  };
+
   enum ScoreBoundMode {
     SCORE_BOUND_OFF,
     SCORE_BOUND_DENSE,
@@ -84,6 +99,12 @@ class DfsAnagramSearch {
   size_t preprocess_threads_used() const {
     return actual_preprocess_threads;
   }
+  bool projected_diagnostics_enabled() const {
+    return projected_diagnostics_requested;
+  }
+  ProjectedDiagnostics const& projected_diagnostics() const {
+    return projected_diagnostic_counts;
+  }
 
  private:
   struct AlignedFree {
@@ -120,6 +141,7 @@ class DfsAnagramSearch {
   struct BoundWorker {
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     uint64_t bag_mask;
+    uint64_t projected_support_key;
     uint64_t score_key;
     size_t letters_left;
     size_t wild_left;
@@ -128,10 +150,12 @@ class DfsAnagramSearch {
     uint64_t nextafter_calls;
     double best;
     double max_rounding_error;
+    ProjectedDiagnostics projected_diagnostics;
   };
 
   bool prepare_hot_classes();
   bool prepare_projected_actions();
+  bool prepare_projected_support_groups();
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void clear_score_bounds();
 
@@ -149,6 +173,12 @@ class DfsAnagramSearch {
       uint32_t class_index, BoundWorker const& worker) const;
   bool projected_action_fits(
       uint32_t action_index, BoundWorker const& worker) const;
+  bool diagnose_projected_action_fit(
+      uint32_t action_index, BoundWorker* worker) const;
+  bool projected_grouped_action_fits(
+      uint32_t action_index, BoundWorker const& worker) const;
+  bool diagnose_projected_grouped_action_fit(
+      uint32_t action_index, BoundWorker* worker) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
   double compute_score_bound();
@@ -190,6 +220,7 @@ class DfsAnagramSearch {
   // The hot bag and all masks use rarest-rank order.
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
   std::array<uint64_t, DFS_SYMBOL_COUNT> score_multipliers;
+  std::array<uint64_t, DFS_SYMBOL_COUNT> score_support_bits;
   uint64_t bag_mask;
   uint64_t current_score_key;
   size_t current_letters_left;
@@ -201,6 +232,8 @@ class DfsAnagramSearch {
   size_t score_wild_span;
   double projected_max_class_score_magnitude;
   bool score_projection_requested;
+  bool projected_diagnostics_requested;
+  bool projected_support_groups_requested;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
   std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
@@ -210,6 +243,8 @@ class DfsAnagramSearch {
   std::unique_ptr<ProjectedValue, AlignedFree> projected_values;
   std::unique_ptr<uint32_t, AlignedFree> projected_requirements;
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_action_offsets;
+  std::vector<size_t> projected_support_offsets;
+  std::vector<uint32_t> projected_support_actions;
   bool hot_classes_ready;
 
   ScoreBoundMode bound_mode;
@@ -224,6 +259,7 @@ class DfsAnagramSearch {
   size_t bound_states_computed;
   uint64_t bound_transitions;
   uint64_t bound_nextafter_calls;
+  ProjectedDiagnostics projected_diagnostic_counts;
   size_t bound_charged_bytes;
   int64_t bound_prunes;
 

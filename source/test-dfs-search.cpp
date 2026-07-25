@@ -238,6 +238,10 @@ static int smoke_test() {
 
     check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "0", 1) == 0,
           "could not enable projected score-bound experiment");
+    check(setenv("NUTRIMATIC_PROJECTED_DIAGNOSTICS", "1", 1) == 0,
+          "could not enable projected score-bound diagnostics");
+    check(setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0,
+          "could not enable projected support-group experiment");
     DfsTopN projected_output(&classes, 2);
     DfsAnagramSearch projected(
         &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
@@ -248,6 +252,10 @@ static int smoke_test() {
     reused_projected.run(&reused_projected_output);
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
           "could not disable projected score-bound experiment");
+    check(unsetenv("NUTRIMATIC_PROJECTED_DIAGNOSTICS") == 0,
+          "could not disable projected score-bound diagnostics");
+    check(unsetenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS") == 0,
+          "could not disable projected support-group experiment");
     check(projected.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
               projected.score_bound_complete(),
@@ -263,6 +271,29 @@ static int smoke_test() {
               projected.projected_action_count() <
                   classes.classes().size(),
           "projected score memo did not merge equivalent actions");
+    DfsAnagramSearch::ProjectedDiagnostics const& diagnostics =
+        projected.projected_diagnostics();
+    check(projected.projected_diagnostics_enabled() &&
+              diagnostics.action_scans > 0 &&
+              diagnostics.fitting_edges > 0,
+          "projected score memo did not collect diagnostics");
+    check(diagnostics.action_scans ==
+              diagnostics.wild_length_rejects +
+              diagnostics.support_rejects +
+              diagnostics.multiplicity_rejects +
+              diagnostics.fitting_edges,
+          "projected fit diagnostics do not partition action scans");
+    check(diagnostics.support_rejects == 0,
+          "support-group traversal scanned an incompatible action");
+    check(diagnostics.fitting_edges ==
+              projected.score_bound_transitions() +
+              diagnostics.dead_child_edges,
+          "projected edge diagnostics do not partition fitting edges");
+    check(diagnostics.states_claimed ==
+              projected.score_bound_states_computed() &&
+              diagnostics.states_claimed ==
+                  diagnostics.finite_states + diagnostics.dead_states,
+          "projected state diagnostics do not partition claimed states");
     check_same_spellings(
         exhausted_expected_spellings,
         projected_output.take_sorted_results(),
@@ -271,6 +302,25 @@ static int smoke_test() {
         reused_expected_output.take_sorted_results(),
         reused_projected_output.take_sorted_results(),
         "projected score memo mishandled a reused class list");
+
+    check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "2", 1) == 0 &&
+              setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0,
+          "could not enable exact support-group experiment");
+    DfsTopN grouped_projected_output(&classes, 2);
+    DfsAnagramSearch grouped_projected(
+        &classes, exhausted_letters, 1e-6, reader.count(), 256, 4);
+    grouped_projected.run(&grouped_projected_output);
+    check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0 &&
+              unsetenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS") == 0,
+          "could not disable exact support-group experiment");
+    check(grouped_projected.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+              grouped_projected.score_bound_exact_letters() == 2,
+          "support-group experiment did not retain exact dimensions");
+    check_same_spellings(
+        exhausted_expected_spellings,
+        grouped_projected_output.take_sorted_results(),
+        "support-group traversal changed retained spellings");
 
     CollectSolutions boundary_expected(&classes);
     DfsAnagramSearch boundary_exhaustive(
