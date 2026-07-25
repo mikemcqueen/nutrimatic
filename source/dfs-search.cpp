@@ -1,6 +1,7 @@
 #include "dfs-search.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <fenv.h>
 #include <float.h>
 #include <limits.h>
@@ -241,6 +242,27 @@ static bool score_bound_arithmetic_supported() {
 #endif
 }
 
+static bool projected_score_experiment(
+    size_t* forced_exact_letters, bool* has_forced_exact_letters) {
+  *forced_exact_letters = 0;
+  *has_forced_exact_letters = false;
+  char const* forced = getenv("NUTRIMATIC_PROJECTED_SCORE_D");
+  if (forced != NULL && forced[0] != '\0') {
+    errno = 0;
+    char* end = NULL;
+    unsigned long long const parsed = strtoull(forced, &end, 10);
+    if (errno == 0 && end != forced && *end == '\0' &&
+        parsed <= SIZE_MAX) {
+      *forced_exact_letters = size_t(parsed);
+      *has_forced_exact_letters = true;
+      return true;
+    }
+  }
+  char const* enabled = getenv("NUTRIMATIC_PROJECTED_SCORE");
+  return enabled != NULL && enabled[0] != '\0' &&
+      strcmp(enabled, "0") != 0;
+}
+
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
@@ -248,6 +270,8 @@ static char const* score_bound_mode_name(
       return "dense";
     case DfsAnagramSearch::SCORE_BOUND_PREFIX:
       return "dense prefix";
+    case DfsAnagramSearch::SCORE_BOUND_PROJECTED:
+      return "projected dense";
     case DfsAnagramSearch::SCORE_BOUND_OFF:
       return "off";
   }
@@ -291,6 +315,13 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     current_bag_key(0),
     current_score_key(0),
     current_letters_left(0),
+    score_exact_mask(0),
+    score_state_count(0),
+    score_effective_states(0),
+    score_exact_letters(0),
+    score_wild_letters(0),
+    score_wild_span(1),
+    score_projection_requested(false),
     hot_classes_ready(false),
     bound_mode(SCORE_BOUND_OFF),
     bound_capacity(0),
@@ -356,12 +387,14 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   fit_classes.reset();
   score_classes.reset();
   score_key_deltas.reset();
+  score_wild_lengths.reset();
   packed_letters.reset();
 
   std::vector<DfsAnagramClass> const& classes = class_list->classes();
   if (classes.empty() || classes.size() > UINT32_MAX ||
       classes.size() > SIZE_MAX / sizeof(FitClass) ||
       classes.size() > SIZE_MAX / sizeof(ScoreClass) ||
+      classes.size() > SIZE_MAX / sizeof(uint16_t) ||
       letters.size() > UINT16_MAX)
     return false;
 
@@ -389,6 +422,11 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   if (score_deltas == NULL) return false;
   std::unique_ptr<uint64_t, AlignedFree> new_score_deltas(score_deltas);
 
+  uint16_t* wild_lengths = static_cast<uint16_t*>(
+      allocate_aligned(classes.size() * sizeof(uint16_t)));
+  if (wild_lengths == NULL) return false;
+  std::unique_ptr<uint16_t, AlignedFree> new_wild_lengths(wild_lengths);
+
   uint32_t* packed = NULL;
   if (requirements != 0) {
     packed = static_cast<uint32_t*>(
@@ -404,6 +442,7 @@ bool DfsAnagramSearch::prepare_hot_classes() {
     DfsAnagramClass const& source = classes[ci];
     uint64_t delta = 0;
     uint64_t score_delta = 0;
+    uint32_t wild_length = 0;
     uint64_t support = 0;
     uint32_t repeated = 0;
 
@@ -436,10 +475,15 @@ bool DfsAnagramSearch::prepare_hot_classes() {
           !checked_add_u64(delta, term, &next))
         return false;
       delta = next;
-      if (!checked_multiply_u64(count, score_multipliers[rank], &term) ||
-          !checked_add_u64(score_delta, term, &next))
-        return false;
-      score_delta = next;
+      if ((score_exact_mask & (UINT64_C(1) << rank)) != 0) {
+        if (!checked_multiply_u64(
+                count, score_multipliers[rank], &term) ||
+            !checked_add_u64(score_delta, term, &next))
+          return false;
+        score_delta = next;
+      } else {
+        wild_length += count;
+      }
     }
 
     fit[ci].support_mask = support;
@@ -450,13 +494,22 @@ bool DfsAnagramSearch::prepare_hot_classes() {
         (repeated << 24);
     score[ci].best_member_log_score = best_member_log_scores[ci];
     score[ci].bag_key_delta = delta;
-    score_deltas[ci] = score_delta;
+    uint64_t flat_score_delta;
+    if (!checked_multiply_u64(
+            score_delta, uint64_t(score_wild_span), &flat_score_delta) ||
+        !checked_add_u64(
+            flat_score_delta, uint64_t(wild_length),
+            &flat_score_delta))
+      return false;
+    score_deltas[ci] = flat_score_delta;
+    wild_lengths[ci] = uint16_t(wild_length);
     offset = write;
   }
 
   fit_classes = std::move(new_fit);
   score_classes = std::move(new_score);
   score_key_deltas = std::move(new_score_deltas);
+  score_wild_lengths = std::move(new_wild_lengths);
   packed_letters = std::move(new_packed);
   return true;
 }
@@ -483,6 +536,33 @@ void DfsAnagramSearch::prepare_score_bounds(
       !score_bound_arithmetic_supported() ||
       candidate_cache_budget < CACHE_ALIGNMENT)
     return;
+
+  if (score_projection_requested) {
+    size_t float_bytes = 0;
+    if (score_effective_states == 0 ||
+        score_effective_states > SIZE_MAX ||
+        !dense_bound_requirements(
+            score_effective_states, sizeof(float), &float_bytes) ||
+        float_bytes > candidate_cache_budget)
+      return;
+    AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
+        allocate_aligned(float_bytes));
+    if (values == NULL) return;
+    for (size_t i = 0; i < size_t(score_effective_states); ++i) {
+      new (&values[i]) AtomicFloatWord;
+      values[i].value.store(
+          FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
+    }
+    bound_float_values.reset(values);
+    bound_capacity = size_t(score_effective_states);
+    bound_value_bytes = sizeof(float);
+    bound_complete = true;
+    bound_mode = SCORE_BOUND_PROJECTED;
+    bound_charged_bytes = float_bytes;
+    active_candidate_cache_budget =
+        candidate_cache_budget - bound_charged_bytes;
+    return;
+  }
 
   // The root's forced rarest symbol is consumed by every first class. Put that
   // symbol in the most-significant score digit and omit the unreachable root
@@ -811,26 +891,131 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       }
     }
   }
-  if (encodable) {
-    uint64_t score_state_count = 1;
-    for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
-      score_multipliers[size_t(rank)] = score_state_count;
-      uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
-      if (!checked_multiply_u64(
-              score_state_count, radix, &score_state_count)) {
-        encodable = false;
-        break;
-      }
-    }
-    assert(!encodable || score_state_count == state_count);
-  }
-
   bag_mask = 0;
   for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
     if (bag[size_t(rank)] != 0)
       bag_mask |= UINT64_C(1) << rank;
+
+  size_t forced_exact_letters = 0;
+  bool has_forced_exact_letters = false;
+  score_projection_requested = projected_score_experiment(
+      &forced_exact_letters, &has_forced_exact_letters);
+  score_exact_mask = bag_mask;
+  score_exact_letters = size_t(__builtin_popcountll(bag_mask));
+  score_wild_letters = 0;
+  score_wild_span = 1;
+  score_state_count = state_count;
+  score_effective_states = 0;
+
+  if (encodable && score_projection_requested) {
+    std::vector<int> present_ranks;
+    present_ranks.reserve(score_exact_letters);
+    for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
+      if (bag[size_t(rank)] != 0)
+        present_ranks.push_back(rank);
+
+    size_t selected_exact_letters = 0;
+    if (has_forced_exact_letters) {
+      selected_exact_letters =
+          std::min(forced_exact_letters, present_ranks.size());
+    } else {
+      uint64_t exact_product = 1;
+      size_t exact_total = 0;
+      for (size_t d = 0; d <= present_ranks.size(); ++d) {
+        size_t const wild_total = letters.size() - exact_total;
+        uint64_t projected_states;
+        bool const states_ok = checked_multiply_u64(
+            exact_product, uint64_t(wild_total + 1),
+            &projected_states);
+        uint64_t effective = projected_states;
+        if (states_ok && d != 0) {
+          uint64_t const root_radix =
+              uint64_t(bag[size_t(present_ranks[0])]) + 1;
+          effective =
+              (projected_states / root_radix) * (root_radix - 1);
+        }
+        size_t bytes = 0;
+        if (states_ok &&
+            dense_bound_requirements(
+                effective, sizeof(float), &bytes) &&
+            bytes <= candidate_cache_budget)
+          selected_exact_letters = d;
+        if (d != present_ranks.size()) {
+          int const rank = present_ranks[d];
+          uint64_t next_product;
+          if (!checked_multiply_u64(
+                  exact_product,
+                  uint64_t(bag[size_t(rank)]) + 1,
+                  &next_product))
+            break;
+          exact_product = next_product;
+          exact_total += bag[size_t(rank)];
+        }
+      }
+    }
+
+    score_exact_mask = 0;
+    size_t exact_total = 0;
+    for (size_t i = 0; i < selected_exact_letters; ++i) {
+      int const rank = present_ranks[i];
+      score_exact_mask |= UINT64_C(1) << rank;
+      exact_total += bag[size_t(rank)];
+    }
+    score_exact_letters = selected_exact_letters;
+    score_wild_letters = letters.size() - exact_total;
+    score_wild_span = score_wild_letters + 1;
+
+    uint64_t exact_product = 1;
+    score_multipliers.fill(0);
+    for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
+      if ((score_exact_mask & (UINT64_C(1) << rank)) == 0) continue;
+      score_multipliers[size_t(rank)] = exact_product;
+      if (!checked_multiply_u64(
+              exact_product, uint64_t(bag[size_t(rank)]) + 1,
+              &exact_product)) {
+        encodable = false;
+        break;
+      }
+    }
+    if (encodable &&
+        !checked_multiply_u64(
+            exact_product, uint64_t(score_wild_span),
+            &score_state_count))
+      encodable = false;
+    if (encodable) {
+      score_effective_states = score_state_count;
+      if (score_exact_mask != 0) {
+        int const root_rank = __builtin_ctzll(score_exact_mask);
+        uint64_t const root_radix =
+            uint64_t(bag[size_t(root_rank)]) + 1;
+        score_effective_states =
+            (score_state_count / root_radix) * (root_radix - 1);
+      }
+    }
+  } else if (encodable) {
+    score_multipliers.fill(0);
+    uint64_t exact_score_states = 1;
+    for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
+      score_multipliers[size_t(rank)] = exact_score_states;
+      uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
+      if (!checked_multiply_u64(
+              exact_score_states, radix, &exact_score_states)) {
+        encodable = false;
+        break;
+      }
+    }
+    assert(!encodable || exact_score_states == state_count);
+    if (encodable && bag_mask != 0) {
+      int const root_rank = __builtin_ctzll(bag_mask);
+      uint64_t const root_radix =
+          uint64_t(bag[size_t(root_rank)]) + 1;
+      score_effective_states =
+          (state_count / root_radix) * (root_radix - 1);
+    }
+  }
+
   current_bag_key = encodable ? state_count - 1 : 0;
-  current_score_key = encodable ? state_count - 1 : 0;
+  current_score_key = encodable ? score_state_count - 1 : 0;
   current_letters_left = letters.size();
   hot_classes_ready = encodable && prepare_hot_classes();
   uint64_t effective_states = 0;
@@ -879,6 +1064,21 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       fputs("# phase 2 preflight: empty bag; no score table needed\n",
             progress);
     }
+    if (score_projection_requested && encodable) {
+      size_t projected_bytes = 0;
+      bool const projected_size_ok = dense_bound_requirements(
+          score_effective_states, sizeof(float), &projected_bytes);
+      fprintf(progress,
+              "# phase 2 experiment: projected score table keeps %zu "
+              "rarest letters exact, merges %zu wildcard letters; "
+              "%llu states, ",
+              score_exact_letters, score_wild_letters,
+              (unsigned long long) score_effective_states);
+      if (projected_size_ok)
+        fprintf(progress, "%zu bytes\n", projected_bytes);
+      else
+        fputs("size exceeds the supported range\n", progress);
+    }
     fflush(progress);
   }
   bool const score_bounds_applicable =
@@ -886,7 +1086,8 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       sink->supports_score_pruning() &&
       score_bound_arithmetic_supported() &&
       bag_mask != 0;
-  if (!allow_cache_fallback && score_bounds_applicable) {
+  if (!allow_cache_fallback && !score_projection_requested &&
+      score_bounds_applicable) {
     if (!dense_sizes_available) {
       if (progress != NULL) {
         fputs("error: dense score table size exceeds the supported range\n"
@@ -924,15 +1125,21 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
     fflush(progress);
   }
   if (bound_mode != SCORE_BOUND_OFF && bound_complete) {
-    bool const ran_parallel =
-        compute_score_bound_parallel(requested_preprocess_threads);
-    if (!ran_parallel && cache_mode == CANDIDATE_CACHE_DENSE)
-      root_score_bound = compute_score_bound<WALK_DENSE>();
-    else if (!ran_parallel && cache_mode == CANDIDATE_CACHE_SPARSE)
-      root_score_bound = compute_score_bound<WALK_SPARSE>();
-    else if (!ran_parallel)
-      root_score_bound = compute_score_bound<WALK_UNCACHED>();
-    if (!ran_parallel) root_score_bound_ready = true;
+    if (bound_mode == SCORE_BOUND_PROJECTED) {
+      if (!compute_projected_score_bound_parallel(
+              requested_preprocess_threads))
+        clear_score_bounds();
+    } else {
+      bool const ran_parallel =
+          compute_score_bound_parallel(requested_preprocess_threads);
+      if (!ran_parallel && cache_mode == CANDIDATE_CACHE_DENSE)
+        root_score_bound = compute_score_bound<WALK_DENSE>();
+      else if (!ran_parallel && cache_mode == CANDIDATE_CACHE_SPARSE)
+        root_score_bound = compute_score_bound<WALK_SPARSE>();
+      else if (!ran_parallel)
+        root_score_bound = compute_score_bound<WALK_UNCACHED>();
+      if (!ran_parallel) root_score_bound_ready = true;
+    }
   }
 
   path.clear();
@@ -1017,6 +1224,28 @@ bool DfsAnagramSearch::hot_class_multiplicity_fits(
     uint32_t const requirement = requirements[i];
     if (worker.bag[packed_rank(requirement)] <
         packed_count(requirement))
+      return false;
+  }
+  return true;
+}
+
+bool DfsAnagramSearch::projected_class_fits(
+    uint32_t class_index, BoundWorker const& worker) const {
+  if (score_wild_lengths.get()[class_index] > worker.wild_left)
+    return false;
+  FitClass const& candidate = fit_classes.get()[class_index];
+  uint64_t const exact_support =
+      candidate.support_mask & score_exact_mask;
+  if ((exact_support & ~worker.bag_mask) != 0) return false;
+  uint32_t const* requirements =
+      packed_letters.get() + candidate.letters_offset;
+  uint32_t const repeated =
+      hot_repeated_count(candidate.packed_length_and_count);
+  for (uint32_t i = 0; i < repeated; ++i) {
+    uint32_t const requirement = requirements[i];
+    uint32_t const rank = packed_rank(requirement);
+    if ((score_exact_mask & (UINT64_C(1) << rank)) != 0 &&
+        worker.bag[rank] < packed_count(requirement))
       return false;
   }
   return true;
@@ -1503,6 +1732,242 @@ double DfsAnagramSearch::compute_parallel_score_bound(
   return result;
 }
 
+void DfsAnagramSearch::consider_projected_bound_candidate(
+    uint32_t class_index, BoundWorker* worker, double* best,
+    double* max_rounding_error) {
+  FitClass const& fit = fit_classes.get()[class_index];
+  ScoreClass const& score = score_classes.get()[class_index];
+  uint32_t const* requirements =
+      packed_letters.get() + fit.letters_offset;
+  uint32_t const requirement_count =
+      hot_requirement_count(fit.packed_length_and_count);
+  size_t const candidate_length =
+      hot_letter_length(fit.packed_length_and_count);
+  size_t const wild_length =
+      score_wild_lengths.get()[class_index];
+  uint64_t const parent_bag_mask = worker->bag_mask;
+  for (uint32_t i = 0; i < requirement_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    uint32_t const rank = packed_rank(requirement);
+    if ((score_exact_mask & (UINT64_C(1) << rank)) == 0) continue;
+    uint32_t& remaining = worker->bag[rank];
+    remaining -= packed_count(requirement);
+    worker->bag_mask &=
+        ~(uint64_t(remaining == 0) << rank);
+  }
+  worker->score_key -= score_key_deltas.get()[class_index];
+  worker->letters_left -= candidate_length;
+  worker->wild_left -= wild_length;
+  double const child = compute_projected_score_bound(worker);
+  worker->wild_left += wild_length;
+  worker->letters_left += candidate_length;
+  worker->score_key += score_key_deltas.get()[class_index];
+  for (uint32_t i = 0; i < requirement_count; ++i) {
+    uint32_t const requirement = requirements[i];
+    uint32_t const rank = packed_rank(requirement);
+    if ((score_exact_mask & (UINT64_C(1) << rank)) != 0)
+      worker->bag[rank] += packed_count(requirement);
+  }
+  worker->bag_mask = parent_bag_mask;
+
+  if (child == -HUGE_VAL) return;
+  ++worker->transitions;
+  double const partial =
+      score.best_member_log_score + restart_log_rate;
+  double const candidate_bound = partial + child;
+  *best = std::max(*best, candidate_bound);
+  *max_rounding_error = std::max(
+      *max_rounding_error,
+      score_candidate_rounding_error(
+          score.best_member_log_score, restart_log_rate, child));
+}
+
+double DfsAnagramSearch::compute_projected_score_bound(
+    BoundWorker* worker) {
+  assert(bound_mode == SCORE_BOUND_PROJECTED);
+  assert(worker->score_key < bound_capacity);
+  unsigned int wait_spins = 0;
+  AtomicFloatWord& slot =
+      bound_float_values.get()[size_t(worker->score_key)];
+  uint32_t stored = slot.value.load(std::memory_order_acquire);
+  for (;;) {
+    if (stored != FLOAT_BOUND_UNSEEN &&
+        stored != FLOAT_BOUND_COMPUTING)
+      return double(bits_to_float(stored));
+    if (stored == FLOAT_BOUND_UNSEEN &&
+        slot.value.compare_exchange_weak(
+            stored, FLOAT_BOUND_COMPUTING,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire))
+      break;
+    if (stored == FLOAT_BOUND_COMPUTING) {
+      bound_wait_backoff(&wait_spins);
+      stored = slot.value.load(std::memory_order_acquire);
+    }
+  }
+
+  if (worker->bag_mask == 0 && worker->wild_left == 0) {
+    publish_parallel_score_bound(worker->score_key, 0.0);
+    ++worker->states_computed;
+    return 0.0;
+  }
+
+  double best = -HUGE_VAL;
+  double max_rounding_error = 0.0;
+  if (worker->bag_mask != 0) {
+    int const rank = __builtin_ctzll(worker->bag_mask);
+    int const forced_symbol =
+        class_list->rank_to_symbol()[size_t(rank)];
+    size_t const begin = first_length_candidate(
+        class_list->candidate_begin(forced_symbol),
+        class_list->candidate_end(forced_symbol),
+        worker->letters_left);
+    size_t const end = class_list->candidate_end(forced_symbol);
+    for (size_t class_index = begin; class_index < end; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (!projected_class_fits(id, *worker)) continue;
+      consider_projected_bound_candidate(
+          id, worker, &best, &max_rounding_error);
+    }
+  } else {
+    size_t const class_count = class_list->classes().size();
+    for (size_t class_index = 0;
+         class_index < class_count; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (!projected_class_fits(id, *worker)) continue;
+      consider_projected_bound_candidate(
+          id, worker, &best, &max_rounding_error);
+    }
+  }
+
+  double const result =
+      best == -HUGE_VAL
+          ? -HUGE_VAL
+          : round_score_bound_up(
+                static_cast<long double>(best) +
+                static_cast<long double>(max_rounding_error),
+                &worker->nextafter_calls);
+  publish_parallel_score_bound(worker->score_key, result);
+  ++worker->states_computed;
+  return result;
+}
+
+bool DfsAnagramSearch::compute_projected_score_bound_parallel(
+    size_t requested_threads) {
+  if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
+      bound_capacity == 0)
+    return false;
+
+  BoundWorker root;
+  root.bag = bag;
+  root.bag_mask = bag_mask & score_exact_mask;
+  root.score_key = current_score_key;
+  root.letters_left = current_letters_left;
+  root.wild_left = score_wild_letters;
+  root.states_computed = 0;
+  root.transitions = 0;
+  root.nextafter_calls = 0;
+  root.best = -HUGE_VAL;
+  root.max_rounding_error = 0.0;
+
+  std::vector<uint32_t> root_candidates;
+  if (root.bag_mask != 0) {
+    int const rank = __builtin_ctzll(root.bag_mask);
+    int const forced_symbol =
+        class_list->rank_to_symbol()[size_t(rank)];
+    size_t const begin = first_length_candidate(
+        class_list->candidate_begin(forced_symbol),
+        class_list->candidate_end(forced_symbol),
+        root.letters_left);
+    size_t const end = class_list->candidate_end(forced_symbol);
+    for (size_t class_index = begin; class_index < end; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (projected_class_fits(id, root))
+        root_candidates.push_back(id);
+    }
+  } else {
+    size_t const class_count = class_list->classes().size();
+    for (size_t class_index = 0;
+         class_index < class_count; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (projected_class_fits(id, root))
+        root_candidates.push_back(id);
+    }
+  }
+
+  if (root_candidates.empty()) {
+    root_score_bound = -HUGE_VAL;
+    root_score_bound_ready = true;
+    actual_preprocess_threads = 1;
+    return true;
+  }
+
+  size_t const worker_count = std::min(
+      std::max(size_t(1), requested_threads),
+      root_candidates.size());
+  std::vector<BoundWorker> workers(worker_count, root);
+  std::vector<std::thread> background;
+  try {
+    background.reserve(worker_count - 1);
+  } catch (...) {
+    return false;
+  }
+
+  std::atomic<size_t> next_candidate(0);
+  auto work = [&](size_t worker_index) {
+    BoundWorker* worker = &workers[worker_index];
+    for (;;) {
+      size_t const index =
+          next_candidate.fetch_add(1, std::memory_order_relaxed);
+      if (index >= root_candidates.size()) break;
+      consider_projected_bound_candidate(
+          root_candidates[index], worker, &worker->best,
+          &worker->max_rounding_error);
+    }
+  };
+
+  for (size_t i = 1; i < worker_count; ++i) {
+    try {
+      background.emplace_back(work, i);
+    } catch (...) {
+      break;
+    }
+  }
+  work(0);
+  for (size_t i = 0; i < background.size(); ++i)
+    background[i].join();
+
+  size_t states = 0;
+  uint64_t transitions = 0;
+  uint64_t nextafter_calls = 0;
+  double best = -HUGE_VAL;
+  double max_rounding_error = 0.0;
+  size_t const active_workers = background.size() + 1;
+  for (size_t i = 0; i < active_workers; ++i) {
+    states += workers[i].states_computed;
+    transitions += workers[i].transitions;
+    nextafter_calls += workers[i].nextafter_calls;
+    best = std::max(best, workers[i].best);
+    max_rounding_error = std::max(
+        max_rounding_error, workers[i].max_rounding_error);
+  }
+
+  root_score_bound =
+      best == -HUGE_VAL
+          ? -HUGE_VAL
+          : round_score_bound_up(
+                static_cast<long double>(best) +
+                static_cast<long double>(max_rounding_error),
+                &nextafter_calls);
+  root_score_bound_ready = true;
+  bound_entries = states;
+  bound_states_computed = states;
+  bound_transitions = transitions;
+  bound_nextafter_calls = nextafter_calls;
+  actual_preprocess_threads = active_workers;
+  return true;
+}
+
 bool DfsAnagramSearch::compute_score_bound_parallel(
     size_t requested_threads) {
   if (bound_mode != SCORE_BOUND_DENSE || requested_threads < 2 ||
@@ -1519,6 +1984,7 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
   root.bag_mask = bag_mask;
   root.score_key = current_score_key;
   root.letters_left = current_letters_left;
+  root.wild_left = 0;
   root.states_computed = 0;
   root.transitions = 0;
   root.nextafter_calls = 0;

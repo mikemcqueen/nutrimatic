@@ -44,6 +44,7 @@ class DfsAnagramSearch {
     SCORE_BOUND_OFF,
     SCORE_BOUND_DENSE,
     SCORE_BOUND_PREFIX,
+    SCORE_BOUND_PROJECTED,
   };
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
@@ -83,6 +84,12 @@ class DfsAnagramSearch {
   size_t score_bound_capacity() const { return bound_capacity; }
   size_t score_bound_value_bytes() const { return bound_value_bytes; }
   bool score_bound_complete() const { return bound_complete; }
+  size_t score_bound_exact_letters() const {
+    return score_exact_letters;
+  }
+  size_t score_bound_wild_letters() const {
+    return score_wild_letters;
+  }
   int64_t score_bound_prunes() const { return bound_prunes; }
   double phase_two_setup_seconds() const { return setup_seconds; }
   double phase_two_search_seconds() const { return search_seconds; }
@@ -125,6 +132,7 @@ class DfsAnagramSearch {
     uint64_t bag_mask;
     uint64_t score_key;
     size_t letters_left;
+    size_t wild_left;
     size_t states_computed;
     uint64_t transitions;
     uint64_t nextafter_calls;
@@ -151,6 +159,8 @@ class DfsAnagramSearch {
                       BoundWorker const& worker) const;
   bool hot_class_multiplicity_fits(
       uint32_t class_index, BoundWorker const& worker) const;
+  bool projected_class_fits(
+      uint32_t class_index, BoundWorker const& worker) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
   uint32_t const* first_length_support_candidate(
@@ -166,6 +176,11 @@ class DfsAnagramSearch {
       uint32_t class_index, BoundWorker* worker, double* best,
       double* max_rounding_error);
   bool compute_score_bound_parallel(size_t requested_threads);
+  double compute_projected_score_bound(BoundWorker* worker);
+  void consider_projected_bound_candidate(
+      uint32_t class_index, BoundWorker* worker, double* best,
+      double* max_rounding_error);
+  bool compute_projected_score_bound_parallel(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
@@ -212,10 +227,18 @@ class DfsAnagramSearch {
   uint64_t current_bag_key;
   uint64_t current_score_key;
   size_t current_letters_left;
+  uint64_t score_exact_mask;
+  uint64_t score_state_count;
+  uint64_t score_effective_states;
+  size_t score_exact_letters;
+  size_t score_wild_letters;
+  size_t score_wild_span;
+  bool score_projection_requested;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
   std::unique_ptr<ScoreClass, AlignedFree> score_classes;
   std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
+  std::unique_ptr<uint16_t, AlignedFree> score_wild_lengths;
   std::unique_ptr<uint32_t, AlignedFree> packed_letters;
   bool hot_classes_ready;
 
