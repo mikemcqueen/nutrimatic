@@ -213,8 +213,12 @@ static int smoke_test() {
     check(isolated.support_cache_entries() == 0 &&
               isolated.support_cache_bytes_charged() == 0,
           "disabled candidate cache retained support storage");
-    check(isolated.score_bound_bytes_charged() == score_only_budget,
-          "score-only mode did not use the full cache budget");
+    check(isolated.score_bound_bytes_charged() == 64,
+          "root-slab compaction charged the wrong dense size");
+    check(isolated.score_bound_capacity() == 6 &&
+              isolated.score_bound_value_bytes() == sizeof(double) &&
+              isolated.score_bound_complete(),
+          "root-slab compaction did not retain complete effective coverage");
     check_same_spellings(
         expected_spellings, isolated_output.take_sorted_results(),
         "candidate-cache gate changed retained spellings");
@@ -257,7 +261,7 @@ static int smoke_test() {
         exhausted_expected_output.take_sorted_results();
 
     DfsTopN expanded_dense_output(&classes, 2);
-    size_t const exact_dense_budget = 320;
+    size_t const exact_dense_budget = 256;
     DfsAnagramSearch expanded_dense(
         &classes, exhausted_letters, 1e-6, reader.count(),
         exact_dense_budget);
@@ -268,6 +272,8 @@ static int smoke_test() {
     check(expanded_dense.score_bound_bytes_charged() ==
               exact_dense_budget,
           "dense score memo did not use its exact full-budget fit");
+    check(expanded_dense.score_bound_capacity() == 30,
+          "dense score memo retained the unused root slab");
     check(expanded_dense.score_bound_prunes() > 0,
           "deep dense score memo did not prune");
     check_same_spellings(
@@ -292,8 +298,13 @@ static int smoke_test() {
     FixedFloorSolutions boundary_output(
         nextafter(best_score, -HUGE_VAL));
     DfsAnagramSearch boundary(
-        &classes, exhausted_letters, 1e-6, reader.count(), 768);
+        &classes, exhausted_letters, 1e-6, reader.count(), 128);
     boundary.run(&boundary_output);
+    check(boundary.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_DENSE &&
+              boundary.score_bound_value_bytes() == sizeof(float) &&
+              boundary.score_bound_complete(),
+          "rounding-boundary test did not use complete float bounds");
     check(std::find(
               boundary_output.ordered_indexes.begin(),
               boundary_output.ordered_indexes.end(),
@@ -314,7 +325,7 @@ static int smoke_test() {
     }
 
     DfsTopN exhausted_output(&classes, 2);
-    size_t const exhausted_budget = 256;
+    size_t const exhausted_budget = 64;
     DfsAnagramSearch exhausted(
         &classes, exhausted_letters, 1e-6, reader.count(),
         exhausted_budget);
@@ -328,38 +339,40 @@ static int smoke_test() {
     std::vector<DfsSpelling> const exhausted_spellings =
         exhausted_output.take_sorted_results();
     check(exhausted.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_SPARSE,
-          "exhausted sparse score memo was not retained");
+              DfsAnagramSearch::SCORE_BOUND_PREFIX,
+          "partial dense score prefix was not selected");
     check(exhausted.score_bound_states_computed() > 0,
-          "sparse score memo was disabled instead of exhausted");
+          "dense score prefix did not lazily construct any bounds");
     check(exhausted.score_bound_entries() ==
               exhausted.score_bound_states_computed(),
-          "exhausted sparse score memo lost completed bounds");
+          "dense score prefix lost completed bounds");
     check(exhausted.score_bound_bytes_charged() > 0,
-          "exhausted sparse score memo released its storage");
+          "dense score prefix released its storage");
     check(exhausted.score_bound_bytes_charged() +
               exhausted.candidate_cache_bytes_charged() +
               exhausted.support_cache_bytes_charged() <=
               exhausted_budget,
-          "retained sparse bounds exceeded the shared cache budget");
+          "dense score prefix exceeded the shared cache budget");
     check(exhausted.score_bound_bytes_charged() == exhausted_budget,
-          "sparse score memo did not use the full cache budget");
+          "dense score prefix did not use the full cache budget");
     check(exhausted.candidate_cache_mode() ==
               DfsAnagramSearch::CANDIDATE_CACHE_OFF &&
               exhausted.candidate_cache_bytes_charged() == 0 &&
               exhausted.support_cache_bytes_charged() == 0,
-          "sparse score memo left budget for candidate caching");
+          "dense score prefix left budget for candidate caching");
     check(exhaustion_message.find(
-              "score-bound mode sparse (capacity 16, admission limit 12)") !=
+              "score-bound mode dense prefix "
+              "(4-byte values, capacity 16, partial coverage)") !=
               std::string::npos,
-          "sparse score capacity diagnostic is missing");
+          "dense score prefix capacity diagnostic is missing");
     check(exhaustion_message.find(
-              "sparse score-bound cache exhausted") !=
-              std::string::npos &&
-          exhaustion_message.find(
-              "retaining 12 completed bounds, and cache misses will run "
-              "unpruned") != std::string::npos,
-          "sparse score exhaustion diagnostic is missing");
+              "precomputed 0 bounded states") != std::string::npos,
+          "dense score prefix was eagerly constructed");
+    check(exhaustion_message.find(
+              "dense-prefix bounds will be constructed lazily during search "
+              "for score keys below 16 once a score floor is available") !=
+              std::string::npos,
+          "dense score prefix lazy-construction diagnostic is missing");
     check_same_spellings(
         exhausted_expected_spellings, exhausted_spellings,
         "exhausted score memo changed the retained spellings");
@@ -369,7 +382,7 @@ static int smoke_test() {
   return 0;
 }
 
-static void sparse_score_bound_test() {
+static void float_score_bound_test() {
   FILE* fp = tmpfile();
   check(fp != NULL, "could not create sparse-bound test index");
   {
@@ -392,27 +405,31 @@ static void sparse_score_bound_test() {
         expected_output.take_sorted_results();
 
     DfsTopN output(&classes, 1);
-    size_t const budget = 1024;
+    size_t const budget = 512;
     DfsAnagramSearch search(
         &classes, letters, 1e-6, reader.count(), budget);
     search.run(&output);
     check(search.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_SPARSE,
-          "large theoretical state space did not use sparse score memo");
-    check(search.score_bound_entries() == 2,
-          "sparse score memo stored the wrong states");
+              DfsAnagramSearch::SCORE_BOUND_DENSE,
+          "complete float score memo was not selected");
+    check(search.score_bound_value_bytes() == sizeof(float) &&
+              search.score_bound_capacity() == 128 &&
+              search.score_bound_complete(),
+          "complete float score memo has the wrong layout");
+    check(search.score_bound_entries() == 1,
+          "float score memo stored the wrong states");
     check(search.score_bound_transitions() == 1,
-          "sparse score memo counted the wrong transitions");
+          "float score memo counted the wrong transitions");
     check(search.score_bound_nextafter_calls() >= 2,
-          "sparse score memo counted too few nextafter calls");
+          "float score memo counted too few nextafter calls");
     check(search.score_bound_bytes_charged() +
               search.candidate_cache_bytes_charged() +
               search.support_cache_bytes_charged() <= budget,
-          "sparse score and candidate caches exceeded their budget");
-    check(output.size() == 1, "sparse score bound lost its solution");
+          "float score and candidate caches exceeded their budget");
+    check(output.size() == 1, "float score bound lost its solution");
     check_same_spellings(
         expected_spellings, output.take_sorted_results(),
-        "sparse score bound changed the retained spellings");
+        "float score bound changed the retained spellings");
   }
 
   fclose(fp);
@@ -511,7 +528,7 @@ int main(int argc, char* argv[]) {
   if (argc == 1) {
     smoke_test();
     entry_point_cache_test();
-    sparse_score_bound_test();
+    float_score_bound_test();
     return 0;
   }
   if (argc == 2 && strcmp(argv[1], "--validate-14") == 0)

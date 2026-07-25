@@ -1,5 +1,21 @@
 # `dfs-anagrams` cache-size performance cliffs
 
+## Implementation update
+
+The dense experiments proposed below are now implemented in this branch:
+
+- the score cache has its own rarest-most-significant mixed-radix key;
+- complete tables omit the root symbol's unused top slab;
+- exact-double storage is preferred when it fits, followed by
+  upward-rounded float storage;
+- smaller budgets become an exactly sized, tag-free float prefix; its bounds
+  are constructed lazily after phase 2 enters the dependency-closed prefix
+  with an active score floor.
+
+The sparse score table described later in this document was the baseline for
+the investigation and has been replaced by the dense-prefix fallback.
+Candidate and support cache keying is unchanged.
+
 ## Summary
 
 `dfs-anagrams` does not degrade smoothly as `--candidate-cache-mib` (`-C`)
@@ -432,10 +448,9 @@ caches are enabled.
 `--preprocess-threads N` (`-T N`) parallelizes dense score-bound construction.
 It does not parallelize sparse construction or the final DFS.
 
-Automatic mode currently remains single-threaded below 30 letters, so an
-explicit value such as `-T 20` can be valuable for expensive 25–28-letter
-dense runs. The implementation caps the actual worker count based on available
-hardware and root work.
+Automatic mode currently remains single-threaded below 26 letters. The
+implementation caps the actual worker count based on available hardware and
+root work.
 
 ### Restrict depth when semantics permit
 
@@ -522,8 +537,8 @@ Potential improvements include:
 
 ### 5. Select preprocessing threads from workload size
 
-The current automatic threshold is raw letter count 30. Existing measurements
-show a large benefit at 28 letters. A better policy could consider:
+The current automatic threshold is raw letter count 26. A better policy could
+consider:
 
 - theoretical state count;
 - dense table size;

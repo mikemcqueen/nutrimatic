@@ -34,6 +34,7 @@ expect_status() {
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --candidate-cache-mib 0 \
+  --allow-cache-fallback \
   > "$test_dir/uncached.stdout" 2> "$test_dir/uncached.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --preprocess-threads 1 \
@@ -62,10 +63,13 @@ grep -q '^# 4 letters "abcd", words of 2+, at most 2 words$' \
   fail "search header is missing from stderr"
 grep -q '^# phase 1 complete:' "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
-grep -q '^# phase 2 preflight: 16 theoretical states, 128 dense score-table bytes, minimum -C 1 MiB (128 bytes)$' \
+grep -q '^# phase 2 preflight: 16 theoretical states, 8 effective non-root states$' \
+  "$test_dir/all.stderr" ||
+  fail "phase-2 state-count diagnostics are missing from stderr"
+grep -q '^# phase 2 preflight: 64 double/64 float dense score-table bytes, minimum -C 1 MiB (64 bytes)$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 cache sizing diagnostics are missing from stderr"
-grep -Eq '^# phase 2 preflight: score-bound mode (off|dense|sparse)( \\(capacity [0-9]+, admission limit [0-9]+\\))?; candidate-cache mode (off|dense|sparse)$' \
+grep -Eq '^# phase 2 preflight: score-bound mode (off|dense|dense prefix)( \([48]-byte values, capacity [0-9]+, (complete effective|partial) coverage\))?; candidate-cache mode (off|dense|sparse)$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 cache mode diagnostics are missing from stderr"
 grep -Eq '^# phase 2: precomputed [0-9]+ bounded states in [0-9.]+s$' \
@@ -102,4 +106,18 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --candidate-cache-mib nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --preprocess-threads nope
+expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --candidate-cache-mib 0
+grep -q '^# phase 2 preflight: 16 theoretical states, 8 effective non-root states$' \
+  "$test_dir/status.stderr" ||
+  fail "undersized cache omitted phase-2 state-count diagnostics"
+grep -q '^# phase 2 preflight: 64 double/64 float dense score-table bytes, minimum -C 1 MiB (64 bytes)$' \
+  "$test_dir/status.stderr" ||
+  fail "undersized cache omitted phase-2 sizing diagnostics"
+grep -q '^error: dense score table requires at least 1 MiB; supplied cache is 0 MiB$' \
+  "$test_dir/status.stderr" ||
+  fail "undersized dense-cache diagnostic is missing"
+grep -q '^       use -C 1 or --allow-cache-fallback$' \
+  "$test_dir/status.stderr" ||
+  fail "dense-cache recovery diagnostic is missing"
 expect_status 1 "$dfs_anagrams" "$test_dir/missing.index" abcd
