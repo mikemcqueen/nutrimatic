@@ -1,0 +1,46 @@
+NUTRIMATIC_PROJECTED_SCORE=1 build/dfs-anagrams     "$IDX" "${S6:0:40}" -m 4 -n 1000 -C 64 -F -p 100 > /dev/null
+# 40 letters "aabbcddeeeeeeffhiiikkllnnnooooqstuuuvwyz", words of 4+, at most 10 words
+# phase 1 complete: 914379 entries, 490329 classes, 6231011 trie nodes
+# phase 2 preflight: 836075520 theoretical states, 418037760 effective non-root states
+# phase 2 preflight: 3344302080 double/1672151040 float dense score-table bytes, minimum -C 1595 MiB (1672151040 bytes)
+# phase 2 experiment: projected score table keeps 15 rarest letters exact, merges 16 wildcard letters; 7050240 states, 28200960 bytes
+# phase 2 preflight: score-bound mode projected dense (4-byte values, capacity 7050240, complete effective coverage); candidate-cache mode off
+^[[Z# phase 2: precomputed 3411183 bounded states in 243.848s
+# phase 2: preprocessing used 20 threads
+# phase 2: 10000000 nodes, 19728 solutions
+# phase 2: 20000000 nodes, 22728 solutions
+# phase 2: 30000000 nodes, 23419 solutions
+# phase 2: 40000000 nodes, 23618 solutions
+# phase 2: 50000000 nodes, 23726 solutions
+# phase 2: 60000000 nodes, 23852 solutions
+# phase 2: 70000000 nodes, 23964 solutions
+# phase 2: 80000000 nodes, 24199 solutions
+# phase 2: 90000000 nodes, 24269 solutions
+# phase 2: 100000000 nodes, 24338 solutions
+# phase 2: 110000000 nodes, 24366 solutions
+# phase 2: 120000000 nodes, 24409 solutions
+# phase 2: 130000000 nodes, 24462 solutions
+# phase 2: 140000000 nodes, 24482 solutions
+# phase 2: 150000000 nodes, 24507 solutions
+# phase 2: 160000000 nodes, 24558 solutions
+# phase 2: 170000000 nodes, 24573 solutions
+# phase 2: 180000000 nodes, 24591 solutions
+# phase 2: 190000000 nodes, 24631 solutions
+# phase 2: 200000000 nodes, 24661 solutions
+# phase 2: 210000000 nodes, 24682 solutions
+# phase 2: 220000000 nodes, 24696 solutions
+# phase 2: 230000000 nodes, 24707 solutions
+# phase 2: 240000000 nodes, 24727 solutions
+# phase 2: 250000000 nodes, 24733 solutions
+# phase 2: 260000000 nodes, 24745 solutions
+# phase 2: 270000000 nodes, 24757 solutions
+# phase 2: 280000000 nodes, 24763 solutions
+# phase 2: 290000000 nodes, 24774 solutions
+# phase 2: 300000000 nodes, 24780 solutions
+# phase 2: 310000000 nodes, 24783 solutions
+# phase 2: 320000000 nodes, 24791 solutions
+# phase 2: 330000000 nodes, 24802 solutions
+# phase 2: 340000000 nodes, 24804 solutions
+# phase 2 timing: 243.847908 s setup, 19.886864 s search, 27133454068 successful bound transitions, 8514252 nextafter calls
+# phase 2 caches: 0 support masks, 0 support bytes, 0 candidate entries, 0 candidate bytes, 3411183 bound entries, 28200960 bound bytes
+# phase 2 complete: 342949072 nodes, 24804 solutions, 15900 spellings expanded, 1000 retained
