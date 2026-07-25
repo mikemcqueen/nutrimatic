@@ -244,6 +244,15 @@ static int smoke_test() {
         read_stream(projected_diagnostics);
     fclose(projected_diagnostics);
     check(setenv(
+              "NUTRIMATIC_PROJECTED_BOTTOM_UP", "0", 1) == 0,
+          "could not select recursive projected evaluation");
+    DfsTopN recursive_projected_output(&classes, 2);
+    DfsAnagramSearch recursive_projected(
+        &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
+    recursive_projected.run(&recursive_projected_output);
+    check(unsetenv("NUTRIMATIC_PROJECTED_BOTTOM_UP") == 0,
+          "could not restore bottom-up projected evaluation");
+    check(setenv(
               "NUTRIMATIC_PROJECTED_ACTION_QUOTIENT", "0", 1) == 0,
           "could not disable projected-action quotient");
     DfsTopN unquotiented_output(&classes, 2);
@@ -290,6 +299,11 @@ static int smoke_test() {
               projected.solutions_found() ==
                   unquotiented.solutions_found(),
           "projected-action quotient changed DFS counters");
+    check(projected.nodes_visited() ==
+                  recursive_projected.nodes_visited() &&
+              projected.solutions_found() ==
+                  recursive_projected.solutions_found(),
+          "bottom-up projected evaluation changed DFS counters");
     check(projected_message.find(
               "projected actions (quotient on)") != std::string::npos,
           "projected-action diagnostic is missing");
@@ -297,6 +311,10 @@ static int smoke_test() {
         exhausted_expected_spellings,
         projected_output.take_sorted_results(),
         "projected score memo changed retained spellings");
+    check_same_spellings(
+        exhausted_expected_spellings,
+        recursive_projected_output.take_sorted_results(),
+        "bottom-up projected evaluation changed retained spellings");
     check_same_spellings(
         exhausted_expected_spellings,
         unquotiented_output.take_sorted_results(),
