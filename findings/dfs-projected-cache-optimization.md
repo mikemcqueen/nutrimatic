@@ -20,10 +20,65 @@ not the main subject of the remaining work. The research question is now how
 to avoid constructing so many action/state edges and abstract states in the
 first place, rather than which adjacent projection depth wins a timing sweep.
 
+Table shape is nevertheless an immediate policy issue. The current
+largest-fitting selector overbuilds the measured larger workloads. A fixed
+one-dimension backoff looked adequate on the first `S6` sweeps, but an
+unrelated-bag validation rejects it as a general policy. Moving one letter
+kind into the wildcard bucket can leave the abstraction exactly isomorphic,
+and the best measured unrelated shape was four dimensions below the largest
+fitting shape. Selection must be based on predicted construction and search
+work, not cache occupancy or dimension count.
+
+Construction work now has a practical pre-build predictor. Summing, for every
+deduplicated action, the number of logical mixed-radix states in which it fits
+counts the complete projected box's potential fitting edges without building
+the box. Calibrating that count with one coarse completed projection predicts
+the measured richer transition counts within 0.3--17.7% across the current
+sweeps. The remaining selector uncertainty is chiefly pruning value: a
+bounded concrete-search or richer-lookup pilot is still needed before changing
+the production depth policy.
+
+A length-only hierarchical certificate can also remove a material fraction of
+the rich recurrence's action edges exactly. The shadow experiment certifies
+30--62% of fitting edges in the current traversal order on the measured bags.
+Actually skipping them reduces successful transitions by 32--66% while
+retaining byte-identical output and final DFS node counts. It does not,
+however, combine well with the current parallel root-closure scheduler:
+skipped children leave table slots unbuilt, and constructing those exact
+bounds synchronously on first concrete demand moves work from parallel setup
+onto the single DFS thread. The serial experiment improves 12.9%; the
+20-thread experiments regress despite doing much less mathematical work.
+Certificates should therefore be carried forward into a parallel layered or
+nonblocking demand scheduler, not enabled as a local recursive-loop shortcut.
+
+A nonblocking scheduler cannot rely on a high aggregate fallback-prune rate.
+When certificate-created holes use the complete 9-bit x 2 modular bound
+immediately, that fallback prunes 97.8--99.9% of hole lookups but exposes
+3.4--9.5x as many final DFS nodes as complete rich coverage. The rare misses
+are concentrated above large subtrees. Widening the quotient to ten bits does
+not materially change the result. A background builder must close important
+holes promptly, and its priority signal must include subtree leverage or a
+bounded-search observation; raw query count and prune coverage are
+insufficient. A complete small exact-letter projection remains the safer
+always-available fallback.
+
+Dead projected work is sharply localized by remaining-letter layer. Across
+two `S6` projections and the unrelated-bag validation, 99.97--100% of edges
+to dead children land in layers with at most seven letters remaining. Those
+low layers contain only 5.5--10.1% of the forward-constructed states. This
+does not justify a full reverse builder, because reverse generation can still
+create root-irrelevant states. It does justify a bounded reverse-completable
+perimeter through layer seven: measure its generated size and use its
+finite/dead mask to avoid the 6.7--10.3% of fitting edges that currently
+discover dead children recursively. The preflight enumeration now confirms
+that this perimeter is compact: it contains only 1.31--1.48x as many finite
+states as the forward traversal reaches in those layers, and a direct
+full-key-space bitset costs 16--105 KiB on the measured cases.
+
 ## Measurements
 
-All measurements use `idx/wiki-merged.5.index`, prefixes of `S6`,
-`-m 4 -n 1000`, and a warm index. The 20-thread results use `-T 20`.
+Unless otherwise noted, measurements use `idx/wiki-merged.5.index`, prefixes
+of `S6`, `-m 4 -n 1000`, and a warm index. The 20-thread results use `-T 20`.
 
 ### 28 letters, `d=14`, `-C 8`
 
@@ -424,10 +479,485 @@ those host timings.
 Cutting rich-only misses in half relative to 6-bit x 4 is useful, but leaving
 19.5 million misses rules out even the improved modular quotient as the only
 large-workload fallback. Use 9-bit x 2 as a cheap complement and as one stage
-in a fallback cascade. The next fallback comparison should be a small
-exact-letter projection, and it should actually control pruning in a shadow
-or replayed search so the measurement reports concrete nodes exposed rather
-than only per-lookup disagreement.
+in a fallback cascade. This made a small exact-letter projection the next
+fallback comparison; the live-pruning sweep below measures concrete nodes
+exposed rather than only per-lookup disagreement.
+
+### Small exact-letter fallback under live pruning
+
+Forced smaller projections were run as the actual phase-2 bound, rather than
+as a per-lookup shadow diagnostic. Their final DFS node counts therefore
+measure the concrete work exposed by weakening the projection. This avoids
+trying to infer node expansion from prune-disagreement counts.
+
+The first sweep used the established 28-letter workload with support-subset
+traversal and 20 preprocessing threads:
+
+| `d` | table bytes | actions | states built | setup | search | phase 2 | construction transitions | final DFS nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6 | 6,080 | 1,390 | 1,040 | 0.020s | 15.330s | 15.349s | 55,954 | 188,177,315 |
+| 8 | 31,104 | 4,823 | 4,750 | 0.032s | 4.874s | 4.906s | 611,754 | 65,099,399 |
+| 10 | 110,592 | 12,103 | 15,861 | 0.102s | 1.958s | 2.060s | 3,316,664 | 28,809,173 |
+| 11 | 290,304 | 20,815 | 39,439 | 0.237s | 1.181s | 1.418s | 10,905,285 | 17,854,432 |
+| 12 | 539,136 | 30,774 | 71,899 | 0.213s | 0.777s | 0.990s | 23,327,436 | 11,331,110 |
+| 13 | 1,368,576 | 50,687 | 178,416 | 0.635s | 0.401s | 1.036s | 75,624,933 | 6,059,101 |
+| 14 | 3,359,232 | 73,522 | 430,123 | 1.243s | 0.214s | 1.457s | 213,302,595 | 3,086,650 |
+
+All seven outputs had SHA-256
+`de32cca977192c1ab65b56329c9a7f8f97e25441fbea1e39c049b7ebf8c33ee6`.
+The deterministic solution counts increase as the bound weakens because more
+below-floor complete solutions are reached, but the retained top 1000 are
+unchanged.
+
+On this case `d=12` is the best measured point and is better than the
+previously selected `d=14` even without online refinement. It uses 6.2x less
+table storage and 9.1x fewer construction transitions, exposes 3.7x as many
+final nodes, and still reduces total phase 2 by 32.0%. Adjacent `d=13` is
+within 4.7%, which is smaller than the host's known timing variability, but
+both clearly beat `d=14`. Even `d=10`, at only 108 KiB, is within 1.42x of
+the `d=14` end-to-end time while doing 64x fewer construction transitions.
+The weakest points show that exact-letter information degrades gracefully for
+several depth steps, but not indefinitely: `d=6` exposes 188 million nodes.
+
+The 28-letter timings were process-gated at launch but were not all monitored
+throughout; a sibling worktree began unrelated `dfs-anagrams` runs later in
+the sweep. Use the deterministic work counts as the portable evidence and the
+timings as an initial shape.
+
+The larger validation used 38 letters, `-C 32`, support-subset traversal, and
+20 preprocessing threads. Each run was checked before launch and while it was
+active; only the measured instance was present.
+
+| `d` | table bytes | actions | states built | setup | search | phase 2 | construction transitions | final DFS nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 13 | 2,322,432 | 44,843 | 286,429 | 1.011s | 50.826s | 51.837s | 189,115,902 | 540,441,307 |
+| 14 | 9,400,320 | 82,327 | 1,151,524 | 5.832s | 16.415s | 22.248s | 1,277,019,105 | 203,485,601 |
+| 15 | 24,883,200 | 124,513 | 2,984,149 | 19.814s | 7.807s | 27.621s | 4,159,322,534 | 105,067,790 |
+
+All three outputs had SHA-256
+`398abaeaeb5245dfe071f1f11d933742591230b685a6be2ac724abc35a4ffec4`.
+
+Here `d=14` is the best measured point. Relative to `d=15`, it cuts table
+storage by 2.65x, constructed states by 2.59x, transitions by 3.26x, and setup
+by 70.6%. Its 1.94x larger final traversal raises search from 7.81s to 16.42s,
+but total phase 2 is still 19.5% faster. `d=13` is a plausible fast emergency
+fallback—it is ready in about one second—but is too weak as the sole bound on
+this workload.
+
+### Intermediate depth-selection validation
+
+A 34-letter sweep fills the gap between the 28- and 38-letter cases. It used
+`-C 32`, support-subset traversal, and 20 preprocessing threads. The `d=12`
+run and a repeated `d=13`/`d=14` pair were checked against the host process
+table before launch and during each run; only the measured instance was
+present.
+
+| `d` | table bytes | actions | states built | setup | search | phase 2 | construction transitions | final DFS nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 1,658,880 | 46,671 | 278,309 | 1.028s | 17.884s | 18.912s | 181,103,560 | 249,546,057 |
+| 13 | 4,354,560 | 74,365 | 723,914 | 3.157s | 10.495s | 13.652s | 619,235,789 | 154,009,521 |
+| 14 | 11,197,440 | 111,306 | 1,830,525 | 10.071s | 5.537s | 15.607s | 1,904,727,125 | 76,881,663 |
+
+All three outputs had SHA-256
+`9a71f496f06e1851c4ab8ac268a66dea5727f90a898a9d35cefd97ca08af0cb4`.
+An initial ungated pair had the same deterministic counts and also favored
+`d=13`: 13.320s versus 14.898s total phase 2.
+
+Here the current largest-fitting selector chooses `d=14`. A forced `d=15`
+would require 33,592,320 bytes, only 37,888 bytes more than the 32 MiB budget,
+but that near fit is not desirable: `d=13` is still 12.5% faster than `d=14`.
+It reduces construction transitions by 67.5% while exposing 2.00x as many
+final nodes. The 6.91s setup saving exceeds the 4.96s search penalty.
+
+The deterministic work also explains the timing knee. Across the three
+controlled runs, setup costs 5.1--5.7ns per successful construction
+transition and search costs 68--72ns per final DFS node. A simple linear proxy
+using those two counts selects `d=13`, so the wall-clock result is not caused
+by an anomalous phase timing.
+
+### Depth-selection policy
+
+Across the now-measured `S6` prefixes, choosing one exact-letter dimension
+below the largest table that fits initially looked like a robust simple
+policy:
+
+| letters | largest fitting `d` | best measured `d` | one-step-backoff result |
+|---:|---:|---:|---|
+| 26 | 12 | 12 | 0.9% slower than best |
+| 28 | 14 | 12 | 4.6% slower than best, 28.9% faster than largest |
+| 34 | 14 | 13 | best, 12.5% faster than largest |
+| 38 | 15 | 14 | best, 19.5% faster than largest |
+
+The earlier 40-letter comparison points the same way: `d=15` was much faster
+end to end than `d=16`, although that timing set was more variable. A one-step
+backoff is not always the exact optimum, but in the tabulated sweep it is
+within 5% of the best point and avoids every material overbuild. Blindly
+spending the last cache bytes does not. This was evidence for testing the
+heuristic, not enough evidence to install it.
+
+A first composition check used the 28-letter window `S6[24:52]` rather than a
+prefix:
+
+| `d` | table bytes | states built | setup | search | phase 2 | construction transitions | final DFS nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 13 | 1,622,016 | 177,490 | 0.340s | 0.387s | 0.727s | 63,204,880 | 4,754,917 |
+| 14 | 2,949,120 | 298,850 | 0.587s | 0.240s | 0.827s | 124,763,129 | 2,889,429 |
+
+Both outputs had SHA-256
+`5f1bba997e11c2612f0f6cdc918d1f54339fc0c6e3017c098a99d49db790dde9`.
+The one-step backoff again won, by 12.1% observed. A sibling's next
+`dfs-anagrams` run appeared immediately after each sub-second measurement, so
+these wall times are not treated as a controlled pair. The deterministic
+counts point the same way: applying the controlled 34-letter cost ranges
+predicts `d=13` at 0.65--0.70s and `d=14` at 0.83--0.92s.
+
+The unrelated validation used the 29-letter bag
+`firestationteamusedquickbrown`, which has 17 distinct letters. It used
+`-C 32`, support-subset traversal, and 20 preprocessing threads. Every run was
+checked before launch and once per one or two seconds while active; only the
+measured `dfs-anagrams` instance was present.
+
+| `d` | wildcard letters | table bytes | actions | states built | setup | search | phase 2 | construction transitions | final DFS nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 12 | 718,848 | 71,382 | 98,101 | 0.524s | 6.544s | 7.068s | 64,076,272 | 78,432,288 |
+| 13 | 10 | 1,824,768 | 124,723 | 239,529 | 1.200s | 3.880s | 5.080s | 215,610,693 | 47,935,597 |
+| 14 | 7 | 5,308,416 | 201,521 | 673,525 | 4.450s | 2.043s | 6.493s | 764,416,628 | 25,143,714 |
+| 15 | 5 | 11,943,936 | 270,847 | 1,487,302 | 12.677s | 1.230s | 13.908s | 1,817,808,981 | 14,792,187 |
+| 16 | 3 | 23,887,872 | 363,069 | 2,968,011 | 34.234s | 0.742s | 34.976s | 4,012,601,755 | 8,078,253 |
+| 17 | 0 | 23,887,872 | 363,069 | 2,968,011 | 40.216s | 0.707s | 40.923s | 4,012,601,755 | 8,078,253 |
+
+All six outputs had SHA-256
+`43ce76eb6381861d29af81ecfffda40136bcd525d9c6830888d7361a240187b7`.
+The automatic largest-fitting selector chose `d=17`, the complete exact
+table. A repeated gated `d=14` then `d=13` pair reported 6.612s and 5.666s
+total phase 2 respectively, again favoring `d=13`; their deterministic counts
+were identical to the table.
+
+This sweep rejects one-dimension backoff as a general selector. At `d=16` the
+only wildcard letter kind has multiplicity three. Its exact radix of four is
+replaced by a wildcard span of four, so `d=16` and `d=17` have the same flat
+state count. Because that wildcard count still uniquely identifies the
+removed letter's count, the two recurrences are isomorphic: they also have the
+same actions, constructed states, transitions, final nodes, and output. Their
+setup-time difference is host variability, not an algorithmic improvement.
+
+The first genuinely lossy backoff is `d=15`, but it is still 2.74x slower than
+the measured optimum. `d=13` uses only 7.6% of the automatic table storage,
+does 18.6x fewer construction transitions, and exposes 5.9x more final nodes;
+the construction saving wins by 6.9--8.1x end to end relative to the
+exact-equivalent `d=16` and `d=17` runs. Moving to `d=12` confirms the other
+side of the knee: setup falls by 0.68s, but search rises by 2.66s.
+
+The phase costs remain regular once the shapes become meaningfully projected.
+For `d=13` through `d=15`, construction costs 5.6--7.0ns per successful
+transition and final search costs 81--83ns per node. Those counts correctly
+select `d=13` after the runs, as the earlier linear proxy did for the
+34-letter case. They still do not solve pre-build selection because the final
+node count is not yet known.
+
+One cheap setup predictor does emerge from the existing sweeps. Constructed
+states are a smooth fraction of logical table capacity within a bag:
+
+| workload | measured `d` | constructed states / capacity |
+|---|---|---|
+| 28-letter `S6` | 12, 13, 14 | 53.3%, 52.1%, 51.2% |
+| 34-letter `S6` | 12, 13, 14 | 67.1%, 66.5%, 65.4% |
+| 38-letter `S6` | 13, 14, 15 | 49.3%, 49.0%, 48.0% |
+| unrelated 29-letter | 12, 13, 14, 15, 16 | 54.6%, 52.5%, 50.8%, 49.8%, 49.7% |
+
+The absolute density varies too much across bags for one global constant, but
+a small projection can calibrate the richer candidates for the same bag.
+Using the unrelated `d=12` density unchanged would predict the `d=13`,
+`d=14`, and `d=15` constructed-state counts within 4%, 8%, and 10%. This makes
+logical capacity plus a coarse-build density a credible state-count estimate.
+It is not by itself a transition estimate: successful transitions per
+constructed state also rise with depth.
+
+### Analytic construction-edge predictor
+
+The stronger setup predictor does not require state sampling. For each
+deduplicated projected action, the number of logical mixed-radix states in
+which it fits can be counted directly:
+
+```text
+wildcard choices
+    * product(exact-root-count[i] - requirement[i] + 1)
+```
+
+Digits rarer than the action's forced bucket contribute one choice, because
+they must be zero. The rarest exact digit stops one below its root count
+because the compact table omits the root slab. Summing this product over
+actions and adding the fitting root actions gives the logical fitting-edge
+count for the complete projected box. The calculation is
+`O(projected actions * d)`, saturates safely on overflow, and runs during
+action preparation without visiting or allocating projected states.
+
+`NUTRIMATIC_PROJECTED_PREFLIGHT_ONLY=1` now stops after action preparation so
+candidate shapes can report table capacity, deduplicated actions, and logical
+fitting edges without constructing a bound or running concrete DFS. The full
+preflight, including ordinary class/action preparation, took 0.050s for the
+28-letter `d=14` case, 0.130s for 34-letter `d=14`, 0.169s for 38-letter
+`d=15`, and 0.246s for the unrelated exact `d=17` case.
+
+The existing completed sweeps let a coarse depth calibrate what fraction of
+the logical edges the top-down builder actually evaluates. The table applies
+the coarsest measured depth's fraction unchanged to every richer depth:
+
+| workload | calibration `d` | richer `d` values | actual transition / logical-edge range | richer transition prediction error |
+|---|---:|---|---:|---:|
+| 28-letter `S6` | 12 | 13, 14 | 39.6--44.5% | +5.7%, +12.5% |
+| 34-letter `S6` | 12 | 13, 14 | 54.5--54.9% | +0.8%, +0.3% |
+| 38-letter `S6` | 13 | 14, 15 | 44.5--46.4% | -3.1%, -4.1% |
+| unrelated 29-letter | 12 | 13, 14, 15, 16 | 42.7--50.2% | +6.9%, +15.9%, +17.7%, +17.3% |
+
+Positive error means overprediction. The estimate is not exact, but within a
+bag it is much more stable than raw action count and directly captures the
+rapid edge growth that dominates setup. Even the worst calibration error is
+small relative to the 3--18x transition differences among candidate depths.
+The instrumented 28-letter `d=12` validation counted 52,399,806 logical edges,
+26,006,886 fitting edges in actually constructed states, and 23,327,436
+successful transitions; its output retained the established SHA-256.
+
+A deliberately crude retrospective total-cost proxy further checks that the
+predictor contains useful selection information. Calibrate transitions from
+the coarse build as above, estimate richer final nodes by scaling the coarse
+node count with `(coarse actions / candidate actions)^1.5`, and charge 6ns per
+transition plus 80ns per final node. It selects the measured optimum for the
+34-letter, 38-letter, and unrelated workloads. It selects `d=13` instead of
+`d=12` for the 28-letter workload, where the measured difference was only
+4.6%. This is not a production selector: the exponent is empirical and the
+coarse final-node count is known only after a complete coarse search. It does
+show that logical fitting edges plus a pruning-value estimate are sufficient
+to locate the observed knees; cache occupancy is not.
+
+### Hierarchical coarse-certificate experiment
+
+The first exact edge certificate uses the already implemented length-only
+projection. For a rich action `a`, it forms the conservative envelope
+
+```text
+action_score(a) + restart + length_bound(child_letters)
+```
+
+and compares it with a feasible lower witness from an earlier fully evaluated
+action at the same rich state. The experiment stores one temporary
+downward-rounded float witness per rich table slot. A child publishes that
+witness before publishing its existing upward-rounded bound, so the upper and
+lower sides remain conservatively ordered across preprocessing threads.
+
+`NUTRIMATIC_PROJECTED_CERTIFICATE_DIAGNOSTICS=1` leaves the recurrence
+unchanged and counts envelopes already below the incumbent in the existing
+action order. It does not sort actions to make the result look better.
+
+The shadow counts are:
+
+| workload | fitting edges | successful transitions | checked after an incumbent | certified | certified / fitting |
+|---|---:|---:|---:|---:|---:|
+| 28-letter `d=12` | 26,006,886 | 23,327,436 | 24,881,138 | 10,993,274 | 42.3% |
+| 28-letter `d=14` | 236,483,620 | 213,302,595 | 231,027,835 | 71,209,010 | 30.1% |
+| unrelated 29-letter `d=13` | 231,084,895 | 215,610,693 | 223,265,709 | 143,930,534 | 62.3% |
+
+This is enough headroom to promote hierarchical certification from a
+speculation to a scheduler input. It also shows that score ordering is not a
+prerequisite for a useful rate. Ordering by coarse envelope may increase the
+rate, but should be tested only after the state-coverage problem below is
+addressed.
+
+`NUTRIMATIC_PROJECTED_CERTIFICATE_PRUNE=1` then skips a certified edge.
+Skipping preserves the value of the state being computed, but it can leave the
+child slot unseen. That matters because the concrete DFS may later query the
+child directly even though the child could not improve this particular
+parent. A first version returned no bound for those misses and passed 308
+million final nodes on the 28-letter `d=12` case before being stopped. Root
+recurrence exactness is not the same as complete query coverage.
+
+The corrected prototype retains action metadata and computes an unseen rich
+state exactly on its first concrete-DFS query. Its results are:
+
+| workload | threads | mode | eager states | total states | setup | search | phase 2 | transitions |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| 28-letter `d=12` | 20 | shadow | 71,899 | 71,899 | 0.329s | 1.187s | 1.516s | 23,327,436 |
+| 28-letter `d=12` | 20 | skip + demand | 61,362 | 71,231 | 0.180s | 1.596s | 1.776s | 12,598,401 |
+| 28-letter `d=14` | 20 | shadow | 430,123 | 430,123 | 2.181s | 0.345s | 2.525s | 213,302,595 |
+| 28-letter `d=14` | 20 | skip + demand | 404,885 | 428,748 | 1.398s | 3.635s | 5.033s | 144,436,679 |
+| 28-letter `d=14` | 1 | shadow | 430,123 | 430,123 | 17.880s | 0.343s | 18.224s | 213,302,595 |
+| 28-letter `d=14` | 1 | skip + demand | 275,865 | 428,748 | 5.549s | 10.318s | 15.867s | 144,428,674 |
+| unrelated `d=13` | 20 | shadow | 239,529 | 239,529 | 1.925s | 5.534s | 7.459s | 215,610,693 |
+| unrelated `d=13` | 20 | skip + demand | 175,313 | 234,005 | 0.963s | 10.741s | 11.704s | 73,253,366 |
+
+Every completed pair retained its established output SHA-256 and identical
+final DFS node and solution counts. The 28-letter `d=12` and `d=14` skip runs
+reduced transitions by 46.0% and 32.3%; the unrelated run reduced them by
+66.0%. Total constructed states fell by only 0.3--2.3%, because exact
+on-demand recurrence closures eventually recovered nearly all of the states
+omitted during eager construction.
+
+The serial `d=14` pair improves total phase 2 by 12.9%, demonstrating that the
+certificate saves real work rather than merely moving counters. The
+20-thread pairs regress by 17--99% because 9,869--58,692 state constructions
+move into the single-threaded final search. The 20-thread `d=14` eager state
+count is unusually high relative to its serial counterpart because each root
+worker has its own incumbent and concurrent traversal changes which shared
+children are already ready; both runs converge to the same 428,748 total
+states and essentially the same transition count after demand completion.
+
+These timings were gated against another `dfs-anagrams` process before each
+run but not continuously monitored. The deterministic state, edge, node,
+solution, and output comparisons carry the main conclusion:
+
+1. keep the conservative upper envelope and downward witness design;
+2. do not synchronously construct a rich miss on the concrete DFS thread;
+3. either enqueue misses for nonblocking background refinement while using a
+   complete smaller projection, or apply certificates in a parallel
+   layer/state scheduler that preserves the desired table coverage; and
+4. measure candidate ordering only inside that scheduler. Reducing eager root
+   closure is not itself the objective when concrete queries recover almost
+   the entire closure.
+
+### Nonblocking-fallback simulation
+
+The next experiment isolates the other endpoint. With
+
+```sh
+NUTRIMATIC_PROJECTED_CERTIFICATE_PRUNE=1
+NUTRIMATIC_PROJECTED_CERTIFICATE_FALLBACK=1
+```
+
+a certificate-created rich miss does no synchronous construction. It
+immediately uses the minimum of the complete length and modular bounds.
+This models a requested entry that remains unfinished for the whole lookup;
+it does not yet run a background refiner. The new counters report total and
+distinct rich-hole lookups and how often the fallback itself prunes.
+
+The first runs used the 9-bit x 2 modular configuration:
+
+| workload | eager rich states | setup | search | rich transitions | fallback lookups | unique holes | fallback prunes | final DFS nodes | nodes / complete rich |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 28-letter `d=12` | 60,285 | 0.368s | 2.973s | 7,620,098 | 1,808,317 | 11,508 | 1,801,053 (99.60%) | 38,587,322 | 3.41x |
+| 28-letter `d=14` | 408,818 | 1.547s | 2.187s | 115,929,036 | 312,826 | 20,763 | 306,097 (97.85%) | 29,310,946 | 9.50x |
+| unrelated `d=13` | 172,157 | 1.094s | 13.876s | 33,228,256 | 11,717,768 | 66,924 | 11,707,971 (99.92%) | 162,691,681 | 3.39x |
+
+Every output retained its established SHA-256. The complete-rich comparison
+uses the earlier 11,331,110, 3,086,650, and 47,935,597 final-node counts.
+Parallel traversal changes which edges receive an incumbent soon enough to be
+certified, so eager state and transition counts vary somewhat between runs;
+the final traversal result is the important discriminator here. Each run was
+checked for another `dfs-anagrams` process before launch, and the longer
+unrelated run was also checked while active.
+
+Widening the 28-letter `d=14` fallback to 10-bit x 2 did not fix the
+amplification. It pruned 337,115 of 343,939 fallback lookups (98.02%) and
+visited 29,084,128 nodes, only 0.8% fewer than 9-bit x 2. Modular preparation
+grew from 0.225s to 0.823s and total phase 2 grew from 3.735s to 4.255s.
+
+Aggregate prune coverage is therefore the wrong scheduler objective. The
+0.08--2.15% of fallback lookups that fail are not representative: some occur
+above very large concrete subtrees and recursively generate more missing-rich
+lookups. A complete small exact projection is much safer. On the same
+28-letter bag, complete `d=12` visits 11.3 million nodes, versus 29.3 million
+for partial `d=14` plus modular fallback. On the unrelated bag, complete
+`d=12` visits 78.4 million nodes, versus 162.7 million for partial `d=13`
+plus modular fallback.
+
+This rejects a fallback-only endpoint, not an active background scheduler.
+The synchronous-demand runs show that the missing exact closures add only
+tens of millions of rich transitions, work that a persistent parallel builder
+may close quickly. The next scheduler prototype must measure latency from a
+concrete miss to a ready rich entry and nodes exposed before readiness. Queue
+priority should include DFS depth, bound gap, or subtree growth observed by a
+bounded pilot; lookup frequency alone discovers a costly state only after its
+subtree has begun expanding.
+
+### Dead work by remaining-letter layer
+
+Projected diagnostics now split outgoing fitting edges, incoming dead-child
+edges, and finite/dead constructed states by `letters_left`. Counters remain
+worker-local and are merged after parallel construction. Incoming dead-child
+edges are attributed to the child layer, which makes the measurement directly
+useful for sizing a reverse-completion perimeter.
+
+The validation used completed rich builders without certificate skips:
+
+| workload | dead states / all states | dead-child / fitting edges | incoming dead-child edges landing at `letters_left <= 7` | forward states at `letters_left <= 7` | dead states at `letters_left <= 7` |
+|---|---:|---:|---:|---:|---:|
+| 28-letter `d=12` | 3,358 / 71,899 (4.7%) | 2,679,450 / 26,006,886 (10.3%) | 99.969% | 10.1% | 99.1% |
+| 28-letter `d=14` | 11,615 / 430,123 (2.7%) | 23,181,025 / 236,483,620 (9.8%) | 99.988% | 5.5% | 99.6% |
+| unrelated 29-letter `d=13` | 4,689 / 239,529 (2.0%) | 15,474,202 / 231,084,895 (6.7%) | 100.000% | 6.0% | 100.0% |
+
+Every dead state in the two `S6` runs had at most 11 letters remaining; all
+dead states in the unrelated run had at most seven. The few `S6` dead states
+in layers 9--11 had almost no incoming edges. A layer-seven boundary therefore
+captures essentially all repeatedly encountered dead children without
+requiring the reverse side to extend through one third of the forward state
+set.
+
+The deterministic aggregate counts and output hashes remained unchanged. The
+two 28-letter runs retained SHA-256
+`de32cca977192c1ab65b56329c9a7f8f97e25441fbea1e39c049b7ebf8c33ee6`;
+the unrelated run retained
+`43ce76eb6381861d29af81ecfffda40136bcd525d9c6830888d7361a240187b7`.
+All launches were checked for another `dfs-anagrams` process, and the longer
+unrelated run was checked while active.
+
+This changes the reverse-construction recommendation. A full reverse builder
+still has weak evidence: only 2.0--4.7% of forward states are dead, and
+reverse traversal can generate finite states unreachable from the root. The
+bounded preflight now exploits `-m 4`: below eight remaining letters, a finite
+state is either empty or exactly one projected action delta. Sorting and
+deduplicating the 4--7-letter action deltas therefore enumerates the complete
+reverse-completable perimeter without running a reverse recurrence.
+
+| workload | reverse finite keys through layer 7 | forward finite states through layer 7 | root-irrelevant reverse keys | reverse keys / all forward states | full-key-space bitset |
+|---|---:|---:|---:|---:|---:|
+| 28-letter `d=12` | 5,811 | 3,931 | 1,880 (32.4%) | 8.1% | 16,848 B |
+| 28-letter `d=14` | 16,951 | 12,273 | 4,678 (27.6%) | 3.9% | 104,976 B |
+| unrelated 29-letter `d=13` | 12,698 | 9,692 | 3,006 (23.7%) | 5.3% | 57,024 B |
+
+The 1.31--1.48x reverse/forward expansion is modest, and even the direct
+one-bit-per-rich-key representation is small. The next implementation should
+retain that temporary mask and let the top-down recurrence reject an unmarked
+child at seven or fewer letters without recursively discovering
+`-infinity`. It should report dead-child lookups avoided, mask preparation
+time, and whether immediately final low-layer children improve certificate
+scheduling. General reverse recursion is unnecessary unless a later
+experiment moves the perimeter to eight or more letters.
+
+The revised near-term recommendation is:
+
+1. Do not select the largest `d` that fits the cache, and do not replace that
+   rule with a fixed decrement in `d`.
+2. Treat depths with only one wildcard letter kind as exact-equivalent and
+   skip them as projection candidates. More generally, rank candidate shapes
+   by actual state/action reduction, not by dimension count.
+3. Keep the dimension backoff only as a narrow baseline for the measured `S6`
+   prefixes. There is no justified production default yet: the unrelated bag
+   needs a much more aggressive backoff.
+4. Enumerate candidate capacities, action counts, and analytic logical fitting
+   edges in preflight. Build one small projection to calibrate its reachable
+   edge fraction, then use that fraction to predict richer setup work. This
+   replaces table bytes with a measured construction-work proxy.
+5. Estimate pruning value with a bounded concrete-DFS pilot or sampled richer
+   lookups before paying for a rich table. Action-count scaling is an adequate
+   retrospective baseline, not yet a justified live predictor.
+6. Carry the measured coarse certificates into a parallel layered or
+   nonblocking demand builder. Do not synchronously fill rich misses on the
+   concrete DFS thread, but also do not leave them on modular fallback for the
+   full search: even 97.8--99.9% fallback pruning exposed 3.4--9.5x more
+   nodes.
+7. Use a complete small exact-letter projection as the primary
+   always-available fallback. The modular quotient can complement it by
+   minimum, but should not replace it. Prioritize rich requests by observed
+   subtree leverage or a bounded pilot, not lookup frequency alone.
+8. Prototype a reverse-completable bitset only through seven remaining
+   letters using the now-measured one-action enumeration. Do not replace the
+   forward builder; use the 16--105 KiB mask to reject low-layer dead children
+   and measure whether avoiding 6.7--10.3% of fitting edges repays its cost.
+9. Measure whether a rich builder running concurrently with small-projection
+   search closes the high-leverage holes early enough to repay its CPU and
+   memory-bandwidth cost. The eager comparisons so far do not: on the
+   unrelated bag, `d=14` spends 3.25s more setup than `d=13` to save only
+   1.84s of standalone search; on the 38-letter case, `d=15` spends 13.98s
+   more setup to save 8.61s of search.
 
 ## Correctness argument
 
@@ -487,13 +1017,19 @@ candidate(a, state)
     <= action_score(a) + restart + U(project(child(a, state)))
 ```
 
-Evaluate one promising action fully to obtain an exact feasible incumbent
+Evaluate one promising action fully to obtain a feasible lower incumbent
 `best`. Any other action whose upper envelope is no greater than `best` can be
-discarded without loading or constructing its rich child. The fully evaluated
-candidates themselves provide the lower incumbent; a separate lower-bound
-table is optional. Group actions by consumed length and order each group by
-descending score. For a length-only `U`, the child term is constant within the
-group, so one failed threshold rejects the rest of that score-ordered group.
+discarded without loading or constructing its rich child. Group actions by
+consumed length and order each group by descending score. For a length-only
+`U`, the child term is constant within the group, so one failed threshold
+rejects the rest of that score-ordered group.
+
+The stored child values cannot directly supply that incumbent: they are floats
+rounded upward to remain admissible, so a candidate calculated from one is
+also an upper value, not a guaranteed feasible lower value. The implemented
+experiment therefore keeps a companion downward-conservative float for every
+expanded child. Treating the existing upward-rounded maximum as `best` would
+incorrectly skip an edge.
 
 A cascade of progressively stronger projections could certify more losers.
 There are two safe stopping modes:
@@ -506,10 +1042,14 @@ There are two safe stopping modes:
 Never store the maximum of only the expanded candidates as an upper bound. It
 is a lower bound on the projected maximum and can prune valid results.
 
-This is the highest-priority construction experiment because it can reduce the
-measured successful-transition volume. The first implementation should be
-shadow-only: retain the current result but count edges and whole score-ordered
-suffixes that the coarse certificate would have skipped.
+The shadow and live experiments above establish a 30--62% certificate rate and
+a 32--66% reduction in successful-transition volume. They also establish the
+scheduler constraint: skipping an edge can omit a child slot that concrete DFS
+later queries directly. Synchronous exact construction on that query preserves
+correctness but regresses the 20-thread runs. The next implementation should
+retain the certificate and change coverage scheduling, not add a production
+skip to the current recursive loop. Whole score-ordered suffixes remain an
+unmeasured secondary improvement.
 
 ### Composite action dominance
 
@@ -584,6 +1124,14 @@ and continues. Completed entries are already published child-first, so they
 can be consumed safely. This changes wall-clock structure as well as work
 selection: useful construction overlaps search, and irrelevant construction
 can be cancelled when the DFS completes.
+
+The fallback simulation adds two constraints. First, use a complete small
+exact projection as the default missing-entry answer; a 9- or 10-bit modular
+quotient left enough high-leverage misses to expand 3.4--9.5x more nodes even
+while pruning 97.8--99.9% of hole lookups. Second, queue priority cannot be
+query count alone. A first miss near the top of a concrete subtree may need to
+preempt many frequently requested shallow-leverage states. DFS depth, bound
+gap, and growth observed since the request are cheap candidate signals.
 
 If a parent is computed using fallback child values, it remains admissible but
 must be marked inexact and revisited after its children improve. Keeping exact
@@ -880,16 +1428,19 @@ because it can exploit otherwise idle cores even for one query.
 
 The opt-in diagnostics now cover total action scans, fit failures by reason,
 fitting-to-dead edges, ready child hits, first-owner claims, ownership
-conflicts, dependency-spin iterations, and aggregate finite/dead states.
+conflicts, dependency-spin iterations, and finite/dead states and edges split
+by remaining-letter layer.
 The remaining useful diagnostics are:
 
-- finite versus dead constructed states split by total-letter layer;
 - the winning action's position in score and coarse-envelope order;
-- shadow coarse-envelope rejects, including whole rejected suffixes;
+- whole coarse-envelope suffixes rejected after candidate ordering;
 - bound-gap histograms and stronger-fallback disagreement on the now-measured
   concrete-DFS query stream;
 - overlap among forward-reachable, reverse-completable, and final-query states;
-  and
+- low-layer perimeter preparation cost and dead lookups avoided when its
+  measured finite-state set controls the forward recurrence;
+- latency from a rich-hole request to publication, nodes exposed during that
+  latency, and subtree leverage of fallback failures; and
 - per-bucket action, state, scan, fit, and winner distributions.
 
 New hot-path counters should follow the implemented worker-local pattern and
@@ -897,13 +1448,17 @@ be merged after construction so instrumentation does not add contention.
 
 The best initial probes do not require a new production builder:
 
-1. Build a shadow length-only envelope and count certified losing edges while
-   leaving the current maximum unchanged.
+1. Prototype a parallel layered or queued state scheduler that retains the
+   measured hierarchical certificates without blocking concrete DFS on a rich
+   miss. Use a complete small exact projection for pending entries and report
+   request-to-publication latency plus nodes exposed before publication.
 2. Run composite-dominance analysis during action preparation without deleting
    actions.
-3. Extend the aggregate fitting-to-dead counts to layer densities.
-4. Replay projected keys requested by concrete DFS against a stronger cheap
-   fallback; length-only preserved too few rich prunes.
+3. Retain the measured layer-seven reverse-completable set as a bitset and
+   use it to reject unmarked low-layer children in shadow and live modes.
+4. Validate coarse-calibrated logical-edge predictions on more bag
+   compositions, then use a bounded concrete-DFS pilot or sampled richer
+   lookups to estimate a candidate depth's final-node savings.
 5. Hash value and reachability subtables to reject or justify symbolic work.
 
 ## Research order
@@ -911,13 +1466,19 @@ The best initial probes do not require a new production builder:
 The recommended order is based on ability to remove work and cost of learning,
 not on additional projection-depth timings:
 
-1. Extend the implemented scan, dead-child, and ownership diagnostics with
-   winner order, layer density, and final-query diagnostics.
-2. Prototype hierarchical candidate certificates in shadow mode. Enable exact
-   edge rejection only if the shadow rate is material.
-3. Measure composite action dominance and the forward/reverse state overlap.
-4. Prototype search-driven lookup with an always-available coarse fallback;
-   then allow nonblocking background refinement.
+1. Replace synchronous rich-miss construction in the certificate prototype
+   with a parallel layered or nonblocking demand scheduler. Use a complete
+   smaller exact projection while a requested rich entry is unfinished, and
+   prioritize requests by estimated subtree leverage rather than frequency
+   alone.
+2. Extend the implemented scan, dead-child, ownership, certificate, layer, and
+   final-query diagnostics with winner order.
+3. Apply the measured layer-seven reverse perimeter to the forward builder,
+   then measure composite action dominance and richer forward/reverse overlap.
+4. Prototype a setup-versus-search selector using the implemented analytic
+   edge preflight and a bounded pruning-value pilot. Then try search-driven
+   lookup using the selected smaller projection as the always-available
+   fallback and allow nonblocking background refinement.
 5. Compare the existing forward recursion with reverse finite-state generation
    and a layered max-plus kernel on a small representative case.
 6. Use actual prune misses to select a complementary projection or one adaptive

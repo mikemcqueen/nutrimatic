@@ -129,6 +129,17 @@ static float round_float_score_bound_up(double value) {
   return rounded;
 }
 
+static float round_float_score_bound_down(long double value) {
+  if (value == -HUGE_VALL) return -HUGE_VALF;
+  if (value == HUGE_VALL) return HUGE_VALF;
+  float rounded = float(value);
+  if (isinf(rounded) && rounded > 0.0f)
+    return FLT_MAX;
+  if (static_cast<long double>(rounded) > value)
+    rounded = nextafterf(rounded, -HUGE_VALF);
+  return rounded;
+}
+
 static void bound_wait_backoff(unsigned int* spins) {
 #if defined(__i386__) || defined(__x86_64__)
   _mm_pause();
@@ -260,6 +271,18 @@ static void add_projected_diagnostics(
   target->dependency_spins += source.dependency_spins;
   target->finite_states += source.finite_states;
   target->dead_states += source.dead_states;
+  target->coarse_certificate_checks +=
+      source.coarse_certificate_checks;
+  target->coarse_certificate_edges +=
+      source.coarse_certificate_edges;
+  target->coarse_certificate_skips +=
+      source.coarse_certificate_skips;
+  target->certificate_fallback_queries +=
+      source.certificate_fallback_queries;
+  target->certificate_fallback_unique_keys +=
+      source.certificate_fallback_unique_keys;
+  target->certificate_fallback_prunes +=
+      source.certificate_fallback_prunes;
   target->final_queries_without_floor +=
       source.final_queries_without_floor;
   target->final_bound_queries += source.final_bound_queries;
@@ -285,6 +308,21 @@ static void add_projected_diagnostics(
         source.final_modular_prefix_rich_only_prunes[i];
     target->final_modular_prefix_only_prunes[i] +=
         source.final_modular_prefix_only_prunes[i];
+  }
+}
+
+static void add_projected_layer_diagnostics(
+    std::vector<DfsAnagramSearch::ProjectedLayerDiagnostics> const&
+        source,
+    std::vector<DfsAnagramSearch::ProjectedLayerDiagnostics>* target) {
+  assert(source.size() == target->size());
+  for (size_t i = 0; i < source.size(); ++i) {
+    (*target)[i].outgoing_fitting_edges +=
+        source[i].outgoing_fitting_edges;
+    (*target)[i].incoming_dead_child_edges +=
+        source[i].incoming_dead_child_edges;
+    (*target)[i].finite_states += source[i].finite_states;
+    (*target)[i].dead_states += source[i].dead_states;
   }
 }
 
@@ -355,8 +393,14 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_wild_letters(0),
     score_wild_span(1),
     projected_max_class_score_magnitude(0.0),
+    projected_dense_fitting_edges(0),
+    projected_reverse_perimeter_depth(0),
+    projected_reverse_perimeter_state_count(0),
     score_projection_requested(false),
     projected_diagnostics_requested(false),
+    projected_certificate_diagnostics_requested(false),
+    projected_certificate_prune_requested(false),
+    projected_certificate_fallback_requested(false),
     projected_query_diagnostics_requested(false),
     projected_support_groups_requested(false),
     modular_bound_bits(6),
@@ -713,6 +757,101 @@ bool DfsAnagramSearch::prepare_projected_actions() {
   projected_fits = std::move(new_fits);
   projected_values = std::move(new_values);
   projected_requirements = std::move(new_requirements);
+
+  if (projected_diagnostics_requested) {
+    size_t const minimum_length =
+        size_t(class_list->min_word_length());
+    projected_reverse_perimeter_depth = std::min(
+        letters.size(), minimum_length * 2 - 1);
+    std::vector<uint64_t> perimeter_keys;
+    try {
+      perimeter_keys.reserve(seeds.size() + 1);
+      perimeter_keys.push_back(0);
+      for (size_t i = 0; i < seeds.size(); ++i) {
+        FitClass const& fit =
+            fit_classes.get()[seeds[i].class_index];
+        size_t const action_length =
+            hot_letter_length(fit.packed_length_and_count);
+        if (action_length <= projected_reverse_perimeter_depth &&
+            seeds[i].score_delta < score_effective_states)
+          perimeter_keys.push_back(seeds[i].score_delta);
+      }
+      std::sort(perimeter_keys.begin(), perimeter_keys.end());
+      perimeter_keys.erase(
+          std::unique(perimeter_keys.begin(), perimeter_keys.end()),
+          perimeter_keys.end());
+      projected_reverse_perimeter_state_count =
+          perimeter_keys.size();
+    } catch (...) {
+      projected_reverse_perimeter_depth = 0;
+      projected_reverse_perimeter_state_count = 0;
+    }
+  }
+
+  // Count fitting action/state pairs in the complete logical projected box.
+  // The allocated table omits the root slab for the rarest exact letter, so
+  // that digit stops one short of its root count. This is a cheap construction
+  // work proxy: actual top-down construction visits only a subset of the box.
+  projected_dense_fitting_edges = 0;
+  int const root_rank =
+      score_exact_mask == 0 ? -1 : __builtin_ctzll(score_exact_mask);
+  for (size_t action_index = 0;
+       action_index < seeds.size(); ++action_index) {
+    ProjectedFit const& fit = fits[action_index];
+    uint64_t choices =
+        uint64_t(score_wild_span - fit.wild_length);
+    int const bucket = fit.exact_support_mask == 0
+        ? DFS_SYMBOL_COUNT
+        : __builtin_ctzll(fit.exact_support_mask);
+    uint32_t const* requirements =
+        fit.requirement_count == 0
+            ? NULL
+            : packed + fit.requirements_offset;
+    std::array<uint32_t, DFS_SYMBOL_COUNT> required_counts;
+    required_counts.fill(0);
+    for (uint32_t i = 0; i < fit.requirement_count; ++i)
+      required_counts[packed_rank(requirements[i])] =
+          packed_count(requirements[i]);
+    for (int rank = 0; rank < DFS_SYMBOL_COUNT && choices != 0; ++rank) {
+      if ((score_exact_mask & (UINT64_C(1) << rank)) == 0)
+        continue;
+      if (rank < bucket) continue;
+      uint32_t const required = required_counts[size_t(rank)];
+      uint32_t maximum = bag[size_t(rank)];
+      if (rank == root_rank) {
+        assert(maximum != 0);
+        --maximum;
+      }
+      if (required > maximum) {
+        choices = 0;
+        break;
+      }
+      uint64_t next;
+      if (!checked_multiply_u64(
+              choices, uint64_t(maximum - required) + 1, &next)) {
+        choices = UINT64_MAX;
+        break;
+      }
+      choices = next;
+    }
+    if (UINT64_MAX - projected_dense_fitting_edges < choices) {
+      projected_dense_fitting_edges = UINT64_MAX;
+      break;
+    }
+    projected_dense_fitting_edges += choices;
+  }
+  // Root itself is outside the compact table. Every prepared action in its
+  // forced bucket already passed the root fit checks during preparation.
+  size_t const root_bucket =
+      root_rank < 0 ? size_t(DFS_SYMBOL_COUNT) : size_t(root_rank);
+  uint64_t const root_edges =
+      projected_action_offsets[root_bucket + 1] -
+      projected_action_offsets[root_bucket];
+  if (UINT64_MAX - projected_dense_fitting_edges < root_edges)
+    projected_dense_fitting_edges = UINT64_MAX;
+  else
+    projected_dense_fitting_edges += root_edges;
+
   score_wild_lengths.reset();
   return true;
 }
@@ -767,7 +906,9 @@ bool DfsAnagramSearch::prepare_projected_support_groups() {
 
 bool DfsAnagramSearch::prepare_projected_length_bounds() {
   projected_length_bounds.clear();
-  if (!projected_query_diagnostics_requested) return true;
+  if (!projected_query_diagnostics_requested &&
+      !projected_certificate_diagnostics_requested)
+    return true;
 
   try {
     uint64_t ignored_nextafter_calls = 0;
@@ -1193,6 +1334,10 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   bound_transitions = 0;
   bound_nextafter_calls = 0;
   projected_diagnostic_counts = ProjectedDiagnostics();
+  projected_layer_diagnostic_counts.clear();
+  projected_reverse_perimeter_depth = 0;
+  projected_reverse_perimeter_state_count = 0;
+  projected_lower_bounds.clear();
   projected_query_bits.clear();
   projected_length_bounds.clear();
   projected_modular_class_deltas8.clear();
@@ -1239,8 +1384,24 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   projected_diagnostics_requested =
       score_projection_requested &&
       environment_flag_enabled("NUTRIMATIC_PROJECTED_DIAGNOSTICS");
+  projected_certificate_diagnostics_requested =
+      score_projection_requested &&
+      environment_flag_enabled(
+          "NUTRIMATIC_PROJECTED_CERTIFICATE_DIAGNOSTICS");
+  projected_certificate_prune_requested =
+      score_projection_requested &&
+      environment_flag_enabled(
+          "NUTRIMATIC_PROJECTED_CERTIFICATE_PRUNE");
+  projected_certificate_fallback_requested =
+      projected_certificate_prune_requested &&
+      environment_flag_enabled(
+          "NUTRIMATIC_PROJECTED_CERTIFICATE_FALLBACK");
+  projected_certificate_diagnostics_requested =
+      projected_certificate_diagnostics_requested ||
+      projected_certificate_prune_requested;
   projected_query_diagnostics_requested =
       projected_diagnostics_requested ||
+      projected_certificate_fallback_requested ||
       (score_projection_requested &&
        environment_flag_enabled(
            "NUTRIMATIC_PROJECTED_QUERY_DIAGNOSTICS"));
@@ -1254,6 +1415,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   score_wild_span = 1;
   score_state_count = state_count;
   score_effective_states = 0;
+  projected_dense_fitting_edges = 0;
 
   if (encodable && score_projection_requested) {
     std::vector<int> present_ranks;
@@ -1454,12 +1616,22 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
         fprintf(progress, "%zu bytes\n", projected_bytes);
       else
         fputs("size exceeds the supported range\n", progress);
-      if (hot_classes_ready)
+      if (hot_classes_ready) {
         fprintf(progress,
                 "# phase 2 experiment: %zu projected actions from %zu "
-                "anagram classes\n",
+                "anagram classes; %llu logical fitting edges\n",
                 projected_action_count(),
-                class_list->classes().size());
+                class_list->classes().size(),
+                (unsigned long long)
+                    projected_logical_fitting_edges());
+        if (projected_diagnostics_requested) {
+          fprintf(progress,
+                  "# phase 2 experiment: reverse perimeter through %zu "
+                  "letters contains %zu finite states\n",
+                  projected_reverse_perimeter_letters(),
+                  projected_reverse_perimeter_states());
+        }
+      }
       if (hot_classes_ready && projected_support_groups_requested)
         fprintf(progress,
                 "# phase 2 experiment: support-subset traversal uses %zu "
@@ -1468,6 +1640,14 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
                 support_group_prepare_seconds);
     }
     fflush(progress);
+  }
+  if (score_projection_requested &&
+      environment_flag_enabled(
+          "NUTRIMATIC_PROJECTED_PREFLIGHT_ONLY")) {
+    setup_seconds =
+        std::chrono::duration<double>(
+            PhaseClock::now() - setup_start).count();
+    return true;
   }
   bool const score_bounds_applicable =
       hot_classes_ready && sink != NULL &&
@@ -1500,6 +1680,16 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
     }
   }
   prepare_score_bounds(state_count, sink);
+  if (projected_certificate_diagnostics_requested &&
+      bound_mode == SCORE_BOUND_PROJECTED) {
+    try {
+      projected_lower_bounds.assign(
+          bound_capacity, -HUGE_VALF);
+    } catch (...) {
+      projected_lower_bounds.clear();
+      projected_certificate_diagnostics_requested = false;
+    }
+  }
   if (progress != NULL) {
     fprintf(progress, "# phase 2 preflight: score-bound mode %s",
             score_bound_mode_name(bound_mode));
@@ -1524,11 +1714,17 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       if (!ran_parallel) root_score_bound_ready = true;
     }
   }
-  projected_fits.reset();
-  projected_values.reset();
-  projected_requirements.reset();
-  std::vector<size_t>().swap(projected_support_offsets);
-  std::vector<uint32_t>().swap(projected_support_actions);
+  if (!projected_certificate_prune_requested ||
+      projected_certificate_fallback_requested) {
+    projected_fits.reset();
+    projected_values.reset();
+    projected_requirements.reset();
+    std::vector<size_t>().swap(projected_support_offsets);
+    std::vector<uint32_t>().swap(projected_support_actions);
+    std::vector<float>().swap(projected_lower_bounds);
+    if (!projected_query_diagnostics_requested)
+      std::vector<double>().swap(projected_length_bounds);
+  }
   if (projected_query_diagnostics_requested &&
       bound_mode == SCORE_BOUND_PROJECTED) {
     try {
@@ -1573,6 +1769,17 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   }
   search_seconds =
       std::chrono::duration<double>(PhaseClock::now() - search_start).count();
+  if (projected_certificate_prune_requested &&
+      !projected_certificate_fallback_requested) {
+    projected_fits.reset();
+    projected_values.reset();
+    projected_requirements.reset();
+    std::vector<size_t>().swap(projected_support_offsets);
+    std::vector<uint32_t>().swap(projected_support_actions);
+    std::vector<float>().swap(projected_lower_bounds);
+    if (!projected_query_diagnostics_requested)
+      std::vector<double>().swap(projected_length_bounds);
+  }
   return true;
 }
 
@@ -1664,6 +1871,8 @@ bool DfsAnagramSearch::diagnose_projected_action_fit(
     }
   }
   ++diagnostics.fitting_edges;
+  ++worker->projected_layer_diagnostics[worker->letters_left]
+        .outgoing_fitting_edges;
   return true;
 }
 
@@ -1705,6 +1914,8 @@ bool DfsAnagramSearch::diagnose_projected_grouped_action_fit(
     }
   }
   ++diagnostics.fitting_edges;
+  ++worker->projected_layer_diagnostics[worker->letters_left]
+        .outgoing_fitting_edges;
   return true;
 }
 
@@ -1938,13 +2149,44 @@ double DfsAnagramSearch::compute_parallel_score_bound(
 
 void DfsAnagramSearch::consider_projected_bound_candidate(
     uint32_t action_index, BoundWorker* worker, double* best,
-    double* max_child_magnitude) {
+    double* lower_best, double* max_child_magnitude) {
   ProjectedFit const& fit = projected_fits.get()[action_index];
   ProjectedValue const& value =
       projected_values.get()[action_index];
   uint32_t const* requirements = projected_requirements.get();
   if (fit.requirement_count != 0)
     requirements += fit.requirements_offset;
+  size_t action_length = fit.wild_length;
+  for (uint32_t i = 0; i < fit.requirement_count; ++i)
+    action_length += packed_count(requirements[i]);
+  assert(action_length <= worker->letters_left);
+  if (DFS_UNLIKELY(
+          projected_certificate_diagnostics_requested &&
+          *lower_best != -HUGE_VAL)) {
+    size_t const child_letters = worker->letters_left - action_length;
+    assert(child_letters < projected_length_bounds.size());
+    double const coarse_child =
+        projected_length_bounds[child_letters];
+    if (coarse_child != -HUGE_VAL) {
+      ++worker->projected_diagnostics.coarse_certificate_checks;
+      long double envelope =
+          static_cast<long double>(value.class_score) +
+          static_cast<long double>(restart_log_rate) +
+          static_cast<long double>(coarse_child);
+      envelope += static_cast<long double>(
+          score_candidate_rounding_error(
+              value.class_score, restart_log_rate, coarse_child));
+      // lower_best is a feasible rich completion, while envelope is an
+      // upper bound on this action and every completion below it.
+      if (envelope <= static_cast<long double>(*lower_best))
+        ++worker->projected_diagnostics.coarse_certificate_edges;
+      if (envelope <= static_cast<long double>(*lower_best) &&
+          projected_certificate_prune_requested) {
+        ++worker->projected_diagnostics.coarse_certificate_skips;
+        return;
+      }
+    }
+  }
   uint64_t const parent_bag_mask = worker->bag_mask;
   uint64_t const parent_support_key = worker->projected_support_key;
   for (uint32_t i = 0; i < fit.requirement_count; ++i) {
@@ -1960,6 +2202,7 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   }
   worker->score_key -= value.score_delta;
   worker->wild_left -= fit.wild_length;
+  worker->letters_left -= action_length;
   AtomicFloatWord& child_slot =
       bound_float_values.get()[size_t(worker->score_key)];
   uint32_t const stored =
@@ -1973,6 +2216,11 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   } else {
     child = compute_projected_score_bound(worker);
   }
+  double const child_lower =
+      projected_certificate_diagnostics_requested
+          ? double(projected_lower_bounds[size_t(worker->score_key)])
+          : -HUGE_VAL;
+  worker->letters_left += action_length;
   worker->wild_left += fit.wild_length;
   worker->score_key += value.score_delta;
   for (uint32_t i = 0; i < fit.requirement_count; ++i) {
@@ -1983,14 +2231,31 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   worker->projected_support_key = parent_support_key;
 
   if (child == -HUGE_VAL) {
-    if (DFS_UNLIKELY(projected_diagnostics_requested))
+    if (DFS_UNLIKELY(projected_diagnostics_requested)) {
       ++worker->projected_diagnostics.dead_child_edges;
+      ++worker->projected_layer_diagnostics[
+            worker->letters_left - action_length]
+            .incoming_dead_child_edges;
+    }
     return;
   }
   ++worker->transitions;
   double const partial = value.class_score + restart_log_rate;
   double const candidate_bound = partial + child;
   *best = std::max(*best, candidate_bound);
+  if (projected_certificate_diagnostics_requested &&
+      child_lower != -HUGE_VAL) {
+    long double lower_candidate =
+        static_cast<long double>(value.class_score) +
+        static_cast<long double>(restart_log_rate) +
+        static_cast<long double>(child_lower);
+    lower_candidate -= static_cast<long double>(
+        score_candidate_rounding_error(
+            value.class_score, restart_log_rate, child_lower));
+    *lower_best = std::max(
+        *lower_best,
+        double(round_float_score_bound_down(lower_candidate)));
+  }
   *max_child_magnitude =
       std::max(*max_child_magnitude, fabs(child));
 }
@@ -2034,14 +2299,20 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
   }
 
   if (worker->bag_mask == 0 && worker->wild_left == 0) {
+    if (projected_certificate_diagnostics_requested)
+      projected_lower_bounds[size_t(worker->score_key)] = 0.0f;
     publish_parallel_score_bound(worker->score_key, 0.0);
     ++worker->states_computed;
-    if (DFS_UNLIKELY(projected_diagnostics_requested))
+    if (DFS_UNLIKELY(projected_diagnostics_requested)) {
       ++worker->projected_diagnostics.finite_states;
+      ++worker->projected_layer_diagnostics[worker->letters_left]
+            .finite_states;
+    }
     return 0.0;
   }
 
   double best = -HUGE_VAL;
+  double lower_best = -HUGE_VAL;
   double max_child_magnitude = 0.0;
   size_t const bucket = worker->bag_mask == 0
       ? size_t(DFS_SYMBOL_COUNT)
@@ -2062,7 +2333,8 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
             : projected_grouped_action_fits(id, *worker);
         if (!fits) continue;
         consider_projected_bound_candidate(
-            id, worker, &best, &max_child_magnitude);
+            id, worker, &best, &lower_best,
+            &max_child_magnitude);
       }
     };
     uint64_t const support = worker->projected_support_key;
@@ -2084,7 +2356,8 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
       uint32_t const id = uint32_t(action_index);
       if (!diagnose_projected_action_fit(id, worker)) continue;
       consider_projected_bound_candidate(
-          id, worker, &best, &max_child_magnitude);
+          id, worker, &best, &lower_best,
+          &max_child_magnitude);
     }
   } else {
     for (size_t action_index = begin;
@@ -2092,7 +2365,8 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
       uint32_t const id = uint32_t(action_index);
       if (!projected_action_fits(id, *worker)) continue;
       consider_projected_bound_candidate(
-          id, worker, &best, &max_child_magnitude);
+          id, worker, &best, &lower_best,
+          &max_child_magnitude);
     }
   }
 
@@ -2106,13 +2380,26 @@ DFS_NOINLINE double DfsAnagramSearch::compute_projected_score_bound(
                 static_cast<long double>(best) +
                 static_cast<long double>(rounding_error),
                 &worker->nextafter_calls);
+  if (projected_certificate_diagnostics_requested) {
+    // Publish the ordinary upper slot only after its companion lower witness;
+    // acquire-loading that slot then makes this plain float safe to read.
+    projected_lower_bounds[size_t(worker->score_key)] =
+        lower_best == -HUGE_VAL
+            ? -HUGE_VALF
+            : round_float_score_bound_down(lower_best);
+  }
   publish_parallel_score_bound(worker->score_key, result);
   ++worker->states_computed;
   if (DFS_UNLIKELY(projected_diagnostics_requested)) {
-    if (result == -HUGE_VAL)
+    if (result == -HUGE_VAL) {
       ++worker->projected_diagnostics.dead_states;
-    else
+      ++worker->projected_layer_diagnostics[worker->letters_left]
+            .dead_states;
+    } else {
       ++worker->projected_diagnostics.finite_states;
+      ++worker->projected_layer_diagnostics[worker->letters_left]
+            .finite_states;
+    }
   }
   return result;
 }
@@ -2137,8 +2424,13 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   root.transitions = 0;
   root.nextafter_calls = 0;
   root.best = -HUGE_VAL;
+  root.lower_best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
   root.projected_diagnostics = ProjectedDiagnostics();
+  if (projected_diagnostics_requested) {
+    root.projected_layer_diagnostics.assign(
+        letters.size() + 1, ProjectedLayerDiagnostics());
+  }
 
   std::vector<uint32_t> root_candidates;
   size_t const root_bucket = root.bag_mask == 0
@@ -2185,6 +2477,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
     root_score_bound_ready = true;
     actual_preprocess_threads = 1;
     projected_diagnostic_counts = root.projected_diagnostics;
+    projected_layer_diagnostic_counts =
+        root.projected_layer_diagnostics;
     return true;
   }
 
@@ -2192,8 +2486,13 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
       std::max(size_t(1), requested_threads),
       root_candidates.size());
   std::vector<BoundWorker> workers(worker_count, root);
-  for (size_t i = 0; i < workers.size(); ++i)
+  for (size_t i = 0; i < workers.size(); ++i) {
     workers[i].projected_diagnostics = ProjectedDiagnostics();
+    if (projected_diagnostics_requested) {
+      workers[i].projected_layer_diagnostics.assign(
+          letters.size() + 1, ProjectedLayerDiagnostics());
+    }
+  }
   std::vector<std::thread> background;
   try {
     background.reserve(worker_count - 1);
@@ -2217,6 +2516,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
       if (index >= root_candidates.size()) break;
       consider_projected_bound_candidate(
           root_candidates[index], worker, &worker->best,
+          &worker->lower_best,
           &worker->max_rounding_error);
     }
   };
@@ -2238,6 +2538,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   double best = -HUGE_VAL;
   double max_child_magnitude = 0.0;
   ProjectedDiagnostics diagnostics = root.projected_diagnostics;
+  std::vector<ProjectedLayerDiagnostics> layer_diagnostics =
+      root.projected_layer_diagnostics;
   size_t const active_workers = background.size() + 1;
   for (size_t i = 0; i < active_workers; ++i) {
     states += workers[i].states_computed;
@@ -2248,6 +2550,11 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
         max_child_magnitude, workers[i].max_rounding_error);
     add_projected_diagnostics(
         workers[i].projected_diagnostics, &diagnostics);
+    if (projected_diagnostics_requested) {
+      add_projected_layer_diagnostics(
+          workers[i].projected_layer_diagnostics,
+          &layer_diagnostics);
+    }
   }
 
   double const rounding_error = score_candidate_rounding_error(
@@ -2266,9 +2573,11 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   bound_transitions = transitions;
   bound_nextafter_calls = nextafter_calls;
   projected_diagnostic_counts = diagnostics;
+  projected_layer_diagnostic_counts.swap(layer_diagnostics);
   assert(!projected_diagnostics_requested ||
          diagnostics.fitting_edges ==
-             transitions + diagnostics.dead_child_edges);
+             transitions + diagnostics.dead_child_edges +
+                 diagnostics.coarse_certificate_skips);
   actual_preprocess_threads = active_workers;
   return true;
 }
@@ -2295,6 +2604,7 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
   root.transitions = 0;
   root.nextafter_calls = 0;
   root.best = -HUGE_VAL;
+  root.lower_best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
   root.projected_diagnostics = ProjectedDiagnostics();
 
@@ -2403,6 +2713,7 @@ bool DfsAnagramSearch::should_prune(
   }
   if (current_score_key >= bound_capacity) return false;
 
+  bool first_query_for_key = false;
   if (DFS_UNLIKELY(projected_query_diagnostics_requested)) {
     ++projected_diagnostic_counts.final_bound_queries;
     if (!projected_query_bits.empty()) {
@@ -2411,19 +2722,97 @@ bool DfsAnagramSearch::should_prune(
           UINT64_C(1) << unsigned(current_score_key % 64);
       if ((projected_query_bits[word] & bit) == 0) {
         projected_query_bits[word] |= bit;
+        first_query_for_key = true;
         ++projected_diagnostic_counts.final_unique_bound_keys;
       }
     }
   }
 
   double remaining_bound;
+  bool used_certificate_fallback = false;
   if (!load_score_bound(current_score_key, &remaining_bound)) {
-    if (bound_mode != SCORE_BOUND_PREFIX) return false;
-    // A rarest-most-significant prefix is dependency-closed: every fitting
-    // subtraction decreases the key. Build its complete bound only after
-    // phase 2 both enters the prefix and has a useful score floor.
-    compute_score_bound();
-    if (!load_score_bound(current_score_key, &remaining_bound))
+    if (bound_mode == SCORE_BOUND_PROJECTED &&
+        projected_certificate_prune_requested) {
+      if (projected_certificate_fallback_requested) {
+        // Model a nonblocking builder: an unfinished rich state immediately
+        // uses complete cheap abstractions instead of making the concrete DFS
+        // wait or constructing the rich dependency closure synchronously.
+        remaining_bound = HUGE_VAL;
+        if (letters_left < projected_length_bounds.size())
+          remaining_bound =
+              projected_length_bounds[letters_left];
+        if (!projected_modular_bounds[0].empty()) {
+          for (size_t p = 0; p < modular_bound_count; ++p) {
+            size_t const index =
+                letters_left * projected_modular_bound_span +
+                current_modular_signatures[p];
+            assert(index < projected_modular_bounds[p].size());
+            remaining_bound = std::min(
+                remaining_bound,
+                projected_modular_bounds[p][index]);
+          }
+        }
+        used_certificate_fallback = true;
+        ++projected_diagnostic_counts
+              .certificate_fallback_queries;
+        if (first_query_for_key)
+          ++projected_diagnostic_counts
+                .certificate_fallback_unique_keys;
+      } else {
+        // A certificate can make a child irrelevant to its parent while the
+        // concrete DFS still queries that child directly. The exact-demand
+        // experiment constructs such misses synchronously.
+        BoundWorker worker;
+        worker.bag = bag;
+        worker.bag_mask = bag_mask & score_exact_mask;
+        worker.projected_support_key = 0;
+        size_t exact_letters_left = 0;
+        for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+          if ((score_exact_mask & (UINT64_C(1) << rank)) == 0)
+            continue;
+          exact_letters_left += worker.bag[size_t(rank)];
+          if (worker.bag[size_t(rank)] != 0)
+            worker.projected_support_key |=
+                score_support_bits[size_t(rank)];
+        }
+        assert(exact_letters_left <= letters_left);
+        worker.score_key = current_score_key;
+        worker.letters_left = letters_left;
+        worker.wild_left = letters_left - exact_letters_left;
+        worker.states_computed = 0;
+        worker.transitions = 0;
+        worker.nextafter_calls = 0;
+        worker.best = -HUGE_VAL;
+        worker.lower_best = -HUGE_VAL;
+        worker.max_rounding_error = 0.0;
+        worker.projected_diagnostics = ProjectedDiagnostics();
+        if (projected_diagnostics_requested) {
+          worker.projected_layer_diagnostics.assign(
+              letters.size() + 1, ProjectedLayerDiagnostics());
+        }
+        remaining_bound = compute_projected_score_bound(&worker);
+        bound_entries += worker.states_computed;
+        bound_states_computed += worker.states_computed;
+        bound_transitions += worker.transitions;
+        bound_nextafter_calls += worker.nextafter_calls;
+        add_projected_diagnostics(
+            worker.projected_diagnostics,
+            &projected_diagnostic_counts);
+        if (projected_diagnostics_requested) {
+          add_projected_layer_diagnostics(
+              worker.projected_layer_diagnostics,
+              &projected_layer_diagnostic_counts);
+        }
+      }
+    } else {
+      if (bound_mode != SCORE_BOUND_PREFIX) return false;
+      // A rarest-most-significant prefix is dependency-closed: every fitting
+      // subtraction decreases the key. Build its complete bound only after
+      // phase 2 both enters the prefix and has a useful score floor.
+      compute_score_bound();
+    }
+    if (!used_certificate_fallback &&
+        !load_score_bound(current_score_key, &remaining_bound))
       return false;
   }
   auto bound_prunes = [&](double bound) {
@@ -2442,46 +2831,52 @@ bool DfsAnagramSearch::should_prune(
   };
 
   bool const prune = bound_prunes(remaining_bound);
+  if (used_certificate_fallback && prune)
+    ++projected_diagnostic_counts.certificate_fallback_prunes;
   if (DFS_UNLIKELY(projected_query_diagnostics_requested)) {
     if (prune) ++projected_diagnostic_counts.final_bound_prunes;
-    if (letters_left < projected_length_bounds.size()) {
-      bool const coarse_prune =
-          bound_prunes(projected_length_bounds[letters_left]);
-      if (coarse_prune)
-        ++projected_diagnostic_counts.final_length_bound_prunes;
-      if (prune && !coarse_prune)
-        ++projected_diagnostic_counts
-            .final_rich_only_vs_length_prunes;
-      if (coarse_prune && !prune)
-        ++projected_diagnostic_counts.final_length_only_prunes;
-    }
-    if (!projected_modular_bounds[0].empty()) {
-      double modular_bound = HUGE_VAL;
-      for (size_t p = 0; p < modular_bound_count; ++p) {
-        size_t const index =
-            letters_left * projected_modular_bound_span +
-            current_modular_signatures[p];
-        assert(index < projected_modular_bounds[p].size());
-        modular_bound = std::min(
-            modular_bound, projected_modular_bounds[p][index]);
-        bool const prefix_prune = bound_prunes(modular_bound);
-        if (prefix_prune)
+    // Fallback-served queries already use these cheap bounds. Keep the
+    // rich-versus-cheap shadow comparison restricted to actual rich entries.
+    if (!used_certificate_fallback) {
+      if (letters_left < projected_length_bounds.size()) {
+        bool const coarse_prune =
+            bound_prunes(projected_length_bounds[letters_left]);
+        if (coarse_prune)
+          ++projected_diagnostic_counts.final_length_bound_prunes;
+        if (prune && !coarse_prune)
           ++projected_diagnostic_counts
-              .final_modular_prefix_bound_prunes[p];
-        if (prune && !prefix_prune)
-          ++projected_diagnostic_counts
-              .final_modular_prefix_rich_only_prunes[p];
-        if (prefix_prune && !prune)
-          ++projected_diagnostic_counts
-              .final_modular_prefix_only_prunes[p];
+              .final_rich_only_vs_length_prunes;
+        if (coarse_prune && !prune)
+          ++projected_diagnostic_counts.final_length_only_prunes;
       }
-      bool const modular_prune = bound_prunes(modular_bound);
-      if (modular_prune)
-        ++projected_diagnostic_counts.final_modular_bound_prunes;
-      if (prune && !modular_prune)
-        ++projected_diagnostic_counts.final_modular_rich_only_prunes;
-      if (modular_prune && !prune)
-        ++projected_diagnostic_counts.final_modular_only_prunes;
+      if (!projected_modular_bounds[0].empty()) {
+        double modular_bound = HUGE_VAL;
+        for (size_t p = 0; p < modular_bound_count; ++p) {
+          size_t const index =
+              letters_left * projected_modular_bound_span +
+              current_modular_signatures[p];
+          assert(index < projected_modular_bounds[p].size());
+          modular_bound = std::min(
+              modular_bound, projected_modular_bounds[p][index]);
+          bool const prefix_prune = bound_prunes(modular_bound);
+          if (prefix_prune)
+            ++projected_diagnostic_counts
+                .final_modular_prefix_bound_prunes[p];
+          if (prune && !prefix_prune)
+            ++projected_diagnostic_counts
+                .final_modular_prefix_rich_only_prunes[p];
+          if (prefix_prune && !prune)
+            ++projected_diagnostic_counts
+                .final_modular_prefix_only_prunes[p];
+        }
+        bool const modular_prune = bound_prunes(modular_bound);
+        if (modular_prune)
+          ++projected_diagnostic_counts.final_modular_bound_prunes;
+        if (prune && !modular_prune)
+          ++projected_diagnostic_counts.final_modular_rich_only_prunes;
+        if (modular_prune && !prune)
+          ++projected_diagnostic_counts.final_modular_only_prunes;
+      }
     }
   }
   return prune;

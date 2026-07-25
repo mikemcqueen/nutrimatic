@@ -48,6 +48,12 @@ class DfsAnagramSearch {
     uint64_t dependency_spins;
     uint64_t finite_states;
     uint64_t dead_states;
+    uint64_t coarse_certificate_checks;
+    uint64_t coarse_certificate_edges;
+    uint64_t coarse_certificate_skips;
+    uint64_t certificate_fallback_queries;
+    uint64_t certificate_fallback_unique_keys;
+    uint64_t certificate_fallback_prunes;
     uint64_t final_queries_without_floor;
     uint64_t final_bound_queries;
     uint64_t final_unique_bound_keys;
@@ -64,6 +70,13 @@ class DfsAnagramSearch {
         final_modular_prefix_rich_only_prunes;
     std::array<uint64_t, MAX_MODULAR_BOUND_COUNT>
         final_modular_prefix_only_prunes;
+  };
+
+  struct ProjectedLayerDiagnostics {
+    uint64_t outgoing_fitting_edges;
+    uint64_t incoming_dead_child_edges;
+    uint64_t finite_states;
+    uint64_t dead_states;
   };
 
   enum ScoreBoundMode {
@@ -110,6 +123,15 @@ class DfsAnagramSearch {
   }
   size_t projected_action_count() const {
     return projected_action_offsets[DFS_SYMBOL_COUNT + 1];
+  }
+  uint64_t projected_logical_fitting_edges() const {
+    return projected_dense_fitting_edges;
+  }
+  size_t projected_reverse_perimeter_letters() const {
+    return projected_reverse_perimeter_depth;
+  }
+  size_t projected_reverse_perimeter_states() const {
+    return projected_reverse_perimeter_state_count;
   }
   int64_t score_bound_prunes() const { return bound_prunes; }
   double phase_two_setup_seconds() const { return setup_seconds; }
@@ -158,6 +180,10 @@ class DfsAnagramSearch {
   ProjectedDiagnostics const& projected_diagnostics() const {
     return projected_diagnostic_counts;
   }
+  std::vector<ProjectedLayerDiagnostics> const&
+  projected_layer_diagnostics() const {
+    return projected_layer_diagnostic_counts;
+  }
 
  private:
   struct AlignedFree {
@@ -202,8 +228,10 @@ class DfsAnagramSearch {
     uint64_t transitions;
     uint64_t nextafter_calls;
     double best;
+    double lower_best;
     double max_rounding_error;
     ProjectedDiagnostics projected_diagnostics;
+    std::vector<ProjectedLayerDiagnostics> projected_layer_diagnostics;
   };
 
   bool prepare_hot_classes();
@@ -250,7 +278,7 @@ class DfsAnagramSearch {
   double compute_projected_score_bound(BoundWorker* worker);
   void consider_projected_bound_candidate(
       uint32_t action_index, BoundWorker* worker, double* best,
-      double* max_child_magnitude);
+      double* lower_best, double* max_child_magnitude);
   bool compute_projected_score_bound_parallel(
       size_t requested_threads, FILE* progress);
   bool load_score_bound(uint64_t key, double* value) const;
@@ -288,8 +316,14 @@ class DfsAnagramSearch {
   size_t score_wild_letters;
   size_t score_wild_span;
   double projected_max_class_score_magnitude;
+  uint64_t projected_dense_fitting_edges;
+  size_t projected_reverse_perimeter_depth;
+  size_t projected_reverse_perimeter_state_count;
   bool score_projection_requested;
   bool projected_diagnostics_requested;
+  bool projected_certificate_diagnostics_requested;
+  bool projected_certificate_prune_requested;
+  bool projected_certificate_fallback_requested;
   bool projected_query_diagnostics_requested;
   bool projected_support_groups_requested;
 
@@ -303,6 +337,7 @@ class DfsAnagramSearch {
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_action_offsets;
   std::vector<size_t> projected_support_offsets;
   std::vector<uint32_t> projected_support_actions;
+  std::vector<float> projected_lower_bounds;
   std::vector<uint64_t> projected_query_bits;
   std::vector<double> projected_length_bounds;
   size_t modular_bound_bits;
@@ -334,6 +369,8 @@ class DfsAnagramSearch {
   uint64_t bound_transitions;
   uint64_t bound_nextafter_calls;
   ProjectedDiagnostics projected_diagnostic_counts;
+  std::vector<ProjectedLayerDiagnostics>
+      projected_layer_diagnostic_counts;
   size_t bound_charged_bytes;
   int64_t bound_prunes;
 

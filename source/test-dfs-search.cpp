@@ -240,6 +240,10 @@ static int smoke_test() {
           "could not enable projected score-bound experiment");
     check(setenv("NUTRIMATIC_PROJECTED_DIAGNOSTICS", "1", 1) == 0,
           "could not enable projected score-bound diagnostics");
+    check(setenv(
+              "NUTRIMATIC_PROJECTED_CERTIFICATE_DIAGNOSTICS",
+              "1", 1) == 0,
+          "could not enable projected certificate diagnostics");
     check(setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0,
           "could not enable projected support-group experiment");
     check(setenv("NUTRIMATIC_PROJECTED_MODULAR_BITS", "3", 1) == 0 &&
@@ -262,6 +266,9 @@ static int smoke_test() {
           "could not disable projected score-bound experiment");
     check(unsetenv("NUTRIMATIC_PROJECTED_DIAGNOSTICS") == 0,
           "could not disable projected score-bound diagnostics");
+    check(unsetenv(
+              "NUTRIMATIC_PROJECTED_CERTIFICATE_DIAGNOSTICS") == 0,
+          "could not disable projected certificate diagnostics");
     check(unsetenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS") == 0,
           "could not disable projected support-group experiment");
     check(unsetenv("NUTRIMATIC_PROJECTED_MODULAR_BITS") == 0 &&
@@ -309,6 +316,39 @@ static int smoke_test() {
               projected.score_bound_transitions() +
               diagnostics.dead_child_edges,
           "projected edge diagnostics do not partition fitting edges");
+    check(projected.projected_logical_fitting_edges() >=
+              diagnostics.fitting_edges,
+          "logical projected edge count missed a constructed edge");
+    check(projected.projected_reverse_perimeter_letters() > 0 &&
+              projected.projected_reverse_perimeter_states() > 0,
+          "projected reverse perimeter was not measured");
+    check(diagnostics.coarse_certificate_edges <=
+              diagnostics.coarse_certificate_checks &&
+              diagnostics.coarse_certificate_skips <=
+                  diagnostics.coarse_certificate_edges &&
+              diagnostics.coarse_certificate_checks <=
+                  diagnostics.fitting_edges,
+          "projected certificate diagnostics are inconsistent");
+    uint64_t layer_fitting_edges = 0;
+    uint64_t layer_dead_child_edges = 0;
+    uint64_t layer_finite_states = 0;
+    uint64_t layer_dead_states = 0;
+    std::vector<DfsAnagramSearch::ProjectedLayerDiagnostics> const&
+        layers = projected.projected_layer_diagnostics();
+    check(!layers.empty(),
+          "projected layer diagnostics were not collected");
+    for (size_t i = 0; i < layers.size(); ++i) {
+      layer_fitting_edges += layers[i].outgoing_fitting_edges;
+      layer_dead_child_edges +=
+          layers[i].incoming_dead_child_edges;
+      layer_finite_states += layers[i].finite_states;
+      layer_dead_states += layers[i].dead_states;
+    }
+    check(layer_fitting_edges == diagnostics.fitting_edges &&
+              layer_dead_child_edges == diagnostics.dead_child_edges &&
+              layer_finite_states == diagnostics.finite_states &&
+              layer_dead_states == diagnostics.dead_states,
+          "projected layer diagnostics do not match aggregate counts");
     check(diagnostics.states_claimed ==
               projected.score_bound_states_computed() &&
               diagnostics.states_claimed ==
@@ -357,19 +397,37 @@ static int smoke_test() {
           "wide projected modular diagnostics were not applied");
 
     check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "2", 1) == 0 &&
-              setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0,
+              setenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS", "1", 1) == 0 &&
+              setenv(
+                  "NUTRIMATIC_PROJECTED_CERTIFICATE_PRUNE", "1", 1) == 0 &&
+              setenv(
+                  "NUTRIMATIC_PROJECTED_CERTIFICATE_FALLBACK", "1", 1) == 0,
           "could not enable exact support-group experiment");
     DfsTopN grouped_projected_output(&classes, 2);
     DfsAnagramSearch grouped_projected(
         &classes, exhausted_letters, 1e-6, reader.count(), 256, 4);
     grouped_projected.run(&grouped_projected_output);
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0 &&
-              unsetenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS") == 0,
+              unsetenv("NUTRIMATIC_PROJECTED_SUPPORT_GROUPS") == 0 &&
+              unsetenv(
+                  "NUTRIMATIC_PROJECTED_CERTIFICATE_PRUNE") == 0 &&
+              unsetenv(
+                  "NUTRIMATIC_PROJECTED_CERTIFICATE_FALLBACK") == 0,
           "could not disable exact support-group experiment");
     check(grouped_projected.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
               grouped_projected.score_bound_exact_letters() == 2,
           "support-group experiment did not retain exact dimensions");
+    DfsAnagramSearch::ProjectedDiagnostics const&
+        grouped_diagnostics = grouped_projected.projected_diagnostics();
+    check(grouped_projected.projected_query_diagnostics_enabled() &&
+              grouped_diagnostics.certificate_fallback_queries > 0 &&
+              grouped_diagnostics.certificate_fallback_unique_keys > 0 &&
+              grouped_diagnostics.certificate_fallback_unique_keys <=
+                  grouped_diagnostics.certificate_fallback_queries &&
+              grouped_diagnostics.certificate_fallback_prunes <=
+                  grouped_diagnostics.certificate_fallback_queries,
+          "projected certificate fallback diagnostics are inconsistent");
     check_same_spellings(
         exhausted_expected_spellings,
         grouped_projected_output.take_sorted_results(),

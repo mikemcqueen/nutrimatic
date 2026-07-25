@@ -296,6 +296,37 @@ int main(int argc, char* argv[]) {
             (unsigned long long) diagnostics.dependency_spins,
             (unsigned long long) diagnostics.finite_states,
             (unsigned long long) diagnostics.dead_states);
+    std::vector<DfsAnagramSearch::ProjectedLayerDiagnostics> const&
+        layers = search.projected_layer_diagnostics();
+    for (size_t letters_left = 0;
+         letters_left < layers.size(); ++letters_left) {
+      DfsAnagramSearch::ProjectedLayerDiagnostics const& layer =
+          layers[letters_left];
+      if (layer.outgoing_fitting_edges == 0 &&
+          layer.incoming_dead_child_edges == 0 &&
+          layer.finite_states == 0 &&
+          layer.dead_states == 0)
+        continue;
+      fprintf(stderr,
+              "# phase 2 projected layer %zu: %llu outgoing fitting, "
+              "%llu incoming dead-child, %llu finite states, "
+              "%llu dead states\n",
+              letters_left,
+              (unsigned long long) layer.outgoing_fitting_edges,
+              (unsigned long long) layer.incoming_dead_child_edges,
+              (unsigned long long) layer.finite_states,
+              (unsigned long long) layer.dead_states);
+    }
+    fprintf(stderr,
+            "# phase 2 projected coarse certificates: %llu checks, "
+            "%llu fitting edges certified in traversal order, "
+            "%llu skipped\n",
+            (unsigned long long)
+                diagnostics.coarse_certificate_checks,
+            (unsigned long long)
+                diagnostics.coarse_certificate_edges,
+            (unsigned long long)
+                diagnostics.coarse_certificate_skips);
   }
   if (search.projected_query_diagnostics_enabled()) {
     DfsAnagramSearch::ProjectedDiagnostics const& diagnostics =
@@ -309,6 +340,15 @@ int main(int argc, char* argv[]) {
             (unsigned long long)
                 diagnostics.final_unique_bound_keys,
             (unsigned long long) diagnostics.final_bound_prunes);
+    fprintf(stderr,
+            "# phase 2 projected certificate fallback: %llu lookups, "
+            "%llu unique keys, %llu pruned\n",
+            (unsigned long long)
+                diagnostics.certificate_fallback_queries,
+            (unsigned long long)
+                diagnostics.certificate_fallback_unique_keys,
+            (unsigned long long)
+                diagnostics.certificate_fallback_prunes);
     fprintf(stderr,
             "# phase 2 projected length-only fallback: %llu pruned, "
             "%llu rich-only pruned, %llu length-only pruned\n",
