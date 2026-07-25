@@ -236,7 +236,22 @@ static int smoke_test() {
     DfsTopN projected_output(&classes, 2);
     DfsAnagramSearch projected(
         &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
-    projected.run(&projected_output);
+    FILE* projected_diagnostics = tmpfile();
+    check(projected_diagnostics != NULL,
+          "could not create projected diagnostic stream");
+    projected.run(&projected_output, projected_diagnostics);
+    std::string const projected_message =
+        read_stream(projected_diagnostics);
+    fclose(projected_diagnostics);
+    check(setenv(
+              "NUTRIMATIC_PROJECTED_ACTION_QUOTIENT", "0", 1) == 0,
+          "could not disable projected-action quotient");
+    DfsTopN unquotiented_output(&classes, 2);
+    DfsAnagramSearch unquotiented(
+        &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
+    unquotiented.run(&unquotiented_output);
+    check(unsetenv("NUTRIMATIC_PROJECTED_ACTION_QUOTIENT") == 0,
+          "could not restore projected-action quotient");
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
           "could not disable projected score-bound experiment");
     check(projected.score_bound_mode() ==
@@ -250,10 +265,70 @@ static int smoke_test() {
     check(projected.score_bound_capacity() ==
               exhausted_letters.size() + 1,
           "wildcard-only projected score memo has the wrong size");
+    check(projected.score_bound_projected_quotient_enabled(),
+          "projected-action quotient was not enabled by default");
+    check(!unquotiented.score_bound_projected_quotient_enabled(),
+          "projected-action quotient opt-out was ignored");
+    check(projected.score_bound_projected_actions() <
+              classes.classes().size(),
+          "projected-action quotient did not collapse equivalent classes");
+    check(unquotiented.score_bound_projected_actions() ==
+              classes.classes().size(),
+          "unquotiented projection omitted concrete classes");
+    check(projected.score_bound_states_computed() ==
+              unquotiented.score_bound_states_computed(),
+          "projected-action quotient changed computed states");
+    check(projected.score_bound_transitions() <
+              unquotiented.score_bound_transitions(),
+          "projected-action quotient did not reduce transitions");
+    check(projected.score_bound_candidate_tests() >=
+                  projected.score_bound_fitting_transitions() &&
+              projected.score_bound_fitting_transitions() >=
+                  projected.score_bound_transitions(),
+          "projected work counters are inconsistent");
+    check(projected.nodes_visited() == unquotiented.nodes_visited() &&
+              projected.solutions_found() ==
+                  unquotiented.solutions_found(),
+          "projected-action quotient changed DFS counters");
+    check(projected_message.find(
+              "projected actions (quotient on)") != std::string::npos,
+          "projected-action diagnostic is missing");
     check_same_spellings(
         exhausted_expected_spellings,
         projected_output.take_sorted_results(),
         "projected score memo changed retained spellings");
+    check_same_spellings(
+        exhausted_expected_spellings,
+        unquotiented_output.take_sorted_results(),
+        "unquotiented projected score memo changed retained spellings");
+
+    for (size_t exact = 1; exact <= 2; ++exact) {
+      std::string const forced = std::to_string(exact);
+      check(setenv(
+                "NUTRIMATIC_PROJECTED_SCORE_D",
+                forced.c_str(), 1) == 0,
+            "could not select projected exact depth");
+      DfsTopN depth_output(&classes, 2);
+      DfsAnagramSearch depth(
+          &classes, exhausted_letters, 1e-6, reader.count(), 4096, 4);
+      depth.run(&depth_output);
+      check(depth.score_bound_mode() ==
+                DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+                depth.score_bound_complete(),
+            "intermediate projected depth did not retain complete bounds");
+      check(depth.score_bound_exact_letters() == exact,
+            "projected score memo used the wrong exact depth");
+      if (exact == 2)
+        check(depth.score_bound_projected_actions() ==
+                  classes.classes().size(),
+              "all-exact projection collapsed distinct classes");
+      check_same_spellings(
+          exhausted_expected_spellings,
+          depth_output.take_sorted_results(),
+          "projected exact depth changed retained spellings");
+    }
+    check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
+          "could not restore projected exact depth");
 
     CollectSolutions boundary_expected(&classes);
     DfsAnagramSearch boundary_exhaustive(

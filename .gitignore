@@ -3,6 +3,7 @@
 /.env/
 tmp/
 /s.sh
+/results/
 
 # Python
 *.pyc

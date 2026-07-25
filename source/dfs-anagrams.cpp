@@ -273,6 +273,14 @@ int main(int argc, char* argv[]) {
           search.phase_two_search_seconds(),
           (unsigned long long) search.score_bound_transitions(),
           (unsigned long long) search.score_bound_nextafter_calls());
+  if (search.score_bound_mode() ==
+      DfsAnagramSearch::SCORE_BOUND_PROJECTED)
+    fprintf(stderr,
+            "# phase 2 projected work: %llu candidate tests, "
+            "%llu fitting transitions\n",
+            (unsigned long long) search.score_bound_candidate_tests(),
+            (unsigned long long)
+                search.score_bound_fitting_transitions());
   fprintf(stderr,
           "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
           search.score_bound_entries(),
