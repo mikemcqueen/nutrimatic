@@ -29,8 +29,30 @@ The number of computed abstract states was unchanged. A complete `d=10`,
 top-1 run produced byte-identical output and identical final DFS counters
 before and after quotienting.
 
-The prototype was removed after measurement. The working source was restored,
-rebuilt, and passed the focused DFS unit and CLI smoke tests.
+The initial prototype was removed after measurement. A production
+implementation has now been added with projection-specific action records,
+representative buckets, work diagnostics, and a temporary opt-out for direct
+comparison.
+
+### Implementation status
+
+The production quotient is enabled by default. The current implementation:
+
+- sorts `(projected delta, class ID)` pairs and retains the highest-scoring
+  representative for each delta;
+- assigns representatives to projection-specific exact-letter buckets or the
+  wildcard-only bucket;
+- stores flat delta, exact support, repeated exact requirements, lengths,
+  partial score, and fixed rounding-error arithmetic in a compact projected
+  action;
+- reports concrete classes, distinct projected actions, candidate tests,
+  fitting transitions, and successful transitions; and
+- accepts `NUTRIMATIC_PROJECTED_ACTION_QUOTIENT=0` as a temporary validation
+  opt-out.
+
+The automatic depth selector still chooses the largest projected dense table
+that fits the memory budget. It does not yet include action fanout or expected
+search cost.
 
 ## Workload
 
@@ -250,6 +272,58 @@ measurement, while the quotient timing used the restored post-cache-removal
 tree. The transition counts are deterministic and the wall-time difference is
 large enough that this build difference does not affect the conclusion.
 
+### Later unquotiented reruns
+
+Later restored-tree, top-1,000 runs showed substantial wall-time variation
+without changing the deterministic state and transition counts:
+
+| depth | capacity | computed states | transitions | setup | search |
+|---:|---:|---:|---:|---:|---:|
+| 15 | 7,050,240 | 3,411,183 | 27,133,454,068 | 326.450s | 38.130s |
+| 16 | 18,662,400 | 8,787,405 | 51,881,790,162 | 764.141s | 19.078s |
+
+The later `d=15` run had the same state and transition counts as the earlier
+226.549-second setup run, but took 326.450 seconds to preprocess. Absolute
+wall times in this document should therefore be treated as individual
+measurements, not stable predictions. The deterministic work counts and the
+large quotient reductions are the stronger evidence.
+
+The `d=16` run also reinforces that choosing the largest table that fits the
+memory budget is not a good time-based policy. Its tighter bound roughly
+halved final search time relative to that later `d=15` run, but preprocessing
+grew to more than 51.8 billion successful transitions and dominated the
+end-to-end result.
+
+### Production `d=10` comparison
+
+A same-session top-1 comparison of the production compact action
+implementation and its opt-out produced:
+
+| implementation | actions | setup | successful transitions |
+|---|---:|---:|---:|
+| concrete actions, quotient off | 490,329 | 5.708552s | 557,404,675 |
+| compact projected actions | 12,499 | 0.296500s | 7,968,461 |
+
+Both modes computed 25,192 projected states and reported:
+
+```text
+22,709,308 DFS nodes
+93 solutions
+5 spellings expanded
+1 retained
+```
+
+Their stdout SHA-256 hashes were identical:
+
+```text
+908e08189cf9f5d0d65340bf39235c0cfde87f9922db357bbba2fbb63129ef74
+```
+
+The production setup was 19.25x faster than the same-session opt-out. It was
+also faster than the earlier 0.305-second representative-ID production
+measurement and the 0.235-second temporary prototype was close enough that
+wall-time noise dominates that small difference.
+
 ## Depth scaling
 
 Before quotienting, forced-depth measurements with 20 preprocessing threads
@@ -306,9 +380,9 @@ about 9.44 billion instructions to projected preprocessing. Approximately
 candidate-transition handler. This supports reducing action transitions before
 tuning synchronization or state-level rounding.
 
-## Recommended implementation sequence
+## Implementation results and next sequence
 
-### 1. Add the projected-action quotient
+### 1. Projected-action quotient: implemented
 
 After projected deltas are constructed:
 
@@ -322,21 +396,33 @@ After projected deltas are constructed:
 Sorting IDs needs little temporary memory and is more predictable than a large
 `unordered_map`.
 
+The implementation uses projection-specific bucket ranges and a projected
+length-search helper. The existing `first_length_candidate()` helper indexes
+the concrete `fit_classes` array directly and therefore could not be reused
+for the ordered action vector.
+
+During production validation, the implementation retains a temporary opt-out
+switch for the quotient. This permits the same binary to compare quotient and
+unquotiented output, DFS counters, projected-state counts, and thread
+behavior. It can be removed after the focused comparisons pass.
+
 Useful diagnostics are:
 
 ```text
 concrete class count
 distinct projected action count
-per-bucket concrete/action counts
 attempted candidate tests
 fitting transitions including dead children
 successful transitions
 ```
 
-### 2. Add a compact projected-action record
+Per-bucket concrete/action counts remain a useful optional diagnostic but are
+not yet reported.
+
+### 2. Compact projected-action record: implemented
 
 The projected recurrence does not need wildcard identities or all concrete
-requirements. A projection-specific action can contain:
+requirements. The production action contains:
 
 ```text
 flat projected delta
@@ -366,13 +452,14 @@ Precomputing:
 
 ```text
 partial_score = class_score + restart
-error_base    = abs(class_score) + abs(restart) + 1
+error_base    = abs(class_score) + abs(restart)
 ```
 
-also avoids recalculating invariant arithmetic for every successful
-transition.
+avoids recalculating invariant arithmetic for every successful transition.
+The child magnitude and final `+ 1` are still applied per transition in the
+same order as the original rounding-error calculation.
 
-### 3. Re-sweep end-to-end depth after quotienting
+### 3. End-to-end depth sweep: completed
 
 The selector target is:
 
@@ -382,22 +469,75 @@ projected setup time + final DFS search time
 
 not preprocessing alone.
 
-With quotienting, measured setup was approximately:
+In individual quotient prototype runs, measured setup was approximately:
 
 ```text
 d=14:  9.0s
 d=15: 75.6s
 ```
 
-The existing unquotiented `d=15` search took about 20.2 seconds. If quotienting
-leaves the bound unchanged, grouped `d=15` should take roughly 96 seconds for
-setup plus search. Grouped `d=14` could therefore spend approximately 87
-seconds in final search and still tie it.
+One unquotiented `d=15` run took about 20.2 seconds to search, while the later
+restored-tree run took 38.1 seconds with identical DFS counters. Quotienting
+leaves the bound unchanged and should leave matched-build search work
+unchanged, but the observed timing spread makes cross-run arithmetic too noisy
+to select a depth confidently.
 
-Measure `d=13`, `d=14`, and `d=15` with top 1,000 and compare byte-identical
-stdout. The best depth may change again after the compact-action work.
+The same-session compact-action top-1,000 sweep produced:
 
-### 4. Prototype bottom-up wildcard-vector evaluation
+| depth | actions | computed states | candidate tests | fitting transitions | successful transitions |
+|---:|---:|---:|---:|---:|---:|
+| 13 | 59,676 | 448,377 | 4,648,877,468 | 423,826,039 | 397,143,388 |
+| 14 | 85,240 | 849,189 | 12,759,904,105 | 955,069,092 | 900,312,291 |
+| 15 | 151,440 | 3,411,183 | 93,064,759,838 | 6,141,176,817 | 5,919,322,956 |
+
+| depth | setup | search | total | final DFS nodes |
+|---:|---:|---:|---:|---:|
+| 13 | 2.417543s | 137.672081s | 140.089624s | 1,359,487,854 |
+| 14 | 5.301802s | 97.458439s | 102.760241s | 862,949,213 |
+| 15 | 44.530226s | 28.340842s | 72.871068s | 342,949,072 |
+
+All three depths produced the same top-1,000 stdout SHA-256:
+
+```text
+5cf8a34f71e78a47270897fb32161526807fb2ff906580708986f8e42f0ec601
+```
+
+They also expanded 15,900 spellings and retained 1,000 results. `d=15` is the
+best end-to-end depth among those tested despite its much larger preprocessing
+cost. The setup/search tradeoff confirms that neither table bytes nor setup
+time alone is a sufficient selector target.
+
+### 4. Add projection-specific support filtering
+
+After quotienting, action support can be cached or indexed by exact presence
+mask. There are at most:
+
+```text
+2^d
+```
+
+such masks, and many projected multiplicity states share one mask.
+
+Possible implementations include:
+
+- a small on-demand support-list cache;
+- bitsets of actions requiring each exact symbol; or
+- batching all wildcard counts and multiplicities for the same exact support.
+
+The production counters show that this is now the leading measured
+preprocessing opportunity. At `d=15`, only 6.14 billion of 93.06 billion
+candidate tests fit, and 5.92 billion of those fitting transitions reach a
+finite child. In other words:
+
+- only 6.6% of length-filtered candidate tests fit; but
+- 96.4% of fitting transitions are successful.
+
+The dominant remaining rejection is therefore before recursion, in support,
+wildcard-length, or repeated-count fitting. A projection-specific cache or
+index should target that rejection directly. Reintroducing the former general
+candidate-cache machinery is unnecessary.
+
+### 5. Prototype bottom-up wildcard-vector evaluation
 
 The flat layout stores every wildcard count contiguously for one exact bag:
 
@@ -431,26 +571,6 @@ batched wildcard evaluation need to compensate for that extra coverage.
 
 A small viability bitmask per exact bag could record which wildcard counts
 have finite completions and skip dead vector positions.
-
-### 5. Add projection-specific support filtering if needed
-
-After quotienting, action support can be cached or indexed by exact presence
-mask. There are at most:
-
-```text
-2^d
-```
-
-such masks, and many projected multiplicity states share one mask.
-
-Possible implementations include:
-
-- a small on-demand support-list cache;
-- bitsets of actions requiring each exact symbol; or
-- batching all wildcard counts and multiplicities for the same exact support.
-
-This should be measured after quotienting. Reintroducing the former general
-candidate-cache machinery is unnecessary.
 
 ### 6. Explore coarse-to-fine projected bounds
 
@@ -501,10 +621,11 @@ root-task scheduling.
 
 ### Rounding and `nextafter`
 
-The `d=15` run made about 8.5 million `nextafter` calls but processed 27.1
-billion successful transitions. Rounding is already performed primarily once
-per computed state. Per-transition invariant score/error arithmetic may be
-worth precomputing, but state-level `nextafter` tuning is not a leading target.
+The production `d=15` run made about 8.5 million `nextafter` calls while
+processing 5.92 billion successful transitions and 93.06 billion candidate
+tests. Invariant score/error arithmetic is now stored in the compact action,
+and rounding remains primarily once per computed state. State-level
+`nextafter` tuning is not a leading target.
 
 ### Plain lazy construction
 
@@ -524,20 +645,27 @@ The current recursive, shared-atomic traversal is not a suitable GPU kernel.
 GPU evaluation should be reconsidered only after quotienting and a regular
 bottom-up wildcard-vector formulation exist.
 
-## Validation required for a production quotient
+## Production validation
 
-Minimal focused validation should include:
+Focused validation now covers:
 
-1. a synthetic input where several concrete classes have the same projected
-   delta but different scores;
-2. equality of retained output between quotient and unquotiented projection;
+1. a synthetic wildcard-only projection with equivalent concrete classes and
+   different scores;
+2. quotient versus opt-out retained output, state counts, DFS counters, and
+   transition reduction;
 3. equality against exhaustive output on the existing small projected test;
 4. forced `d=0`, an intermediate `d`, and all-exact projection;
-5. identical output across one and multiple preprocessing threads;
-6. the 40-letter `d=14` and `d=15`, top-1,000 workload; and
-7. reporting both concrete-class and projected-action counts.
+5. one and multiple preprocessing threads;
+6. the 40-letter `d=10` quotient/opt-out comparison;
+7. the 40-letter `d=13`, `d=14`, and `d=15` top-1,000 sweep with identical
+   output hashes; and
+8. concrete-class, projected-action, candidate-test, fitting-transition, and
+   successful-transition diagnostics.
 
-The quotient should leave:
+The build and focused Meson smoke suite pass, including the 14-letter index
+validation and CLI differential test.
+
+The quotient leaves:
 
 ```text
 computed projected-state count
@@ -547,21 +675,30 @@ retained spellings
 ```
 
 unchanged relative to the unquotiented projection. Its successful-transition
-count is expected to fall because dominated parallel edges have been removed.
+count falls because dominated parallel edges have been removed.
+
+A direct top-1,000 opt-out comparison at `d=14` or `d=15` remains possible,
+but it would intentionally repeat the earlier minute-scale unquotiented
+preprocessing. The fast `d=10` direct comparison plus identical deeper output
+hashes and counters provide the current production smoke coverage.
 
 ## Conclusion
 
-Projected preprocessing is currently dominated by evaluating concrete class
-edges that the projection has already made equivalent. Quotienting those
-classes is:
+Projected preprocessing was dominated by evaluating concrete class edges that
+the projection had already made equivalent. Quotienting those classes is now:
 
 - exact;
 - local to projected-bound construction;
 - compatible with the existing flat projected key;
 - independently useful at every projection depth; and
-- strongly supported by the 40-letter measurements.
+- validated in the focused unit and CLI smoke suite.
 
-It should precede selector tuning, bottom-up evaluation, support indexing, or
-additional parallelization. After quotienting, the next decision should be
-made from a new `d=13..15` end-to-end sweep rather than from cache capacity
-alone.
+The compact production action reduces the same-session `d=10` setup from
+5.71 seconds to 0.30 seconds. In the completed top-1,000 sweep, `d=15` was the
+best tested end-to-end depth at 72.87 seconds.
+
+The next measured target is projection-specific fit filtering: the `d=15`
+recurrence performs 93.06 billion candidate tests to find 6.14 billion fitting
+actions. Selector tuning should then use the measured setup/search tradeoff
+rather than cache capacity alone. Bottom-up evaluation, coarse-to-fine bounds,
+persistence, and additional parallelization remain later experiments.
