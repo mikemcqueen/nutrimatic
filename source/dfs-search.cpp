@@ -1127,11 +1127,12 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   if (bound_mode != SCORE_BOUND_OFF && bound_complete) {
     if (bound_mode == SCORE_BOUND_PROJECTED) {
       if (!compute_projected_score_bound_parallel(
-              requested_preprocess_threads))
+              requested_preprocess_threads, progress))
         clear_score_bounds();
     } else {
       bool const ran_parallel =
-          compute_score_bound_parallel(requested_preprocess_threads);
+          compute_score_bound_parallel(
+              requested_preprocess_threads, progress);
       if (!ran_parallel && cache_mode == CANDIDATE_CACHE_DENSE)
         root_score_bound = compute_score_bound<WALK_DENSE>();
       else if (!ran_parallel && cache_mode == CANDIDATE_CACHE_SPARSE)
@@ -1165,10 +1166,6 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
               "during search for score keys below %zu once a score floor "
               "is available\n",
               bound_capacity);
-    if (actual_preprocess_threads > 1)
-      fprintf(progress_stream,
-              "# phase 2: preprocessing used %zu threads\n",
-              actual_preprocess_threads);
     fflush(progress_stream);
   }
   if (!hot_classes_ready) {
@@ -1853,7 +1850,7 @@ double DfsAnagramSearch::compute_projected_score_bound(
 }
 
 bool DfsAnagramSearch::compute_projected_score_bound_parallel(
-    size_t requested_threads) {
+    size_t requested_threads, FILE* progress) {
   if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
       bound_capacity == 0)
     return false;
@@ -1912,6 +1909,13 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   } catch (...) {
     return false;
   }
+  if (progress != NULL && worker_count > 1) {
+    fprintf(progress,
+            "# phase 2: using %zu threads to calculate projected "
+            "score bounds\n",
+            worker_count);
+    fflush(progress);
+  }
 
   std::atomic<size_t> next_candidate(0);
   auto work = [&](size_t worker_index) {
@@ -1969,7 +1973,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
 }
 
 bool DfsAnagramSearch::compute_score_bound_parallel(
-    size_t requested_threads) {
+    size_t requested_threads, FILE* progress) {
   if (bound_mode != SCORE_BOUND_DENSE || requested_threads < 2 ||
       !bound_complete || bound_capacity == 0)
     return false;
@@ -2015,6 +2019,12 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
     background.reserve(worker_count - 1);
   } catch (...) {
     return false;
+  }
+  if (progress != NULL && worker_count > 1) {
+    fprintf(progress,
+            "# phase 2: using %zu threads to calculate dense score bounds\n",
+            worker_count);
+    fflush(progress);
   }
 
   std::atomic<size_t> next_candidate(0);
