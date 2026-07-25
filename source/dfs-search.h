@@ -7,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -34,12 +33,6 @@ class DfsSolutionSink {
 // than once.
 class DfsAnagramSearch {
  public:
-  enum CandidateCacheMode {
-    CANDIDATE_CACHE_OFF,
-    CANDIDATE_CACHE_DENSE,
-    CANDIDATE_CACHE_SPARSE,
-  };
-
   enum ScoreBoundMode {
     SCORE_BOUND_OFF,
     SCORE_BOUND_DENSE,
@@ -49,9 +42,8 @@ class DfsAnagramSearch {
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
                    double restart, int64_t corpus_total,
-                   size_t candidate_cache_bytes = 0,
-                   size_t preprocess_threads = 1,
-                   bool enable_candidate_cache = true);
+                   size_t score_cache_bytes = 0,
+                   size_t preprocess_threads = 1);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When progress is non-null, report every 100k * progress_factor nodes.
@@ -62,13 +54,6 @@ class DfsAnagramSearch {
 
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
-  CandidateCacheMode candidate_cache_mode() const { return cache_mode; }
-  size_t candidate_cache_entries() const { return admitted_entries; }
-  size_t candidate_cache_bytes_charged() const { return charged_bytes; }
-  size_t support_cache_entries() const { return support_admitted_entries; }
-  size_t support_cache_bytes_charged() const {
-    return support_charged_bytes;
-  }
   ScoreBoundMode score_bound_mode() const { return bound_mode; }
   size_t score_bound_entries() const { return bound_entries; }
   size_t score_bound_states_computed() const {
@@ -116,17 +101,6 @@ class DfsAnagramSearch {
     uint32_t packed_length_and_count;
   };
 
-  struct alignas(16) ScoreClass {
-    double best_member_log_score;
-    uint64_t bag_key_delta;
-  };
-
-  enum WalkMode {
-    WALK_UNCACHED,
-    WALK_DENSE,
-    WALK_SPARSE,
-  };
-
   struct BoundWorker {
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     uint64_t bag_mask;
@@ -142,11 +116,8 @@ class DfsAnagramSearch {
 
   bool prepare_hot_classes();
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
-  void prepare_cache(uint64_t state_count);
-  void clear_cache();
   void clear_score_bounds();
 
-  template<WalkMode mode>
   void walk(size_t letters_left, size_t entry_point,
             double representative_log_score, DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
@@ -163,12 +134,7 @@ class DfsAnagramSearch {
       uint32_t class_index, BoundWorker const& worker) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
-  uint32_t const* first_length_support_candidate(
-      uint32_t const* begin, uint32_t const* end,
-      size_t letters_left) const;
-  template<WalkMode mode>
   double compute_score_bound();
-  template<WalkMode mode>
   void consider_bound_candidate(uint32_t class_index, double* best,
                                 double* max_rounding_error);
   double compute_parallel_score_bound(BoundWorker* worker);
@@ -186,24 +152,9 @@ class DfsAnagramSearch {
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
-  template<WalkMode mode>
   bool should_prune(double representative_log_score,
                     DfsSolutionSink* sink);
-  bool build_candidate_entry(size_t begin, size_t end, uint64_t* metadata);
-  bool build_support_entry(size_t begin, size_t end, uint64_t candidate_mask,
-                           uint64_t* metadata);
-  uint64_t parallel_support_entry(
-      BoundWorker const& worker, size_t end);
-  uint64_t support_lookup(uint64_t key, size_t* slot,
-                          bool* may_insert) const;
-  void publish_support(size_t slot, uint64_t key, uint64_t metadata);
-  void prepare_support_cache(size_t* remaining_budget);
-  void publish_dense(uint64_t key, uint64_t metadata);
-  void publish_sparse(size_t slot, uint64_t key, uint64_t metadata);
-  uint64_t sparse_lookup(uint64_t key, size_t* slot,
-                         bool* may_insert) const;
 
-  template<WalkMode mode>
   void visit_fitting_class(uint32_t class_index, size_t letters_left,
                            double representative_log_score,
                            DfsSolutionSink* sink);
@@ -216,17 +167,13 @@ class DfsAnagramSearch {
   double const restart_log_rate;
   std::vector<double> best_member_log_scores;
   size_t const max_depth;
-  size_t const candidate_cache_budget;
+  size_t const score_cache_budget;
   size_t const requested_preprocess_threads;
-  bool const candidate_cache_enabled;
-  size_t active_candidate_cache_budget;
 
   // The hot bag and all masks use rarest-rank order.
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
-  std::array<uint64_t, DFS_SYMBOL_COUNT> multipliers;
   std::array<uint64_t, DFS_SYMBOL_COUNT> score_multipliers;
   uint64_t bag_mask;
-  uint64_t current_bag_key;
   uint64_t current_score_key;
   size_t current_letters_left;
   uint64_t score_exact_mask;
@@ -238,7 +185,6 @@ class DfsAnagramSearch {
   bool score_projection_requested;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
-  std::unique_ptr<ScoreClass, AlignedFree> score_classes;
   std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
   std::unique_ptr<uint16_t, AlignedFree> score_wild_lengths;
   std::unique_ptr<uint32_t, AlignedFree> packed_letters;
@@ -258,31 +204,6 @@ class DfsAnagramSearch {
   uint64_t bound_nextafter_calls;
   size_t bound_charged_bytes;
   int64_t bound_prunes;
-
-  CandidateCacheMode cache_mode;
-  std::unique_ptr<uint64_t, AlignedFree> cache_metadata;
-  std::unique_ptr<uint64_t, AlignedFree> sparse_keys;
-  std::unique_ptr<uint32_t, AlignedFree> candidate_ids;
-  size_t cache_capacity;
-  size_t sparse_max_entries;
-  size_t sparse_filled;
-  size_t candidate_capacity;
-  size_t candidate_used;
-  size_t admitted_entries;
-  size_t charged_bytes;
-
-  std::unique_ptr<uint64_t, AlignedFree> support_metadata;
-  std::unique_ptr<AtomicWord, AlignedFree> support_keys;
-  std::unique_ptr<uint32_t, AlignedFree> support_candidate_ids;
-  size_t support_capacity;
-  size_t support_max_entries;
-  std::atomic<size_t> support_filled;
-  size_t support_candidate_capacity;
-  size_t support_candidate_used;
-  size_t support_admitted_entries;
-  size_t support_charged_bytes;
-  std::mutex support_build_mutex;
-  std::atomic<bool> parallel_support_exhausted;
 
   std::vector<size_t> path;
   FILE* progress_stream;

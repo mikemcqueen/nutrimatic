@@ -33,7 +33,7 @@ expect_status() {
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
-  --candidate-cache-mib 0 \
+  --cache-size 0 \
   --allow-cache-fallback \
   > "$test_dir/uncached.stdout" 2> "$test_dir/uncached.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
@@ -43,7 +43,7 @@ expect_status() {
   --preprocess-threads 4 \
   > "$test_dir/threaded.stdout" 2> "$test_dir/threaded.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/uncached.stdout" ||
-  fail "candidate cache changed stdout"
+  fail "score cache changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/thread-one.stdout" ||
   fail "--preprocess-threads 1 changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/threaded.stdout" ||
@@ -70,7 +70,7 @@ grep -q '^# phase 2 preflight: 16 theoretical states, 8 effective non-root state
 grep -q '^# phase 2 preflight: 64 double/64 float dense score-table bytes, minimum -C 1 MiB (64 bytes)$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 cache sizing diagnostics are missing from stderr"
-grep -Eq '^# phase 2 preflight: score-bound mode (off|dense|dense prefix)( \([48]-byte values, capacity [0-9]+, (complete effective|partial) coverage\))?; candidate-cache mode (off|dense|sparse)$' \
+grep -Eq '^# phase 2 preflight: score-bound mode (off|dense|dense prefix)( \([48]-byte values, capacity [0-9]+, (complete effective|partial) coverage\))?$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 cache mode diagnostics are missing from stderr"
 grep -Eq '^# phase 2: precomputed [0-9]+ bounded states in [0-9.]+s$' \
@@ -81,7 +81,7 @@ grep -q '^# phase 2 complete:' "$test_dir/all.stderr" ||
 grep -Eq '^# phase 2 timing: [0-9.]+ s setup, [0-9.]+ s search, [0-9]+ successful bound transitions, [0-9]+ nextafter calls$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 timing or transition statistics are missing from stderr"
-grep -Eq '^# phase 2 caches: [0-9]+ support masks, [0-9]+ support bytes, [0-9]+ candidate entries, [0-9]+ candidate bytes, [0-9]+ bound entries, [0-9]+ bound bytes$' \
+grep -Eq '^# phase 2 score cache: [0-9]+ bound entries, [0-9]+ bound bytes$' \
   "$test_dir/all.stderr" ||
   fail "phase-2 cache statistics are missing from stderr"
 grep -Eq '^[#] phase 2 complete: .* [0-9]+ retained$' \
@@ -104,11 +104,11 @@ cmp "$test_dir/used.stdout" "$test_dir/left.stdout" ||
 expect_status 2 "$dfs_anagrams" "$index_file" 'ab!'
 expect_status 2 "$dfs_anagrams" "$index_file" abc -p 0
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
-  --candidate-cache-mib nope
+  --cache-size nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --preprocess-threads nope
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
-  --candidate-cache-mib 0
+  --cache-size 0
 grep -q '^# phase 2 preflight: 16 theoretical states, 8 effective non-root states$' \
   "$test_dir/status.stderr" ||
   fail "undersized cache omitted phase-2 state-count diagnostics"

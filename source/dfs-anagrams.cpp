@@ -68,12 +68,9 @@ static bool parse_count(char const* in, char const* what, int* out) {
 
 static int const DEFAULT_MIN_WORD_LEN = 4;
 static int const DEFAULT_TOP = 10000;
-static size_t const DEFAULT_CANDIDATE_CACHE_MIB = 64;
+static size_t const DEFAULT_SCORE_CACHE_MIB = 64;
 static unsigned int const DEFAULT_MAX_PREPROCESS_THREADS = 20;
 static size_t const MIB = size_t(1024) * size_t(1024);
-// Temporary experiment: isolate score-bound behavior from the support-mask and
-// full fitting-candidate caches. This can become a CLI option later.
-static bool const ENABLE_CANDIDATE_CACHE = false;
 
 static bool parse_mib(char const* in, char const* what, size_t* out) {
   if (*in == '\0' || *in == '-') {
@@ -99,7 +96,7 @@ struct Args {
   int max_words;
   int top;
   int progress_factor;
-  size_t candidate_cache_bytes;
+  size_t score_cache_bytes;
   int preprocess_threads;
   bool allow_cache_fallback;
 };
@@ -108,17 +105,17 @@ static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
       " [-u used-letters] [-m min-word-length] [-n top]"
-      " [-p progress-factor] [--candidate-cache-mib MiB]"
+      " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [-F|--allow-cache-fallback]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
-      "  --candidate-cache-mib defaults to %zu; 0 disables it with -F\n"
+      "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " dense table does not fit\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DEFAULT_CANDIDATE_CACHE_MIB);
+      DEFAULT_SCORE_CACHE_MIB);
 }
 
 static struct optparse_long const long_options[] = {
@@ -126,7 +123,7 @@ static struct optparse_long const long_options[] = {
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
   { "top", 'n', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
-  { "candidate-cache-mib", 'C', OPTPARSE_REQUIRED },
+  { "cache-size", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -136,7 +133,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->min_word_len = DEFAULT_MIN_WORD_LEN;
   out->top = DEFAULT_TOP;
   out->progress_factor = 1;
-  out->candidate_cache_bytes = DEFAULT_CANDIDATE_CACHE_MIB * MIB;
+  out->score_cache_bytes = DEFAULT_SCORE_CACHE_MIB * MIB;
   out->preprocess_threads = 0;
   out->allow_cache_fallback = false;
 
@@ -171,8 +168,8 @@ static bool parse_args(char* argv[], Args* out) {
         }
         break;
       case 'C':
-        if (!parse_mib(options.optarg, "--candidate-cache-mib",
-                       &out->candidate_cache_bytes))
+        if (!parse_mib(options.optarg, "--cache-size",
+                       &out->score_cache_bytes))
           return false;
         break;
       case 'T':
@@ -264,8 +261,7 @@ int main(int argc, char* argv[]) {
   }
   DfsAnagramSearch search(
       &classes, args.letters, restart, reader.count(),
-      args.candidate_cache_bytes, preprocess_threads,
-      ENABLE_CANDIDATE_CACHE);
+      args.score_cache_bytes, preprocess_threads);
   DfsTopN output(&classes, size_t(args.top));
   if (!search.run(args.top == 0 ? NULL : &output, stderr,
                   args.progress_factor, args.allow_cache_fallback))
@@ -278,13 +274,7 @@ int main(int argc, char* argv[]) {
           (unsigned long long) search.score_bound_transitions(),
           (unsigned long long) search.score_bound_nextafter_calls());
   fprintf(stderr,
-          "# phase 2 caches: %zu support masks, %zu support bytes, "
-          "%zu candidate entries, %zu candidate bytes, "
-          "%zu bound entries, %zu bound bytes\n",
-          search.support_cache_entries(),
-          search.support_cache_bytes_charged(),
-          search.candidate_cache_entries(),
-          search.candidate_cache_bytes_charged(),
+          "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
           search.score_bound_entries(),
           search.score_bound_bytes_charged());
   fprintf(stderr,

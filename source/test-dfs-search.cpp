@@ -69,20 +69,6 @@ class FixedFloorSolutions: public DfsSolutionSink {
   std::vector<double> ordered_scores;
 };
 
-static void check_same_run(CollectSolutions const& expected,
-                           DfsAnagramSearch const& expected_search,
-                           CollectSolutions const& actual,
-                           DfsAnagramSearch const& actual_search,
-                           char const* message) {
-  check(actual_search.nodes_visited() == expected_search.nodes_visited(),
-        message);
-  check(actual_search.solutions_found() ==
-            expected_search.solutions_found(),
-        message);
-  check(actual.ordered_indexes == expected.ordered_indexes, message);
-  check(actual.ordered_scores == expected.ordered_scores, message);
-}
-
 static void check_same_spellings(
     std::vector<DfsSpelling> const& expected,
     std::vector<DfsSpelling> const& actual, char const* message) {
@@ -133,28 +119,6 @@ static int smoke_test() {
     check(fabs(sink.ab_ab_log_score - expected) < 1e-12,
           "wrong representative score");
 
-    size_t const budgets[] = { 1024, 192, 128 };
-    DfsAnagramSearch::CandidateCacheMode const modes[] = {
-      DfsAnagramSearch::CANDIDATE_CACHE_DENSE,
-      DfsAnagramSearch::CANDIDATE_CACHE_SPARSE,
-      DfsAnagramSearch::CANDIDATE_CACHE_SPARSE,
-    };
-    for (size_t i = 0; i < sizeof(budgets) / sizeof(budgets[0]); ++i) {
-      CollectSolutions cached_sink(&classes);
-      DfsAnagramSearch cached(
-          &classes, "aabb", 1e-6, reader.count(), budgets[i]);
-      cached.run(&cached_sink);
-      check(cached.candidate_cache_mode() == modes[i],
-            "wrong candidate cache mode");
-      check(cached.candidate_cache_bytes_charged() <= budgets[i],
-            "candidate cache exceeded its byte budget");
-      check_same_run(sink, search, cached_sink, cached,
-                     "candidate cache changed ordered DFS results");
-      check(cached.score_bound_mode() ==
-                DfsAnagramSearch::SCORE_BOUND_OFF,
-            "non-score sink unexpectedly enabled score pruning");
-    }
-
     DfsTopN expected_output(&classes, 2);
     DfsAnagramSearch exhaustive(
         &classes, "aabb", 1e-6, reader.count(), 0);
@@ -182,13 +146,8 @@ static int smoke_test() {
           "phase-2 setup time was negative");
     check(bounded.phase_two_search_seconds() >= 0.0,
           "phase-2 search time was negative");
-    check(bounded.score_bound_bytes_charged() +
-              bounded.candidate_cache_bytes_charged() +
-              bounded.support_cache_bytes_charged() <=
-              bound_budget,
-          "combined caches exceeded their byte budget");
-    check(bounded.support_cache_entries() > 0,
-          "support cache admitted no entries");
+    check(bounded.score_bound_bytes_charged() <= bound_budget,
+          "score cache exceeded its byte budget");
     check(bounded.nodes_visited() <= exhaustive.nodes_visited(),
           "score bound visited more nodes than exhaustive DFS");
     check_same_spellings(
@@ -199,20 +158,11 @@ static int smoke_test() {
     size_t const score_only_budget = 128;
     DfsAnagramSearch isolated(
         &classes, "aabb", 1e-6, reader.count(),
-        score_only_budget, 1, false);
+        score_only_budget);
     isolated.run(&isolated_output);
     check(isolated.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_DENSE,
-          "candidate-cache gate disabled dense score memo");
-    check(isolated.candidate_cache_mode() ==
-              DfsAnagramSearch::CANDIDATE_CACHE_OFF,
-          "candidate-cache gate did not disable candidate storage");
-    check(isolated.candidate_cache_entries() == 0 &&
-              isolated.candidate_cache_bytes_charged() == 0,
-          "disabled candidate cache retained storage");
-    check(isolated.support_cache_entries() == 0 &&
-              isolated.support_cache_bytes_charged() == 0,
-          "disabled candidate cache retained support storage");
+          "small budget disabled dense score memo");
     check(isolated.score_bound_bytes_charged() == 64,
           "root-slab compaction charged the wrong dense size");
     check(isolated.score_bound_capacity() == 6 &&
@@ -221,7 +171,7 @@ static int smoke_test() {
           "root-slab compaction did not retain complete effective coverage");
     check_same_spellings(
         expected_spellings, isolated_output.take_sorted_results(),
-        "candidate-cache gate changed retained spellings");
+        "small score cache changed retained spellings");
 
     DfsTopN threaded_output(&classes, 2);
     DfsAnagramSearch threaded(
@@ -372,18 +322,10 @@ static int smoke_test() {
           "dense score prefix lost completed bounds");
     check(exhausted.score_bound_bytes_charged() > 0,
           "dense score prefix released its storage");
-    check(exhausted.score_bound_bytes_charged() +
-              exhausted.candidate_cache_bytes_charged() +
-              exhausted.support_cache_bytes_charged() <=
-              exhausted_budget,
-          "dense score prefix exceeded the shared cache budget");
+    check(exhausted.score_bound_bytes_charged() <= exhausted_budget,
+          "dense score prefix exceeded the score-cache budget");
     check(exhausted.score_bound_bytes_charged() == exhausted_budget,
           "dense score prefix did not use the full cache budget");
-    check(exhausted.candidate_cache_mode() ==
-              DfsAnagramSearch::CANDIDATE_CACHE_OFF &&
-              exhausted.candidate_cache_bytes_charged() == 0 &&
-              exhausted.support_cache_bytes_charged() == 0,
-          "dense score prefix left budget for candidate caching");
     check(exhaustion_message.find(
               "score-bound mode dense prefix "
               "(4-byte values, capacity 16, partial coverage)") !=
@@ -446,52 +388,12 @@ static void float_score_bound_test() {
           "float score memo counted the wrong transitions");
     check(search.score_bound_nextafter_calls() >= 2,
           "float score memo counted too few nextafter calls");
-    check(search.score_bound_bytes_charged() +
-              search.candidate_cache_bytes_charged() +
-              search.support_cache_bytes_charged() <= budget,
-          "float score and candidate caches exceeded their budget");
+    check(search.score_bound_bytes_charged() <= budget,
+          "float score cache exceeded its budget");
     check(output.size() == 1, "float score bound lost its solution");
     check_same_spellings(
         expected_spellings, output.take_sorted_results(),
         "float score bound changed the retained spellings");
-  }
-
-  fclose(fp);
-}
-
-static void entry_point_cache_test() {
-  FILE* fp = tmpfile();
-  check(fp != NULL, "could not create entry-point test index");
-  {
-    IndexWriter writer(fp);
-    writer.next("a ", 0, 2);
-    writer.next("aa ", 0, 3);
-    writer.next("aaa ", 0, 5);
-    writer.next("aaaa ", 0, 7);
-    writer.next(NULL, 0, 0);
-  }
-  fflush(fp);
-  rewind(fp);
-
-  {
-    IndexReader reader(fp);
-    std::string const letters = "aaaaaaaa";
-    DfsClassList classes(&reader, letters, 1);
-
-    CollectSolutions expected(&classes);
-    DfsAnagramSearch uncached(
-        &classes, letters, 1e-6, reader.count(), 0);
-    uncached.run(&expected);
-
-    CollectSolutions actual(&classes);
-    DfsAnagramSearch cached(
-        &classes, letters, 1e-6, reader.count(), 2048);
-    cached.run(&actual);
-    check(cached.candidate_cache_mode() ==
-              DfsAnagramSearch::CANDIDATE_CACHE_DENSE,
-          "entry-point regression did not use dense cache");
-    check_same_run(expected, uncached, actual, cached,
-                   "entry-point-dependent cache reuse changed DFS results");
   }
 
   fclose(fp);
@@ -551,7 +453,6 @@ static int validate_14_letters() {
 int main(int argc, char* argv[]) {
   if (argc == 1) {
     smoke_test();
-    entry_point_cache_test();
     float_score_bound_test();
     return 0;
   }
