@@ -176,6 +176,8 @@ class DfsAnagramSearch {
       double* max_rounding_error);
   bool compute_projected_score_bound_parallel(
       size_t requested_threads, FILE* progress);
+  bool compute_projected_score_bound_bottom_up(
+      size_t requested_threads, FILE* progress);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
@@ -225,6 +227,7 @@ class DfsAnagramSearch {
   ScoreBoundMode bound_mode;
   std::unique_ptr<AtomicWord, AlignedFree> bound_values;
   std::unique_ptr<AtomicFloatWord, AlignedFree> bound_float_values;
+  std::unique_ptr<float, AlignedFree> bound_plain_float_values;
   size_t bound_capacity;
   size_t bound_value_bytes;
   bool bound_complete;

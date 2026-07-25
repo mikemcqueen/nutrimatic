@@ -237,6 +237,13 @@ static bool projected_action_quotient_enabled() {
       strcmp(enabled, "0") != 0;
 }
 
+static bool projected_bottom_up_enabled() {
+  char const* enabled =
+      getenv("NUTRIMATIC_PROJECTED_BOTTOM_UP");
+  return enabled == NULL || enabled[0] == '\0' ||
+      strcmp(enabled, "0") != 0;
+}
+
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
@@ -581,6 +588,7 @@ void DfsAnagramSearch::clear_score_bounds() {
   bound_mode = SCORE_BOUND_OFF;
   bound_values.reset();
   bound_float_values.reset();
+  bound_plain_float_values.reset();
   bound_capacity = 0;
   bound_value_bytes = 0;
   bound_complete = false;
@@ -608,15 +616,25 @@ void DfsAnagramSearch::prepare_score_bounds(
             score_effective_states, sizeof(float), &float_bytes) ||
         float_bytes > score_cache_budget)
       return;
-    AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
-        allocate_aligned(float_bytes));
-    if (values == NULL) return;
-    for (size_t i = 0; i < size_t(score_effective_states); ++i) {
-      new (&values[i]) AtomicFloatWord;
-      values[i].value.store(
-          FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
+    bool const bottom_up_eligible =
+        score_wild_span != 0 &&
+        score_effective_states / score_wild_span <= UINT32_MAX;
+    if (projected_bottom_up_enabled() && bottom_up_eligible) {
+      float* values = static_cast<float*>(
+          allocate_aligned(float_bytes));
+      if (values == NULL) return;
+      bound_plain_float_values.reset(values);
+    } else {
+      AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
+          allocate_aligned(float_bytes));
+      if (values == NULL) return;
+      for (size_t i = 0; i < size_t(score_effective_states); ++i) {
+        new (&values[i]) AtomicFloatWord;
+        values[i].value.store(
+            FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
+      }
+      bound_float_values.reset(values);
     }
-    bound_float_values.reset(values);
     bound_capacity = size_t(score_effective_states);
     bound_value_bytes = sizeof(float);
     bound_complete = true;
@@ -701,6 +719,10 @@ bool DfsAnagramSearch::load_score_bound(
     return true;
   }
   assert(bound_value_bytes == sizeof(float));
+  if (bound_plain_float_values.get() != NULL) {
+    *value = double(bound_plain_float_values.get()[size_t(key)]);
+    return true;
+  }
   uint32_t const stored =
       bound_float_values.get()[size_t(key)].value.load(
           std::memory_order_relaxed);
@@ -726,6 +748,11 @@ bool DfsAnagramSearch::store_score_bound(uint64_t key, double value) {
     return true;
   }
   assert(bound_value_bytes == sizeof(float));
+  if (bound_plain_float_values.get() != NULL) {
+    bound_plain_float_values.get()[size_t(key)] =
+        round_float_score_bound_up(value);
+    return true;
+  }
   AtomicFloatWord& stored =
       bound_float_values.get()[size_t(key)];
   uint32_t const previous =
@@ -748,6 +775,7 @@ void DfsAnagramSearch::publish_parallel_score_bound(
         double_to_bits(value), std::memory_order_release);
   } else {
     assert(bound_value_bytes == sizeof(float));
+    assert(bound_plain_float_values.get() == NULL);
     bound_float_values.get()[size_t(key)].value.store(
         float_to_bits(round_float_score_bound_up(value)),
         std::memory_order_release);
@@ -1030,12 +1058,23 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
               bound_value_bytes, bound_capacity,
               bound_complete ? "complete effective" : "partial");
     fputc('\n', progress);
+    if (bound_mode == SCORE_BOUND_PROJECTED)
+      fprintf(progress,
+              "# phase 2 experiment: projected evaluator %s\n",
+              bound_plain_float_values.get() != NULL
+                  ? "bottom-up plain"
+                  : "recursive atomic");
     fflush(progress);
   }
   if (bound_mode != SCORE_BOUND_OFF && bound_complete) {
     if (bound_mode == SCORE_BOUND_PROJECTED) {
-      if (!compute_projected_score_bound_parallel(
-              requested_preprocess_threads, progress))
+      bool const computed =
+          bound_plain_float_values.get() != NULL
+              ? compute_projected_score_bound_bottom_up(
+                    requested_preprocess_threads, progress)
+              : compute_projected_score_bound_parallel(
+                    requested_preprocess_threads, progress);
+      if (!computed)
         clear_score_bounds();
     } else {
       bool const ran_parallel =
@@ -1506,6 +1545,336 @@ double DfsAnagramSearch::compute_projected_score_bound(
   publish_parallel_score_bound(worker->score_key, result);
   ++worker->states_computed;
   return result;
+}
+
+bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
+    size_t requested_threads, FILE* progress) {
+  if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
+      bound_capacity == 0 ||
+      bound_plain_float_values.get() == NULL ||
+      score_wild_span == 0 ||
+      bound_capacity % score_wild_span != 0)
+    return false;
+
+  size_t const exact_bag_count = bound_capacity / score_wild_span;
+  if (exact_bag_count == 0 || exact_bag_count > UINT32_MAX)
+    return false;
+
+  struct VectorWorker {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    std::vector<double> best;
+    std::vector<double> max_rounding_error;
+    uint64_t candidate_tests;
+    uint64_t fitting_transitions;
+    uint64_t transitions;
+    uint64_t nextafter_calls;
+
+    explicit VectorWorker(size_t wild_span):
+        best(wild_span),
+        max_rounding_error(wild_span),
+        candidate_tests(0),
+        fitting_transitions(0),
+        transitions(0),
+        nextafter_calls(0) {
+      bag.fill(0);
+    }
+  };
+
+  float* const values = bound_plain_float_values.get();
+  size_t const wildcard_bucket = DFS_SYMBOL_COUNT;
+  size_t const wildcard_begin =
+      projected_bucket_starts[wildcard_bucket];
+  size_t const wildcard_end =
+      projected_bucket_starts[wildcard_bucket + 1];
+
+  uint64_t candidate_tests = 0;
+  uint64_t fitting_transitions = 0;
+  uint64_t transitions = 0;
+  uint64_t nextafter_calls = 0;
+
+  // The exact-empty vector is its own base layer. Wildcard-only actions point
+  // to smaller indexes in the same vector.
+  values[0] = 0.0f;
+  for (size_t wild = 1; wild < score_wild_span; ++wild) {
+    double best = -HUGE_VAL;
+    double max_rounding_error = 0.0;
+    for (size_t action_index = wildcard_begin;
+         action_index < wildcard_end; ++action_index) {
+      ProjectedAction const& action =
+          projected_actions[action_index];
+      ++candidate_tests;
+      size_t const wild_length =
+          projected_wild_length(action.packed_lengths);
+      assert(wild_length != 0);
+      if (wild_length > wild) continue;
+      ++fitting_transitions;
+      double const child = double(values[wild - wild_length]);
+      if (child == -HUGE_VAL) continue;
+      ++transitions;
+      best = std::max(best, action.partial_score + child);
+      double rounding_error = action.rounding_error_base;
+      rounding_error += fabs(child);
+      rounding_error += 1.0;
+      rounding_error *= DBL_EPSILON * 4.0;
+      max_rounding_error =
+          std::max(max_rounding_error, rounding_error);
+    }
+    double const result =
+        best == -HUGE_VAL
+            ? -HUGE_VAL
+            : round_score_bound_up(
+                  static_cast<long double>(best) +
+                  static_cast<long double>(max_rounding_error),
+                  &nextafter_calls);
+    values[wild] = round_float_score_bound_up(result);
+  }
+
+  size_t max_exact_total = 0;
+  for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+    if ((score_exact_mask & (UINT64_C(1) << rank)) != 0)
+      max_exact_total += bag[rank];
+  }
+  if (score_exact_mask != 0) {
+    assert(max_exact_total != 0);
+    --max_exact_total;
+  }
+
+  std::vector<std::vector<uint32_t> > exact_layers;
+  std::vector<VectorWorker> workers;
+  size_t worker_count = 1;
+  try {
+    exact_layers.resize(max_exact_total + 1);
+    for (size_t exact_key = 1;
+         exact_key < exact_bag_count; ++exact_key) {
+      size_t exact_total = 0;
+      for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+        if ((score_exact_mask & (UINT64_C(1) << rank)) == 0)
+          continue;
+        uint64_t const multiplier = score_multipliers[rank];
+        uint64_t const radix = uint64_t(bag[rank]) + 1;
+        exact_total += size_t(
+            (uint64_t(exact_key) / multiplier) % radix);
+      }
+      assert(exact_total < exact_layers.size());
+      exact_layers[exact_total].push_back(uint32_t(exact_key));
+    }
+
+    size_t largest_layer = 0;
+    for (size_t total = 1; total < exact_layers.size(); ++total)
+      largest_layer =
+          std::max(largest_layer, exact_layers[total].size());
+    worker_count = std::min(
+        std::max(size_t(1), requested_threads),
+        std::max(size_t(1), largest_layer));
+    workers.reserve(worker_count);
+    for (size_t i = 0; i < worker_count; ++i)
+      workers.emplace_back(score_wild_span);
+  } catch (...) {
+    return false;
+  }
+
+  bool announced_threads = false;
+  size_t actual_workers = 1;
+  for (size_t exact_total = 1;
+       exact_total < exact_layers.size(); ++exact_total) {
+    std::vector<uint32_t> const& layer = exact_layers[exact_total];
+    if (layer.empty()) continue;
+    size_t const layer_workers =
+        std::min(worker_count, layer.size());
+    std::atomic<size_t> next_bag(0);
+
+    auto work = [&](size_t worker_index) {
+      VectorWorker* worker = &workers[worker_index];
+      for (;;) {
+        size_t const layer_index =
+            next_bag.fetch_add(1, std::memory_order_relaxed);
+        if (layer_index >= layer.size()) break;
+        uint64_t const exact_key = layer[layer_index];
+        uint64_t exact_mask = 0;
+        worker->bag.fill(0);
+        for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+          if ((score_exact_mask & (UINT64_C(1) << rank)) == 0)
+            continue;
+          uint64_t const multiplier = score_multipliers[rank];
+          uint64_t const radix = uint64_t(bag[rank]) + 1;
+          uint32_t const count = uint32_t(
+              (exact_key / multiplier) % radix);
+          worker->bag[rank] = count;
+          if (count != 0)
+            exact_mask |= UINT64_C(1) << rank;
+        }
+        assert(exact_mask != 0);
+
+        std::fill(
+            worker->best.begin(), worker->best.end(), -HUGE_VAL);
+        std::fill(
+            worker->max_rounding_error.begin(),
+            worker->max_rounding_error.end(), 0.0);
+        size_t const bucket = size_t(__builtin_ctzll(exact_mask));
+        size_t const begin = projected_bucket_starts[bucket];
+        size_t const end = projected_bucket_starts[bucket + 1];
+        uint64_t const base_key =
+            exact_key * uint64_t(score_wild_span);
+
+        for (size_t action_index = begin;
+             action_index < end; ++action_index) {
+          ProjectedAction const& action =
+              projected_actions[action_index];
+          ++worker->candidate_tests;
+          if ((action.exact_support_mask & ~exact_mask) != 0)
+            continue;
+          uint32_t const* repeated =
+              action.repeated_count == 0
+                  ? NULL
+                  : &projected_repeated_requirements[
+                        action.repeated_offset];
+          bool fits = true;
+          for (uint32_t i = 0; i < action.repeated_count; ++i) {
+            uint32_t const requirement = repeated[i];
+            if (worker->bag[packed_rank(requirement)] <
+                packed_count(requirement)) {
+              fits = false;
+              break;
+            }
+          }
+          if (!fits) continue;
+
+          size_t const wild_length =
+              projected_wild_length(action.packed_lengths);
+          for (size_t wild = wild_length;
+               wild < score_wild_span; ++wild) {
+            ++worker->fitting_transitions;
+            uint64_t const parent_key = base_key + wild;
+            assert(action.score_key_delta <= parent_key);
+            double const child = double(
+                values[size_t(parent_key -
+                              action.score_key_delta)]);
+            if (child == -HUGE_VAL) continue;
+            ++worker->transitions;
+            worker->best[wild] = std::max(
+                worker->best[wild],
+                action.partial_score + child);
+            double rounding_error = action.rounding_error_base;
+            rounding_error += fabs(child);
+            rounding_error += 1.0;
+            rounding_error *= DBL_EPSILON * 4.0;
+            worker->max_rounding_error[wild] = std::max(
+                worker->max_rounding_error[wild],
+                rounding_error);
+          }
+        }
+
+        for (size_t wild = 0; wild < score_wild_span; ++wild) {
+          double const best = worker->best[wild];
+          double const result =
+              best == -HUGE_VAL
+                  ? -HUGE_VAL
+                  : round_score_bound_up(
+                        static_cast<long double>(best) +
+                        static_cast<long double>(
+                            worker->max_rounding_error[wild]),
+                        &worker->nextafter_calls);
+          values[size_t(base_key + wild)] =
+              round_float_score_bound_up(result);
+        }
+      }
+    };
+
+    std::vector<std::thread> background;
+    try {
+      background.reserve(layer_workers - 1);
+      for (size_t i = 1; i < layer_workers; ++i)
+        background.emplace_back(work, i);
+    } catch (...) {
+      // The already-created workers remain useful; the main thread shares
+      // their dynamic queue and completes any unclaimed bags.
+    }
+    size_t const active_workers = background.size() + 1;
+    actual_workers = std::max(actual_workers, active_workers);
+    if (!announced_threads && progress != NULL &&
+        active_workers > 1) {
+      fprintf(progress,
+              "# phase 2: using %zu threads to calculate projected "
+              "score bounds bottom-up\n",
+              active_workers);
+      fflush(progress);
+      announced_threads = true;
+    }
+    work(0);
+    for (size_t i = 0; i < background.size(); ++i)
+      background[i].join();
+  }
+
+  for (size_t i = 0; i < workers.size(); ++i) {
+    candidate_tests += workers[i].candidate_tests;
+    fitting_transitions += workers[i].fitting_transitions;
+    transitions += workers[i].transitions;
+    nextafter_calls += workers[i].nextafter_calls;
+  }
+
+  BoundWorker root;
+  root.bag = bag;
+  root.bag_mask = bag_mask & score_exact_mask;
+  root.score_key = current_score_key;
+  root.letters_left = current_letters_left;
+  root.wild_left = score_wild_letters;
+  root.states_computed = 0;
+  root.candidate_tests = 0;
+  root.fitting_transitions = 0;
+  root.transitions = 0;
+  root.nextafter_calls = 0;
+  root.best = -HUGE_VAL;
+  root.max_rounding_error = 0.0;
+
+  size_t const root_bucket = root.bag_mask == 0
+      ? wildcard_bucket
+      : size_t(__builtin_ctzll(root.bag_mask));
+  size_t const root_end = projected_bucket_starts[root_bucket + 1];
+  size_t const root_begin = first_projected_length_candidate(
+      projected_bucket_starts[root_bucket],
+      root_end, root.letters_left);
+  candidate_tests += root_end - root_begin;
+  double root_best = -HUGE_VAL;
+  double root_max_rounding_error = 0.0;
+  for (size_t action_index = root_begin;
+       action_index < root_end; ++action_index) {
+    ProjectedAction const& action =
+        projected_actions[action_index];
+    if (!projected_action_fits(action, root)) continue;
+    ++fitting_transitions;
+    assert(action.score_key_delta <= root.score_key);
+    uint64_t const child_key =
+        root.score_key - action.score_key_delta;
+    assert(child_key < bound_capacity);
+    double const child = double(values[size_t(child_key)]);
+    if (child == -HUGE_VAL) continue;
+    ++transitions;
+    root_best = std::max(
+        root_best, action.partial_score + child);
+    double rounding_error = action.rounding_error_base;
+    rounding_error += fabs(child);
+    rounding_error += 1.0;
+    rounding_error *= DBL_EPSILON * 4.0;
+    root_max_rounding_error = std::max(
+        root_max_rounding_error, rounding_error);
+  }
+
+  root_score_bound =
+      root_best == -HUGE_VAL
+          ? -HUGE_VAL
+          : round_score_bound_up(
+                static_cast<long double>(root_best) +
+                static_cast<long double>(root_max_rounding_error),
+                &nextafter_calls);
+  root_score_bound_ready = true;
+  bound_entries = bound_capacity;
+  bound_states_computed = bound_capacity;
+  bound_candidate_tests = candidate_tests;
+  bound_fitting_transitions = fitting_transitions;
+  bound_transitions = transitions;
+  bound_nextafter_calls = nextafter_calls;
+  actual_preprocess_threads = actual_workers;
+  return true;
 }
 
 bool DfsAnagramSearch::compute_projected_score_bound_parallel(
