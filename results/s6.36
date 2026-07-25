@@ -8,7 +8,3 @@ time build/dfs-anagrams $IDX "${S6:0:36}" -p 100 -C 300 -n 1000 > /dev/null
 # phase 2 timing: 931.339438 s setup, 1.154439 s search, 60453533590 successful bound transitions, 83443704 nextafter calls
 # phase 2 caches: 0 support masks, 0 support bytes, 0 candidate entries, 0 candidate bytes, 33206504 bound entries, 313528320 bound bytes
 # phase 2 complete: 6682322 nodes, 2795 solutions, 13798 spellings expanded, 1000 retained
-
-real    15m7.907s
-user    171m18.526s
-sys     0m24.078s

@@ -281,6 +281,30 @@ static int smoke_test() {
         expanded_dense_output.take_sorted_results(),
         "full-budget dense score memo changed retained spellings");
 
+    check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "0", 1) == 0,
+          "could not enable projected score-bound experiment");
+    DfsTopN projected_output(&classes, 2);
+    DfsAnagramSearch projected(
+        &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
+    projected.run(&projected_output);
+    check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
+          "could not disable projected score-bound experiment");
+    check(projected.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+              projected.score_bound_complete(),
+          "projected score memo did not retain complete coverage");
+    check(projected.score_bound_exact_letters() == 0 &&
+              projected.score_bound_wild_letters() ==
+                  exhausted_letters.size(),
+          "projected score memo used the wrong abstraction");
+    check(projected.score_bound_capacity() ==
+              exhausted_letters.size() + 1,
+          "wildcard-only projected score memo has the wrong size");
+    check_same_spellings(
+        exhausted_expected_spellings,
+        projected_output.take_sorted_results(),
+        "projected score memo changed retained spellings");
+
     CollectSolutions boundary_expected(&classes);
     DfsAnagramSearch boundary_exhaustive(
         &classes, exhausted_letters, 1e-6, reader.count(), 0);
