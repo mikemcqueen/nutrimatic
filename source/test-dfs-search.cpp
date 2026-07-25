@@ -231,12 +231,21 @@ static int smoke_test() {
         expanded_dense_output.take_sorted_results(),
         "full-budget dense score memo changed retained spellings");
 
+    DfsTopN reused_expected_output(&classes, 2);
+    DfsAnagramSearch reused_expected(
+        &classes, "a", 1e-6, reader.count(), 0);
+    reused_expected.run(&reused_expected_output);
+
     check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "0", 1) == 0,
           "could not enable projected score-bound experiment");
     DfsTopN projected_output(&classes, 2);
     DfsAnagramSearch projected(
         &classes, exhausted_letters, 1e-6, reader.count(), 64, 4);
     projected.run(&projected_output);
+    DfsTopN reused_projected_output(&classes, 2);
+    DfsAnagramSearch reused_projected(
+        &classes, "a", 1e-6, reader.count(), 64, 2);
+    reused_projected.run(&reused_projected_output);
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
           "could not disable projected score-bound experiment");
     check(projected.score_bound_mode() ==
@@ -250,10 +259,18 @@ static int smoke_test() {
     check(projected.score_bound_capacity() ==
               exhausted_letters.size() + 1,
           "wildcard-only projected score memo has the wrong size");
+    check(projected.projected_action_count() > 0 &&
+              projected.projected_action_count() <
+                  classes.classes().size(),
+          "projected score memo did not merge equivalent actions");
     check_same_spellings(
         exhausted_expected_spellings,
         projected_output.take_sorted_results(),
         "projected score memo changed retained spellings");
+    check_same_spellings(
+        reused_expected_output.take_sorted_results(),
+        reused_projected_output.take_sorted_results(),
+        "projected score memo mishandled a reused class list");
 
     CollectSolutions boundary_expected(&classes);
     DfsAnagramSearch boundary_exhaustive(
