@@ -46,6 +46,16 @@ class DfsAnagramSearch {
     uint64_t dependency_spins;
     uint64_t finite_states;
     uint64_t dead_states;
+    uint64_t final_queries_without_floor;
+    uint64_t final_bound_queries;
+    uint64_t final_unique_bound_keys;
+    uint64_t final_bound_prunes;
+    uint64_t final_length_bound_prunes;
+    uint64_t final_rich_only_vs_length_prunes;
+    uint64_t final_length_only_prunes;
+    uint64_t final_modular_bound_prunes;
+    uint64_t final_modular_rich_only_prunes;
+    uint64_t final_modular_only_prunes;
   };
 
   enum ScoreBoundMode {
@@ -96,11 +106,17 @@ class DfsAnagramSearch {
   int64_t score_bound_prunes() const { return bound_prunes; }
   double phase_two_setup_seconds() const { return setup_seconds; }
   double phase_two_search_seconds() const { return search_seconds; }
+  double projected_support_group_prepare_seconds() const {
+    return support_group_prepare_seconds;
+  }
   size_t preprocess_threads_used() const {
     return actual_preprocess_threads;
   }
   bool projected_diagnostics_enabled() const {
     return projected_diagnostics_requested;
+  }
+  bool projected_query_diagnostics_enabled() const {
+    return projected_query_diagnostics_requested;
   }
   ProjectedDiagnostics const& projected_diagnostics() const {
     return projected_diagnostic_counts;
@@ -156,6 +172,8 @@ class DfsAnagramSearch {
   bool prepare_hot_classes();
   bool prepare_projected_actions();
   bool prepare_projected_support_groups();
+  bool prepare_projected_length_bounds();
+  bool prepare_projected_modular_bounds();
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void clear_score_bounds();
 
@@ -200,7 +218,7 @@ class DfsAnagramSearch {
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
   bool should_prune(double representative_log_score,
-                    DfsSolutionSink* sink);
+                    DfsSolutionSink* sink, size_t letters_left);
 
   void visit_fitting_class(uint32_t class_index, size_t letters_left,
                            double representative_log_score,
@@ -233,6 +251,7 @@ class DfsAnagramSearch {
   double projected_max_class_score_magnitude;
   bool score_projection_requested;
   bool projected_diagnostics_requested;
+  bool projected_query_diagnostics_requested;
   bool projected_support_groups_requested;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
@@ -245,6 +264,15 @@ class DfsAnagramSearch {
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_action_offsets;
   std::vector<size_t> projected_support_offsets;
   std::vector<uint32_t> projected_support_actions;
+  std::vector<uint64_t> projected_query_bits;
+  std::vector<double> projected_length_bounds;
+  static size_t const MODULAR_BOUND_COUNT = 4;
+  static size_t const MODULAR_BOUND_SPAN = 64;
+  std::array<uint8_t, MODULAR_BOUND_COUNT>
+      current_modular_signatures;
+  std::vector<uint32_t> projected_modular_class_deltas;
+  std::array<std::vector<double>, MODULAR_BOUND_COUNT>
+      projected_modular_bounds;
   bool hot_classes_ready;
 
   ScoreBoundMode bound_mode;
@@ -271,6 +299,7 @@ class DfsAnagramSearch {
   int64_t solutions;
   double setup_seconds;
   double search_seconds;
+  double support_group_prepare_seconds;
   size_t actual_preprocess_threads;
 };
 

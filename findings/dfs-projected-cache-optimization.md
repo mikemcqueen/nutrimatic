@@ -80,6 +80,13 @@ increases construction transitions by 3.15x and setup time by 3.55x. Total
 phase 2 is consequently 2.24x slower than `d=15`, despite using the larger
 cache and producing the tighter bound.
 
+Later investigation established that other `dfs-anagrams` instances sometimes
+run concurrently on this host. The timings above and the initial support-group
+timings below were not preceded by a host-process check, so they are
+observations rather than controlled speedup evidence. Future timing runs must
+check the host process table immediately before the run and during long runs.
+Deterministic state, transition, node, and solution counts are unaffected.
+
 ## Data layout and hot-loop changes
 
 The action metadata is split into two 16-byte, 64-byte-aligned arrays:
@@ -212,13 +219,108 @@ another example of the host's timing variability. The `nextafter` count
 differed by two out of about 7.26 million because the group traversal changes
 action order.
 
+The 40-letter, `d=16`, 128 MiB validation also retained exactly 8,787,405
+states, 18,670,931,559 successful transitions, 183,381,681 final DFS nodes,
+and byte-identical top-1000 output. Ungated support-group runs recorded
+131.075s and 112.012s setup versus an earlier ungated 169.550s reference; these
+are not a controlled comparison. A later run checked before launch and during
+construction found no competing `dfs-anagrams` and recorded 93.128s, but lacks
+a similarly gated ungrouped pair. The support index contained 65,536 groups
+and 222,643 action IDs and took 8.5--9.7ms to build.
+
 The evidence promotes support-subset traversal from a speculative fit index to
-a strong candidate for the projected builder. A `d=16` validation remains
-useful; the support offset table has 65,537 entries there. Index-build time
-should also be reported separately from recurrence construction.
-Wildcard-length sub-buckets are the next inexpensive scan reduction: after
-support grouping, 104,454,693 of 473,063,458 remaining checks still fail on
-wildcard length.
+a strong candidate for the projected builder. Index-build time is now reported
+separately from recurrence construction.
+
+### Wildcard-length ordering experiment
+
+Sorting every support group by wildcard consumption allows its scan to stop at
+the first action longer than the state's wildcard remainder. On the 28-letter
+diagnostic case this behaved exactly as intended at the scan level: it removed
+104,454,693 of 473,063,458 checks (22.1%), leaving 368,608,765. State,
+transition, final-node, solution, and output counts were unchanged. Building
+and sorting the 16,384-group index took 2.5--3.1ms.
+
+The optimization was nevertheless a regression in the clean serial paired
+runs:
+
+| traversal within each support group | setup run 1 | setup run 2 |
+|---|---:|---:|
+| original projected-action order | 10.324s | 10.289s |
+| wildcard length, then action ID | 10.797s | 10.854s |
+
+The mean setup penalty was 5.0%. The successful transitions dominate this
+workload, and their traversal order affects recursive construction and cache
+locality. Removing cheap rejected checks did not compensate for the worse
+successful-edge order. The wildcard ordering is therefore not retained.
+Future fit indexes should preserve the existing successful-action order or
+demonstrate a more valuable ordering objective; scan-count reduction alone is
+not sufficient evidence. These paired runs also predated the host-process
+gate, so the timing magnitude is tentative even though both pairs consistently
+favored the original order.
+
+## Final-query demand experiment
+
+Final-query diagnostics are independently enabled with:
+
+```sh
+NUTRIMATIC_PROJECTED_QUERY_DIAGNOSTICS=1
+```
+
+They use a temporary one-bit-per-table-slot set and count concrete-DFS bound
+lookups, distinct projected keys, lookups that prune, and DFS nodes reached
+before the top-N sink has a score floor. Full projected-builder diagnostics
+also enable these query counters; the separate switch avoids instrumenting
+billions of construction edges when only final demand is needed.
+
+| workload | states built | unique queried | built queried | bound lookups | rich prunes | length-only prunes | modular preserves | nodes before floor |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 28 letters, `d=14` | 430,123 | 324,005 | 75.3% | 3,086,592 | 3,080,422 (99.80%) | 1,592,898 (51.7%) | 2,834,857 (92.0%) | 57 |
+| 40 letters, `d=16` | 8,787,405 | 5,202,667 | 59.2% | 183,381,299 | 183,299,923 (99.96%) | 74,271,639 (40.5%) | 144,571,967 (78.9%) | 381 |
+
+Eager construction built 106,118 states never queried in the smaller case and
+3,584,738 never queried in the larger case. This establishes meaningful
+state-selection headroom, especially at `d=16`, but it is not a direct estimate
+of lazy construction work: a queried state's exact rich value may require
+unqueried descendants. The score floor also arrives almost immediately and
+the DFS then issues bound queries at nearly every node, so a background
+refiner would face demand quickly rather than enjoying a long warm-up window.
+
+The very high prune rate makes admissible fallback quality critical. A
+length-only recurrence was evaluated in shadow mode on every rich lookup. It
+missed 1,487,524 rich prunes in the smaller case and 109,028,284 in the larger
+case. It produced zero coarse-only prunes, as required by its relaxation, but
+preserved only 51.7% and 40.5% of rich pruning respectively.
+
+This rejects length-only fallback as the sole basis for online refinement.
+Saving projected states would expose tens of millions of concrete nodes until
+refinement caught up. Before implementing a lazy/background builder, test a
+stronger still-cheap fallback—such as a second small projection or several
+weighted scalar projections—against this same disagreement counter. Bound-gap
+histograms would help distinguish near misses from cases needing much more
+abstraction detail.
+
+The first stronger shadow fallback uses four independent tables keyed by
+remaining length and a deterministic 6-bit modular multiset signature. Each
+table contains only 64 states per length layer. It deduplicates concrete
+classes by `(length, signature delta)`, relaxes all count and fit constraints,
+and computes a complete max-plus recurrence. Each table is independently
+admissible, so their minimum is admissible and can also complement the rich
+projection.
+
+This fallback preserved 92.0% of rich prunes at `d=14` and 78.9% at `d=16`,
+far better than length-only but still missing 245,565 and 38,727,956 rich
+prunes respectively. It also proved 552 and 4,844 prunes that the rich
+projection missed, confirming complementary value. The `d=16` modular run was
+host-process-gated at launch and during construction and produced
+byte-identical output.
+
+Four 6-bit signatures are therefore promising as an additional complementary
+bound, but not yet strong enough as the only fallback for absent rich states.
+The next cheap sweep should vary signature width, hash selection, and table
+count while reporting rich-prune coverage per table byte and per final-query
+operation. If coverage saturates well below 100%, a small exact-letter
+projection is a better fallback candidate.
 
 ## Correctness argument
 
@@ -563,6 +665,13 @@ bound safely. Random weights are useful only as a baseline. Better weights
 should be selected to separate high-score actions that collide in the current
 projection.
 
+The final-query shadow experiment now implements the quotient variant with
+four deterministic 6-bit signatures. Its minimum preserves 92.0% of rich
+prunes on the 28-letter case and 78.9% on the 40-letter `d=16` case, while
+also adding a small number of complementary prunes. The result justifies a
+parameter/weight-selection sweep but not immediate use as the sole online
+fallback.
+
 ## Share work across many states
 
 ### Symbolic or decision-diagram construction
@@ -670,8 +779,8 @@ The remaining useful diagnostics are:
 - finite versus dead constructed states split by total-letter layer;
 - the winning action's position in score and coarse-envelope order;
 - shadow coarse-envelope rejects, including whole rejected suffixes;
-- projected states queried by concrete DFS, unique keys, frequency, bound gap,
-  and whether the lookup actually pruned;
+- bound-gap histograms and stronger-fallback disagreement on the now-measured
+  concrete-DFS query stream;
 - overlap among forward-reachable, reverse-completable, and final-query states;
   and
 - per-bucket action, state, scan, fit, and winner distributions.
@@ -686,8 +795,8 @@ The best initial probes do not require a new production builder:
 2. Run composite-dominance analysis during action preparation without deleting
    actions.
 3. Extend the aggregate fitting-to-dead counts to layer densities.
-4. Record projected keys requested by concrete DFS and whether a ready rich
-   value would have changed the prune decision.
+4. Replay projected keys requested by concrete DFS against a stronger cheap
+   fallback; length-only preserved too few rich prunes.
 5. Hash value and reachability subtables to reject or justify symbolic work.
 
 ## Research order

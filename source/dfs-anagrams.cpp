@@ -297,6 +297,37 @@ int main(int argc, char* argv[]) {
             (unsigned long long) diagnostics.finite_states,
             (unsigned long long) diagnostics.dead_states);
   }
+  if (search.projected_query_diagnostics_enabled()) {
+    DfsAnagramSearch::ProjectedDiagnostics const& diagnostics =
+        search.projected_diagnostics();
+    fprintf(stderr,
+            "# phase 2 projected final queries: %llu before score floor, "
+            "%llu bound lookups, %llu unique keys, %llu pruned\n",
+            (unsigned long long)
+                diagnostics.final_queries_without_floor,
+            (unsigned long long) diagnostics.final_bound_queries,
+            (unsigned long long)
+                diagnostics.final_unique_bound_keys,
+            (unsigned long long) diagnostics.final_bound_prunes);
+    fprintf(stderr,
+            "# phase 2 projected length-only fallback: %llu pruned, "
+            "%llu rich-only pruned, %llu length-only pruned\n",
+            (unsigned long long)
+                diagnostics.final_length_bound_prunes,
+            (unsigned long long)
+                diagnostics.final_rich_only_vs_length_prunes,
+            (unsigned long long)
+                diagnostics.final_length_only_prunes);
+    fprintf(stderr,
+            "# phase 2 projected modular fallback: %llu pruned, "
+            "%llu rich-only pruned, %llu modular-only pruned\n",
+            (unsigned long long)
+                diagnostics.final_modular_bound_prunes,
+            (unsigned long long)
+                diagnostics.final_modular_rich_only_prunes,
+            (unsigned long long)
+                diagnostics.final_modular_only_prunes);
+  }
   fprintf(stderr,
           "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
           search.score_bound_entries(),

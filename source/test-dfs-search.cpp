@@ -294,6 +294,26 @@ static int smoke_test() {
               diagnostics.states_claimed ==
                   diagnostics.finite_states + diagnostics.dead_states,
           "projected state diagnostics do not partition claimed states");
+    check(projected.projected_query_diagnostics_enabled() &&
+              diagnostics.final_bound_queries > 0 &&
+              diagnostics.final_unique_bound_keys > 0 &&
+              diagnostics.final_unique_bound_keys <=
+                  diagnostics.final_bound_queries &&
+              diagnostics.final_bound_prunes ==
+                  uint64_t(projected.score_bound_prunes()) &&
+              diagnostics.final_length_bound_prunes +
+                  diagnostics.final_rich_only_vs_length_prunes ==
+                  diagnostics.final_bound_prunes &&
+              diagnostics.final_length_only_prunes == 0 &&
+              diagnostics.final_modular_bound_prunes >=
+                  diagnostics.final_modular_only_prunes &&
+              diagnostics.final_modular_bound_prunes -
+                  diagnostics.final_modular_only_prunes +
+                  diagnostics.final_modular_rich_only_prunes ==
+                  diagnostics.final_bound_prunes &&
+              diagnostics.final_modular_bound_prunes >=
+                  diagnostics.final_length_bound_prunes,
+          "projected final-query diagnostics are inconsistent");
     check_same_spellings(
         exhausted_expected_spellings,
         projected_output.take_sorted_results(),
