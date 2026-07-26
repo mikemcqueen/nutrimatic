@@ -407,13 +407,6 @@ static bool projected_action_quotient_enabled() {
       strcmp(enabled, "0") != 0;
 }
 
-static bool projected_support_sidecar_enabled() {
-  char const* enabled =
-      getenv("NUTRIMATIC_PROJECTED_SUPPORT_SIDECAR");
-  return enabled == NULL || enabled[0] == '\0' ||
-      strcmp(enabled, "0") != 0;
-}
-
 static bool projected_bottom_up_enabled() {
   char const* enabled =
       getenv("NUTRIMATIC_PROJECTED_BOTTOM_UP");
@@ -778,7 +771,8 @@ bool DfsAnagramSearch::length_certificate_rejects(
 
 bool DfsAnagramSearch::prepare_projected_actions() {
   static_assert(sizeof(ProjectedAction) == 48,
-                "ProjectedAction must remain three 16-byte blocks");
+                "ProjectedAction must remain three 16-byte blocks, the last "
+                "one partly free");
   projected_actions.clear();
   projected_action_support.clear();
   projected_repeated_requirements.clear();
@@ -845,7 +839,14 @@ bool DfsAnagramSearch::prepare_projected_actions() {
       offset += bucket_counts[bucket];
     }
     projected_bucket_starts[WILDCARD_BUCKET + 1] = offset;
-    projected_actions.resize(offset);
+    // The mask no longer lives in the action, so carry it alongside while the
+    // buckets are sorted and split the two arrays apart afterwards. That keeps
+    // the sidecar index-parallel by construction rather than by convention.
+    struct SortableAction {
+      ProjectedAction action;
+      uint64_t exact_support;
+    };
+    std::vector<SortableAction> ordered(offset);
     std::array<size_t, DFS_SYMBOL_COUNT + 1> write;
     for (size_t bucket = 0; bucket <= WILDCARD_BUCKET; ++bucket)
       write[bucket] = projected_bucket_starts[bucket];
@@ -858,7 +859,6 @@ bool DfsAnagramSearch::prepare_projected_actions() {
           : size_t(__builtin_ctzll(exact_support));
       FitClass const& fit = fit_classes.get()[id];
       ProjectedAction action;
-      action.exact_support_mask = exact_support;
       action.score_key_delta = score_key_deltas.get()[id];
       double const class_score = best_member_log_scores[id];
       action.partial_score = class_score + restart_log_rate;
@@ -883,31 +883,31 @@ bool DfsAnagramSearch::prepare_projected_actions() {
         projected_repeated_requirements.push_back(requirement);
         ++action.repeated_count;
       }
-      projected_actions[write[bucket]++] = action;
+      ordered[write[bucket]].action = action;
+      ordered[write[bucket]].exact_support = exact_support;
+      ++write[bucket];
     }
 
     for (size_t bucket = 0; bucket <= WILDCARD_BUCKET; ++bucket) {
       std::sort(
-          projected_actions.begin() +
-              projected_bucket_starts[bucket],
-          projected_actions.begin() +
-              projected_bucket_starts[bucket + 1],
-          [](ProjectedAction const& a, ProjectedAction const& b) {
+          ordered.begin() + projected_bucket_starts[bucket],
+          ordered.begin() + projected_bucket_starts[bucket + 1],
+          [](SortableAction const& a, SortableAction const& b) {
             uint32_t const a_length =
-                projected_total_length(a.packed_lengths);
+                projected_total_length(a.action.packed_lengths);
             uint32_t const b_length =
-                projected_total_length(b.packed_lengths);
+                projected_total_length(b.action.packed_lengths);
             if (a_length != b_length) return a_length > b_length;
-            return a.score_key_delta < b.score_key_delta;
+            return a.action.score_key_delta < b.action.score_key_delta;
           });
     }
 
-    // Strictly after the sort, in one place, so the sidecar cannot drift out
-    // of step with the actions it indexes.
-    projected_action_support.reserve(projected_actions.size());
-    for (size_t i = 0; i < projected_actions.size(); ++i)
-      projected_action_support.push_back(
-          projected_actions[i].exact_support_mask);
+    projected_actions.resize(offset);
+    projected_action_support.resize(offset);
+    for (size_t i = 0; i < offset; ++i) {
+      projected_actions[i] = ordered[i].action;
+      projected_action_support[i] = ordered[i].exact_support;
+    }
   } catch (...) {
     projected_actions.clear();
     projected_action_support.clear();
@@ -1583,11 +1583,12 @@ bool DfsAnagramSearch::hot_class_multiplicity_fits(
 }
 
 bool DfsAnagramSearch::projected_action_fits(
-    ProjectedAction const& action, BoundWorker const& worker) const {
+    size_t action_index, BoundWorker const& worker) const {
+  ProjectedAction const& action = projected_actions[action_index];
   if (projected_wild_length(action.packed_lengths) >
       worker.wild_left)
     return false;
-  if ((action.exact_support_mask & ~worker.bag_mask) != 0)
+  if ((projected_action_support[action_index] & ~worker.bag_mask) != 0)
     return false;
   uint32_t const* repeated = action.repeated_count == 0
       ? NULL
@@ -1844,15 +1845,18 @@ double DfsAnagramSearch::compute_parallel_score_bound(
 }
 
 void DfsAnagramSearch::consider_projected_bound_candidate(
-    ProjectedAction const& action, BoundWorker* worker, double* best,
+    size_t action_index, BoundWorker* worker, double* best,
     double* max_rounding_error) {
+  ProjectedAction const& action = projected_actions[action_index];
+  uint64_t const exact_support =
+      projected_action_support[action_index];
   ++worker->fitting_transitions;
   size_t const candidate_length =
       projected_total_length(action.packed_lengths);
   size_t const wild_length =
       projected_wild_length(action.packed_lengths);
   uint64_t const parent_bag_mask = worker->bag_mask;
-  uint64_t single_support = action.exact_support_mask;
+  uint64_t single_support = exact_support;
   uint32_t const* repeated = action.repeated_count == 0
       ? NULL
       : &projected_repeated_requirements[action.repeated_offset];
@@ -1880,7 +1884,7 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   worker->wild_left += wild_length;
   worker->letters_left += candidate_length;
   worker->score_key += action.score_key_delta;
-  single_support = action.exact_support_mask;
+  single_support = exact_support;
   for (uint32_t i = 0; i < action.repeated_count; ++i) {
     uint32_t const requirement = repeated[i];
     uint32_t const rank = packed_rank(requirement);
@@ -1945,11 +1949,10 @@ double DfsAnagramSearch::compute_projected_score_bound(
   size_t const begin = first_projected_length_candidate(
       projected_bucket_starts[bucket], end, worker->letters_left);
   for (size_t action = begin; action < end; ++action) {
-    ProjectedAction const& candidate = projected_actions[action];
     ++worker->candidate_tests;
-    if (!projected_action_fits(candidate, *worker)) continue;
+    if (!projected_action_fits(action, *worker)) continue;
     consider_projected_bound_candidate(
-        candidate, worker, &best, &max_rounding_error);
+        action, worker, &best, &max_rounding_error);
   }
 
   double const result =
@@ -2024,14 +2027,6 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   // Resolved once, before any worker starts, so no AVX2 instruction can be
   // reached on a machine that lacks it and no bag pays for the decision.
   ProjectedKernel const kernel = projected_kernel_choice();
-  bool const sidecar = projected_support_sidecar_enabled() &&
-      projected_action_support.size() == projected_actions.size();
-  if (progress != NULL && !sidecar) {
-    dfs_diagnostic(
-        progress,
-        "phase 2: projected support-mask sidecar disabled\n");
-    fflush(progress);
-  }
   if (progress != NULL && kernel != PROJECTED_KERNEL_SCALAR) {
     dfs_diagnostic(
         progress,
@@ -2159,20 +2154,17 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
       // kernels out of line, a runtime branch here made the scalar path spill
       // its loop-invariant registers across a call it never makes, and that
       // cost 14% of setup.
-      auto scan = [&](auto kernel_tag, auto sidecar_tag,
-                      VectorWorker* worker, uint64_t exact_mask,
-                      uint64_t base_key, size_t begin, size_t end) {
+      auto scan = [&](auto kernel_tag, VectorWorker* worker,
+                      uint64_t exact_mask, uint64_t base_key,
+                      size_t begin, size_t end) {
         for (size_t action_index = begin;
              action_index < end; ++action_index) {
           ++local_candidate_tests;
-          // Support filtering rejects most scanned actions at depth, so with
-          // the sidecar the rejection reads eight contiguous bytes and never
-          // touches the cold 48-byte record.
-          uint64_t const support =
-              decltype(sidecar_tag)::value
-                  ? projected_action_support[action_index]
-                  : projected_actions[action_index].exact_support_mask;
-          if ((support & ~exact_mask) != 0) continue;
+          // Support filtering rejects most scanned actions at depth, and the
+          // sidecar rejection reads eight contiguous bytes without touching
+          // the cold record.
+          if ((projected_action_support[action_index] & ~exact_mask) != 0)
+            continue;
           ProjectedAction const& action =
               projected_actions[action_index];
           uint32_t const* repeated =
@@ -2257,25 +2249,19 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
         uint64_t const base_key =
             exact_key * uint64_t(score_wild_span);
 
-        auto dispatch = [&](auto sidecar_tag) {
-          if (kernel == PROJECTED_KERNEL_SCALAR) {
-            scan(std::integral_constant<
-                     ProjectedKernel, PROJECTED_KERNEL_SCALAR>(),
-                 sidecar_tag, worker, exact_mask, base_key, begin, end);
-          } else if (kernel == PROJECTED_KERNEL_AVX2) {
-            scan(std::integral_constant<
-                     ProjectedKernel, PROJECTED_KERNEL_AVX2>(),
-                 sidecar_tag, worker, exact_mask, base_key, begin, end);
-          } else {
-            scan(std::integral_constant<
-                     ProjectedKernel, PROJECTED_KERNEL_VERIFY>(),
-                 sidecar_tag, worker, exact_mask, base_key, begin, end);
-          }
-        };
-        if (sidecar)
-          dispatch(std::true_type());
-        else
-          dispatch(std::false_type());
+        if (kernel == PROJECTED_KERNEL_SCALAR) {
+          scan(std::integral_constant<
+                   ProjectedKernel, PROJECTED_KERNEL_SCALAR>(),
+               worker, exact_mask, base_key, begin, end);
+        } else if (kernel == PROJECTED_KERNEL_AVX2) {
+          scan(std::integral_constant<
+                   ProjectedKernel, PROJECTED_KERNEL_AVX2>(),
+               worker, exact_mask, base_key, begin, end);
+        } else {
+          scan(std::integral_constant<
+                   ProjectedKernel, PROJECTED_KERNEL_VERIFY>(),
+               worker, exact_mask, base_key, begin, end);
+        }
 
         for (size_t wild = 0; wild < score_wild_span; ++wild) {
           double const best = worker->best[wild];
@@ -2370,9 +2356,9 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   double root_max_rounding_error = 0.0;
   for (size_t action_index = root_begin;
        action_index < root_end; ++action_index) {
+    if (!projected_action_fits(action_index, root)) continue;
     ProjectedAction const& action =
         projected_actions[action_index];
-    if (!projected_action_fits(action, root)) continue;
     ++fitting_transitions;
     assert(action.score_key_delta <= root.score_key);
     uint64_t const child_key =
@@ -2439,7 +2425,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
       root_end, root.letters_left);
   uint64_t const root_candidate_tests = root_end - root_begin;
   for (size_t action = root_begin; action < root_end; ++action) {
-    if (projected_action_fits(projected_actions[action], root))
+    if (projected_action_fits(action, root))
       root_candidates.push_back(uint32_t(action));
   }
 
@@ -2478,8 +2464,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
           next_candidate.fetch_add(1, std::memory_order_relaxed);
       if (index >= root_candidates.size()) break;
       consider_projected_bound_candidate(
-          projected_actions[root_candidates[index]],
-          worker, &worker->best,
+          root_candidates[index], worker, &worker->best,
           &worker->max_rounding_error);
     }
   };
