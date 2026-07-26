@@ -1,5 +1,7 @@
 #include "dfs-search.h"
 
+#include "dfs-diagnostic.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <fenv.h>
@@ -322,7 +324,6 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     certificate_group_rejects(0),
     certificate_scans_skipped(0),
     certificate_scans_kept(0),
-    certificate_prepare_seconds(0.0),
     bound_mode(SCORE_BOUND_OFF),
     bound_capacity(0),
     bound_value_bytes(0),
@@ -935,7 +936,9 @@ void DfsAnagramSearch::publish_parallel_score_bound(
 
 bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
                            int progress_factor,
-                           bool allow_cache_fallback) {
+                           bool allow_cache_fallback,
+                           bool dense_cache,
+                           int exact_letters) {
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const setup_start = PhaseClock::now();
   bound_states_computed = 0;
@@ -961,7 +964,6 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   certificate_group_rejects = 0;
   certificate_scans_skipped = 0;
   certificate_scans_kept = 0;
-  certificate_prepare_seconds = 0.0;
   bag.fill(0);
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
@@ -991,8 +993,13 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
 
   size_t forced_exact_letters = 0;
   bool has_forced_exact_letters = false;
-  score_projection_requested = projected_score_experiment(
+  bool const projection_experiment = projected_score_experiment(
       &forced_exact_letters, &has_forced_exact_letters);
+  if (exact_letters >= 0) {
+    forced_exact_letters = size_t(exact_letters);
+    has_forced_exact_letters = true;
+  }
+  score_projection_requested = !dense_cache || projection_experiment;
   projected_actions_ready = false;
   projected_actions.clear();
   projected_repeated_requirements.clear();
@@ -1134,55 +1141,57 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   }
   if (progress != NULL) {
     if (!encodable) {
-      fputs("# phase 2 preflight: theoretical state count exceeds the "
-            "supported range; dense score-table size and minimum -C "
-            "unavailable\n", progress);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: theoretical state count exceeds the "
+          "supported range; dense score-table size and minimum -C "
+          "unavailable\n");
     } else if (bag_mask != 0 && dense_sizes_available) {
       size_t const minimum_mib =
           float_bytes / MIB + size_t(float_bytes % MIB != 0);
-      fprintf(progress,
-              "# phase 2 preflight: %llu theoretical states, "
-              "%llu effective non-root states\n"
-              "# phase 2 preflight: "
-              "%zu double/%zu float dense score-table bytes, "
-              "minimum -C %zu MiB (%zu bytes)\n",
-              (unsigned long long) state_count,
-              (unsigned long long) effective_states,
-              double_bytes, float_bytes, minimum_mib, float_bytes);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: %llu theoretical states, "
+          "%llu effective non-root states\n",
+          (unsigned long long) state_count,
+          (unsigned long long) effective_states);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: "
+          "%zu double/%zu float dense score-table bytes, "
+          "minimum -C %zu MiB (%zu bytes)\n",
+          double_bytes, float_bytes, minimum_mib, float_bytes);
     } else if (bag_mask != 0) {
-      fprintf(progress,
-              "# phase 2 preflight: %llu theoretical states, "
-              "%llu effective non-root states\n"
-              "# phase 2 preflight: dense score-table size and minimum -C "
-              "exceed the "
-              "supported range\n",
-              (unsigned long long) state_count,
-              (unsigned long long) effective_states);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: %llu theoretical states, "
+          "%llu effective non-root states\n",
+          (unsigned long long) state_count,
+          (unsigned long long) effective_states);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: dense score-table size and minimum -C "
+          "exceed the supported range\n");
     } else {
-      fputs("# phase 2 preflight: empty bag; no score table needed\n",
-            progress);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: empty bag; no score table needed\n");
     }
     if (score_projection_requested && encodable) {
       size_t projected_bytes = 0;
       bool const projected_size_ok = dense_bound_requirements(
           score_effective_states, sizeof(float), &projected_bytes);
-      fprintf(progress,
-              "# phase 2 experiment: projected score table keeps %zu "
-              "rarest letters exact, merges %zu wildcard letters; "
-              "%llu states, ",
-              score_exact_letters, score_wild_letters,
-              (unsigned long long) score_effective_states);
+      dfs_diagnostic(
+          progress, "phase 2 preflight: projected score table keeps %zu "
+          "rarest letters exact, merges %zu wildcard letters; "
+          "%llu states, ",
+          score_exact_letters, score_wild_letters,
+          (unsigned long long) score_effective_states);
       if (projected_size_ok)
         fprintf(progress, "%zu bytes\n", projected_bytes);
       else
         fputs("size exceeds the supported range\n", progress);
       if (projected_actions_ready)
-        fprintf(progress,
-                "# phase 2 experiment: %zu concrete classes, "
-                "%zu projected actions (quotient %s)\n",
-                class_list->classes().size(),
-                projected_actions.size(),
-                projected_quotient_enabled ? "on" : "off");
+        dfs_diagnostic(
+            progress, "phase 2 preflight: %zu concrete classes, "
+            "%zu projected actions (quotient %s)\n",
+            class_list->classes().size(),
+            projected_actions.size(),
+            projected_quotient_enabled ? "on" : "off");
     }
     fflush(progress);
   }
@@ -1196,33 +1205,39 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       certificate_mode != 0 && score_bounds_applicable;
   length_certificate_shadow = certificate_mode == 1;
   if (length_certificate_requested) {
-    PhaseClock::time_point const certificate_start = PhaseClock::now();
     if (!prepare_length_certificate())
       length_certificate_ready = false;
-    certificate_prepare_seconds =
-        std::chrono::duration<double>(
-            PhaseClock::now() - certificate_start).count();
   }
-  if (!allow_cache_fallback && !score_projection_requested &&
-      score_bounds_applicable) {
-    if (!dense_sizes_available) {
+  if (!allow_cache_fallback && score_bounds_applicable) {
+    size_t required_bytes = float_bytes;
+    bool size_available = dense_sizes_available;
+    char const* mode_name = "dense";
+    if (score_projection_requested) {
+      mode_name = "projected dense";
+      size_available = dense_bound_requirements(
+          score_effective_states, sizeof(float), &required_bytes);
+    }
+    if (!size_available) {
       if (progress != NULL) {
-        fputs("error: dense score table size exceeds the supported range\n"
-              "       use --allow-cache-fallback\n", progress);
+        fprintf(progress,
+                "error: %s score table size exceeds the supported range\n"
+                "       use --allow-cache-fallback\n",
+                mode_name);
         fflush(progress);
       }
       return false;
     }
-    if (float_bytes > score_cache_budget) {
+    if (required_bytes > score_cache_budget) {
       size_t const required_mib =
-          float_bytes / MIB + size_t(float_bytes % MIB != 0);
+          required_bytes / MIB +
+          size_t(required_bytes % MIB != 0);
       size_t const supplied_mib = score_cache_budget / MIB;
       if (progress != NULL) {
         fprintf(progress,
-                "error: dense score table requires at least %zu MiB; "
+                "error: %s score table requires at least %zu MiB; "
                 "supplied cache is %zu MiB\n"
                 "       use -C %zu or --allow-cache-fallback\n",
-                required_mib, supplied_mib, required_mib);
+                mode_name, required_mib, supplied_mib, required_mib);
         fflush(progress);
       }
       return false;
@@ -1230,19 +1245,19 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   }
   prepare_score_bounds(state_count, sink);
   if (progress != NULL) {
-    fprintf(progress, "# phase 2 preflight: score-bound mode %s",
-            score_bound_mode_name(bound_mode));
+    dfs_diagnostic(progress, "phase 2 preflight: score-bound mode %s",
+                   score_bound_mode_name(bound_mode));
     if (bound_mode != SCORE_BOUND_OFF)
       fprintf(progress, " (%zu-byte values, capacity %zu, %s coverage)",
               bound_value_bytes, bound_capacity,
               bound_complete ? "complete effective" : "partial");
     fputc('\n', progress);
     if (bound_mode == SCORE_BOUND_PROJECTED)
-      fprintf(progress,
-              "# phase 2 experiment: projected evaluator %s\n",
-              bound_plain_float_values.get() != NULL
-                  ? "bottom-up plain"
-                  : "recursive atomic");
+      dfs_diagnostic(
+          progress, "phase 2 preflight: projected evaluator %s\n",
+          bound_plain_float_values.get() != NULL
+              ? "bottom-up plain"
+              : "recursive atomic");
     fflush(progress);
   }
   if (bound_mode != SCORE_BOUND_OFF && bound_complete) {
@@ -1279,15 +1294,17 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   setup_seconds =
       std::chrono::duration<double>(search_start - setup_start).count();
   if (progress_stream != NULL) {
-    fprintf(progress_stream,
-            "# phase 2: precomputed %zu bounded states in %.3fs\n",
-            bound_states_computed, setup_seconds);
+    dfs_diagnostic(
+        progress_stream,
+        "phase 2: precomputed %zu bounded states in %.1fs\n",
+        bound_states_computed, setup_seconds);
     if (bound_mode == SCORE_BOUND_PREFIX)
-      fprintf(progress_stream,
-              "# phase 2: dense-prefix bounds will be constructed lazily "
-              "during search for score keys below %zu once a score floor "
-              "is available\n",
-              bound_capacity);
+      dfs_diagnostic(
+          progress_stream,
+          "phase 2: dense-prefix bounds will be constructed lazily "
+          "during search for score keys below %zu once a score floor "
+          "is available\n",
+          bound_capacity);
     fflush(progress_stream);
   }
   if (!hot_classes_ready) {
@@ -2008,10 +2025,11 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     actual_workers = std::max(actual_workers, active_workers);
     if (!announced_threads && progress != NULL &&
         active_workers > 1) {
-      fprintf(progress,
-              "# phase 2: using %zu threads to calculate projected "
-              "score bounds bottom-up\n",
-              active_workers);
+      dfs_diagnostic(
+          progress,
+          "phase 2: using up to %zu threads to calculate projected "
+          "score bounds bottom-up\n",
+          worker_count);
       fflush(progress);
       announced_threads = true;
     }
@@ -2146,10 +2164,10 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
     return false;
   }
   if (progress != NULL && worker_count > 1) {
-    fprintf(progress,
-            "# phase 2: using %zu threads to calculate projected "
-            "score bounds\n",
-            worker_count);
+    dfs_diagnostic(
+        progress,
+        "phase 2: using %zu threads to calculate projected score bounds\n",
+        worker_count);
     fflush(progress);
   }
 
@@ -2266,9 +2284,10 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
     return false;
   }
   if (progress != NULL && worker_count > 1) {
-    fprintf(progress,
-            "# phase 2: using %zu threads to calculate dense score bounds\n",
-            worker_count);
+    dfs_diagnostic(
+        progress,
+        "phase 2: using %zu threads to calculate dense score bounds\n",
+        worker_count);
     fflush(progress);
   }
 
@@ -2561,9 +2580,8 @@ void DfsAnagramSearch::report_search_progress(
           new_solutions, std::memory_order_relaxed) +
       new_solutions;
   std::lock_guard<std::mutex> const guard(progress_mutex);
-  fprintf(progress_stream,
-          "# phase 2: %lld nodes, %lld solutions\n",
-          (long long) total_nodes, (long long) total_solutions);
+  dfs_diagnostic(progress_stream, "phase 2: %lld nodes, %lld solutions\n",
+                 (long long) total_nodes, (long long) total_solutions);
   fflush(progress_stream);
 }
 
@@ -2702,9 +2720,8 @@ void DfsAnagramSearch::walk_unoptimized(
     double representative_log_score, DfsSolutionSink* sink) {
   ++nodes;
   if (progress_stream != NULL && nodes == next_progress) {
-    fprintf(progress_stream,
-            "# phase 2: %lld nodes, %lld solutions\n",
-            (long long) nodes, (long long) solutions);
+    dfs_diagnostic(progress_stream, "phase 2: %lld nodes, %lld solutions\n",
+                   (long long) nodes, (long long) solutions);
     fflush(progress_stream);
     if (next_progress <= INT64_MAX - progress_interval)
       next_progress += progress_interval;

@@ -3,6 +3,8 @@
 source ~/code/nutrimatic/.env/bin/activate
 conan build .
 
+source build/dep-info/conanbuild.sh # for meson, ninja
+
 ## REVIEW
 
 always /code-review (claude) or /review (codex) code before committing

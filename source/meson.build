@@ -71,7 +71,12 @@ index_lib = library(
 
 dfs_class_list_lib = library(
   'dfs-class-list',
-  ['dfs-class-list.cpp', 'dfs-search.cpp', 'dfs-output.cpp'],
+  [
+    'dfs-class-list.cpp',
+    'dfs-diagnostic.cpp',
+    'dfs-search.cpp',
+    'dfs-output.cpp',
+  ],
   link_with: index_lib,
   dependencies: thread_dep,
 )

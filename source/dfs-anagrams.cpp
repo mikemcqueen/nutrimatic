@@ -1,4 +1,5 @@
 #include "dfs-class-list.h"
+#include "dfs-diagnostic.h"
 #include "dfs-output.h"
 #include "dfs-search.h"
 #include "index.h"
@@ -99,7 +100,9 @@ struct Args {
   size_t score_cache_bytes;
   int preprocess_threads;
   int search_threads;
+  int exact_letters;
   bool allow_cache_fallback;
+  bool dense_cache;
 };
 
 static void usage(char const* program) {
@@ -108,15 +111,20 @@ static void usage(char const* program) {
       " [-u used-letters] [-m min-word-length] [-n top]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
-      " [-F|--allow-cache-fallback]\n"
+      " [-d projection-depth]"
+      " [-D|--dense-cache] [-F|--allow-cache-fallback]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
       "  -S, --search-threads defaults to 1\n"
+      "  -d, --projection-depth keeps this many rarest letter types exact in"
+      " the projected cache; the default is the largest depth that fits -C\n"
+      "  -D, --dense-cache requests an exact dense score cache instead of"
+      " the default projected dense cache\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
-      " dense table does not fit\n",
+      " requested table does not fit\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
       DEFAULT_SCORE_CACHE_MIB);
 }
@@ -129,6 +137,8 @@ static struct optparse_long const long_options[] = {
   { "cache-size", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { "search-threads", 'S', OPTPARSE_REQUIRED },
+  { "projection-depth", 'd', OPTPARSE_REQUIRED },
+  { "dense-cache", 'D', OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
@@ -140,7 +150,9 @@ static bool parse_args(char* argv[], Args* out) {
   out->score_cache_bytes = DEFAULT_SCORE_CACHE_MIB * MIB;
   out->preprocess_threads = 0;
   out->search_threads = 1;
+  out->exact_letters = -1;
   out->allow_cache_fallback = false;
+  out->dense_cache = false;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -191,14 +203,28 @@ static bool parse_args(char* argv[], Args* out) {
           return false;
         }
         break;
+      case 'd':
+        if (!parse_count(options.optarg, "--projection-depth",
+                         &out->exact_letters))
+          return false;
+        break;
       case 'F':
         out->allow_cache_fallback = true;
+        break;
+      case 'D':
+        out->dense_cache = true;
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
         usage(argv[0]);
         return false;
     }
+  }
+
+  if (out->dense_cache && out->exact_letters >= 0) {
+    fputs("error: --projection-depth cannot be used with --dense-cache\n",
+          stderr);
+    return false;
   }
 
   char const* index_file = optparse_arg(&options);
@@ -235,6 +261,8 @@ static bool parse_args(char* argv[], Args* out) {
 }
 
 int main(int argc, char* argv[]) {
+  dfs_reset_diagnostic_clock();
+
   Args args;
   if (!parse_args(argv, &args)) return 2;
 
@@ -245,20 +273,21 @@ int main(int argc, char* argv[]) {
   }
 
   if (args.max_words > 0) {
-    fprintf(stderr, "# %zu letters \"%s\", words of %d+, at most %d word%s\n",
-            args.letters.size(), args.letters.c_str(), args.min_word_len,
-            args.max_words, args.max_words == 1 ? "" : "s");
+    dfs_diagnostic(
+        stderr, "%zu letters \"%s\", words of %d+, at most %d word%s\n",
+        args.letters.size(), args.letters.c_str(), args.min_word_len,
+        args.max_words, args.max_words == 1 ? "" : "s");
   } else {
-    fprintf(stderr, "# %zu letters \"%s\", no minimum word length\n",
-            args.letters.size(), args.letters.c_str());
+    dfs_diagnostic(stderr, "%zu letters \"%s\", no minimum word length\n",
+                   args.letters.size(), args.letters.c_str());
   }
 
   IndexReader reader(fp);
   DfsClassList classes(&reader, args.letters, args.min_word_len);
-  fprintf(stderr,
-          "# phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
-          classes.entry_count(), classes.classes().size(),
-          (long long) classes.nodes_visited());
+  dfs_diagnostic(
+      stderr, "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
+      classes.entry_count(), classes.classes().size(),
+      (long long) classes.nodes_visited());
   fflush(stderr);
 
   double const restart = 1e-6;
@@ -279,57 +308,51 @@ int main(int argc, char* argv[]) {
       size_t(args.search_threads));
   DfsTopN output(&classes, size_t(args.top));
   if (!search.run(args.top == 0 ? NULL : &output, stderr,
-                  args.progress_factor, args.allow_cache_fallback))
+                  args.progress_factor, args.allow_cache_fallback,
+                  args.dense_cache, args.exact_letters))
     return 2;
-  fprintf(stderr,
-          "# phase 2 timing: %.6f s setup, %.6f s search, "
-          "%llu successful bound transitions, %llu nextafter calls\n",
-          search.phase_two_setup_seconds(),
-          search.phase_two_search_seconds(),
-          (unsigned long long) search.score_bound_transitions(),
-          (unsigned long long) search.score_bound_nextafter_calls());
+  dfs_diagnostic(
+      stderr, "phase 2 timing: %.1fs setup, %.1fs search, "
+      "%llu successful bound transitions, %llu nextafter calls\n",
+      search.phase_two_setup_seconds(),
+      search.phase_two_search_seconds(),
+      (unsigned long long) search.score_bound_transitions(),
+      (unsigned long long) search.score_bound_nextafter_calls());
   if (search.score_bound_mode() ==
       DfsAnagramSearch::SCORE_BOUND_PROJECTED)
-    fprintf(stderr,
-            "# phase 2 projected work: %llu candidate tests, "
-            "%llu fitting transitions\n",
-            (unsigned long long) search.score_bound_candidate_tests(),
-            (unsigned long long)
-                search.score_bound_fitting_transitions());
-  if (search.length_certificate_enabled())
-    fprintf(stderr,
-            "# phase 2 length certificate: %s, %zu table bytes, "
-            "%.6f s prepare, %llu group tests, %llu rejected, "
-            "%llu class scans kept, %llu skipped\n",
-            search.length_certificate_skipping()
-                ? "active"
-                : "shadow",
-            search.length_certificate_table_bytes(),
-            search.length_certificate_prepare_seconds(),
-            (unsigned long long)
-                search.length_certificate_group_tests(),
-            (unsigned long long)
-                search.length_certificate_group_rejects(),
-            (unsigned long long)
-                search.length_certificate_scans_kept(),
-            (unsigned long long)
-                search.length_certificate_scans_skipped());
+    dfs_diagnostic(
+        stderr, "phase 2 projected work: %llu candidate tests, "
+        "%llu fitting transitions\n",
+        (unsigned long long) search.score_bound_candidate_tests(),
+        (unsigned long long) search.score_bound_fitting_transitions());
+  if (search.length_certificate_enabled()) {
+    dfs_diagnostic(
+        stderr, "phase 2 length certificate: %s, %zu table bytes\n",
+        search.length_certificate_skipping() ? "active" : "shadow",
+        search.length_certificate_table_bytes());
+    dfs_diagnostic(
+        stderr, "phase 2   %llu group tests, %llu rejected, "
+        "%llu class scans kept, %llu skipped\n",
+        (unsigned long long) search.length_certificate_group_tests(),
+        (unsigned long long) search.length_certificate_group_rejects(),
+        (unsigned long long) search.length_certificate_scans_kept(),
+        (unsigned long long) search.length_certificate_scans_skipped());
+  }
   if (search.search_threads_used() > 1)
-    fprintf(stderr,
-            "# phase 2 search parallelism: %d requested, %zu used, "
-            "%llu tasks\n",
-            args.search_threads, search.search_threads_used(),
-            (unsigned long long) search.search_tasks_generated());
-  fprintf(stderr,
-          "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
-          search.score_bound_entries(),
-          search.score_bound_bytes_charged());
-  fprintf(stderr,
-          "# phase 2 complete: %lld nodes, %lld solutions, "
-          "%zu spellings expanded, %zu retained\n",
-          (long long) search.nodes_visited(),
-          (long long) search.solutions_found(),
-          output.spellings_expanded(), output.size());
+    dfs_diagnostic(
+        stderr, "phase 2 search parallelism: %d requested, %zu used, "
+        "%llu tasks\n",
+        args.search_threads, search.search_threads_used(),
+        (unsigned long long) search.search_tasks_generated());
+  dfs_diagnostic(
+      stderr, "phase 2 score cache: %zu bound entries, %zu bound bytes\n",
+      search.score_bound_entries(), search.score_bound_bytes_charged());
+  dfs_diagnostic(
+      stderr, "phase 2 complete: %lld nodes, %lld solutions, "
+      "%zu spellings expanded, %zu retained\n",
+      (long long) search.nodes_visited(),
+      (long long) search.solutions_found(),
+      output.spellings_expanded(), output.size());
   fflush(stderr);
 
   std::vector<DfsSpelling> const results = output.take_sorted_results();

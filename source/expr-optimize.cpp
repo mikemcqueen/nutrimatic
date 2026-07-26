@@ -34,7 +34,7 @@ void OptimizeExpr(StdFst const& input, StdMutableFst* output) {
 
   if (getenv("DEBUG_FST") != NULL) {
     fprintf(stderr,
-        "optimize(%.2fs): %d rmeps(%.2fs) %d det(%.2fs) %d min(%.2fs) %d\n",
+        "optimize(%.1fs): %d rmeps(%.1fs) %d det(%.1fs) %d min(%.1fs) %d\n",
         double(t4 - t1) / CLOCKS_PER_SEC, n1,
         double(t2 - t1) / CLOCKS_PER_SEC, n2,
         double(t3 - t2) / CLOCKS_PER_SEC, n3,
