@@ -127,6 +127,27 @@ output expansion and heap locking may occupy a materially larger share of the
 run. Parallel-search retention and thread-count selection must therefore
 include a million-result benchmark rather than extrapolating from this result.
 
+## Integration baseline
+
+The integration starts from branch head
+`a4f05268885d28eb2a726915653b786cbbe686ae`. The only initial worktree change
+was the pending refinement to `plans/dfs-codex-1-integration.md`.
+
+The untouched source built successfully and passed `test-dfs-search`,
+`test-dfs-output`, `test-dfs-class-list`, and the corpus-backed
+`test-dfs-search --validate-14` smoke check.
+
+The 40-letter S6 prefix at projected depth 15, top-10,000, and a 1,024 MiB
+cache retained 10,000 rows with cutoff score `2.984e-34`. Phase 2 used
+4.513798 seconds of setup and 251.849998 seconds of search, visited
+3,987,952,548 nodes, found 320,681 class solutions, and expanded 149,148
+spellings. Its complete output SHA-256 is
+`f8aae06669bcb31561134a2661ca8af71062ad378aae401ca53cb786161b4d5f`;
+the first 9,900 rows hash to
+`313c91e1f933abd8ff2d698e0453223c4e7d834f5c9b27dbfe1deddf59ab89e2`.
+The ignored reference artifact is
+`results/dfs-codex-1-baseline.stdout`.
+
 ## Recommended integration order
 
 ### 1. Port the group-only length certificate

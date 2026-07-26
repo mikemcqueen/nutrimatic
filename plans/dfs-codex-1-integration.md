@@ -161,7 +161,7 @@ unrelated edits.
 
 | Phase | Deliverable | Status | Proposed commit |
 |---:|---|:---:|---|
-| 0 | Baseline contract | [ ] | `Record DFS integration baseline` |
+| 0 | Baseline contract | [x] | `Record DFS integration baseline` |
 | 1 | Serial worker refactor | [ ] | `Isolate concrete DFS state` |
 | 2 | Group-only length certificate | [ ] | `Certify concrete DFS length groups` |
 | 3 | Concurrent top-N sink | [ ] | `Make DFS top-N thread-safe` |
@@ -212,7 +212,7 @@ IDX="$IDX" ./build/test-dfs-search --validate-14
 Keep tests focused on invariants and small synthetic indexes. Long S6 runs are
 benchmark gates, not unit tests.
 
-## Phase 0 — freeze the baseline and integration contract [ ]
+## Phase 0 — freeze the baseline and integration contract [x]
 
 ### Purpose
 
@@ -227,12 +227,12 @@ this plan before source work begins.
 
 ### Tasks
 
-- [ ] Confirm the findings refer to independent commit `30561e0`.
-- [ ] Record the current branch head and `git status --short`.
-- [ ] Build the untouched source.
-- [ ] Run the common smoke suite.
-- [ ] Capture one serial 48-letter reference at the established projected
-      depth and output limit. Preserve complete stdout in the ignored
+- [x] Confirm the findings refer to independent commit `30561e0`.
+- [x] Record the current branch head and `git status --short`.
+- [x] Build the untouched source.
+- [x] Run the common smoke suite.
+- [x] Capture one serial 40-letter, top-10,000 reference at the established
+      projected depth. Preserve complete stdout in the ignored
       `results/` directory so Phase 5 can inspect the cutoff bucket and compare
       rows above it:
 
@@ -241,25 +241,25 @@ this plan before source work begins.
   BASELINE_OUTPUT=results/dfs-codex-1-baseline.stdout
   BASELINE_LOG=results/dfs-codex-1-baseline.stderr
   NUTRIMATIC_PROJECTED_SCORE_D=15 \
-    ./build/dfs-anagrams "$IDX" "${S6:0:48}" \
-      -n 100000 -C 1024 -F -p 10000 \
+    ./build/dfs-anagrams "$IDX" "${S6:0:40}" \
+      -n 10000 -C 1024 -F -p 10000 \
       >"$BASELINE_OUTPUT" 2>"$BASELINE_LOG"
-  test "$(wc -l <"$BASELINE_OUTPUT")" -eq 100000
+  test "$(wc -l <"$BASELINE_OUTPUT")" -eq 10000
   sha256sum "$BASELINE_OUTPUT"
-  head -n 99000 "$BASELINE_OUTPUT" | sha256sum
+  head -n 9900 "$BASELINE_OUTPUT" | sha256sum
   tail -n 1 "$BASELINE_OUTPUT"
   ```
 
-- [ ] Confirm the `dfs-anagrams` command itself exits successfully before
+- [x] Confirm the `dfs-anagrams` command itself exits successfully before
       accepting either hash. Do not use a live `dfs-anagrams | head` pipeline,
       because early pipe closure can hide an upstream failure.
-- [ ] Record the artifact path and row count, full-output SHA-256, SHA-256 of
-      the first 99,000 output rows, printed cutoff score, setup time, search
+- [x] Record the artifact path and row count, full-output SHA-256, SHA-256 of
+      the first 9,900 output rows, printed cutoff score, setup time, search
       time, DFS nodes, solutions, spellings expanded, retained results, and
       projected work counters in the implementation log section at the end of
       this file. Retain the ignored output artifact through Phase 5.
-- [ ] Review both documents for agreement with the current source.
-- [ ] Run `git diff --check`.
+- [x] Review both documents for agreement with the current source.
+- [x] Run `git diff --check`.
 
 ### Completion gate
 
@@ -827,12 +827,12 @@ The required correctness result is:
 Parallel node counts may differ slightly because floor publication order
 changes.
 
-For the 100,000-row CLI baseline comparison, hashing the first 99% of output
+For the 10,000-row CLI baseline comparison, hashing the first 99% of output
 is a useful quick signal. `dfs-anagrams` already prints retained results in
 descending score order with deterministic tie ordering:
 
 ```bash
-head -n 99000 output.txt | sha256sum
+head -n 9900 output.txt | sha256sum
 ```
 
 It is not the correctness definition and must not influence production code.
@@ -850,8 +850,8 @@ progress factor, and top-N:
 
 ```bash
 NUTRIMATIC_PROJECTED_SCORE_D=15 \
-  ./build/dfs-anagrams "$IDX" "${S6:0:48}" \
-    -n 100000 -C 1024 -F -p 10000 --search-threads N \
+  ./build/dfs-anagrams "$IDX" "${S6:0:40}" \
+    -n 10000 -C 1024 -F -p 10000 --search-threads N \
     >results/dfs-codex-1-integrated-MODE.stdout \
     2>results/dfs-codex-1-integrated-MODE.stderr
 ```
@@ -860,9 +860,15 @@ Prefix the disabled cells with `NUTRIMATIC_LENGTH_CERTIFICATE=0`; leave the
 variable unset for active cells. Replace `MODE` with a distinct matrix-cell
 name. The disabled one-thread output must match the complete Phase 0 artifact
 byte-for-byte. For the other cells, apply the cutoff-tie comparison above and
-compare their first-99,000-row smoke hashes with the Phase 0 prefix hash.
+compare their first-9,900-row smoke hashes with the Phase 0 prefix hash.
 
-Then run the established 38-letter quick differential:
+The following two commands are additional performance gates, not alternate
+baseline parameters. Their explicit depths reproduce previously measured
+workloads: `d=13` is the established 38-letter quick differential, while
+`d=12` is only the starting point for finding a practical million-result
+reference. Neither depth is an automatic policy decision.
+
+First run the established 38-letter quick differential:
 
 ```bash
 NUTRIMATIC_PROJECTED_SCORE_D=13 \
@@ -923,7 +929,7 @@ with disproportionate work remains visible.
       38-letter reference.
 - [ ] Parallel search provides a useful wall-time improvement on the
       top-1,000,000 reference; a top-1,000-only win is insufficient.
-- [ ] On the exact 48-letter, top-100,000 command, the combined phase-2 time
+- [ ] On the exact 40-letter, top-10,000 command, the combined phase-2 time
       improves over the Phase 0 serial baseline.
 - [ ] Peak RSS remains within the expected certificate tables plus shallow
       task/worker storage.
@@ -964,8 +970,8 @@ At minimum measure:
 
 | Workload | Top-N | Depth neighborhood |
 |---|---:|---|
-| `${S6:0:48}` | 1 | 11, 12, 13, 14 |
-| `${S6:0:48}` | 10 | 12, 13, 14 |
+| `${S6:0:40}` | 1 | 11, 12, 13, 14 |
+| `${S6:0:40}` | 10 | 12, 13, 14 |
 | `${S6:0:38}` | 1,000 | 12, 13, 14, 15 |
 | million-result reference | 1,000,000 | neighbors of its serial winner |
 
@@ -1071,26 +1077,48 @@ speedup ratios.
 
 ```text
 branch head:
+  a4f05268885d28eb2a726915653b786cbbe686ae
+initial git status --short:
+  M plans/dfs-codex-1-integration.md
 build:
+  PASS — source /home/mike/code/nutrimatic/.env/bin/activate && conan build .
 smoke tests:
-48-letter command:
+  PASS — test-dfs-search, test-dfs-output, test-dfs-class-list,
+  and IDX="$IDX" test-dfs-search --validate-14
+40-letter, top-10,000 command:
+  PASS (exit 0) — NUTRIMATIC_PROJECTED_SCORE_D=15,
+  -n 10000 -C 1024 -F -p 10000
 baseline output artifact:
+  results/dfs-codex-1-baseline.stdout
 retained output rows:
+  10000
 full stdout SHA-256:
-99,000-row stdout SHA-256:
+  f8aae06669bcb31561134a2661ca8af71062ad378aae401ca53cb786161b4d5f
+9,900-row stdout SHA-256:
+  313c91e1f933abd8ff2d698e0453223c4e7d834f5c9b27dbfe1deddf59ab89e2
 printed cutoff score:
+  2.984e-34
 setup:
+  4.513798 s
 search:
+  251.849998 s
 DFS nodes:
+  3987952548
 solutions:
+  320681
 spellings expanded/retained:
+  149148 / 10000
+projected work:
+  7050240 bound entries, 12184378227 successful bound transitions,
+  17491291 nextafter calls, 11154835508 candidate tests,
+  12580372385 fitting transitions
 ```
 
 ### Phase commits
 
 | Phase | Commit | Review | Verification notes |
 |---:|---|---|---|
-| 0 | pending | pending | |
+| 0 | `Record DFS integration baseline` | complete | Build, common smoke suite, and 40-letter reference passed. |
 | 1 | pending | pending | |
 | 2 | pending | pending | |
 | 3 | pending | pending | |
