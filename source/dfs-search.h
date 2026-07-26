@@ -93,6 +93,32 @@ class DfsAnagramSearch {
   size_t preprocess_threads_used() const {
     return actual_preprocess_threads;
   }
+  bool length_certificate_enabled() const {
+    return length_certificate_ready;
+  }
+  bool length_certificate_skipping() const {
+    return length_certificate_ready && !length_certificate_shadow;
+  }
+  uint64_t length_certificate_group_tests() const {
+    return certificate_group_tests;
+  }
+  uint64_t length_certificate_group_rejects() const {
+    return certificate_group_rejects;
+  }
+  uint64_t length_certificate_scans_skipped() const {
+    return certificate_scans_skipped;
+  }
+  uint64_t length_certificate_scans_kept() const {
+    return certificate_scans_kept;
+  }
+  double length_certificate_prepare_seconds() const {
+    return certificate_prepare_seconds;
+  }
+  size_t length_certificate_table_bytes() const {
+    return certificate_max_score.size() * sizeof(double) +
+        certificate_group_end.size() * sizeof(uint32_t) +
+        length_tail_bounds.size() * sizeof(double);
+  }
 
  private:
   struct AlignedFree {
@@ -146,18 +172,30 @@ class DfsAnagramSearch {
     int64_t nodes;
     int64_t solutions;
     int64_t bound_prunes;
+    uint64_t certificate_group_tests;
+    uint64_t certificate_group_rejects;
+    uint64_t certificate_scans_skipped;
+    uint64_t certificate_scans_kept;
     int64_t next_progress;
     int64_t reported_solutions;
   };
 
   bool prepare_hot_classes();
   bool prepare_projected_actions();
+  bool prepare_length_certificate();
+  bool length_certificate_rejects(
+      size_t base, size_t length, size_t letters_left,
+      double representative_log_score, double floor) const;
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void clear_score_bounds();
 
   void walk(SearchWorker* worker, size_t letters_left,
             size_t entry_point, double representative_log_score,
             DfsSolutionSink* sink);
+  void walk_certified(SearchWorker* worker, int rank, size_t start,
+                      size_t end, size_t letters_left,
+                      double representative_log_score, double floor,
+                      DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
@@ -244,6 +282,18 @@ class DfsAnagramSearch {
   bool projected_actions_ready;
   bool projected_quotient_enabled;
   bool hot_classes_ready;
+  bool length_certificate_requested;
+  bool length_certificate_shadow;
+  bool length_certificate_ready;
+  size_t certificate_stride;
+  std::vector<double> certificate_max_score;
+  std::vector<uint32_t> certificate_group_end;
+  std::vector<double> length_tail_bounds;
+  uint64_t certificate_group_tests;
+  uint64_t certificate_group_rejects;
+  uint64_t certificate_scans_skipped;
+  uint64_t certificate_scans_kept;
+  double certificate_prepare_seconds;
 
   ScoreBoundMode bound_mode;
   std::unique_ptr<AtomicWord, AlignedFree> bound_values;

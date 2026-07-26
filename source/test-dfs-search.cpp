@@ -114,6 +114,8 @@ static int smoke_test() {
 
     check(search.solutions_found() == 6, "wrong solution count");
     check(sink.solutions.size() == 6, "permutation duplicate emitted");
+    check(!search.length_certificate_enabled(),
+          "sink without a floor enabled the length certificate");
     double const expected =
         2.0 * log(5.0) + log(1e-6) - log(double(reader.count()));
     check(fabs(sink.ab_ab_log_score - expected) < 1e-12,
@@ -131,14 +133,38 @@ static int smoke_test() {
               repeated_sink.ordered_scores == sink.ordered_scores,
           "reused search changed optimized traversal");
 
+    check(setenv(
+              "NUTRIMATIC_LENGTH_CERTIFICATE", "0", 1) == 0,
+          "could not disable length certificate");
     DfsTopN expected_output(&classes, 2);
     DfsAnagramSearch exhaustive(
         &classes, "aabb", 1e-6, reader.count(), 0);
     exhaustive.run(&expected_output);
+    check(!exhaustive.length_certificate_enabled(),
+          "disabled length certificate was prepared");
     std::vector<DfsSpelling> const expected_spellings =
         expected_output.take_sorted_results();
 
     size_t const bound_budget = 4096;
+    DfsTopN disabled_output(&classes, 2);
+    DfsAnagramSearch disabled(
+        &classes, "aabb", 1e-6, reader.count(), bound_budget);
+    disabled.run(&disabled_output);
+    std::vector<DfsSpelling> const disabled_spellings =
+        disabled_output.take_sorted_results();
+
+    check(setenv(
+              "NUTRIMATIC_LENGTH_CERTIFICATE", "shadow", 1) == 0,
+          "could not shadow length certificate");
+    DfsTopN shadow_output(&classes, 2);
+    DfsAnagramSearch shadow(
+        &classes, "aabb", 1e-6, reader.count(), bound_budget);
+    shadow.run(&shadow_output);
+    std::vector<DfsSpelling> const shadow_spellings =
+        shadow_output.take_sorted_results();
+    check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
+          "could not enable length certificate");
+
     DfsTopN bounded_output(&classes, 2);
     DfsAnagramSearch bounded(
         &classes, "aabb", 1e-6, reader.count(), bound_budget);
@@ -162,9 +188,41 @@ static int smoke_test() {
           "score cache exceeded its byte budget");
     check(bounded.nodes_visited() <= exhaustive.nodes_visited(),
           "score bound visited more nodes than exhaustive DFS");
+    check(shadow.length_certificate_enabled() &&
+              !shadow.length_certificate_skipping(),
+          "shadow length certificate used the wrong mode");
+    check(bounded.length_certificate_enabled() &&
+              bounded.length_certificate_skipping(),
+          "active length certificate used the wrong mode");
+    check(shadow.nodes_visited() == disabled.nodes_visited() &&
+              shadow.solutions_found() == disabled.solutions_found() &&
+              shadow.score_bound_prunes() ==
+                  disabled.score_bound_prunes(),
+          "shadow length certificate changed traversal counters");
+    check(bounded.length_certificate_scans_skipped() > 0,
+          "active length certificate skipped no class group");
+    check_same_spellings(
+        expected_spellings, disabled_spellings,
+        "disabled length certificate changed retained spellings");
+    check_same_spellings(
+        expected_spellings, shadow_spellings,
+        "shadow length certificate changed retained spellings");
     check_same_spellings(
         expected_spellings, bounded_spellings,
         "score bound changed the retained spellings");
+
+    DfsTopN certificate_only_output(&classes, 2);
+    DfsAnagramSearch certificate_only(
+        &classes, "aabb", 1e-6, reader.count(), 0);
+    certificate_only.run(&certificate_only_output);
+    check(certificate_only.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_OFF &&
+              certificate_only.length_certificate_enabled(),
+          "zero score cache disabled the length certificate");
+    check_same_spellings(
+        expected_spellings,
+        certificate_only_output.take_sorted_results(),
+        "certificate-only search changed retained spellings");
 
     DfsTopN isolated_output(&classes, 2);
     size_t const score_only_budget = 128;
@@ -374,21 +432,44 @@ static int smoke_test() {
         boundary_expected.ordered_scores[best_position];
     std::vector<size_t> const& best_path =
         boundary_expected.ordered_indexes[best_position];
-    FixedFloorSolutions boundary_output(
-        nextafter(best_score, -HUGE_VAL));
-    DfsAnagramSearch boundary(
-        &classes, exhausted_letters, 1e-6, reader.count(), 128);
-    boundary.run(&boundary_output);
-    check(boundary.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_DENSE &&
-              boundary.score_bound_value_bytes() == sizeof(float) &&
-              boundary.score_bound_complete(),
-          "rounding-boundary test did not use complete float bounds");
-    check(std::find(
-              boundary_output.ordered_indexes.begin(),
-              boundary_output.ordered_indexes.end(),
-              best_path) != boundary_output.ordered_indexes.end(),
-          "one-ulp score floor pruned the best deep solution");
+    std::vector<double> const boundary_floors = {
+        nextafter(best_score, -HUGE_VAL),
+        best_score,
+        nextafter(best_score, HUGE_VAL),
+    };
+    for (size_t i = 0; i < boundary_floors.size(); ++i) {
+      check(setenv(
+                "NUTRIMATIC_LENGTH_CERTIFICATE", "0", 1) == 0,
+            "could not disable boundary length certificate");
+      FixedFloorSolutions disabled_boundary_output(
+          boundary_floors[i]);
+      DfsAnagramSearch disabled_boundary(
+          &classes, exhausted_letters, 1e-6, reader.count(), 128);
+      disabled_boundary.run(&disabled_boundary_output);
+      check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
+            "could not restore boundary length certificate");
+
+      FixedFloorSolutions boundary_output(boundary_floors[i]);
+      DfsAnagramSearch boundary(
+          &classes, exhausted_letters, 1e-6, reader.count(), 128);
+      boundary.run(&boundary_output);
+      check(boundary.score_bound_mode() ==
+                DfsAnagramSearch::SCORE_BOUND_DENSE &&
+                boundary.score_bound_value_bytes() == sizeof(float) &&
+                boundary.score_bound_complete(),
+            "rounding-boundary test did not use complete float bounds");
+      check(boundary_output.ordered_indexes ==
+                    disabled_boundary_output.ordered_indexes &&
+                boundary_output.ordered_scores ==
+                    disabled_boundary_output.ordered_scores,
+            "length certificate changed a boundary-floor result");
+      if (i == 0)
+        check(std::find(
+                  boundary_output.ordered_indexes.begin(),
+                  boundary_output.ordered_indexes.end(),
+                  best_path) != boundary_output.ordered_indexes.end(),
+              "one-ulp score floor pruned the best deep solution");
+    }
 
     int const original_rounding = fegetround();
     if (original_rounding != -1 && fesetround(FE_DOWNWARD) == 0) {
@@ -399,6 +480,8 @@ static int smoke_test() {
       check(downward.score_bound_mode() ==
                 DfsAnagramSearch::SCORE_BOUND_OFF,
             "score memo ignored a non-nearest rounding mode");
+      check(!downward.length_certificate_enabled(),
+            "length certificate ignored a non-nearest rounding mode");
       check(fesetround(original_rounding) == 0,
             "could not restore floating-point rounding mode");
     }
