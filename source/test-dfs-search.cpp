@@ -119,6 +119,18 @@ static int smoke_test() {
     check(fabs(sink.ab_ab_log_score - expected) < 1e-12,
           "wrong representative score");
 
+    int64_t const first_nodes = search.nodes_visited();
+    int64_t const first_solutions = search.solutions_found();
+    CollectSolutions repeated_sink(&classes);
+    search.run(&repeated_sink);
+    check(search.nodes_visited() == first_nodes,
+          "reused search changed optimized node count");
+    check(search.solutions_found() == first_solutions,
+          "reused search changed optimized solution count");
+    check(repeated_sink.ordered_indexes == sink.ordered_indexes &&
+              repeated_sink.ordered_scores == sink.ordered_scores,
+          "reused search changed optimized traversal");
+
     DfsTopN expected_output(&classes, 2);
     DfsAnagramSearch exhaustive(
         &classes, "aabb", 1e-6, reader.count(), 0);

@@ -138,19 +138,38 @@ class DfsAnagramSearch {
     double max_rounding_error;
   };
 
+  struct SearchWorker {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    uint64_t bag_mask;
+    uint64_t score_key;
+    std::vector<size_t> path;
+    int64_t nodes;
+    int64_t solutions;
+    int64_t bound_prunes;
+    int64_t next_progress;
+    int64_t reported_solutions;
+  };
+
   bool prepare_hot_classes();
   bool prepare_projected_actions();
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void clear_score_bounds();
 
-  void walk(size_t letters_left, size_t entry_point,
-            double representative_log_score, DfsSolutionSink* sink);
+  void walk(SearchWorker* worker, size_t letters_left,
+            size_t entry_point, double representative_log_score,
+            DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
+  void start_search_worker(SearchWorker* worker);
+  void merge_search_worker(SearchWorker const& worker);
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;
+  bool hot_class_fits(uint32_t class_index,
+                      SearchWorker const& worker) const;
+  bool hot_class_multiplicity_fits(
+      uint32_t class_index, SearchWorker const& worker) const;
   bool hot_class_fits(uint32_t class_index,
                       BoundWorker const& worker) const;
   bool hot_class_multiplicity_fits(
@@ -181,10 +200,12 @@ class DfsAnagramSearch {
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
-  bool should_prune(double representative_log_score,
-                    DfsSolutionSink* sink);
+  bool should_prune(SearchWorker* worker,
+                    double representative_log_score,
+                    DfsSolutionSink* sink, size_t letters_left);
 
-  void visit_fitting_class(uint32_t class_index, size_t letters_left,
+  void visit_fitting_class(SearchWorker* worker, uint32_t class_index,
+                           size_t letters_left,
                            double representative_log_score,
                            DfsSolutionSink* sink);
   void visit_unoptimized_class(size_t class_index, size_t letters_left,
