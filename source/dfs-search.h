@@ -320,6 +320,10 @@ class DfsAnagramSearch {
   std::unique_ptr<uint16_t, AlignedFree> score_wild_lengths;
   std::unique_ptr<uint32_t, AlignedFree> packed_letters;
   std::vector<ProjectedAction> projected_actions;
+  // Index-parallel to projected_actions: exact_support_mask alone, so the
+  // bottom-up scan can reject an action without touching its cold record.
+  // Built in one place, strictly after the per-bucket sort.
+  std::vector<uint64_t> projected_action_support;
   std::vector<uint32_t> projected_repeated_requirements;
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_bucket_starts;
   bool projected_actions_ready;
