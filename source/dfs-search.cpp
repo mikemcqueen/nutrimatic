@@ -2189,15 +2189,22 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
           // wildcard letters than the bag holds, and the span is that total
           // plus one. The update below therefore always covers
           // score_wild_span - wild_length wildcard counts and its
-          // fitting-transition count is exact in closed form.
-          assert(wild_length < score_wild_span);
+          // fitting-transition count is exact in closed form. A violation
+          // means fit-class or exact-mask construction is broken, not that
+          // this action should be skipped: skipping it would drop a
+          // transition from an upper bound and silently lower it.
+          DFS_CHECK(wild_length < score_wild_span);
+          size_t const count = score_wild_span - wild_length;
+
           // The whole span shares one range check: parent keys ascend with
           // `wild`, so the smallest one bounds them all.
           uint64_t const first_parent_key = base_key + wild_length;
-          assert(action.score_key_delta <= first_parent_key);
-          size_t const count = score_wild_span - wild_length;
-          float const* const children = values +
+          DFS_CHECK(action.score_key_delta <= first_parent_key);
+          size_t const children_offset =
               size_t(first_parent_key - action.score_key_delta);
+          DFS_CHECK(children_offset + count <= bound_capacity);
+          float const* const children = values + children_offset;
+
           double* const best = &worker->best[wild_length];
           double* const error =
               &worker->max_rounding_error[wild_length];
