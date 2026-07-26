@@ -98,6 +98,17 @@ class DfsAnagramSearch {
     return projected_quotient_enabled;
   }
   int64_t score_bound_prunes() const { return bound_prunes; }
+
+  // Test hook: one projected wildcard update over `count` contiguous wildcard
+  // counts, exactly as the bottom-up evaluator performs it, returning the
+  // number of finite children. When vector is true this runs the dispatched
+  // vector kernel, falling back to the scalar one when the build or the CPU
+  // has none; the two must agree bit for bit.
+  static uint64_t test_projected_wild_update(
+      double partial_score, double rounding_error_base,
+      float const* children, double* best, double* max_rounding_error,
+      size_t count, bool vector);
+
   double phase_two_setup_seconds() const { return setup_seconds; }
   double phase_two_search_seconds() const { return search_seconds; }
   size_t preprocess_threads_used() const {
