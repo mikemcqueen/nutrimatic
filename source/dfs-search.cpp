@@ -186,6 +186,41 @@ static double round_score_bound_up(
   return rounded;
 }
 
+// One projected action's contribution to a contiguous run of wildcard counts.
+//
+// The child key is base_key + wild - score_key_delta with `wild` running
+// contiguously, so `children` is an ascending contiguous float range; that is
+// what lets a vector kernel load whole lane groups.
+//
+// This is the portable baseline, and the reference every other kernel must
+// reproduce bit for bit. The expressions and their association order are
+// fixed: partial_score + child for the score, and
+// ((rounding_error_base + fabs(child)) + 1.0) * (DBL_EPSILON * 4.0) for the
+// error envelope. A -HUGE_VAL child is dead: it must not reach either maximum
+// (fabs would poison the envelope with inf) and must not be counted.
+//
+// Returns the number of finite children, that is, successful transitions.
+inline __attribute__((always_inline)) static uint64_t
+projected_wild_update_scalar(
+    double partial_score, double rounding_error_base,
+    float const* children, double* best, double* max_rounding_error,
+    size_t count) {
+  uint64_t finite = 0;
+  for (size_t i = 0; i < count; ++i) {
+    double const child = double(children[i]);
+    if (child == -HUGE_VAL) continue;
+    ++finite;
+    best[i] = std::max(best[i], partial_score + child);
+    double rounding_error = rounding_error_base;
+    rounding_error += fabs(child);
+    rounding_error += 1.0;
+    rounding_error *= DBL_EPSILON * 4.0;
+    max_rounding_error[i] =
+        std::max(max_rounding_error[i], rounding_error);
+  }
+  return finite;
+}
+
 // Bound the error in fl(fl(class_score + restart) + child). IEEE double
 // round-to-nearest incurs less than one DBL_EPSILON times the sum of operand
 // magnitudes here. The factor of four also covers rounding while calculating
@@ -1987,27 +2022,18 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
           // score_wild_span - wild_length times and its fitting-transition
           // count is exact in closed form.
           assert(wild_length < score_wild_span);
-          local_fitting_transitions += score_wild_span - wild_length;
-          for (size_t wild = wild_length;
-               wild < score_wild_span; ++wild) {
-            uint64_t const parent_key = base_key + wild;
-            assert(action.score_key_delta <= parent_key);
-            double const child = double(
-                values[size_t(parent_key -
-                              action.score_key_delta)]);
-            if (child == -HUGE_VAL) continue;
-            ++local_transitions;
-            worker->best[wild] = std::max(
-                worker->best[wild],
-                action.partial_score + child);
-            double rounding_error = action.rounding_error_base;
-            rounding_error += fabs(child);
-            rounding_error += 1.0;
-            rounding_error *= DBL_EPSILON * 4.0;
-            worker->max_rounding_error[wild] = std::max(
-                worker->max_rounding_error[wild],
-                rounding_error);
-          }
+          // The whole span shares one range check: parent keys ascend with
+          // `wild`, so the smallest one bounds them all.
+          uint64_t const first_parent_key = base_key + wild_length;
+          assert(action.score_key_delta <= first_parent_key);
+          size_t const count = score_wild_span - wild_length;
+          local_fitting_transitions += count;
+          local_transitions += projected_wild_update_scalar(
+              action.partial_score, action.rounding_error_base,
+              values + size_t(first_parent_key -
+                              action.score_key_delta),
+              &worker->best[wild_length],
+              &worker->max_rounding_error[wild_length], count);
         }
 
         for (size_t wild = 0; wild < score_wild_span; ++wild) {
