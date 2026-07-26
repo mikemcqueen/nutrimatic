@@ -281,6 +281,24 @@ int main(int argc, char* argv[]) {
             (unsigned long long) search.score_bound_candidate_tests(),
             (unsigned long long)
                 search.score_bound_fitting_transitions());
+  if (search.length_certificate_enabled())
+    fprintf(stderr,
+            "# phase 2 length certificate: %s, %zu table bytes, "
+            "%.6f s prepare, %llu group tests, %llu rejected, "
+            "%llu class scans kept, %llu skipped\n",
+            search.length_certificate_skipping()
+                ? "active"
+                : "shadow",
+            search.length_certificate_table_bytes(),
+            search.length_certificate_prepare_seconds(),
+            (unsigned long long)
+                search.length_certificate_group_tests(),
+            (unsigned long long)
+                search.length_certificate_group_rejects(),
+            (unsigned long long)
+                search.length_certificate_scans_kept(),
+            (unsigned long long)
+                search.length_certificate_scans_skipped());
   fprintf(stderr,
           "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
           search.score_bound_entries(),

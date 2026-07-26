@@ -244,6 +244,15 @@ static bool projected_bottom_up_enabled() {
       strcmp(enabled, "0") != 0;
 }
 
+static int length_certificate_mode() {
+  char const* mode = getenv("NUTRIMATIC_LENGTH_CERTIFICATE");
+  if (mode == NULL || mode[0] == '\0' || strcmp(mode, "1") == 0)
+    return 2;
+  if (strcmp(mode, "shadow") == 0) return 1;
+  if (strcmp(mode, "0") == 0) return 0;
+  return 0;
+}
+
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
@@ -289,6 +298,15 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     projected_actions_ready(false),
     projected_quotient_enabled(true),
     hot_classes_ready(false),
+    length_certificate_requested(false),
+    length_certificate_shadow(false),
+    length_certificate_ready(false),
+    certificate_stride(0),
+    certificate_group_tests(0),
+    certificate_group_rejects(0),
+    certificate_scans_skipped(0),
+    certificate_scans_kept(0),
+    certificate_prepare_seconds(0.0),
     bound_mode(SCORE_BOUND_OFF),
     bound_capacity(0),
     bound_value_bytes(0),
@@ -447,6 +465,119 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   score_wild_lengths = std::move(new_wild_lengths);
   packed_letters = std::move(new_packed);
   return true;
+}
+
+bool DfsAnagramSearch::prepare_length_certificate() {
+  auto const fail = [this]() {
+    certificate_stride = 0;
+    certificate_max_score.clear();
+    certificate_group_end.clear();
+    length_tail_bounds.clear();
+    length_certificate_ready = false;
+    return false;
+  };
+  fail();
+  if (!length_certificate_requested) return true;
+  if (letters.size() == SIZE_MAX) return false;
+
+  try {
+    std::vector<DfsAnagramClass> const& classes =
+        class_list->classes();
+    size_t max_length = 0;
+    for (size_t i = 0; i < classes.size(); ++i)
+      max_length = std::max(max_length, classes[i].key.size());
+    if (max_length == SIZE_MAX) return false;
+    certificate_stride = max_length + 1;
+    if (certificate_stride != 0 &&
+        size_t(DFS_SYMBOL_COUNT) >
+            SIZE_MAX / certificate_stride)
+      return false;
+    size_t const group_entries =
+        size_t(DFS_SYMBOL_COUNT) * certificate_stride;
+    certificate_max_score.assign(group_entries, -HUGE_VAL);
+    certificate_group_end.assign(group_entries, 0);
+
+    std::vector<double> best_score(
+        letters.size() + 1, -HUGE_VAL);
+    for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+      int const symbol = class_list->rank_to_symbol()[rank];
+      size_t const begin = class_list->candidate_begin(symbol);
+      size_t const end = class_list->candidate_end(symbol);
+      size_t const base = rank * certificate_stride;
+      size_t previous_length = SIZE_MAX;
+      for (size_t i = begin; i < end; ++i) {
+        size_t const length = classes[i].key.size();
+        if (length >= certificate_stride ||
+            length > letters.size())
+          return fail();
+        if (previous_length != SIZE_MAX &&
+            length > previous_length)
+          return fail();
+        previous_length = length;
+        certificate_max_score[base + length] = std::max(
+            certificate_max_score[base + length],
+            best_member_log_scores[i]);
+        certificate_group_end[base + length] = uint32_t(i + 1);
+        best_score[length] = std::max(
+            best_score[length], best_member_log_scores[i]);
+      }
+    }
+
+    length_tail_bounds.assign(letters.size() + 1, -HUGE_VAL);
+    length_tail_bounds[0] = 0.0;
+    uint64_t ignored_nextafter_calls = 0;
+    for (size_t left = 1; left <= letters.size(); ++left) {
+      double best = -HUGE_VAL;
+      double max_rounding_error = 0.0;
+      for (size_t length = 1; length <= left; ++length) {
+        if (best_score[length] == -HUGE_VAL ||
+            length_tail_bounds[left - length] == -HUGE_VAL)
+          continue;
+        double const child = length_tail_bounds[left - length];
+        double const candidate =
+            best_score[length] + restart_log_rate + child;
+        best = std::max(best, candidate);
+        max_rounding_error = std::max(
+            max_rounding_error,
+            score_candidate_rounding_error(
+                best_score[length], restart_log_rate, child));
+      }
+      if (best != -HUGE_VAL)
+        length_tail_bounds[left] = round_score_bound_up(
+            static_cast<long double>(best) +
+                static_cast<long double>(max_rounding_error),
+            &ignored_nextafter_calls);
+    }
+  } catch (...) {
+    return fail();
+  }
+  length_certificate_ready = true;
+  return true;
+}
+
+bool DfsAnagramSearch::length_certificate_rejects(
+    size_t base, size_t length, size_t letters_left,
+    double representative_log_score, double floor) const {
+  assert(base + length < certificate_max_score.size());
+  assert(length <= letters_left);
+  double const group_best = certificate_max_score[base + length];
+  double const tail = length_tail_bounds[letters_left - length];
+  if (group_best == -HUGE_VAL || tail == -HUGE_VAL) return true;
+  long double const upper =
+      static_cast<long double>(representative_log_score) +
+      static_cast<long double>(restart_log_rate) +
+      static_cast<long double>(group_best) +
+      static_cast<long double>(tail);
+  long double const magnitude =
+      fabsl(static_cast<long double>(representative_log_score)) +
+      fabsl(static_cast<long double>(restart_log_rate)) +
+      fabsl(static_cast<long double>(group_best)) +
+      fabsl(static_cast<long double>(tail)) +
+      fabsl(static_cast<long double>(floor)) + 1.0L;
+  long double const padding =
+      magnitude * static_cast<long double>(DBL_EPSILON) *
+      (static_cast<long double>(max_depth) + 2.0L) * 16.0L;
+  return upper + padding <= static_cast<long double>(floor);
 }
 
 bool DfsAnagramSearch::prepare_projected_actions() {
@@ -795,6 +926,18 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   setup_seconds = 0.0;
   search_seconds = 0.0;
   actual_preprocess_threads = 1;
+  certificate_stride = 0;
+  certificate_max_score.clear();
+  certificate_group_end.clear();
+  length_tail_bounds.clear();
+  length_certificate_requested = false;
+  length_certificate_shadow = false;
+  length_certificate_ready = false;
+  certificate_group_tests = 0;
+  certificate_group_rejects = 0;
+  certificate_scans_skipped = 0;
+  certificate_scans_kept = 0;
+  certificate_prepare_seconds = 0.0;
   bag.fill(0);
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
@@ -1024,6 +1167,18 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       sink->supports_score_pruning() &&
       score_bound_arithmetic_supported() &&
       bag_mask != 0;
+  int const certificate_mode = length_certificate_mode();
+  length_certificate_requested =
+      certificate_mode != 0 && score_bounds_applicable;
+  length_certificate_shadow = certificate_mode == 1;
+  if (length_certificate_requested) {
+    PhaseClock::time_point const certificate_start = PhaseClock::now();
+    if (!prepare_length_certificate())
+      length_certificate_ready = false;
+    certificate_prepare_seconds =
+        std::chrono::duration<double>(
+            PhaseClock::now() - certificate_start).count();
+  }
   if (!allow_cache_fallback && !score_projection_requested &&
       score_bounds_applicable) {
     if (!dense_sizes_available) {
@@ -2275,11 +2430,54 @@ void DfsAnagramSearch::walk(SearchWorker* worker, size_t letters_left,
   size_t const end = class_list->candidate_end(forced_symbol);
 
   size_t const start = std::max(begin, entry_point);
+  if (DFS_UNLIKELY(length_certificate_ready) &&
+      !worker->path.empty()) {
+    double floor;
+    if (sink != NULL && sink->score_floor(&floor)) {
+      walk_certified(worker, rank, start, end, letters_left,
+                     representative_log_score, floor, sink);
+      return;
+    }
+  }
   for (size_t class_index = start; class_index < end; ++class_index) {
     uint32_t const id = uint32_t(class_index);
     if (!hot_class_fits(id, *worker)) continue;
     visit_fitting_class(
         worker, id, letters_left, representative_log_score, sink);
+  }
+}
+
+void DfsAnagramSearch::walk_certified(
+    SearchWorker* worker, int rank, size_t start, size_t end,
+    size_t letters_left, double representative_log_score,
+    double floor, DfsSolutionSink* sink) {
+  size_t const base = size_t(rank) * certificate_stride;
+  size_t class_index = start;
+  while (class_index < end) {
+    size_t const length = hot_letter_length(
+        fit_classes.get()[class_index].packed_length_and_count);
+    size_t const group_end =
+        size_t(certificate_group_end[base + length]);
+    assert(group_end > class_index && group_end <= end);
+    ++worker->certificate_group_tests;
+    bool const rejected = length_certificate_rejects(
+        base, length, letters_left, representative_log_score, floor);
+    if (rejected) {
+      ++worker->certificate_group_rejects;
+      worker->certificate_scans_skipped += group_end - class_index;
+      if (!length_certificate_shadow) {
+        class_index = group_end;
+        continue;
+      }
+    } else {
+      worker->certificate_scans_kept += group_end - class_index;
+    }
+    for (; class_index < group_end; ++class_index) {
+      uint32_t const id = uint32_t(class_index);
+      if (!hot_class_fits(id, *worker)) continue;
+      visit_fitting_class(
+          worker, id, letters_left, representative_log_score, sink);
+    }
   }
 }
 
@@ -2292,6 +2490,10 @@ void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
   worker->nodes = 0;
   worker->solutions = 0;
   worker->bound_prunes = 0;
+  worker->certificate_group_tests = 0;
+  worker->certificate_group_rejects = 0;
+  worker->certificate_scans_skipped = 0;
+  worker->certificate_scans_kept = 0;
   worker->next_progress = progress_interval;
   worker->reported_solutions = 0;
 }
@@ -2301,6 +2503,11 @@ void DfsAnagramSearch::merge_search_worker(
   nodes += worker.nodes;
   solutions += worker.solutions;
   bound_prunes += worker.bound_prunes;
+  certificate_group_tests += worker.certificate_group_tests;
+  certificate_group_rejects += worker.certificate_group_rejects;
+  certificate_scans_skipped +=
+      worker.certificate_scans_skipped;
+  certificate_scans_kept += worker.certificate_scans_kept;
 }
 
 void DfsAnagramSearch::visit_unoptimized_class(

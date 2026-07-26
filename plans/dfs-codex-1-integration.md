@@ -163,7 +163,7 @@ unrelated edits.
 |---:|---|:---:|---|
 | 0 | Baseline contract | [x] | `Record DFS integration baseline` |
 | 1 | Serial worker refactor | [x] | `Isolate concrete DFS state` |
-| 2 | Group-only length certificate | [ ] | `Certify concrete DFS length groups` |
+| 2 | Group-only length certificate | [x] | `Certify concrete DFS length groups` |
 | 3 | Concurrent top-N sink | [ ] | `Make DFS top-N thread-safe` |
 | 4 | Parallel concrete DFS scheduler | [ ] | `Parallelize concrete DFS search` |
 | 5 | Integrated validation | [ ] | `Record DFS integration results` |
@@ -360,7 +360,7 @@ committed as:
 Isolate concrete DFS state
 ```
 
-## Phase 2 — add the group-only length certificate [ ]
+## Phase 2 — add the group-only length certificate [x]
 
 ### Purpose
 
@@ -445,14 +445,14 @@ formula.
 
 ### Traversal
 
-- [ ] Add `walk_certified()` for the existing rarest-rank range.
-- [ ] Enter it only when the certificate is ready, the path is nonempty, and
+- [x] Add `walk_certified()` for the existing rarest-rank range.
+- [x] Enter it only when the certificate is ready, the path is nonempty, and
       `score_floor()` returns a floor.
-- [ ] Advance rejected groups directly to their stored exclusive end.
-- [ ] Traverse surviving groups in their original class-index order.
-- [ ] Retain the entry-point tie-break by starting at
+- [x] Advance rejected groups directly to their stored exclusive end.
+- [x] Traverse surviving groups in their original class-index order.
+- [x] Retain the entry-point tie-break by starting at
       `max(first_length_candidate(...), entry_point)`.
-- [ ] Keep certificate tables immutable once concrete search starts.
+- [x] Keep certificate tables immutable once concrete search starts.
 
 ### Activation and A/B control
 
@@ -488,34 +488,34 @@ Do not add per-node output.
 
 ### Focused tests
 
-- [ ] A synthetic top-N search produces identical spellings with the
+- [x] A synthetic top-N search produces identical spellings with the
       certificate disabled, shadowed, and active.
-- [ ] Disabled and shadow modes have identical node, solution, and traversal
+- [x] Disabled and shadow modes have identical node, solution, and traversal
       counters.
-- [ ] Exercise the group-rejection predicate at floors below, equal to, and
+- [x] Exercise the group-rejection predicate at floors below, equal to, and
       above its conservatively padded envelope.
-- [ ] Do not require equal aggregate group-decision counters from shadow and
+- [x] Do not require equal aggregate group-decision counters from shadow and
       active modes: active skipping removes downstream nodes that shadow mode
       still visits.
-- [ ] Active mode skips at least one whole group on the synthetic fixture.
-- [ ] A sink without a floor never claims certificate skips.
-- [ ] Score cache disabled (`-C 0 -F` equivalent in the library) does not
+- [x] Active mode skips at least one whole group on the synthetic fixture.
+- [x] A sink without a floor never claims certificate skips.
+- [x] Score cache disabled (`-C 0 -F` equivalent in the library) does not
       disable the certificate.
-- [ ] A non-nearest floating-point rounding mode disables the certificate,
+- [x] A non-nearest floating-point rounding mode disables the certificate,
       matching the rich-bound guard.
-- [ ] Original class order is unchanged.
+- [x] Original class order is unchanged.
 
 ### Verification
 
-- [ ] Build successfully.
-- [ ] Run the common smoke suite.
-- [ ] Compare certificate disabled, shadow, and active on a short S6 prefix;
+- [x] Build successfully.
+- [x] Run the common smoke suite.
+- [x] Compare certificate disabled, shadow, and active on a short S6 prefix;
       stdout hashes must match.
-- [ ] Confirm the active run reduces candidate scans without increasing DFS
+- [x] Confirm the active run reduces candidate scans without increasing DFS
       nodes.
-- [ ] `/review` checks the recurrence, restart placement, rounding padding,
+- [x] `/review` checks the recurrence, restart placement, rounding padding,
       group boundaries, entry point, and failure cleanup.
-- [ ] `git diff --check` passes.
+- [x] `git diff --check` passes.
 
 ### Completion gate
 
@@ -1119,8 +1119,8 @@ projected work:
 | Phase | Commit | Review | Verification notes |
 |---:|---|---|---|
 | 0 | `b3b9535` | complete | Build, common smoke suite, and 40-letter reference passed. |
-| 1 | `Isolate concrete DFS state` | complete | Build and focused smoke checks passed; full 40-letter output and counters matched Phase 0. |
-| 2 | pending | pending | |
+| 1 | `3bcaa50` | complete | Build and focused smoke checks passed; full 40-letter output and counters matched Phase 0. |
+| 2 | `Certify concrete DFS length groups` | complete | Common smoke suite passed; short S6 output matched in all modes and active skipped 319,698,260 scans. |
 | 3 | pending | pending | |
 | 4 | pending | pending | |
 | 5 | pending | pending | |
