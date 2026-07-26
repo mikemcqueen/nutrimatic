@@ -162,7 +162,7 @@ unrelated edits.
 | Phase | Deliverable | Status | Proposed commit |
 |---:|---|:---:|---|
 | 0 | Baseline contract | [x] | `Record DFS integration baseline` |
-| 1 | Serial worker refactor | [ ] | `Isolate concrete DFS state` |
+| 1 | Serial worker refactor | [x] | `Isolate concrete DFS state` |
 | 2 | Group-only length certificate | [ ] | `Certify concrete DFS length groups` |
 | 3 | Concurrent top-N sink | [ ] | `Make DFS top-N thread-safe` |
 | 4 | Parallel concrete DFS scheduler | [ ] | `Parallelize concrete DFS search` |
@@ -272,7 +272,7 @@ Record DFS integration baseline
 
 Do not change production source in this commit.
 
-## Phase 1 — isolate serial concrete-search worker state [ ]
+## Phase 1 — isolate serial concrete-search worker state [x]
 
 ### Purpose
 
@@ -311,21 +311,21 @@ lifetimes and counters differ.
 
 ### Refactor
 
-- [ ] Add `start_search_worker()` to copy the root bag, mask, and score key,
+- [x] Add `start_search_worker()` to copy the root bag, mask, and score key,
       reserve the path, and zero counters.
-- [ ] Add `merge_search_worker()` to transfer final counters into the public
+- [x] Add `merge_search_worker()` to transfer final counters into the public
       search aggregates.
-- [ ] Change optimized-search helpers to accept `SearchWorker*`:
+- [x] Change optimized-search helpers to accept `SearchWorker*`:
       `walk()`, `visit_fitting_class()`, `should_prune()`,
       `hot_class_fits()`, and `hot_class_multiplicity_fits()`.
-- [ ] Use `worker->score_key` for bound lookup and lazy-prefix decisions.
-- [ ] Keep all subtraction/restoration paired on the worker's bag, mask, and
+- [x] Use `worker->score_key` for bound lookup and lazy-prefix decisions.
+- [x] Keep all subtraction/restoration paired on the worker's bag, mask, and
       score key.
-- [ ] Move optimized path access to `worker->path`.
-- [ ] Keep `walk_unoptimized()` serial and on its existing object state for
+- [x] Move optimized path access to `worker->path`.
+- [x] Keep `walk_unoptimized()` serial and on its existing object state for
       now. Its behavior is the fallback when hot-class preparation fails.
-- [ ] Run exactly one `SearchWorker` from `run()` and merge it afterward.
-- [ ] Preserve current progress text and cadence in serial mode.
+- [x] Run exactly one `SearchWorker` from `run()` and merge it afterward.
+- [x] Preserve current progress text and cadence in serial mode.
 
 ### Invariants to review
 
@@ -341,15 +341,15 @@ lifetimes and counters differ.
 
 ### Verification
 
-- [ ] Build successfully.
-- [ ] Run `test-dfs-search`.
-- [ ] Run `test-dfs-output`.
-- [ ] Run `test-dfs-search --validate-14` with `IDX`.
-- [ ] Diff a small CLI run before and after byte-for-byte.
-- [ ] Confirm identical score-bound mode, state, transition, node, solution,
+- [x] Build successfully.
+- [x] Run `test-dfs-search`.
+- [x] Run `test-dfs-output`.
+- [x] Run `test-dfs-search --validate-14` with `IDX`.
+- [x] Diff a small CLI run before and after byte-for-byte.
+- [x] Confirm identical score-bound mode, state, transition, node, solution,
       and output counters on the synthetic bounded search.
-- [ ] `/review` reports no unresolved findings.
-- [ ] `git diff --check` passes.
+- [x] `/review` reports no unresolved findings.
+- [x] `git diff --check` passes.
 
 ### Completion gate
 
@@ -1118,8 +1118,8 @@ projected work:
 
 | Phase | Commit | Review | Verification notes |
 |---:|---|---|---|
-| 0 | `Record DFS integration baseline` | complete | Build, common smoke suite, and 40-letter reference passed. |
-| 1 | pending | pending | |
+| 0 | `b3b9535` | complete | Build, common smoke suite, and 40-letter reference passed. |
+| 1 | `Isolate concrete DFS state` | complete | Build and focused smoke checks passed; full 40-letter output and counters matched Phase 0. |
 | 2 | pending | pending | |
 | 3 | pending | pending | |
 | 4 | pending | pending | |

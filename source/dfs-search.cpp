@@ -1114,7 +1114,10 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   if (!hot_classes_ready) {
     walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
   } else {
-    walk(letters.size(), 0, 0.0, sink);
+    SearchWorker worker;
+    start_search_worker(&worker);
+    walk(&worker, letters.size(), 0, 0.0, sink);
+    merge_search_worker(worker);
   }
   search_seconds =
       std::chrono::duration<double>(PhaseClock::now() - search_start).count();
@@ -1137,6 +1140,29 @@ bool DfsAnagramSearch::hot_class_multiplicity_fits(
   for (uint32_t i = 0; i < repeated; ++i) {
     uint32_t const requirement = requirements[i];
     if (bag[packed_rank(requirement)] < packed_count(requirement))
+      return false;
+  }
+  return true;
+}
+
+bool DfsAnagramSearch::hot_class_fits(
+    uint32_t class_index, SearchWorker const& worker) const {
+  FitClass const& candidate = fit_classes.get()[class_index];
+  if ((candidate.support_mask & ~worker.bag_mask) != 0) return false;
+  return hot_class_multiplicity_fits(class_index, worker);
+}
+
+bool DfsAnagramSearch::hot_class_multiplicity_fits(
+    uint32_t class_index, SearchWorker const& worker) const {
+  FitClass const& candidate = fit_classes.get()[class_index];
+  uint32_t const* requirements =
+      packed_letters.get() + candidate.letters_offset;
+  uint32_t const repeated =
+      hot_repeated_count(candidate.packed_length_and_count);
+  for (uint32_t i = 0; i < repeated; ++i) {
+    uint32_t const requirement = requirements[i];
+    if (worker.bag[packed_rank(requirement)] <
+        packed_count(requirement))
       return false;
   }
   return true;
@@ -2114,25 +2140,32 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
 }
 
 bool DfsAnagramSearch::should_prune(
-    double representative_log_score, DfsSolutionSink* sink) {
+    SearchWorker* worker, double representative_log_score,
+    DfsSolutionSink* sink, size_t letters_left) {
   if (bound_mode == SCORE_BOUND_OFF) return false;
   // H charges a restart to every class it adds. That is exact below the first
   // chosen class, but the root's first class does not pay a restart.
-  if (path.empty())
+  if (worker->path.empty())
     return root_score_bound_ready && root_score_bound == -HUGE_VAL;
 
   double floor;
   if (sink == NULL || !sink->score_floor(&floor)) return false;
-  if (current_score_key >= bound_capacity) return false;
+  uint64_t const query_key = worker->score_key;
+  if (query_key >= bound_capacity) return false;
 
   double remaining_bound;
-  if (!load_score_bound(current_score_key, &remaining_bound)) {
+  if (!load_score_bound(query_key, &remaining_bound)) {
     if (bound_mode != SCORE_BOUND_PREFIX) return false;
     // A rarest-most-significant prefix is dependency-closed: every fitting
     // subtraction decreases the key. Build its complete bound only after
-    // phase 2 both enters the prefix and has a useful score floor.
+    // phase 2 both enters the prefix and has a useful score floor. This
+    // legacy builder borrows the shared scratch state; prefix mode is serial.
+    bag = worker->bag;
+    bag_mask = worker->bag_mask;
+    current_score_key = query_key;
+    current_letters_left = letters_left;
     compute_score_bound();
-    if (!load_score_bound(current_score_key, &remaining_bound))
+    if (!load_score_bound(query_key, &remaining_bound))
       return false;
   }
   if (remaining_bound == -HUGE_VAL) return true;
@@ -2150,7 +2183,7 @@ bool DfsAnagramSearch::should_prune(
 }
 
 void DfsAnagramSearch::visit_fitting_class(
-    uint32_t class_index, size_t letters_left,
+    SearchWorker* worker, uint32_t class_index, size_t letters_left,
     double representative_log_score, DfsSolutionSink* sink) {
   FitClass const& fit = fit_classes.get()[class_index];
   double const class_score = best_member_log_scores[class_index];
@@ -2158,22 +2191,22 @@ void DfsAnagramSearch::visit_fitting_class(
       hot_letter_length(fit.packed_length_and_count);
   assert(candidate_length <= letters_left);
   size_t const next_letters_left = letters_left - candidate_length;
-  bool const first_class = path.empty();
+  bool const first_class = worker->path.empty();
 
-  path.push_back(class_index);
+  worker->path.push_back(class_index);
   if (DFS_UNLIKELY(next_letters_left == 0)) {
     double const next_log_score =
         first_class
             ? class_score
             : representative_log_score + restart_log_rate +
                   class_score;
-    ++solutions;
-    if (sink != NULL) sink->emit(path, next_log_score);
-    path.pop_back();
+    ++worker->solutions;
+    if (sink != NULL) sink->emit(worker->path, next_log_score);
+    worker->path.pop_back();
     return;
   }
-  if (DFS_UNLIKELY(path.size() >= max_depth)) {
-    path.pop_back();
+  if (DFS_UNLIKELY(worker->path.size() >= max_depth)) {
+    worker->path.pop_back();
     return;
   }
 
@@ -2186,48 +2219,53 @@ void DfsAnagramSearch::visit_fitting_class(
       packed_letters.get() + fit.letters_offset;
   uint32_t const requirement_count =
       hot_requirement_count(fit.packed_length_and_count);
-  uint64_t const parent_bag_mask = bag_mask;
+  uint64_t const parent_bag_mask = worker->bag_mask;
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
-    uint32_t& remaining = bag[requirement_rank];
+    uint32_t& remaining = worker->bag[requirement_rank];
     remaining -= packed_count(requirement);
-    bag_mask &= ~(uint64_t(remaining == 0) << requirement_rank);
+    worker->bag_mask &=
+        ~(uint64_t(remaining == 0) << requirement_rank);
   }
-  current_score_key -= score_key_deltas.get()[class_index];
-  walk(next_letters_left, class_index, next_log_score, sink);
-  current_score_key += score_key_deltas.get()[class_index];
+  worker->score_key -= score_key_deltas.get()[class_index];
+  walk(worker, next_letters_left, class_index, next_log_score, sink);
+  worker->score_key += score_key_deltas.get()[class_index];
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
     uint32_t const requirement_rank = packed_rank(requirement);
-    bag[requirement_rank] += packed_count(requirement);
+    worker->bag[requirement_rank] += packed_count(requirement);
   }
-  bag_mask = parent_bag_mask;
-  path.pop_back();
+  worker->bag_mask = parent_bag_mask;
+  worker->path.pop_back();
 }
 
-void DfsAnagramSearch::walk(size_t letters_left, size_t entry_point,
+void DfsAnagramSearch::walk(SearchWorker* worker, size_t letters_left,
+                            size_t entry_point,
                             double representative_log_score,
                             DfsSolutionSink* sink) {
-  ++nodes;
-  if (DFS_UNLIKELY(progress_stream != NULL && nodes == next_progress)) {
+  ++worker->nodes;
+  if (DFS_UNLIKELY(progress_stream != NULL &&
+                   worker->nodes == worker->next_progress)) {
     fprintf(progress_stream,
             "# phase 2: %lld nodes, %lld solutions\n",
-            (long long) nodes, (long long) solutions);
+            (long long) worker->nodes,
+            (long long) worker->solutions);
     fflush(progress_stream);
-    if (next_progress <= INT64_MAX - progress_interval)
-      next_progress += progress_interval;
+    if (worker->next_progress <= INT64_MAX - progress_interval)
+      worker->next_progress += progress_interval;
     else
-      next_progress = INT64_MAX;
+      worker->next_progress = INT64_MAX;
   }
 
-  if (DFS_UNLIKELY(bag_mask == 0)) return;
-  if (DFS_UNLIKELY(should_prune(representative_log_score, sink))) {
-    ++bound_prunes;
+  if (DFS_UNLIKELY(worker->bag_mask == 0)) return;
+  if (DFS_UNLIKELY(should_prune(
+          worker, representative_log_score, sink, letters_left))) {
+    ++worker->bound_prunes;
     return;
   }
 
-  int const rank = __builtin_ctzll(bag_mask);
+  int const rank = __builtin_ctzll(worker->bag_mask);
   int const forced_symbol =
       class_list->rank_to_symbol()[size_t(rank)];
   size_t const begin = first_length_candidate(
@@ -2239,10 +2277,30 @@ void DfsAnagramSearch::walk(size_t letters_left, size_t entry_point,
   size_t const start = std::max(begin, entry_point);
   for (size_t class_index = start; class_index < end; ++class_index) {
     uint32_t const id = uint32_t(class_index);
-    if (!hot_class_fits(id)) continue;
+    if (!hot_class_fits(id, *worker)) continue;
     visit_fitting_class(
-        id, letters_left, representative_log_score, sink);
+        worker, id, letters_left, representative_log_score, sink);
   }
+}
+
+void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
+  worker->bag = bag;
+  worker->bag_mask = bag_mask;
+  worker->score_key = current_score_key;
+  worker->path.clear();
+  worker->path.reserve(letters.size());
+  worker->nodes = 0;
+  worker->solutions = 0;
+  worker->bound_prunes = 0;
+  worker->next_progress = progress_interval;
+  worker->reported_solutions = 0;
+}
+
+void DfsAnagramSearch::merge_search_worker(
+    SearchWorker const& worker) {
+  nodes += worker.nodes;
+  solutions += worker.solutions;
+  bound_prunes += worker.bound_prunes;
 }
 
 void DfsAnagramSearch::visit_unoptimized_class(
