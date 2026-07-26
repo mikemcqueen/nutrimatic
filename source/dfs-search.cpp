@@ -1945,6 +1945,23 @@ double DfsAnagramSearch::compute_projected_score_bound(
   return result;
 }
 
+uint64_t DfsAnagramSearch::test_projected_wild_update(
+    double partial_score, double rounding_error_base,
+    float const* children, double* best, double* max_rounding_error,
+    size_t count, bool vector) {
+#if defined(__x86_64__)
+  if (vector && __builtin_cpu_supports("avx2"))
+    return projected_wild_update_avx2(
+        partial_score, rounding_error_base, children, best,
+        max_rounding_error, count);
+#else
+  (void)vector;
+#endif
+  return projected_wild_update_scalar(
+      partial_score, rounding_error_base, children, best,
+      max_rounding_error, count);
+}
+
 bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     size_t requested_threads, FILE* progress) {
   if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||

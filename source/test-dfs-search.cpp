@@ -470,31 +470,65 @@ static int smoke_test() {
         unquotiented_output.take_sorted_results(),
         "unquotiented projected score memo changed retained spellings");
 
+    // A non-zero exact depth is what puts the layered bottom-up worker, and
+    // with it the wildcard-update kernel, on the path. Run each depth through
+    // every kernel mode: "verify" abandons the score bound on any
+    // scalar-versus-vector difference, so a mismatch shows up as a lost
+    // projected mode below. On a machine without AVX2 all three modes
+    // degenerate to the scalar kernel and the comparison is vacuous.
+    static char const* const KERNEL_MODES[] = {"0", "1", "verify"};
     for (size_t exact = 1; exact <= 2; ++exact) {
       std::string const forced = std::to_string(exact);
       check(setenv(
                 "NUTRIMATIC_PROJECTED_SCORE_D",
                 forced.c_str(), 1) == 0,
             "could not select projected exact depth");
-      DfsTopN depth_output(&classes, 2);
-      DfsAnagramSearch depth(
-          &classes, exhausted_letters, 1e-6, reader.count(), 4096, 4);
-      depth.run(&depth_output);
-      check(depth.score_bound_mode() ==
-                DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
-                depth.score_bound_complete(),
-            "intermediate projected depth did not retain complete bounds");
-      check(depth.score_bound_exact_letters() == exact,
-            "projected score memo used the wrong exact depth");
-      if (exact == 2)
-        check(depth.score_bound_projected_actions() ==
-                  classes.classes().size(),
-              "all-exact projection collapsed distinct classes");
-      check_same_spellings(
-          exhausted_expected_spellings,
-          depth_output.take_sorted_results(),
-          "projected exact depth changed retained spellings");
+      int64_t scalar_nodes = 0;
+      int64_t scalar_solutions = 0;
+      uint64_t scalar_transitions = 0;
+      for (size_t mode = 0;
+           mode < sizeof(KERNEL_MODES) / sizeof(KERNEL_MODES[0]); ++mode) {
+        check(setenv(
+                  "NUTRIMATIC_PROJECTED_SIMD",
+                  KERNEL_MODES[mode], 1) == 0,
+              "could not select projected wildcard kernel");
+        DfsTopN depth_output(&classes, 2);
+        DfsAnagramSearch depth(
+            &classes, exhausted_letters, 1e-6, reader.count(), 4096, 4);
+        depth.run(&depth_output);
+        check(depth.score_bound_mode() ==
+                  DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+                  depth.score_bound_complete(),
+              "intermediate projected depth did not retain complete bounds");
+        check(depth.score_bound_exact_letters() == exact,
+              "projected score memo used the wrong exact depth");
+        // Note that candidate tests do not bound fitting transitions here:
+        // one surviving action contributes a whole wildcard span.
+        check(depth.score_bound_fitting_transitions() >=
+                  depth.score_bound_transitions(),
+              "projected work counters are inconsistent at depth");
+        if (mode == 0) {
+          if (exact == 2)
+            check(depth.score_bound_projected_actions() ==
+                      classes.classes().size(),
+                  "all-exact projection collapsed distinct classes");
+          scalar_nodes = depth.nodes_visited();
+          scalar_solutions = depth.solutions_found();
+          scalar_transitions = depth.score_bound_transitions();
+        } else {
+          check(depth.nodes_visited() == scalar_nodes &&
+                    depth.solutions_found() == scalar_solutions &&
+                    depth.score_bound_transitions() == scalar_transitions,
+                "projected wildcard kernel changed DFS counters");
+        }
+        check_same_spellings(
+            exhausted_expected_spellings,
+            depth_output.take_sorted_results(),
+            "projected exact depth changed retained spellings");
+      }
     }
+    check(unsetenv("NUTRIMATIC_PROJECTED_SIMD") == 0,
+          "could not restore the projected wildcard kernel");
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
           "could not restore projected exact depth");
 
@@ -670,6 +704,85 @@ static void float_score_bound_test() {
   fclose(fp);
 }
 
+// The vector kernel must reproduce the scalar one bit for bit, including the
+// lanes it leaves alone. Cover the edges directly rather than hoping an
+// end-to-end run reaches them: dead children, spans shorter than one lane
+// group, spans with a tail, offset destinations, and seeds that move the
+// maximum in one lane but not its neighbours.
+static void wildcard_kernel_test() {
+  static size_t const PAD = 3;
+  static size_t const COUNTS[] = {1, 2, 3, 4, 5, 7, 8, 15, 17};
+  static char const* const PATTERNS[] = {
+      "finite", "dead", "alternating", "first dead", "last dead"};
+
+  for (size_t pattern = 0;
+       pattern < sizeof(PATTERNS) / sizeof(PATTERNS[0]); ++pattern) {
+    for (size_t which = 0;
+         which < sizeof(COUNTS) / sizeof(COUNTS[0]); ++which) {
+      size_t const count = COUNTS[which];
+      for (size_t offset = 0; offset <= PAD; ++offset) {
+        std::vector<float> children(PAD + count + PAD, 0.0f);
+        std::vector<double> seed_best(PAD + count + PAD, 0.0);
+        std::vector<double> seed_error(PAD + count + PAD, 0.0);
+        uint64_t expected_finite = 0;
+        for (size_t i = 0; i < count; ++i) {
+          bool dead = false;
+          if (strcmp(PATTERNS[pattern], "dead") == 0)
+            dead = true;
+          else if (strcmp(PATTERNS[pattern], "alternating") == 0)
+            dead = (i % 2) == 1;
+          else if (strcmp(PATTERNS[pattern], "first dead") == 0)
+            dead = i == 0;
+          else if (strcmp(PATTERNS[pattern], "last dead") == 0)
+            dead = i + 1 == count;
+          children[offset + i] =
+              dead ? -HUGE_VALF : float(-1.25 * double(i) - 0.5);
+          if (!dead) ++expected_finite;
+          // Seed every third lane just above what this action can reach and
+          // the rest just below, so only some lanes move.
+          seed_best[offset + i] =
+              (i % 3) == 0 ? 1e6 : -HUGE_VAL;
+          seed_error[offset + i] = (i % 3) == 1 ? 1e6 : 0.0;
+        }
+
+        std::vector<double> scalar_best(seed_best);
+        std::vector<double> scalar_error(seed_error);
+        std::vector<double> vector_best(seed_best);
+        std::vector<double> vector_error(seed_error);
+        double const partial_score = -3.75;
+        double const rounding_error_base = 2.5;
+        uint64_t const scalar_finite =
+            DfsAnagramSearch::test_projected_wild_update(
+                partial_score, rounding_error_base,
+                &children[offset], &scalar_best[offset],
+                &scalar_error[offset], count, false);
+        uint64_t const vector_finite =
+            DfsAnagramSearch::test_projected_wild_update(
+                partial_score, rounding_error_base,
+                &children[offset], &vector_best[offset],
+                &vector_error[offset], count, true);
+
+        check(scalar_finite == expected_finite,
+              "scalar wildcard kernel counted the wrong finite children");
+        check(vector_finite == expected_finite,
+              "vector wildcard kernel counted the wrong finite children");
+        check(memcmp(&scalar_best[0], &vector_best[0],
+                     scalar_best.size() * sizeof(double)) == 0,
+              "vector wildcard kernel changed the score maximum");
+        check(memcmp(&scalar_error[0], &vector_error[0],
+                     scalar_error.size() * sizeof(double)) == 0,
+              "vector wildcard kernel changed the rounding-error maximum");
+        for (size_t i = 0; i < vector_best.size(); ++i) {
+          if (i >= offset && i < offset + count) continue;
+          check(vector_best[i] == seed_best[i] &&
+                    vector_error[i] == seed_error[i],
+                "vector wildcard kernel wrote outside its span");
+        }
+      }
+    }
+  }
+}
+
 static void check_count(int64_t actual, int64_t expected,
                         char const* message) {
   if (actual != expected) {
@@ -723,6 +836,7 @@ static int validate_14_letters() {
 
 int main(int argc, char* argv[]) {
   if (argc == 1) {
+    wildcard_kernel_test();
     smoke_test();
     float_score_bound_test();
     return 0;
