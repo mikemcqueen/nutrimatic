@@ -166,7 +166,6 @@ class DfsAnagramSearch {
   };
 
   struct alignas(16) ProjectedAction {
-    uint64_t exact_support_mask;
     uint64_t score_key_delta;
     double partial_score;
     double rounding_error_base;
@@ -255,7 +254,7 @@ class DfsAnagramSearch {
   bool hot_class_multiplicity_fits(
       uint32_t class_index, BoundWorker const& worker) const;
   bool projected_action_fits(
-      ProjectedAction const& action, BoundWorker const& worker) const;
+      size_t action_index, BoundWorker const& worker) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
   size_t first_projected_length_candidate(
@@ -271,7 +270,7 @@ class DfsAnagramSearch {
       size_t requested_threads, FILE* progress);
   double compute_projected_score_bound(BoundWorker* worker);
   void consider_projected_bound_candidate(
-      ProjectedAction const& action, BoundWorker* worker, double* best,
+      size_t action_index, BoundWorker* worker, double* best,
       double* max_rounding_error);
   bool compute_projected_score_bound_parallel(
       size_t requested_threads, FILE* progress);
@@ -320,9 +319,10 @@ class DfsAnagramSearch {
   std::unique_ptr<uint16_t, AlignedFree> score_wild_lengths;
   std::unique_ptr<uint32_t, AlignedFree> packed_letters;
   std::vector<ProjectedAction> projected_actions;
-  // Index-parallel to projected_actions: exact_support_mask alone, so the
-  // bottom-up scan can reject an action without touching its cold record.
-  // Built in one place, strictly after the per-bucket sort.
+  // Index-parallel to projected_actions, and the only copy of an action's
+  // exact-support mask: the bottom-up scan rejects most actions on it alone,
+  // without touching the cold record. Built in one place, strictly after the
+  // per-bucket sort.
   std::vector<uint64_t> projected_action_support;
   std::vector<uint32_t> projected_repeated_requirements;
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_bucket_starts;
