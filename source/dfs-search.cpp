@@ -331,14 +331,16 @@ static uint64_t projected_wild_update_checked(
 #endif
 }
 
-// NUTRIMATIC_PROJECTED_SIMD selects the wildcard-update kernel: "1" takes the
-// best available vector kernel, "verify" runs it against the scalar kernel and
-// fails preprocessing on any difference, and anything else stays scalar.
+// NUTRIMATIC_PROJECTED_SIMD selects the wildcard-update kernel: unset or "1"
+// takes the best available vector kernel, "verify" runs it against the scalar
+// kernel and fails preprocessing on any difference, and anything else, "0"
+// included, stays scalar.
 static ProjectedKernel projected_kernel_choice() {
   char const* mode = getenv("NUTRIMATIC_PROJECTED_SIMD");
-  if (mode == NULL || mode[0] == '\0') return PROJECTED_KERNEL_SCALAR;
-  bool const verify = strcmp(mode, "verify") == 0;
-  if (!verify && strcmp(mode, "1") != 0) return PROJECTED_KERNEL_SCALAR;
+  bool const verify = mode != NULL && strcmp(mode, "verify") == 0;
+  if (!verify && mode != NULL && mode[0] != '\0' &&
+      strcmp(mode, "1") != 0)
+    return PROJECTED_KERNEL_SCALAR;
 #if defined(__x86_64__)
   if (__builtin_cpu_supports("avx2"))
     return verify ? PROJECTED_KERNEL_VERIFY : PROJECTED_KERNEL_AVX2;
