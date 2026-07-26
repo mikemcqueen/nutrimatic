@@ -135,6 +135,31 @@ static int smoke_test() {
               repeated_sink.ordered_scores == sink.ordered_scores,
           "reused search changed optimized traversal");
 
+    CollectSolutions serial_only_sink(&classes);
+    DfsAnagramSearch serial_only_search(
+        &classes, "aabb", 1e-6, reader.count(), 0, 1, 4);
+    serial_only_search.run(&serial_only_sink);
+    check(serial_only_search.search_threads_used() == 1 &&
+              serial_only_search.search_tasks_generated() == 0,
+          "generic sink did not fall back to serial search");
+    check(serial_only_sink.ordered_indexes == sink.ordered_indexes &&
+              serial_only_sink.ordered_scores == sink.ordered_scores,
+          "requested parallelism changed generic-sink traversal");
+
+    check(setenv("NUTRIMATIC_SEARCH_TASKS", "2", 1) == 0,
+          "could not lower exhaustive parallel task target");
+    DfsAnagramSearch parallel_counter(
+        &classes, "aabb", 1e-6, reader.count(), 0, 1, 4);
+    parallel_counter.run(NULL);
+    check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
+          "could not restore exhaustive parallel task target");
+    check(parallel_counter.search_threads_used() > 1 &&
+              parallel_counter.nodes_visited() ==
+                  search.nodes_visited() &&
+              parallel_counter.solutions_found() ==
+                  search.solutions_found(),
+          "parallel exhaustive search changed public counters");
+
     check(setenv(
               "NUTRIMATIC_LENGTH_CERTIFICATE", "0", 1) == 0,
           "could not disable length certificate");
@@ -213,6 +238,42 @@ static int smoke_test() {
         expected_spellings, bounded_spellings,
         "score bound changed the retained spellings");
 
+    check(setenv("NUTRIMATIC_SEARCH_TASKS", "2", 1) == 0,
+          "could not lower parallel search task target");
+    check(setenv(
+              "NUTRIMATIC_LENGTH_CERTIFICATE", "0", 1) == 0,
+          "could not disable parallel length certificate");
+    DfsTopN parallel_disabled_output(&classes, 2);
+    DfsAnagramSearch parallel_disabled(
+        &classes, "aabb", 1e-6, reader.count(),
+        bound_budget, 1, 4);
+    parallel_disabled.run(&parallel_disabled_output);
+    check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
+          "could not restore parallel length certificate");
+    check(parallel_disabled.search_threads_used() > 1,
+          "certificate-disabled search did not run in parallel");
+    check_same_spellings(
+        bounded_spellings,
+        parallel_disabled_output.take_sorted_results(),
+        "certificate-disabled parallel search changed retained spellings");
+    for (size_t run = 0; run < 3; ++run) {
+      DfsTopN parallel_output(&classes, 2);
+      DfsAnagramSearch parallel(
+          &classes, "aabb", 1e-6, reader.count(),
+          bound_budget, 1, 4);
+      parallel.run(&parallel_output);
+      check(parallel.search_threads_used() > 1 &&
+                parallel.search_threads_used() <= 4,
+            "parallel top-N did not use multiple workers");
+      check(parallel.search_tasks_generated() > 0,
+            "parallel top-N generated no search tasks");
+      check_same_spellings(
+          bounded_spellings, parallel_output.take_sorted_results(),
+          "parallel top-N changed retained spellings");
+    }
+    check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
+          "could not restore parallel search task target");
+
     DfsTopN certificate_only_output(&classes, 2);
     DfsAnagramSearch certificate_only(
         &classes, "aabb", 1e-6, reader.count(), 0);
@@ -225,6 +286,23 @@ static int smoke_test() {
         expected_spellings,
         certificate_only_output.take_sorted_results(),
         "certificate-only search changed retained spellings");
+
+    check(setenv("NUTRIMATIC_SEARCH_TASKS", "2", 1) == 0,
+          "could not lower unbounded parallel task target");
+    DfsTopN parallel_unbounded_output(&classes, 2);
+    DfsAnagramSearch parallel_unbounded(
+        &classes, "aabb", 1e-6, reader.count(), 0, 1, 4);
+    parallel_unbounded.run(&parallel_unbounded_output);
+    check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
+          "could not restore unbounded parallel task target");
+    check(parallel_unbounded.score_bound_mode() ==
+              DfsAnagramSearch::SCORE_BOUND_OFF &&
+              parallel_unbounded.search_threads_used() > 1,
+          "score-bound-off search did not run in parallel");
+    check_same_spellings(
+        expected_spellings,
+        parallel_unbounded_output.take_sorted_results(),
+        "score-bound-off parallel search changed retained spellings");
 
     DfsTopN isolated_output(&classes, 2);
     size_t const score_only_budget = 128;
@@ -492,7 +570,7 @@ static int smoke_test() {
     size_t const exhausted_budget = 64;
     DfsAnagramSearch exhausted(
         &classes, exhausted_letters, 1e-6, reader.count(),
-        exhausted_budget);
+        exhausted_budget, 1, 4);
     FILE* exhausted_diagnostics = tmpfile();
     check(exhausted_diagnostics != NULL,
           "could not create exhaustion diagnostic stream");
@@ -505,6 +583,9 @@ static int smoke_test() {
     check(exhausted.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_PREFIX,
           "partial dense score prefix was not selected");
+    check(exhausted.search_threads_used() == 1 &&
+              exhausted.search_tasks_generated() == 0,
+          "dense score prefix did not fall back to serial search");
     check(exhausted.score_bound_states_computed() > 0,
           "dense score prefix did not lazily construct any bounds");
     check(exhausted.score_bound_entries() ==

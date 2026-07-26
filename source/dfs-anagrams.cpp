@@ -98,6 +98,7 @@ struct Args {
   int progress_factor;
   size_t score_cache_bytes;
   int preprocess_threads;
+  int search_threads;
   bool allow_cache_fallback;
 };
 
@@ -106,12 +107,14 @@ static void usage(char const* program) {
       "usage: %s input.index letters"
       " [-u used-letters] [-m min-word-length] [-n top]"
       " [-p progress-factor] [--cache-size MiB]"
-      " [--preprocess-threads N] [-F|--allow-cache-fallback]\n"
+      " [--preprocess-threads N] [--search-threads N]"
+      " [-F|--allow-cache-fallback]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
+      "  -S, --search-threads defaults to 1\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " dense table does not fit\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
@@ -125,6 +128,7 @@ static struct optparse_long const long_options[] = {
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "cache-size", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
+  { "search-threads", 'S', OPTPARSE_REQUIRED },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
@@ -135,6 +139,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->progress_factor = 1;
   out->score_cache_bytes = DEFAULT_SCORE_CACHE_MIB * MIB;
   out->preprocess_threads = 0;
+  out->search_threads = 1;
   out->allow_cache_fallback = false;
 
   struct optparse options;
@@ -176,6 +181,15 @@ static bool parse_args(char* argv[], Args* out) {
         if (!parse_count(options.optarg, "--preprocess-threads",
                          &out->preprocess_threads))
           return false;
+        break;
+      case 'S':
+        if (!parse_count(options.optarg, "--search-threads",
+                         &out->search_threads))
+          return false;
+        if (out->search_threads < 1) {
+          fputs("error: --search-threads must be at least 1\n", stderr);
+          return false;
+        }
         break;
       case 'F':
         out->allow_cache_fallback = true;
@@ -261,7 +275,8 @@ int main(int argc, char* argv[]) {
   }
   DfsAnagramSearch search(
       &classes, args.letters, restart, reader.count(),
-      args.score_cache_bytes, preprocess_threads);
+      args.score_cache_bytes, preprocess_threads,
+      size_t(args.search_threads));
   DfsTopN output(&classes, size_t(args.top));
   if (!search.run(args.top == 0 ? NULL : &output, stderr,
                   args.progress_factor, args.allow_cache_fallback))
@@ -299,6 +314,12 @@ int main(int argc, char* argv[]) {
                 search.length_certificate_scans_kept(),
             (unsigned long long)
                 search.length_certificate_scans_skipped());
+  if (search.search_threads_used() > 1)
+    fprintf(stderr,
+            "# phase 2 search parallelism: %d requested, %zu used, "
+            "%llu tasks\n",
+            args.search_threads, search.search_threads_used(),
+            (unsigned long long) search.search_tasks_generated());
   fprintf(stderr,
           "# phase 2 score cache: %zu bound entries, %zu bound bytes\n",
           search.score_bound_entries(),

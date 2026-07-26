@@ -42,12 +42,18 @@ expect_status() {
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --preprocess-threads 4 \
   > "$test_dir/threaded.stdout" 2> "$test_dir/threaded.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  -S 1 \
+  > "$test_dir/search-thread-one.stdout" \
+  2> "$test_dir/search-thread-one.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/uncached.stdout" ||
   fail "score cache changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/thread-one.stdout" ||
   fail "--preprocess-threads 1 changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/threaded.stdout" ||
   fail "threaded preprocessing changed stdout"
+cmp "$test_dir/all.stdout" "$test_dir/search-thread-one.stdout" ||
+  fail "-S 1 changed stdout"
 grep -Eq \
   '^# phase 2: using [2-4] threads to calculate dense score bounds$' \
   "$test_dir/threaded.stderr" ||
@@ -107,6 +113,10 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --cache-size nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --preprocess-threads nope
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --search-threads 0
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --search-threads nope
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --cache-size 0
 grep -q '^# phase 2 preflight: 16 theoretical states, 8 effective non-root states$' \

@@ -165,7 +165,7 @@ unrelated edits.
 | 1 | Serial worker refactor | [x] | `Isolate concrete DFS state` |
 | 2 | Group-only length certificate | [x] | `Certify concrete DFS length groups` |
 | 3 | Concurrent top-N sink | [x] | `Make DFS top-N thread-safe` |
-| 4 | Parallel concrete DFS scheduler | [ ] | `Parallelize concrete DFS search` |
+| 4 | Parallel concrete DFS scheduler | [x] | `Parallelize concrete DFS search` |
 | 5 | Integrated validation | [ ] | `Record DFS integration results` |
 | 6 | Depth and thread policy | [ ] | `Recalibrate projected DFS` |
 
@@ -619,7 +619,7 @@ safe, and the change is committed as:
 Make DFS top-N thread-safe
 ```
 
-## Phase 4 — parallelize concrete DFS [ ]
+## Phase 4 — parallelize concrete DFS [x]
 
 ### Purpose
 
@@ -639,14 +639,14 @@ threads join.
 
 ### Public interface and diagnostics
 
-- [ ] Extend `DfsAnagramSearch` with a `search_threads` constructor argument
+- [x] Extend `DfsAnagramSearch` with a `search_threads` constructor argument
       defaulted to one.
-- [ ] Add `--search-threads N` and short form `-S` to `dfs-anagrams`.
-- [ ] Require `N >= 1`; default to one in this commit.
-- [ ] Add `search_threads_used()` and `search_tasks_generated()` accessors.
-- [ ] Report the actual worker count and task count when more than one worker
+- [x] Add `--search-threads N` and short form `-S` to `dfs-anagrams`.
+- [x] Require `N >= 1`; default to one in this commit.
+- [x] Add `search_threads_used()` and `search_tasks_generated()` accessors.
+- [x] Report the actual worker count and task count when more than one worker
       was launched.
-- [ ] Keep preprocessing and search thread controls independent.
+- [x] Keep preprocessing and search thread controls independent.
 
 The Meson thread dependency already exists for DFS preprocessing; verify it
 rather than adding duplicate linkage.
@@ -672,34 +672,34 @@ that the inline path is large enough before publishing a task.
 
 ### Task generation
 
-- [ ] Start from an ordinary initialized `SearchWorker`.
-- [ ] At the selected shallow depth, publish a materialized task instead of
+- [x] Start from an ordinary initialized `SearchWorker`.
+- [x] At the selected shallow depth, publish a materialized task instead of
       descending.
-- [ ] Begin at depth one, then expand queued frontier tasks breadth-first
+- [x] Begin at depth one, then expand queued frontier tasks breadth-first
       until at least `64 * requested threads` live tasks exist, the frontier
       is exhausted, or maximum split depth is reached.
-- [ ] Preserve `entry_point` exactly so canonical class-permutation collapse
+- [x] Preserve `entry_point` exactly so canonical class-permutation collapse
       remains valid after resumption.
-- [ ] Count any shallow solutions found during task generation normally.
-- [ ] Merge the serial seed worker's counters once.
+- [x] Count any shallow solutions found during task generation normally.
+- [x] Merge the serial seed worker's counters once.
 
 Task generation is intentionally serial. Its job is to create enough coarse
 work to amortize scheduling while retaining the ordinary traversal logic.
 
 ### Worker scheduler
 
-- [ ] Cap the requested count at the number of live tasks.
-- [ ] Allocate one `SearchWorker` per possible active worker.
-- [ ] Use one relaxed atomic next-task cursor.
-- [ ] Launch at most `worker_count - 1` background threads and run worker zero
+- [x] Cap the requested count at the number of live tasks.
+- [x] Allocate one `SearchWorker` per possible active worker.
+- [x] Use one relaxed atomic next-task cursor.
+- [x] Launch at most `worker_count - 1` background threads and run worker zero
       on the caller.
-- [ ] Catch thread-construction failure, retain successfully launched
+- [x] Catch thread-construction failure, retain successfully launched
       workers, and let the caller/shared cursor finish all remaining tasks.
-- [ ] Join every successfully created thread before reading worker counters or
+- [x] Join every successfully created thread before reading worker counters or
       returning.
-- [ ] Set `actual_search_threads` to `1 + launched background threads`.
-- [ ] Merge only worker zero and successfully launched worker contexts.
-- [ ] If no live task remains after frontier generation, return success
+- [x] Set `actual_search_threads` to `1 + launched background threads`.
+- [x] Merge only worker zero and successfully launched worker contexts.
+- [x] If no live task remains after frontier generation, return success
       without running the root search again.
 
 No joinable thread may be abandoned on a failure path.
@@ -726,31 +726,31 @@ Otherwise run the one-worker serial path. In particular:
 
 ### Progress synchronization
 
-- [ ] Keep worker node and solution counters local.
-- [ ] Use atomics only to aggregate progress intervals.
-- [ ] Protect `fprintf()` and `fflush()` on the shared progress stream with one
+- [x] Keep worker node and solution counters local.
+- [x] Use atomics only to aggregate progress intervals.
+- [x] Protect `fprintf()` and `fflush()` on the shared progress stream with one
       mutex.
-- [ ] Merge exact final totals after joining; progress lines may be approximate
+- [x] Merge exact final totals after joining; progress lines may be approximate
       snapshots, final public counters may not.
-- [ ] Do not put a mutex or atomic increment in the per-node hot path when
+- [x] Do not put a mutex or atomic increment in the per-node hot path when
       progress is disabled.
 
 ### Focused tests
 
-- [ ] A non-opted-in collecting sink remains serial even when four threads are
+- [x] A non-opted-in collecting sink remains serial even when four threads are
       requested.
-- [ ] `DfsTopN` uses more than one worker on a small fixture with the task
+- [x] `DfsTopN` uses more than one worker on a small fixture with the task
       target overridden low.
-- [ ] On a fixture with no cutoff-score tie, serial and parallel searches
+- [x] On a fixture with no cutoff-score tie, serial and parallel searches
       retain identical spellings and scores.
-- [ ] Serial and parallel searches report the same result for certificate
+- [x] Serial and parallel searches report the same result for certificate
       disabled and active modes, using the same tie-aware comparison.
-- [ ] Parallel search works with score bounds off.
-- [ ] `SCORE_BOUND_PREFIX` falls back to one search worker.
-- [ ] `search_tasks_generated()` is nonzero when parallel work is used.
-- [ ] Repeated parallel runs preserve the same cutoff score; spellings tied
+- [x] Parallel search works with score bounds off.
+- [x] `SCORE_BOUND_PREFIX` falls back to one search worker.
+- [x] `search_tasks_generated()` is nonzero when parallel work is used.
+- [x] Repeated parallel runs preserve the same cutoff score; spellings tied
       exactly at that cutoff may differ.
-- [ ] Progress output remains well-formed rather than interleaved.
+- [x] Progress output remains well-formed rather than interleaved.
 
 Node and solution counters may differ between serial and parallel top-N runs
 because the shared floor strengthens at a different time. Output and score
@@ -759,21 +759,21 @@ match exactly.
 
 ### Verification
 
-- [ ] Build successfully.
-- [ ] Run the common smoke suite.
-- [ ] Run serial/parallel corpus differentials at top-1,000 and on the chosen
+- [x] Build successfully.
+- [x] Run the common smoke suite.
+- [x] Run serial/parallel corpus differentials at top-1,000 and on the chosen
       top-1,000,000 reference workload.
-- [ ] On a fixture with no cutoff-score tie, compare all retained output
+- [x] On a fixture with no cutoff-score tie, compare all retained output
       byte-for-byte.
-- [ ] On corpus runs, compare the exact prefix above the cutoff-score bucket
+- [x] On corpus runs, compare the exact prefix above the cutoff-score bucket
       and verify the same cutoff score and retained count.
-- [ ] Confirm the requested, actual, and task diagnostics are truthful.
-- [ ] Repeat the parallel smoke enough times to expose scheduling-sensitive
+- [x] Confirm the requested, actual, and task diagnostics are truthful.
+- [x] Repeat the parallel smoke enough times to expose scheduling-sensitive
       failures.
-- [ ] `/review` checks sink gating, task completeness, entry-point
+- [x] `/review` checks sink gating, task completeness, entry-point
       preservation, restoration, thread-creation failure, joins, progress
       locking, and counter merging.
-- [ ] `git diff --check` passes.
+- [x] `git diff --check` passes.
 
 ### Completion gate
 
@@ -1118,13 +1118,33 @@ projected work:
 
 | Phase | Commit | Review | Verification notes |
 |---:|---|---|---|
-| 0 | `b3b9535` | complete | Build, common smoke suite, and 40-letter reference passed. |
-| 1 | `3bcaa50` | complete | Build and focused smoke checks passed; full 40-letter output and counters matched Phase 0. |
-| 2 | `96189fd` | complete | Common smoke suite passed; short S6 output matched in all modes and active skipped 319,698,260 scans. |
-| 3 | `Make DFS top-N thread-safe` | complete | Focused serial, concurrent emit/floor, zero-limit, and drain/refill tests passed. |
-| 4 | pending | pending | |
+| 0 | `03c0095` | complete | Build, common smoke suite, and 40-letter reference passed. |
+| 1 | `59fc502` | complete | Build and focused smoke checks passed; full 40-letter output and counters matched Phase 0. |
+| 2 | `73c5914` | complete | Common smoke suite passed; short S6 output matched in all modes and active skipped 319,698,260 scans. |
+| 3 | `31a3a67` | complete | Focused serial, concurrent emit/floor, zero-limit, and drain/refill tests passed. |
+| 4 | `Parallelize concrete DFS search` | complete | Common smoke suite and repeated top-1,000 plus million-row serial/parallel differentials passed. |
 | 5 | pending | pending | |
 | 6 | pending | pending | |
+
+### Phase 4 scheduler verification
+
+```text
+build and common smoke suite:
+  PASS
+38-letter, top-1,000, d=13:
+  serial plus three 20-thread runs retained 1,000 rows with identical SHA-256
+  398abaeaeb5245dfe071f1f11d933742591230b685a6be2ac724abc35a4ffec4
+  serial search 5.910599 s; parallel searches 0.748010, 0.730676,
+  and 0.713123 s
+  each parallel run requested/used 20 workers and generated 18,330 tasks
+  all 5,265 emitted progress records were complete, non-interleaved lines
+28-letter, top-1,000,000, d=12:
+  serial and 20-thread runs retained 1,000,000 rows with identical SHA-256
+  329fc07f414cab7baa46ddf6fb9f85e726f94e56470216da1be6fb120fe8de6e
+  serial search 54.944951 s; parallel search 58.952763 s
+  parallel requested/used 20 workers and generated 22,786 tasks
+  the output-lock ceiling is retained for the Phase 5 policy decision
+```
 
 ### Combined benchmark
 
