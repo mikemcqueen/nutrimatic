@@ -24,7 +24,7 @@ and use $IDX as index file parameter when calling programs; load env("IDX") from
 
 to get letters in the S6 environment variable use:
 
-source ./s.sh
+source ./setup.sh
 
 you can then use ${S6:0:N} for various letter counts.
 
