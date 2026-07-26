@@ -1917,6 +1917,14 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
 
     auto work = [&](size_t worker_index) {
       VectorWorker* worker = &workers[worker_index];
+      // One set of accumulators for every bag this worker drains from this
+      // layer, folded into the worker fields once before returning. The worker
+      // fields stay cumulative across layers because the same VectorWorker is
+      // reused, so the final aggregation is unchanged.
+      uint64_t local_candidate_tests = 0;
+      uint64_t local_fitting_transitions = 0;
+      uint64_t local_transitions = 0;
+      uint64_t local_nextafter_calls = 0;
       for (;;) {
         size_t const layer_index =
             next_bag.fetch_add(1, std::memory_order_relaxed);
@@ -1952,7 +1960,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
              action_index < end; ++action_index) {
           ProjectedAction const& action =
               projected_actions[action_index];
-          ++worker->candidate_tests;
+          ++local_candidate_tests;
           if ((action.exact_support_mask & ~exact_mask) != 0)
             continue;
           uint32_t const* repeated =
@@ -1973,16 +1981,22 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
 
           size_t const wild_length =
               projected_wild_length(action.packed_lengths);
+          // Every class fits the letter bag, so an action cannot want more
+          // wildcard letters than the bag holds, and the span is that total
+          // plus one. The loop below therefore always runs
+          // score_wild_span - wild_length times and its fitting-transition
+          // count is exact in closed form.
+          assert(wild_length < score_wild_span);
+          local_fitting_transitions += score_wild_span - wild_length;
           for (size_t wild = wild_length;
                wild < score_wild_span; ++wild) {
-            ++worker->fitting_transitions;
             uint64_t const parent_key = base_key + wild;
             assert(action.score_key_delta <= parent_key);
             double const child = double(
                 values[size_t(parent_key -
                               action.score_key_delta)]);
             if (child == -HUGE_VAL) continue;
-            ++worker->transitions;
+            ++local_transitions;
             worker->best[wild] = std::max(
                 worker->best[wild],
                 action.partial_score + child);
@@ -2005,11 +2019,16 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
                         static_cast<long double>(best) +
                         static_cast<long double>(
                             worker->max_rounding_error[wild]),
-                        &worker->nextafter_calls);
+                        &local_nextafter_calls);
           values[size_t(base_key + wild)] =
               round_float_score_bound_up(result);
         }
       }
+
+      worker->candidate_tests += local_candidate_tests;
+      worker->fitting_transitions += local_fitting_transitions;
+      worker->transitions += local_transitions;
+      worker->nextafter_calls += local_nextafter_calls;
     };
 
     std::vector<std::thread> background;
