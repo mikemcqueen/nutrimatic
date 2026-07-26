@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -47,7 +48,8 @@ class DfsAnagramSearch {
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
                    double restart, int64_t corpus_total,
                    size_t score_cache_bytes = 0,
-                   size_t preprocess_threads = 1);
+                   size_t preprocess_threads = 1,
+                   size_t search_threads = 1);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When progress is non-null, report every 100k * progress_factor nodes.
@@ -97,6 +99,12 @@ class DfsAnagramSearch {
   size_t preprocess_threads_used() const {
     return actual_preprocess_threads;
   }
+  size_t search_threads_used() const {
+    return actual_search_threads;
+  }
+  uint64_t search_tasks_generated() const {
+    return search_tasks_created;
+  }
   bool length_certificate_enabled() const {
     return length_certificate_ready;
   }
@@ -125,6 +133,8 @@ class DfsAnagramSearch {
   }
 
  private:
+  static size_t const MAX_SPLIT_DEPTH = 6;
+
   struct AlignedFree {
     void operator()(void* pointer) const;
   };
@@ -168,6 +178,17 @@ class DfsAnagramSearch {
     double max_rounding_error;
   };
 
+  struct SearchTask {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    uint64_t bag_mask;
+    uint64_t score_key;
+    std::array<uint32_t, MAX_SPLIT_DEPTH> path;
+    uint32_t path_size;
+    uint32_t entry_point;
+    uint32_t letters_left;
+    double representative_log_score;
+  };
+
   struct SearchWorker {
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     uint64_t bag_mask;
@@ -180,6 +201,8 @@ class DfsAnagramSearch {
     uint64_t certificate_group_rejects;
     uint64_t certificate_scans_skipped;
     uint64_t certificate_scans_kept;
+    size_t split_depth;
+    std::vector<SearchTask>* produced;
     int64_t next_progress;
     int64_t reported_solutions;
   };
@@ -204,7 +227,10 @@ class DfsAnagramSearch {
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
   void start_search_worker(SearchWorker* worker);
+  void report_search_progress(SearchWorker* worker);
   void merge_search_worker(SearchWorker const& worker);
+  bool run_parallel_search(
+      DfsSolutionSink* sink, size_t threads, size_t target_tasks);
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;
@@ -261,6 +287,7 @@ class DfsAnagramSearch {
   size_t const max_depth;
   size_t const score_cache_budget;
   size_t const requested_preprocess_threads;
+  size_t const requested_search_threads;
 
   // The hot bag and all masks use rarest-rank order.
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
@@ -326,6 +353,11 @@ class DfsAnagramSearch {
   double setup_seconds;
   double search_seconds;
   size_t actual_preprocess_threads;
+  size_t actual_search_threads;
+  uint64_t search_tasks_created;
+  std::atomic<int64_t> progress_nodes;
+  std::atomic<int64_t> progress_solutions;
+  std::mutex progress_mutex;
 };
 
 #endif

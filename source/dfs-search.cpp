@@ -253,6 +253,20 @@ static int length_certificate_mode() {
   return 0;
 }
 
+static size_t search_task_target(size_t threads) {
+  size_t target =
+      threads > SIZE_MAX / 64 ? SIZE_MAX : threads * 64;
+  char const* forced = getenv("NUTRIMATIC_SEARCH_TASKS");
+  if (forced == NULL || forced[0] == '\0') return target;
+  errno = 0;
+  char* end = NULL;
+  unsigned long long const parsed = strtoull(forced, &end, 10);
+  if (errno == 0 && end != forced && *end == '\0' &&
+      parsed != 0 && parsed <= SIZE_MAX)
+    return size_t(parsed);
+  return target;
+}
+
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
@@ -278,13 +292,15 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    std::string const& letters,
                                    double restart, int64_t corpus_total,
                                    size_t score_cache_bytes,
-                                   size_t preprocess_threads):
+                                   size_t preprocess_threads,
+                                   size_t search_threads):
     class_list(classes),
     letters(letters),
     restart_log_rate(make_restart_log_rate(restart, corpus_total)),
     max_depth(derived_max_depth(classes, letters.size())),
     score_cache_budget(score_cache_bytes),
     requested_preprocess_threads(std::max(size_t(1), preprocess_threads)),
+    requested_search_threads(std::max(size_t(1), search_threads)),
     bag_mask(0),
     current_score_key(0),
     current_letters_left(0),
@@ -328,7 +344,11 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     solutions(0),
     setup_seconds(0.0),
     search_seconds(0.0),
-    actual_preprocess_threads(1) {
+    actual_preprocess_threads(1),
+    actual_search_threads(1),
+    search_tasks_created(0),
+    progress_nodes(0),
+    progress_solutions(0) {
   assert(class_list != NULL);
   static_assert(sizeof(AtomicWord) == sizeof(uint64_t),
                 "atomic bound words must remain eight bytes");
@@ -926,6 +946,10 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   setup_seconds = 0.0;
   search_seconds = 0.0;
   actual_preprocess_threads = 1;
+  actual_search_threads = 1;
+  search_tasks_created = 0;
+  progress_nodes.store(0, std::memory_order_relaxed);
+  progress_solutions.store(0, std::memory_order_relaxed);
   certificate_stride = 0;
   certificate_max_score.clear();
   certificate_group_end.clear();
@@ -1269,10 +1293,20 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   if (!hot_classes_ready) {
     walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
   } else {
-    SearchWorker worker;
-    start_search_worker(&worker);
-    walk(&worker, letters.size(), 0, 0.0, sink);
-    merge_search_worker(worker);
+    bool const parallel_eligible =
+        requested_search_threads > 1 &&
+        (sink == NULL || sink->supports_parallel_search()) &&
+        bound_mode != SCORE_BOUND_PREFIX;
+    if (parallel_eligible) {
+      run_parallel_search(
+          sink, requested_search_threads,
+          search_task_target(requested_search_threads));
+    } else {
+      SearchWorker worker;
+      start_search_worker(&worker);
+      walk(&worker, letters.size(), 0, 0.0, sink);
+      merge_search_worker(worker);
+    }
   }
   search_seconds =
       std::chrono::duration<double>(PhaseClock::now() - search_start).count();
@@ -2384,7 +2418,24 @@ void DfsAnagramSearch::visit_fitting_class(
         ~(uint64_t(remaining == 0) << requirement_rank);
   }
   worker->score_key -= score_key_deltas.get()[class_index];
-  walk(worker, next_letters_left, class_index, next_log_score, sink);
+  if (DFS_UNLIKELY(worker->split_depth != 0) &&
+      worker->path.size() <= worker->split_depth) {
+    SearchTask task;
+    task.bag = worker->bag;
+    task.bag_mask = worker->bag_mask;
+    task.score_key = worker->score_key;
+    assert(worker->path.size() <= MAX_SPLIT_DEPTH);
+    for (size_t i = 0; i < worker->path.size(); ++i)
+      task.path[i] = uint32_t(worker->path[i]);
+    task.path_size = uint32_t(worker->path.size());
+    task.entry_point = class_index;
+    task.letters_left = uint32_t(next_letters_left);
+    task.representative_log_score = next_log_score;
+    assert(worker->produced != NULL);
+    worker->produced->push_back(task);
+  } else {
+    walk(worker, next_letters_left, class_index, next_log_score, sink);
+  }
   worker->score_key += score_key_deltas.get()[class_index];
   for (uint32_t i = 0; i < requirement_count; ++i) {
     uint32_t const requirement = requirements[i];
@@ -2401,17 +2452,8 @@ void DfsAnagramSearch::walk(SearchWorker* worker, size_t letters_left,
                             DfsSolutionSink* sink) {
   ++worker->nodes;
   if (DFS_UNLIKELY(progress_stream != NULL &&
-                   worker->nodes == worker->next_progress)) {
-    fprintf(progress_stream,
-            "# phase 2: %lld nodes, %lld solutions\n",
-            (long long) worker->nodes,
-            (long long) worker->solutions);
-    fflush(progress_stream);
-    if (worker->next_progress <= INT64_MAX - progress_interval)
-      worker->next_progress += progress_interval;
-    else
-      worker->next_progress = INT64_MAX;
-  }
+                   worker->nodes == worker->next_progress))
+    report_search_progress(worker);
 
   if (DFS_UNLIKELY(worker->bag_mask == 0)) return;
   if (DFS_UNLIKELY(should_prune(
@@ -2494,8 +2536,35 @@ void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
   worker->certificate_group_rejects = 0;
   worker->certificate_scans_skipped = 0;
   worker->certificate_scans_kept = 0;
-  worker->next_progress = progress_interval;
+  worker->split_depth = 0;
+  worker->produced = NULL;
+  worker->next_progress =
+      progress_stream == NULL ? INT64_MAX : progress_interval;
   worker->reported_solutions = 0;
+}
+
+void DfsAnagramSearch::report_search_progress(
+    SearchWorker* worker) {
+  worker->next_progress =
+      worker->next_progress <= INT64_MAX - progress_interval
+          ? worker->next_progress + progress_interval
+          : INT64_MAX;
+  int64_t const total_nodes =
+      progress_nodes.fetch_add(
+          progress_interval, std::memory_order_relaxed) +
+      progress_interval;
+  int64_t const new_solutions =
+      worker->solutions - worker->reported_solutions;
+  worker->reported_solutions = worker->solutions;
+  int64_t const total_solutions =
+      progress_solutions.fetch_add(
+          new_solutions, std::memory_order_relaxed) +
+      new_solutions;
+  std::lock_guard<std::mutex> const guard(progress_mutex);
+  fprintf(progress_stream,
+          "# phase 2: %lld nodes, %lld solutions\n",
+          (long long) total_nodes, (long long) total_solutions);
+  fflush(progress_stream);
 }
 
 void DfsAnagramSearch::merge_search_worker(
@@ -2508,6 +2577,81 @@ void DfsAnagramSearch::merge_search_worker(
   certificate_scans_skipped +=
       worker.certificate_scans_skipped;
   certificate_scans_kept += worker.certificate_scans_kept;
+}
+
+bool DfsAnagramSearch::run_parallel_search(
+    DfsSolutionSink* sink, size_t threads, size_t target_tasks) {
+  assert(threads > 1);
+  assert(target_tasks > 0);
+
+  std::vector<SearchTask> tasks;
+  SearchWorker seed;
+  start_search_worker(&seed);
+  seed.split_depth = 1;
+  seed.produced = &tasks;
+  walk(&seed, letters.size(), 0, 0.0, sink);
+
+  size_t head = 0;
+  std::vector<SearchTask> children;
+  while (tasks.size() - head < target_tasks &&
+         head < tasks.size() &&
+         tasks[head].path_size < MAX_SPLIT_DEPTH) {
+    SearchTask const task = tasks[head++];
+    children.clear();
+    seed.bag = task.bag;
+    seed.bag_mask = task.bag_mask;
+    seed.score_key = task.score_key;
+    seed.path.assign(
+        task.path.begin(), task.path.begin() + task.path_size);
+    seed.split_depth = task.path_size + 1;
+    seed.produced = &children;
+    walk(&seed, task.letters_left, task.entry_point,
+         task.representative_log_score, sink);
+    tasks.insert(tasks.end(), children.begin(), children.end());
+  }
+  merge_search_worker(seed);
+  search_tasks_created = uint64_t(tasks.size() - head);
+  if (head >= tasks.size()) return true;
+
+  size_t const worker_count =
+      std::min(threads, tasks.size() - head);
+  std::atomic<size_t> next_task(head);
+  std::vector<SearchWorker> workers(worker_count);
+  std::vector<std::thread> pool;
+  pool.reserve(worker_count - 1);
+  for (size_t i = 0; i < worker_count; ++i)
+    start_search_worker(&workers[i]);
+  auto const body = [&](size_t index) {
+    SearchWorker& worker = workers[index];
+    for (;;) {
+      size_t const slot =
+          next_task.fetch_add(1, std::memory_order_relaxed);
+      if (slot >= tasks.size()) break;
+      SearchTask const& task = tasks[slot];
+      worker.bag = task.bag;
+      worker.bag_mask = task.bag_mask;
+      worker.score_key = task.score_key;
+      worker.path.assign(
+          task.path.begin(), task.path.begin() + task.path_size);
+      walk(&worker, task.letters_left, task.entry_point,
+           task.representative_log_score, sink);
+    }
+  };
+
+  try {
+    for (size_t i = 1; i < worker_count; ++i)
+      pool.push_back(std::thread(body, i));
+  } catch (...) {
+    // The caller and successfully launched workers share the same cursor, so
+    // they complete every task even if a later thread cannot be constructed.
+  }
+  actual_search_threads = 1 + pool.size();
+  body(0);
+  for (size_t i = 0; i < pool.size(); ++i)
+    pool[i].join();
+  for (size_t i = 0; i < actual_search_threads; ++i)
+    merge_search_worker(workers[i]);
+  return true;
 }
 
 void DfsAnagramSearch::visit_unoptimized_class(
