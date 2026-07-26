@@ -164,7 +164,7 @@ unrelated edits.
 | 0 | Baseline contract | [x] | `Record DFS integration baseline` |
 | 1 | Serial worker refactor | [x] | `Isolate concrete DFS state` |
 | 2 | Group-only length certificate | [x] | `Certify concrete DFS length groups` |
-| 3 | Concurrent top-N sink | [ ] | `Make DFS top-N thread-safe` |
+| 3 | Concurrent top-N sink | [x] | `Make DFS top-N thread-safe` |
 | 4 | Parallel concrete DFS scheduler | [ ] | `Parallelize concrete DFS search` |
 | 5 | Integrated validation | [ ] | `Record DFS integration results` |
 | 6 | Depth and thread policy | [ ] | `Recalibrate projected DFS` |
@@ -526,7 +526,7 @@ produces useful skips, retains original class order, and is committed as:
 Certify concrete DFS length groups
 ```
 
-## Phase 3 — make `DfsTopN` concurrency-safe [ ]
+## Phase 3 — make `DfsTopN` concurrency-safe [x]
 
 ### Purpose
 
@@ -556,22 +556,22 @@ opts in only after the synchronization below exists.
 
 ### `DfsTopN` synchronization
 
-- [ ] Protect the heap, positions map, and `expanded` mutation with one mutex.
-- [ ] Hold that mutex for the full spelling expansion in `emit()`. This keeps
+- [x] Protect the heap, positions map, and `expanded` mutation with one mutex.
+- [x] Hold that mutex for the full spelling expansion in `emit()`. This keeps
       the pending expansion's repeated floor checks coherent and avoids
       exposing internal heap operations.
-- [ ] Publish the numeric floor separately as atomic bits plus an atomic
+- [x] Publish the numeric floor separately as atomic bits plus an atomic
       full flag.
-- [ ] Store floor bits before a release-store of the full flag; readers
+- [x] Store floor bits before a release-store of the full flag; readers
       acquire-load the flag before loading bits.
-- [ ] Republish after every operation that may strengthen a full heap.
-- [ ] Preserve the invariant that the published floor never decreases while
+- [x] Republish after every operation that may strengthen a full heap.
+- [x] Preserve the invariant that the published floor never decreases while
       a populated search is active. A stale lower value may cause extra work
       but cannot over-prune.
-- [ ] In `take_sorted_results()`, acquire the heap mutex, clear the published
+- [x] In `take_sorted_results()`, acquire the heap mutex, clear the published
       full flag, and swap out both heap and positions before sorting.
-- [ ] State in comments that draining is not concurrent with an active search.
-- [ ] Leave `size()` and `spellings_expanded()` as post-join observers; do not
+- [x] State in comments that draining is not concurrent with an active search.
+- [x] Leave `size()` and `spellings_expanded()` as post-join observers; do not
       pay synchronization for calls the contract does not permit.
 
 Use bit conversion through `memcpy`, matching the existing atomic score-bound
@@ -579,16 +579,16 @@ style. Add static assertions if needed to document the atomic word size.
 
 ### Focused tests
 
-- [ ] Existing serial `DfsTopN` tests remain byte-identical.
-- [ ] Several threads can call `emit()` on one `DfsTopN`; using unique scores
+- [x] Existing serial `DfsTopN` tests remain byte-identical.
+- [x] Several threads can call `emit()` on one `DfsTopN`; using unique scores
       or a limit that does not cut a tie group, the final retained set matches
       a serial reference.
-- [ ] Concurrent `score_floor()` calls never observe a floor greater than the
+- [x] Concurrent `score_floor()` calls never observe a floor greater than the
       final floor or a decreasing sequence after publication.
-- [ ] A generic collecting sink reports no parallel capability.
-- [ ] Drain a full `DfsTopN`, refill it with lower scores, and verify it
+- [x] A generic collecting sink reports no parallel capability.
+- [x] Drain a full `DfsTopN`, refill it with lower scores, and verify it
       accepts results until the new heap becomes full.
-- [ ] A zero-limit sink remains inert.
+- [x] A zero-limit sink remains inert.
 
 ### Review focus
 
@@ -602,13 +602,13 @@ style. Add static assertions if needed to document the atomic word size.
 
 ### Verification
 
-- [ ] Build successfully.
-- [ ] Run `test-dfs-output`.
-- [ ] Run `test-dfs-search`.
+- [x] Build successfully.
+- [x] Run `test-dfs-output`.
+- [x] Run `test-dfs-search`.
 - [ ] Optionally run the focused tests under ThreadSanitizer if a compatible
       build is already available; this is not a substitute for review.
-- [ ] `/review` reports no unresolved race or publication finding.
-- [ ] `git diff --check` passes.
+- [x] `/review` reports no unresolved race or publication finding.
+- [x] `git diff --check` passes.
 
 ### Completion gate
 
@@ -1120,8 +1120,8 @@ projected work:
 |---:|---|---|---|
 | 0 | `b3b9535` | complete | Build, common smoke suite, and 40-letter reference passed. |
 | 1 | `3bcaa50` | complete | Build and focused smoke checks passed; full 40-letter output and counters matched Phase 0. |
-| 2 | `Certify concrete DFS length groups` | complete | Common smoke suite passed; short S6 output matched in all modes and active skipped 319,698,260 scans. |
-| 3 | pending | pending | |
+| 2 | `96189fd` | complete | Common smoke suite passed; short S6 output matched in all modes and active skipped 319,698,260 scans. |
+| 3 | `Make DFS top-N thread-safe` | complete | Focused serial, concurrent emit/floor, zero-limit, and drain/refill tests passed. |
 | 4 | pending | pending | |
 | 5 | pending | pending | |
 | 6 | pending | pending | |

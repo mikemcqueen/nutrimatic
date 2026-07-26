@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 
 #include <algorithm>
 #include <limits>
@@ -64,21 +65,44 @@ static double spelling_log_score(
 DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
     class_list(classes),
     result_limit(limit),
-    expanded(0) {
+    expanded(0),
+    published_floor_bits(0),
+    published_full(false) {
   assert(class_list != NULL);
+  static_assert(sizeof(double) == sizeof(uint64_t),
+                "published score floors must remain eight bytes");
   heap.reserve(result_limit);
   positions.reserve(result_limit);
 }
 
+void DfsTopN::publish_floor() {
+  if (!full()) return;
+  double const floor = heap[0].log_score;
+  uint64_t bits;
+  memcpy(&bits, &floor, sizeof(bits));
+  published_floor_bits.store(bits, std::memory_order_relaxed);
+  published_full.store(true, std::memory_order_release);
+}
+
 bool DfsTopN::score_floor(double* floor) const {
-  if (result_limit == 0 || !full()) return false;
-  *floor = floor_log_score();
+  if (result_limit == 0 ||
+      !published_full.load(std::memory_order_acquire))
+    return false;
+  uint64_t const bits =
+      published_floor_bits.load(std::memory_order_relaxed);
+  memcpy(floor, &bits, sizeof(bits));
   return true;
 }
 
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_log_score) {
   if (result_limit == 0 || class_indexes.empty()) return;
+  double published;
+  if (score_floor(&published) &&
+      representative_log_score <= published)
+    return;
+
+  std::lock_guard<std::mutex> const guard(heap_mutex);
   if (full() && representative_log_score <= floor_log_score()) return;
 
   std::vector<DfsAnagramClass> const& classes = class_list->classes();
@@ -108,7 +132,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
           anagram_class.members[current.member_indexes[i]].text;
     }
     spelling.word_set_key = make_word_set_key(spelling.text);
-    offer(spelling);
+    if (offer(spelling)) publish_floor();
 
     // Every tuple has one canonical parent: decrement its first nonzero
     // dimension. Inverting that relation generates the Cartesian product
@@ -156,15 +180,15 @@ double DfsTopN::floor_log_score() const {
   return heap[0].log_score;
 }
 
-void DfsTopN::offer(DfsSpelling const& spelling) {
+bool DfsTopN::offer(DfsSpelling const& spelling) {
   std::unordered_map<std::string, size_t>::iterator found =
       positions.find(spelling.word_set_key);
   if (found != positions.end()) {
     size_t const position = found->second;
-    if (heap[position].log_score >= spelling.log_score) return;
+    if (heap[position].log_score >= spelling.log_score) return false;
     heap[position] = spelling;
     sift_down(position);
-    return;
+    return true;
   }
 
   if (heap.size() < result_limit) {
@@ -172,14 +196,15 @@ void DfsTopN::offer(DfsSpelling const& spelling) {
     heap.push_back(spelling);
     positions[spelling.word_set_key] = position;
     sift_up(position);
-    return;
+    return true;
   }
 
-  if (spelling.log_score <= heap[0].log_score) return;
+  if (spelling.log_score <= heap[0].log_score) return false;
   positions.erase(heap[0].word_set_key);
   heap[0] = spelling;
   positions[spelling.word_set_key] = 0;
   sift_down(0);
+  return true;
 }
 
 void DfsTopN::swap_heap_entries(size_t a, size_t b) {
@@ -214,8 +239,15 @@ void DfsTopN::sift_down(size_t position) {
 
 std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
   std::vector<DfsSpelling> results;
-  results.swap(heap);
-  std::unordered_map<std::string, size_t>().swap(positions);
+  {
+    // Draining is a post-search operation. It is not permitted concurrently
+    // with emit() or score_floor(), but uses the same mutex so sink reuse
+    // resets publication in one coherent state transition.
+    std::lock_guard<std::mutex> const guard(heap_mutex);
+    published_full.store(false, std::memory_order_release);
+    results.swap(heap);
+    std::unordered_map<std::string, size_t>().swap(positions);
+  }
   std::sort(results.begin(), results.end(),
             [](DfsSpelling const& a, DfsSpelling const& b) {
     if (a.log_score != b.log_score) return a.log_score > b.log_score;

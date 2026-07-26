@@ -8,7 +8,9 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 static void check(bool ok, char const* message) {
@@ -202,6 +204,135 @@ static void heap_churn_test() {
             "heap index pointed at the wrong spelling");
       check_close(results[i].log_score, log(expected_scores[i]),
                   "heap retained the wrong score");
+    }
+
+    double stale_floor = 0.0;
+    check(!output.score_floor(&stale_floor),
+          "drained top-N output retained its published floor");
+    output.emit(std::vector<size_t>(1, indexes[1]), log(1.0));
+    std::vector<DfsSpelling> const reused_results =
+        output.take_sorted_results();
+    check(reused_results.size() == 1 &&
+              reused_results[0].word_set_key == "bb",
+          "drained top-N output rejected a lower-scoring refill");
+
+    DfsTopN zero_output(&classes, 0);
+    zero_output.emit(std::vector<size_t>(1, indexes[0]), log(100.0));
+    check(zero_output.size() == 0 &&
+              zero_output.spellings_expanded() == 0 &&
+              !zero_output.score_floor(&stale_floor),
+          "zero-limit top-N output was not inert");
+  }
+
+  fclose(fp);
+}
+
+static void concurrent_top_n_test() {
+  FILE* fp = tmpfile();
+  check(fp != NULL, "could not create concurrent top-N index");
+  {
+    IndexWriter writer(fp);
+    writer.next("aa ", 0, 1);
+    writer.next("bb ", 0, 1);
+    writer.next("cc ", 0, 1);
+    writer.next("dd ", 0, 1);
+    writer.next("ee ", 0, 1);
+    writer.next("ff ", 0, 1);
+    writer.next("gg ", 0, 1);
+    writer.next("hh ", 0, 1);
+    writer.next(NULL, 0, 0);
+  }
+  fflush(fp);
+  rewind(fp);
+
+  {
+    IndexReader reader(fp);
+    DfsClassList classes(&reader, "aabbccddeeffgghh", 2, false);
+    std::vector<size_t> indexes;
+    char const* keys[] = {
+      "aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh",
+    };
+    for (size_t i = 0; i < 8; ++i)
+      indexes.push_back(find_class(classes, keys[i]));
+
+    size_t const limit = 5;
+    size_t const event_count = 256;
+    DfsTopN serial(&classes, limit);
+    for (size_t event = 0; event < event_count; ++event)
+      serial.emit(
+          std::vector<size_t>(1, indexes[event % indexes.size()]),
+          log(double(event + 1)));
+    std::vector<DfsSpelling> const expected =
+        serial.take_sorted_results();
+
+    DfsTopN concurrent(&classes, limit);
+    check(concurrent.supports_parallel_search(),
+          "top-N output did not opt in to parallel search");
+    for (size_t event = 0; event < limit; ++event)
+      concurrent.emit(
+          std::vector<size_t>(1, indexes[event % indexes.size()]),
+          log(double(event + 1)));
+    std::atomic<bool> start(false);
+    std::atomic<size_t> producers_done(0);
+    std::atomic<bool> floor_decreased(false);
+    double reader_max[2] = {
+      -HUGE_VAL,
+      -HUGE_VAL,
+    };
+    std::vector<std::thread> producers;
+    for (size_t thread = 0; thread < 4; ++thread) {
+      producers.push_back(std::thread([&, thread]() {
+        while (!start.load(std::memory_order_acquire))
+          std::this_thread::yield();
+        for (size_t event = limit + thread;
+             event < event_count; event += 4)
+          concurrent.emit(
+              std::vector<size_t>(
+                  1, indexes[event % indexes.size()]),
+              log(double(event + 1)));
+        producers_done.fetch_add(1, std::memory_order_release);
+      }));
+    }
+    std::vector<std::thread> readers;
+    for (size_t thread = 0; thread < 2; ++thread) {
+      readers.push_back(std::thread([&, thread]() {
+        double previous = -HUGE_VAL;
+        do {
+          double floor;
+          if (concurrent.score_floor(&floor)) {
+            if (floor < previous)
+              floor_decreased.store(true, std::memory_order_relaxed);
+            previous = std::max(previous, floor);
+          }
+          std::this_thread::yield();
+        } while (
+            producers_done.load(std::memory_order_acquire) != 4);
+        reader_max[thread] = previous;
+      }));
+    }
+    start.store(true, std::memory_order_release);
+    for (size_t i = 0; i < producers.size(); ++i)
+      producers[i].join();
+    for (size_t i = 0; i < readers.size(); ++i)
+      readers[i].join();
+
+    double final_floor = 0.0;
+    check(concurrent.score_floor(&final_floor),
+          "concurrent top-N output did not publish a floor");
+    check(!floor_decreased.load(std::memory_order_relaxed),
+          "concurrent score floor decreased");
+    for (size_t i = 0; i < 2; ++i)
+      check(reader_max[i] <= final_floor,
+            "concurrent score floor exceeded the final floor");
+    std::vector<DfsSpelling> const actual =
+        concurrent.take_sorted_results();
+    check(actual.size() == expected.size(),
+          "concurrent top-N retained the wrong result count");
+    for (size_t i = 0; i < expected.size(); ++i) {
+      check(actual[i].word_set_key == expected[i].word_set_key,
+            "concurrent top-N retained the wrong spelling");
+      check_close(actual[i].log_score, expected[i].log_score,
+                  "concurrent top-N retained the wrong score");
     }
   }
 
@@ -413,6 +544,7 @@ static void search_output_integration_test() {
 int main() {
   exhaustive_product_test();
   heap_churn_test();
+  concurrent_top_n_test();
   repeated_class_test();
   large_repeated_class_test();
   search_output_integration_test();
