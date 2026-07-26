@@ -2,7 +2,7 @@
 /build/
 /.env/
 tmp/
-/s.sh
+/setup.sh
 /results/
 
 # Python
