@@ -76,7 +76,7 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
 }
 
 void DfsTopN::publish_floor() {
-  if (!full()) return;
+  if (heap.size() != result_limit) return;
   double const floor = heap[0].log_score;
   uint64_t bits;
   memcpy(&bits, &floor, sizeof(bits));
@@ -102,9 +102,6 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
       representative_log_score <= published)
     return;
 
-  std::lock_guard<std::mutex> const guard(heap_mutex);
-  if (full() && representative_log_score <= floor_log_score()) return;
-
   std::vector<DfsAnagramClass> const& classes = class_list->classes();
   ExpansionCandidate first;
   first.log_score = representative_log_score;
@@ -117,9 +114,8 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 
   while (!pending.empty()) {
     ExpansionCandidate const current = pending.top();
-    if (full() && current.log_score <= floor_log_score()) break;
+    if (score_floor(&published) && current.log_score <= published) break;
     pending.pop();
-    ++expanded;
 
     DfsSpelling spelling;
     spelling.log_score = current.log_score;
@@ -132,7 +128,17 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
           anagram_class.members[current.member_indexes[i]].text;
     }
     spelling.word_set_key = make_word_set_key(spelling.text);
-    if (offer(spelling)) publish_floor();
+    {
+      std::lock_guard<std::mutex> const guard(heap_mutex);
+      // The published floor may have strengthened while this spelling was
+      // constructed. Since pending is score ordered and descendants cannot
+      // improve on their parent, an authoritative cutoff ends this expansion.
+      if (heap.size() == result_limit &&
+          current.log_score <= floor_log_score())
+        break;
+      ++expanded;
+      if (offer(spelling)) publish_floor();
+    }
 
     // Every tuple has one canonical parent: decrement its first nonzero
     // dimension. Inverting that relation generates the Cartesian product
@@ -165,7 +171,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
           next.log_score =
               spelling_log_score(classes, class_indexes, next.member_indexes,
                                  representative_log_score);
-          if (!full() || next.log_score > floor_log_score())
+          if (!score_floor(&published) || next.log_score > published)
             pending.push(std::move(next));
         }
       }
@@ -175,7 +181,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 }
 
 double DfsTopN::floor_log_score() const {
-  if (!full())
+  if (heap.size() != result_limit)
     return -std::numeric_limits<double>::infinity();
   return heap[0].log_score;
 }

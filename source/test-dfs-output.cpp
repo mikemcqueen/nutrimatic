@@ -232,14 +232,22 @@ static void concurrent_top_n_test() {
   check(fp != NULL, "could not create concurrent top-N index");
   {
     IndexWriter writer(fp);
-    writer.next("aa ", 0, 1);
-    writer.next("bb ", 0, 1);
-    writer.next("cc ", 0, 1);
-    writer.next("dd ", 0, 1);
-    writer.next("ee ", 0, 1);
-    writer.next("ff ", 0, 1);
-    writer.next("gg ", 0, 1);
-    writer.next("hh ", 0, 1);
+    writer.next("ab ", 0, 997);
+    writer.next("ba ", 0, 991);
+    writer.next("cd ", 0, 997);
+    writer.next("dc ", 0, 991);
+    writer.next("ef ", 0, 997);
+    writer.next("fe ", 0, 991);
+    writer.next("gh ", 0, 997);
+    writer.next("hg ", 0, 991);
+    writer.next("ij ", 0, 997);
+    writer.next("ji ", 0, 991);
+    writer.next("kl ", 0, 997);
+    writer.next("lk ", 0, 991);
+    writer.next("mn ", 0, 997);
+    writer.next("nm ", 0, 991);
+    writer.next("op ", 0, 997);
+    writer.next("po ", 0, 991);
     writer.next(NULL, 0, 0);
   }
   fflush(fp);
@@ -247,15 +255,17 @@ static void concurrent_top_n_test() {
 
   {
     IndexReader reader(fp);
-    DfsClassList classes(&reader, "aabbccddeeffgghh", 2, false);
+    DfsClassList classes(&reader, "abcdefghijklmnop", 2, false);
     std::vector<size_t> indexes;
     char const* keys[] = {
-      "aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh",
+      "ab", "cd", "ef", "gh", "ij", "kl", "mn", "op",
     };
     for (size_t i = 0; i < 8; ++i)
       indexes.push_back(find_class(classes, keys[i]));
 
-    size_t const limit = 5;
+    // Each emit expands both members of its anagram class. This exercises
+    // concurrent worker-local expansion as well as shared heap updates.
+    size_t const limit = 16;
     size_t const event_count = 256;
     DfsTopN serial(&classes, limit);
     for (size_t event = 0; event < event_count; ++event)

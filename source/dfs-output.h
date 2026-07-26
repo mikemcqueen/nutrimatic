@@ -43,7 +43,6 @@ class DfsTopN: public DfsSolutionSink {
   void swap_heap_entries(size_t a, size_t b);
   void sift_up(size_t position);
   void sift_down(size_t position);
-  bool full() const { return heap.size() == result_limit; }
   double floor_log_score() const;
 
   DfsClassList const* const class_list;
@@ -54,10 +53,12 @@ class DfsTopN: public DfsSolutionSink {
   std::vector<DfsSpelling> heap;
   std::unordered_map<std::string, size_t> positions;
 
-  // During parallel search, emit() owns this mutex for the complete spelling
-  // expansion. score_floor() reads the separately published monotone floor so
-  // the search hot path does not contend on the heap. A stale lower floor only
-  // causes extra search work; it cannot prune a retained spelling.
+  // During parallel search, emit() owns this mutex only while checking and
+  // updating the shared heap, positions map, and expanded count. Its spelling
+  // expansion queue is worker-local. score_floor() reads the separately
+  // published monotone floor so the search hot path does not contend on the
+  // heap. A stale lower floor only causes extra work; it cannot prune a
+  // retained spelling.
   mutable std::mutex heap_mutex;
   std::atomic<uint64_t> published_floor_bits;
   std::atomic<bool> published_full;
