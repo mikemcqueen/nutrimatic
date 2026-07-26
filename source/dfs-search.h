@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,10 @@ class DfsSolutionSink {
   // only with an admissible upper bound on every completion below a DFS node.
   virtual bool supports_score_pruning() const { return false; }
   virtual bool score_floor(double* floor) const { return false; }
+
+  // Parallel search shares one sink between workers. Sinks may opt in only
+  // when emit() and score_floor() are safe to call concurrently.
+  virtual bool supports_parallel_search() const { return false; }
   virtual ~DfsSolutionSink() { }
 };
 
@@ -34,6 +39,7 @@ class DfsSolutionSink {
 class DfsAnagramSearch {
  public:
   static size_t const MAX_MODULAR_BOUND_COUNT = 8;
+  static size_t const MAX_SPLIT_DEPTH = 6;
 
   struct ProjectedDiagnostics {
     uint64_t action_scans;
@@ -142,6 +148,8 @@ class DfsAnagramSearch {
   size_t preprocess_threads_used() const {
     return actual_preprocess_threads;
   }
+  size_t search_threads_used() const { return actual_search_threads; }
+  uint64_t search_tasks_generated() const { return search_tasks_created; }
   bool projected_diagnostics_enabled() const {
     return projected_diagnostics_requested;
   }
@@ -268,6 +276,46 @@ class DfsAnagramSearch {
     std::vector<ProjectedLayerDiagnostics> projected_layer_diagnostics;
   };
 
+  // A subtree handed to another thread. `path` is short because tasks are only
+  // created above `split_depth`, so it is stored inline to keep the pool free
+  // of per-task heap allocations.
+  struct SearchTask {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    uint64_t bag_mask;
+    uint64_t score_key;
+    std::array<uint32_t, MAX_SPLIT_DEPTH> path;
+    uint32_t path_size;
+    uint32_t entry_point;
+    uint32_t letters_left;
+    double representative_log_score;
+    std::array<uint16_t, MAX_MODULAR_BOUND_COUNT> modular_signatures;
+  };
+
+  // Per-thread concrete-search state. The bound tables, class metadata, and
+  // certificate tables are read-only during search, so this is everything a
+  // parallel searcher has to keep to itself.
+  struct SearchWorker {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    uint64_t bag_mask;
+    uint64_t score_key;
+    std::vector<size_t> path;
+    int64_t nodes;
+    int64_t solutions;
+    int64_t bound_prunes;
+    uint64_t certificate_group_tests;
+    uint64_t certificate_group_rejects;
+    uint64_t certificate_scans_skipped;
+    uint64_t certificate_scans_kept;
+    uint64_t certificate_suffix_skips;
+    std::array<uint16_t, MAX_MODULAR_BOUND_COUNT> modular_signatures;
+    // Non-zero while this worker publishes shallow subtrees as tasks instead of
+    // descending into them.
+    size_t split_depth;
+    std::vector<SearchTask>* produced;
+    int64_t next_progress;
+    int64_t reported_solutions;
+  };
+
   bool prepare_hot_classes();
   bool prepare_projected_actions();
   bool prepare_projected_support_groups();
@@ -285,18 +333,27 @@ class DfsAnagramSearch {
   void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
   void clear_score_bounds();
 
-  void walk(size_t letters_left, size_t entry_point,
+  void walk(SearchWorker* worker, size_t letters_left, size_t entry_point,
             double representative_log_score, DfsSolutionSink* sink);
-  void walk_certified(int rank, size_t start, size_t end,
-                      size_t letters_left,
+  void walk_certified(SearchWorker* worker, int rank, size_t start,
+                      size_t end, size_t letters_left,
                       double representative_log_score, double floor,
                       DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
+  void start_search_worker(SearchWorker* worker);
+  void report_search_progress(SearchWorker* worker);
+  void merge_search_worker(SearchWorker const& worker);
+  bool run_parallel_search(
+      DfsSolutionSink* sink, size_t threads, size_t split_depth);
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;
+  bool hot_class_fits(uint32_t class_index,
+                      SearchWorker const& worker) const;
+  bool hot_class_multiplicity_fits(
+      uint32_t class_index, SearchWorker const& worker) const;
   bool hot_class_fits(uint32_t class_index,
                       BoundWorker const& worker) const;
   bool hot_class_multiplicity_fits(
@@ -329,10 +386,11 @@ class DfsAnagramSearch {
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
-  bool should_prune(double representative_log_score,
+  bool should_prune(SearchWorker* worker, double representative_log_score,
                     DfsSolutionSink* sink, size_t letters_left);
 
-  void visit_fitting_class(uint32_t class_index, size_t letters_left,
+  void visit_fitting_class(SearchWorker* worker, uint32_t class_index,
+                           size_t letters_left,
                            double representative_log_score,
                            DfsSolutionSink* sink);
   void visit_unoptimized_class(size_t class_index, size_t letters_left,
@@ -451,6 +509,13 @@ class DfsAnagramSearch {
   double support_group_prepare_seconds;
   double modular_bound_prepare_seconds;
   size_t actual_preprocess_threads;
+
+  size_t requested_search_threads;
+  size_t actual_search_threads;
+  uint64_t search_tasks_created;
+  std::atomic<int64_t> progress_nodes;
+  std::atomic<int64_t> progress_solutions;
+  std::mutex progress_mutex;
 };
 
 #endif

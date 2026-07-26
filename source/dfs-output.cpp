@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 
 #include <algorithm>
 #include <limits>
@@ -64,21 +65,41 @@ static double spelling_log_score(
 DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
     class_list(classes),
     result_limit(limit),
-    expanded(0) {
+    expanded(0),
+    published_floor_bits(0),
+    published_full(false) {
   assert(class_list != NULL);
   heap.reserve(result_limit);
   positions.reserve(result_limit);
 }
 
+void DfsTopN::publish_floor() {
+  if (!full()) return;
+  double const floor = heap[0].log_score;
+  uint64_t bits;
+  memcpy(&bits, &floor, sizeof(bits));
+  published_floor_bits.store(bits, std::memory_order_relaxed);
+  published_full.store(true, std::memory_order_release);
+}
+
 bool DfsTopN::score_floor(double* floor) const {
-  if (result_limit == 0 || !full()) return false;
-  *floor = floor_log_score();
+  if (result_limit == 0 ||
+      !published_full.load(std::memory_order_acquire))
+    return false;
+  uint64_t const bits =
+      published_floor_bits.load(std::memory_order_relaxed);
+  memcpy(floor, &bits, sizeof(bits));
   return true;
 }
 
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_log_score) {
   if (result_limit == 0 || class_indexes.empty()) return;
+  double published;
+  if (score_floor(&published) && representative_log_score <= published)
+    return;
+
+  std::lock_guard<std::mutex> const guard(heap_mutex);
   if (full() && representative_log_score <= floor_log_score()) return;
 
   std::vector<DfsAnagramClass> const& classes = class_list->classes();
@@ -109,6 +130,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
     }
     spelling.word_set_key = make_word_set_key(spelling.text);
     offer(spelling);
+    publish_floor();
 
     // Every tuple has one canonical parent: decrement its first nonzero
     // dimension. Inverting that relation generates the Cartesian product
@@ -214,8 +236,12 @@ void DfsTopN::sift_down(size_t position) {
 
 std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
   std::vector<DfsSpelling> results;
-  results.swap(heap);
-  std::unordered_map<std::string, size_t>().swap(positions);
+  {
+    std::lock_guard<std::mutex> const guard(heap_mutex);
+    published_full.store(false, std::memory_order_release);
+    results.swap(heap);
+    std::unordered_map<std::string, size_t>().swap(positions);
+  }
   std::sort(results.begin(), results.end(),
             [](DfsSpelling const& a, DfsSpelling const& b) {
     if (a.log_score != b.log_score) return a.log_score > b.log_score;

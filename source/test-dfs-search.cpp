@@ -110,10 +110,16 @@ static int smoke_test() {
     DfsClassList classes(&reader, "aabb", 1);
     CollectSolutions sink(&classes);
     DfsAnagramSearch search(&classes, "aabb", 1e-6, reader.count());
+    check(setenv("NUTRIMATIC_SEARCH_THREADS", "4", 1) == 0,
+          "could not request parallel search");
     search.run(&sink);
+    check(unsetenv("NUTRIMATIC_SEARCH_THREADS") == 0,
+          "could not clear parallel search request");
 
     check(search.solutions_found() == 6, "wrong solution count");
     check(sink.solutions.size() == 6, "permutation duplicate emitted");
+    check(search.search_threads_used() == 1,
+          "non-thread-safe sink was used by parallel search");
     double const expected =
         2.0 * log(5.0) + log(1e-6) - log(double(reader.count()));
     check(fabs(sink.ab_ab_log_score - expected) < 1e-12,
@@ -153,6 +159,22 @@ static int smoke_test() {
     check_same_spellings(
         expected_spellings, bounded_spellings,
         "score bound changed the retained spellings");
+
+    check(setenv("NUTRIMATIC_SEARCH_THREADS", "4", 1) == 0 &&
+              setenv("NUTRIMATIC_SEARCH_TASKS", "2", 1) == 0,
+          "could not configure parallel search");
+    DfsTopN parallel_output(&classes, 2);
+    DfsAnagramSearch parallel(
+        &classes, "aabb", 1e-6, reader.count(), bound_budget);
+    parallel.run(&parallel_output);
+    check(unsetenv("NUTRIMATIC_SEARCH_THREADS") == 0 &&
+              unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
+          "could not clear parallel search configuration");
+    check(parallel.search_threads_used() > 1,
+          "thread-safe top-N sink did not use parallel search");
+    check_same_spellings(
+        bounded_spellings, parallel_output.take_sorted_results(),
+        "parallel search changed the retained spellings");
 
     DfsTopN isolated_output(&classes, 2);
     size_t const score_only_budget = 128;

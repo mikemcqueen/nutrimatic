@@ -1,6 +1,8 @@
 #ifndef NUTRIMATIC_DFS_OUTPUT_H
 #define NUTRIMATIC_DFS_OUTPUT_H
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +26,7 @@ class DfsTopN: public DfsSolutionSink {
             double representative_log_score);
   bool supports_score_pruning() const { return result_limit != 0; }
   bool score_floor(double* floor) const;
+  bool supports_parallel_search() const { return true; }
 
   size_t size() const { return heap.size(); }
   size_t limit() const { return result_limit; }
@@ -48,6 +51,16 @@ class DfsTopN: public DfsSolutionSink {
   // A min-heap: the weakest retained spelling is always at position zero.
   std::vector<DfsSpelling> heap;
   std::unordered_map<std::string, size_t> positions;
+
+  // A parallel search calls emit() from several threads and score_floor() at
+  // nearly every node. The heap is serialized, but the floor is published as a
+  // separate atomic so the hot read never contends. The floor only ever rises
+  // once the heap is full, so a reader that observes a stale value simply
+  // prunes less; it can never discard a retained spelling.
+  mutable std::mutex heap_mutex;
+  std::atomic<uint64_t> published_floor_bits;
+  std::atomic<bool> published_full;
+  void publish_floor();
 };
 
 #endif

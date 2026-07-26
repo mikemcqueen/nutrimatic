@@ -203,6 +203,16 @@ static void heap_churn_test() {
       check_close(results[i].log_score, log(expected_scores[i]),
                   "heap retained the wrong score");
     }
+
+    double stale_floor = 0.0;
+    check(!output.score_floor(&stale_floor),
+          "drained top-N output retained its published floor");
+    output.emit(std::vector<size_t>(1, indexes[1]), log(1.0));
+    std::vector<DfsSpelling> const reused_results =
+        output.take_sorted_results();
+    check(reused_results.size() == 1 &&
+              reused_results[0].word_set_key == "bb",
+          "drained top-N output rejected a lower-scoring refill");
   }
 
   fclose(fp);
