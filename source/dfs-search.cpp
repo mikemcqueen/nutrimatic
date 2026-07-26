@@ -221,6 +221,137 @@ projected_wild_update_scalar(
   return finite;
 }
 
+// Which wildcard-update kernel the bottom-up evaluator runs. Resolved once per
+// preprocessing run, never per bag or per action.
+enum ProjectedKernel {
+  PROJECTED_KERNEL_SCALAR,
+  PROJECTED_KERNEL_AVX2,
+  PROJECTED_KERNEL_VERIFY  // run both and compare, for tests and debugging
+};
+
+#if defined(__x86_64__)
+
+// Four wildcard counts at a time, in the scalar kernel's exact arithmetic.
+//
+// std::max(current, candidate) is (current < candidate) ? candidate : current,
+// which maxpd reproduces exactly as _mm256_max_pd(candidate, current):
+// MAXPD returns its second operand on ties, on either operand being NaN, and
+// for +0.0 against -0.0, which is what std::max returns in each of those
+// cases. The dead-child test is _CMP_NEQ_UQ rather than the ordered form so
+// that a NaN child counts as live, matching the scalar `child == -HUGE_VAL`.
+// A NaN child then loses both maxima anyway, exactly as it does scalar-side.
+__attribute__((target("avx2"))) static uint64_t
+projected_wild_update_avx2(
+    double partial_score, double rounding_error_base,
+    float const* children, double* best, double* max_rounding_error,
+    size_t count) {
+  __m256d const partial = _mm256_set1_pd(partial_score);
+  __m256d const error_base = _mm256_set1_pd(rounding_error_base);
+  __m256d const one = _mm256_set1_pd(1.0);
+  __m256d const epsilon = _mm256_set1_pd(DBL_EPSILON * 4.0);
+  __m256d const dead = _mm256_set1_pd(-HUGE_VAL);
+  __m256d const sign_bit = _mm256_set1_pd(-0.0);
+  uint64_t finite = 0;
+  size_t i = 0;
+  for (; i + 4 <= count; i += 4) {
+    // float -> double is exact, so the widened lanes hold the same values the
+    // scalar kernel's conversion produces.
+    __m256d const child =
+        _mm256_cvtps_pd(_mm_loadu_ps(children + i));
+    __m256d const live =
+        _mm256_cmp_pd(child, dead, _CMP_NEQ_UQ);
+    __m256d const candidate = _mm256_add_pd(partial, child);
+    __m256d const rounding_error = _mm256_mul_pd(
+        _mm256_add_pd(
+            _mm256_add_pd(
+                error_base, _mm256_andnot_pd(sign_bit, child)),
+            one),
+        epsilon);
+    // The std::vector data is not guaranteed 32-byte aligned and the range
+    // starts at wild_length, so every access is unaligned.
+    __m256d const best_now = _mm256_loadu_pd(best + i);
+    __m256d const error_now = _mm256_loadu_pd(max_rounding_error + i);
+    // A dead lane contributes its own current value, so it cannot move either
+    // maximum; blending before the max also keeps inf out of the envelope.
+    _mm256_storeu_pd(
+        best + i,
+        _mm256_max_pd(
+            _mm256_blendv_pd(best_now, candidate, live), best_now));
+    _mm256_storeu_pd(
+        max_rounding_error + i,
+        _mm256_max_pd(
+            _mm256_blendv_pd(error_now, rounding_error, live),
+            error_now));
+    finite += uint64_t(__builtin_popcount(
+        unsigned(_mm256_movemask_pd(live))));
+  }
+  // score_wild_span is not a multiple of four on any real workload, so the
+  // tail always runs.
+  return finite + projected_wild_update_scalar(
+      partial_score, rounding_error_base, children + i, best + i,
+      max_rounding_error + i, count - i);
+}
+
+#endif  // defined(__x86_64__)
+
+// The non-scalar kernels, kept out of line so the scalar path stays a plain
+// inlined loop. `mismatch` is set, never cleared, when verification fails.
+static uint64_t projected_wild_update_checked(
+    ProjectedKernel kernel, double partial_score,
+    double rounding_error_base, float const* children, double* best,
+    double* max_rounding_error, size_t count, double* scratch_best,
+    double* scratch_error, bool* mismatch) {
+#if defined(__x86_64__)
+  if (kernel == PROJECTED_KERNEL_AVX2)
+    return projected_wild_update_avx2(
+        partial_score, rounding_error_base, children, best,
+        max_rounding_error, count);
+  size_t const bytes = count * sizeof(double);
+  memcpy(scratch_best, best, bytes);
+  memcpy(scratch_error, max_rounding_error, bytes);
+  uint64_t const vector_finite = projected_wild_update_avx2(
+      partial_score, rounding_error_base, children, best,
+      max_rounding_error, count);
+  uint64_t const scalar_finite = projected_wild_update_scalar(
+      partial_score, rounding_error_base, children, scratch_best,
+      scratch_error, count);
+  if (vector_finite != scalar_finite ||
+      memcmp(best, scratch_best, bytes) != 0 ||
+      memcmp(max_rounding_error, scratch_error, bytes) != 0)
+    *mismatch = true;
+  return scalar_finite;
+#else
+  (void)kernel;
+  (void)scratch_best;
+  (void)scratch_error;
+  (void)mismatch;
+  return projected_wild_update_scalar(
+      partial_score, rounding_error_base, children, best,
+      max_rounding_error, count);
+#endif
+}
+
+// NUTRIMATIC_PROJECTED_SIMD selects the wildcard-update kernel: "1" takes the
+// best available vector kernel, "verify" runs it against the scalar kernel and
+// fails preprocessing on any difference, and anything else stays scalar.
+static ProjectedKernel projected_kernel_choice() {
+  char const* mode = getenv("NUTRIMATIC_PROJECTED_SIMD");
+  if (mode == NULL || mode[0] == '\0') return PROJECTED_KERNEL_SCALAR;
+  bool const verify = strcmp(mode, "verify") == 0;
+  if (!verify && strcmp(mode, "1") != 0) return PROJECTED_KERNEL_SCALAR;
+#if defined(__x86_64__)
+  if (__builtin_cpu_supports("avx2"))
+    return verify ? PROJECTED_KERNEL_VERIFY : PROJECTED_KERNEL_AVX2;
+#endif
+  return PROJECTED_KERNEL_SCALAR;
+}
+
+static char const* projected_kernel_name(ProjectedKernel kernel) {
+  if (kernel == PROJECTED_KERNEL_AVX2) return "avx2";
+  if (kernel == PROJECTED_KERNEL_VERIFY) return "avx2 verify";
+  return "scalar";
+}
+
 // Bound the error in fl(fl(class_score + restart) + child). IEEE double
 // round-to-nearest incurs less than one DBL_EPSILON times the sum of operand
 // magnitudes here. The factor of four also covers rounding while calculating
@@ -1831,21 +1962,39 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     std::vector<double> best;
     std::vector<double> max_rounding_error;
+    // Shadow copies, used only by PROJECTED_KERNEL_VERIFY.
+    std::vector<double> verify_best;
+    std::vector<double> verify_error;
     uint64_t candidate_tests;
     uint64_t fitting_transitions;
     uint64_t transitions;
     uint64_t nextafter_calls;
+    bool verify_mismatch;
 
     explicit VectorWorker(size_t wild_span):
         best(wild_span),
         max_rounding_error(wild_span),
+        verify_best(wild_span),
+        verify_error(wild_span),
         candidate_tests(0),
         fitting_transitions(0),
         transitions(0),
-        nextafter_calls(0) {
+        nextafter_calls(0),
+        verify_mismatch(false) {
       bag.fill(0);
     }
   };
+
+  // Resolved once, before any worker starts, so no AVX2 instruction can be
+  // reached on a machine that lacks it and no bag pays for the decision.
+  ProjectedKernel const kernel = projected_kernel_choice();
+  if (progress != NULL && kernel != PROJECTED_KERNEL_SCALAR) {
+    dfs_diagnostic(
+        progress,
+        "phase 2: projected wildcard update kernel %s\n",
+        projected_kernel_name(kernel));
+    fflush(progress);
+  }
 
   float* const values = bound_plain_float_values.get();
   size_t const wildcard_bucket = DFS_SYMBOL_COUNT;
@@ -1960,6 +2109,73 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
       uint64_t local_fitting_transitions = 0;
       uint64_t local_transitions = 0;
       uint64_t local_nextafter_calls = 0;
+
+      // The kernel choice is constant for the whole run, so specialize the
+      // action scan on it instead of branching inside it. With the vector
+      // kernels out of line, a runtime branch here made the scalar path spill
+      // its loop-invariant registers across a call it never makes, and that
+      // cost 14% of setup.
+      auto scan = [&](auto kernel_tag, VectorWorker* worker,
+                      uint64_t exact_mask, uint64_t base_key,
+                      size_t begin, size_t end) {
+        for (size_t action_index = begin;
+             action_index < end; ++action_index) {
+          ProjectedAction const& action =
+              projected_actions[action_index];
+          ++local_candidate_tests;
+          if ((action.exact_support_mask & ~exact_mask) != 0)
+            continue;
+          uint32_t const* repeated =
+              action.repeated_count == 0
+                  ? NULL
+                  : &projected_repeated_requirements[
+                        action.repeated_offset];
+          bool fits = true;
+          for (uint32_t i = 0; i < action.repeated_count; ++i) {
+            uint32_t const requirement = repeated[i];
+            if (worker->bag[packed_rank(requirement)] <
+                packed_count(requirement)) {
+              fits = false;
+              break;
+            }
+          }
+          if (!fits) continue;
+
+          size_t const wild_length =
+              projected_wild_length(action.packed_lengths);
+          // Every class fits the letter bag, so an action cannot want more
+          // wildcard letters than the bag holds, and the span is that total
+          // plus one. The update below therefore always covers
+          // score_wild_span - wild_length wildcard counts and its
+          // fitting-transition count is exact in closed form.
+          assert(wild_length < score_wild_span);
+          // The whole span shares one range check: parent keys ascend with
+          // `wild`, so the smallest one bounds them all.
+          uint64_t const first_parent_key = base_key + wild_length;
+          assert(action.score_key_delta <= first_parent_key);
+          size_t const count = score_wild_span - wild_length;
+          float const* const children = values +
+              size_t(first_parent_key - action.score_key_delta);
+          double* const best = &worker->best[wild_length];
+          double* const error =
+              &worker->max_rounding_error[wild_length];
+          local_fitting_transitions += count;
+          if constexpr (decltype(kernel_tag)::value ==
+                        PROJECTED_KERNEL_SCALAR) {
+            local_transitions += projected_wild_update_scalar(
+                action.partial_score, action.rounding_error_base,
+                children, best, error, count);
+          } else {
+            local_transitions += projected_wild_update_checked(
+                decltype(kernel_tag)::value, action.partial_score,
+                action.rounding_error_base, children, best, error,
+                count, worker->verify_best.data(),
+                worker->verify_error.data(),
+                &worker->verify_mismatch);
+          }
+        }
+      };
+
       for (;;) {
         size_t const layer_index =
             next_bag.fetch_add(1, std::memory_order_relaxed);
@@ -1991,49 +2207,18 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
         uint64_t const base_key =
             exact_key * uint64_t(score_wild_span);
 
-        for (size_t action_index = begin;
-             action_index < end; ++action_index) {
-          ProjectedAction const& action =
-              projected_actions[action_index];
-          ++local_candidate_tests;
-          if ((action.exact_support_mask & ~exact_mask) != 0)
-            continue;
-          uint32_t const* repeated =
-              action.repeated_count == 0
-                  ? NULL
-                  : &projected_repeated_requirements[
-                        action.repeated_offset];
-          bool fits = true;
-          for (uint32_t i = 0; i < action.repeated_count; ++i) {
-            uint32_t const requirement = repeated[i];
-            if (worker->bag[packed_rank(requirement)] <
-                packed_count(requirement)) {
-              fits = false;
-              break;
-            }
-          }
-          if (!fits) continue;
-
-          size_t const wild_length =
-              projected_wild_length(action.packed_lengths);
-          // Every class fits the letter bag, so an action cannot want more
-          // wildcard letters than the bag holds, and the span is that total
-          // plus one. The loop below therefore always runs
-          // score_wild_span - wild_length times and its fitting-transition
-          // count is exact in closed form.
-          assert(wild_length < score_wild_span);
-          // The whole span shares one range check: parent keys ascend with
-          // `wild`, so the smallest one bounds them all.
-          uint64_t const first_parent_key = base_key + wild_length;
-          assert(action.score_key_delta <= first_parent_key);
-          size_t const count = score_wild_span - wild_length;
-          local_fitting_transitions += count;
-          local_transitions += projected_wild_update_scalar(
-              action.partial_score, action.rounding_error_base,
-              values + size_t(first_parent_key -
-                              action.score_key_delta),
-              &worker->best[wild_length],
-              &worker->max_rounding_error[wild_length], count);
+        if (kernel == PROJECTED_KERNEL_SCALAR) {
+          scan(std::integral_constant<
+                   ProjectedKernel, PROJECTED_KERNEL_SCALAR>(),
+               worker, exact_mask, base_key, begin, end);
+        } else if (kernel == PROJECTED_KERNEL_AVX2) {
+          scan(std::integral_constant<
+                   ProjectedKernel, PROJECTED_KERNEL_AVX2>(),
+               worker, exact_mask, base_key, begin, end);
+        } else {
+          scan(std::integral_constant<
+                   ProjectedKernel, PROJECTED_KERNEL_VERIFY>(),
+               worker, exact_mask, base_key, begin, end);
         }
 
         for (size_t wild = 0; wild < score_wild_span; ++wild) {
@@ -2081,6 +2266,19 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     work(0);
     for (size_t i = 0; i < background.size(); ++i)
       background[i].join();
+  }
+
+  for (size_t i = 0; i < workers.size(); ++i) {
+    if (!workers[i].verify_mismatch) continue;
+    if (progress != NULL) {
+      dfs_diagnostic(
+          progress,
+          "phase 2: projected %s kernel disagreed with the scalar "
+          "kernel; abandoning the score bound\n",
+          projected_kernel_name(kernel));
+      fflush(progress);
+    }
+    return false;
   }
 
   for (size_t i = 0; i < workers.size(); ++i) {
