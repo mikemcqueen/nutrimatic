@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <chrono>
 
@@ -14,6 +15,14 @@ DiagnosticClock::time_point diagnostic_start = DiagnosticClock::now();
 
 void dfs_reset_diagnostic_clock() {
   diagnostic_start = DiagnosticClock::now();
+}
+
+void dfs_check_failed(char const* file, int line, char const* expr) {
+  // Worker threads can reach this concurrently; one fprintf keeps the message
+  // intact, and stderr is unbuffered so it lands before the abort.
+  fflush(stdout);
+  fprintf(stderr, "%s:%d: invariant failed: %s\n", file, line, expr);
+  abort();
 }
 
 void dfs_diagnostic(FILE* stream, char const* format, ...) {
