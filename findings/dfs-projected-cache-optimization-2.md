@@ -216,6 +216,32 @@ length-only fallback was much weaker and added no unique prune beside the rich
 bound. With 1–2 GiB available, revisit modular tables only if they reduce
 wall time or a separately supported low-memory deployment needs them.
 
+A follow-up focused specifically on the 1–2 GiB frontier changes two
+priorities. First, retain only one generated exact-total layer at a time
+instead of all 32-bit exact-key IDs. On the 48-letter workload this reduces
+the `d=17` layer-index requirement from 141.75 MiB to a maximum 14.44 MiB
+while retaining the 1.80 GiB float table. On the 40-letter all-exact
+projection it reduces the index from 1.56 GiB to 155.93 MiB. A temporary
+bounded-composition generator reproduced the established 28-letter output
+and every deterministic counter.
+
+Second, optimize the wildcard-update kernel before another elaborate action
+index. On the 48-letter `d=15` run, 122.16 billion of 123.57 billion fitting
+updates had finite children, or 98.86%. Compiler vectorization diagnostics
+show that the loop remains scalar even with `-march=native` because of its
+control flow. A correctness-preserving SIMD implementation with a scalar
+fallback is therefore the leading deep-table kernel experiment. The support
+sidecar remains useful, but the long-input loop performs more expensive
+wildcard updates than rejected action scans.
+
+The larger allowance also exposes an exact selector canonicalization. On the
+40-letter workload, `d=19` and all-exact `d=20` both contain 418,037,760
+float values. Keeping `e:6` as the sole wildcard at `d=19` represents the
+same remaining information, preserves seven-way wildcard-vector batching,
+and needs far fewer exact-layer IDs. Never promote the final wildcard symbol
+to an exact digit when total remaining length already determines its count.
+The deeper label does not produce a deeper bound in that case.
+
 ## Workload
 
 The measurements used:
@@ -2421,6 +2447,219 @@ an atomic-table copy, and a later encoding version can be added if packed
 binary16 wins its wall-time A/B. Additional parallelization remains a later
 experiment for first-run latency.
 
+## Long-input follow-up at a 1–2 GiB allowance
+
+This follow-up treats 1–2 GiB as an available working allowance, not as a
+target allocation. It concentrates on configurations that become selectable
+only with that allowance and on the dominant loop once a long input reaches a
+setup-heavy depth.
+
+Accurate new wall-time A/Bs were not recorded during this follow-up because
+another long-running `dfs-anagrams` process remained active. Static counts,
+compiler diagnostics, exact memory calculations, and correctness
+differentials are unaffected. The temporary prototypes described here were
+removed after those checks.
+
+### Stream exact-total layers instead of retaining every exact key
+
+The bottom-up evaluator needs dependency layers, but it does not need every
+layer's key list at once. After one exact-total layer completes, no later
+operation reads its list; later operations read only its completed values.
+
+For exact digit maxima `m_i`, the number of keys in exact-total layer `t` is
+the coefficient of:
+
+```text
+x^t in product_i (1 + x + ... + x^m_i)
+```
+
+The omitted root plane reduces the root digit's maximum by one. These
+coefficients give both an exact preflight peak and a direct bounded-composition
+generator: enumerate only the keys whose digit sum is the current layer,
+process them, clear the vector, and generate the next layer.
+
+Exact sizes for the 48-letter workload are:
+
+| depth | wildcard span | float values | all retained layer IDs | largest single layer |
+|---:|---:|---:|---:|---:|
+| 13 | 26 | 16.45 MiB | 0.63 MiB | 0.09 MiB |
+| 14 | 25 | 31.64 MiB | 1.27 MiB | 0.17 MiB |
+| 15 | 19 | 168.33 MiB | 8.86 MiB | 0.98 MiB |
+| 16 | 16 | 567.00 MiB | 35.44 MiB | 3.79 MiB |
+| 17 | 13 | 1,842.75 MiB | 141.75 MiB | 14.44 MiB |
+
+At `d=17`, values plus the current layer lists consume 1,984.50 MiB before
+projection actions, repeated requirements, worker scratch, allocator
+overhead, or alignment. Keeping only the largest generated layer reduces
+that subtotal to 1,857.19 MiB. This is the difference between a nominal
+2 GiB fit with almost no safety margin and a preflight with roughly 190 MiB
+left for projection-specific auxiliary data.
+
+The effect is larger when the wildcard span approaches one. On the 40-letter
+workload:
+
+| projection | float values | all retained layer IDs | largest single layer |
+|---|---:|---:|---:|
+| `d=19`, `e:6` wildcard | 1,594.69 MiB | 227.81 MiB | 25.84 MiB |
+| `d=20`, all exact | 1,594.69 MiB | 1,594.69 MiB | 155.93 MiB |
+
+The current all-exact evaluator can therefore allocate about 3.11 GiB for
+values and layer IDs even though its reported value payload fits within
+2 GiB. Streaming a layer lowers that pair to about 1.71 GiB.
+
+A temporary bounded-composition implementation kept one
+`std::vector<uint32_t>` and generated exact keys from digit maxima,
+suffix-capacity bounds, and the existing mixed-radix multipliers. On the
+28-letter `d=12`, top-100 workload it reproduced:
+
+```text
+stdout SHA-256:
+572fdb901391cf35ab30dd2b7ecb7678cb40aeefb32d32905927a3a7d1b1eb98
+
+65,059,267 candidate tests
+52,399,806 fitting transitions
+46,727,994 successful transitions
+1,870,903 final DFS nodes
+```
+
+Those counters and the output were identical to the retained-all-layers
+evaluator. The check establishes enumeration and dependency correctness, not
+a timing win; the process guard intentionally prevented using concurrent
+timings.
+
+Productionize the streamed representation rather than merely charging the
+full current list:
+
+1. compute the layer-size coefficients during preflight;
+2. charge the largest layer, its vector capacity, worker scratch, projected
+   actions, and other projection-only storage to one working allowance;
+3. reserve the exact peak once and reuse the allocation across layers;
+4. generate bounded mixed-radix compositions without type-erased recursive
+   calls in the hot implementation;
+5. retain the old layer builder behind a differential switch until a deep
+   same-binary A/B confirms acceptable generation overhead; and
+6. fail projected preflight explicitly rather than allocating the value table
+   and later dropping to an unbounded search.
+
+The objective remains wall time. Streaming is recommended because it makes
+the 1–2 GiB contract honest and preserves room for useful data, not because
+minimum memory is itself valuable. If generation regresses setup materially
+at the selected depths, a two-pass counting-sort layout with all IDs remains
+a valid faster mode when its fully charged working set fits.
+
+### Canonicalize an information-equivalent final wildcard dimension
+
+The 40-letter `d=19` and all-exact `d=20` projections both contain exactly:
+
+```text
+418,037,760 values
+```
+
+At `d=19`, `e:6` is the only wildcard symbol. Its remaining count is exactly
+the wildcard count, so making `e` exact adds no state information. The value
+count is unchanged, and the earlier action analysis found no remaining
+quotient collisions at this boundary.
+
+The evaluator representation is not neutral, however. `d=19` has 59,719,680
+exact bags with seven wildcard slots per bag. It filters each fitting action
+once and updates the seven-entry vector. All-exact `d=20` instead has
+418,037,760 one-entry exact bags, greatly enlarges the layer index, and gives
+up wildcard batching. It is an equivalent recurrence expressed in a less
+favorable iteration space.
+
+Add this exact canonicalization before general depth scoring:
+
+```text
+if exactly one symbol would remain wildcard and remaining total length
+determines its count, keep that symbol wildcard
+```
+
+More generally, deduplicate selector candidates by represented information
+and state cardinality, then prefer the form with the larger useful wildcard
+vector when its action quotient is no worse. This prevents a 2 GiB allowance
+from selecting a nominally deeper but information-equivalent layout.
+
+### Vectorize the dominant wildcard-update loop
+
+The 48-letter `d=15` deterministic work counters are:
+
+```text
+75,477,336,679 candidate tests
+123,565,269,900 fitting wildcard updates
+122,157,653,994 successful finite-child updates
+```
+
+Thus 98.86% of fitting child loads are finite. The dead-child branch protects
+correctness near the terminal perimeter, but on this long workload it is
+almost always not taken. The update loop also performs more events than the
+support scan, and every finite update loads a child, converts float to double,
+updates a score maximum, and updates a rounding-error maximum.
+
+The release build targets `x86-64-v2`. An additional GCC 14 vectorization
+diagnostic build with `-march=native` still reported the wildcard loop as:
+
+```text
+missed: couldn't vectorize loop
+missed: not vectorized: unsupported control flow in loop
+```
+
+Merely compiling for the local AVX2 CPU therefore does not vectorize it. The
+final state-publication loop did vectorize, but that loop runs once per state
+rather than once per fitting action/state pair.
+
+Make a manually masked SIMD kernel the next deep-table throughput prototype:
+
+1. keep the current scalar loop as the portable and differential baseline;
+2. add runtime-dispatched target clones rather than raising the whole binary's
+   minimum ISA;
+3. load contiguous child floats, widen them to double lanes, and use a
+   negative-infinity mask for dead children;
+4. update score and rounding-error maxima in the same per-lane arithmetic
+   order as the scalar proof;
+5. accumulate finite-lane counts locally so diagnostics do not force scalar
+   control flow;
+6. handle the short prefix and tail scalarly;
+7. compile without fast-math and preserve upward float publication; and
+8. compare whole setup plus search at 48-letter `d=15` before extending the
+   kernel to other storage precisions.
+
+AVX2 is present on the measurement machine, but an SSE2 or compiler-vector
+extension implementation can provide a wider portable floor if it remains
+maintainable. Do not mix packed binary16 into the first SIMD A/B: float versus
+half conversion would confound the benefit, and the available 1–2 GiB means
+packing is not required at the useful `d=15`/`d=16` depths.
+
+The split support sidecar remains the next action-layout comparison. Its
+existing top-down gains are credible, and a temporary bottom-up wiring
+reproduced the 28-letter hash and counters. It did not receive an uncontended
+long-input timing in this follow-up. On the 48-letter work mix, prioritize
+SIMD wildcard updates first, then test the sidecar and support groups against
+the SIMD baseline; optimizing rejected scans first risks attacking the
+smaller and cheaper event class.
+
+### Revised long-input priority
+
+For a dedicated 1–2 GiB deployment, use this order:
+
+1. productionize the exact action-work estimator and reject depths whose
+   setup alone cannot beat the best completed shallower total;
+2. canonicalize information-equivalent projection layouts, including the
+   final-single-wildcard case;
+3. stream one exact-total layer and fully charge projection-specific working
+   memory;
+4. vectorize the float wildcard-update kernel;
+5. calibrate 48+ top-100 and top-1,000 depth neighborhoods only after the
+   estimator has excluded obviously excessive candidates;
+6. measure the split support/cold-action layout against that SIMD baseline;
+7. implement persistence for repeated bags; and
+8. test packed binary16 only as a same-depth wall-time optimization.
+
+Do not automatically advance from the established 48-letter `d=13` top-1 or
+`d=14` top-10 starting points merely because `d=16` fits in 1 GiB or `d=17`
+fits narrowly in 2 GiB. Memory expands the candidate set. Exact setup work
+and measured setup-plus-search time decide whether any deeper candidate is an
+optimization.
+
 ## REVIEW ISSUES
 
 ### Open: account for bottom-up layer IDs in the memory budget
@@ -2445,14 +2684,11 @@ source/dfs-search.cpp: bottom-up exact-layer construction
 ```
 
 Resolve this before relying on deep projections near the configured memory
-limit. The two proposed approaches are:
-
-1. include the exact-layer index and its allocation overhead in preflight and
-   `score_cache_budget` accounting, falling back to the recursive evaluator
-   when the combined bottom-up working set does not fit; or
-2. generate dependency layers without retaining one ID for every exact bag,
-   preserving the value-table-only memory profile at the cost of additional
-   key-generation work.
+limit. The follow-up above makes streamed bounded-composition generation the
+preferred approach. Precompute the exact largest-layer coefficient, retain
+one reusable ID vector, and charge that peak plus all projection-specific
+auxiliary storage during preflight. Keep full retained layers only as a
+measured fast path when their fully charged allocation fits comfortably.
 
 Any fix should avoid silently dropping to score-bound mode off when the
 requested bottom-up working set cannot be allocated.
