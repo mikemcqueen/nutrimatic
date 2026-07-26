@@ -24,6 +24,10 @@ class DfsSolutionSink {
   // only with an admissible upper bound on every completion below a DFS node.
   virtual bool supports_score_pruning() const { return false; }
   virtual bool score_floor(double* floor) const { return false; }
+
+  // Parallel search shares one sink between workers. Sinks may opt in only
+  // when emit() and score_floor() are safe to call concurrently.
+  virtual bool supports_parallel_search() const { return false; }
   virtual ~DfsSolutionSink() { }
 };
 

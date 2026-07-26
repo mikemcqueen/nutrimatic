@@ -1,6 +1,8 @@
 #ifndef NUTRIMATIC_DFS_OUTPUT_H
 #define NUTRIMATIC_DFS_OUTPUT_H
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,7 +26,10 @@ class DfsTopN: public DfsSolutionSink {
             double representative_log_score);
   bool supports_score_pruning() const { return result_limit != 0; }
   bool score_floor(double* floor) const;
+  bool supports_parallel_search() const { return true; }
 
+  // These observers and take_sorted_results() are used only after all search
+  // workers have joined.
   size_t size() const { return heap.size(); }
   size_t limit() const { return result_limit; }
   size_t spellings_expanded() const { return expanded; }
@@ -34,7 +39,7 @@ class DfsTopN: public DfsSolutionSink {
   std::vector<DfsSpelling> take_sorted_results();
 
  private:
-  void offer(DfsSpelling const& spelling);
+  bool offer(DfsSpelling const& spelling);
   void swap_heap_entries(size_t a, size_t b);
   void sift_up(size_t position);
   void sift_down(size_t position);
@@ -48,6 +53,15 @@ class DfsTopN: public DfsSolutionSink {
   // A min-heap: the weakest retained spelling is always at position zero.
   std::vector<DfsSpelling> heap;
   std::unordered_map<std::string, size_t> positions;
+
+  // During parallel search, emit() owns this mutex for the complete spelling
+  // expansion. score_floor() reads the separately published monotone floor so
+  // the search hot path does not contend on the heap. A stale lower floor only
+  // causes extra search work; it cannot prune a retained spelling.
+  mutable std::mutex heap_mutex;
+  std::atomic<uint64_t> published_floor_bits;
+  std::atomic<bool> published_full;
+  void publish_floor();
 };
 
 #endif

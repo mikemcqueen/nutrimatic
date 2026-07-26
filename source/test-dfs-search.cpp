@@ -112,6 +112,8 @@ static int smoke_test() {
     DfsAnagramSearch search(&classes, "aabb", 1e-6, reader.count());
     search.run(&sink);
 
+    check(!sink.supports_parallel_search(),
+          "generic collecting sink opted in to parallel search");
     check(search.solutions_found() == 6, "wrong solution count");
     check(sink.solutions.size() == 6, "permutation duplicate emitted");
     check(!search.length_certificate_enabled(),
