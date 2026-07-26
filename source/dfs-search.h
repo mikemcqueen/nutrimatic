@@ -53,10 +53,14 @@ class DfsAnagramSearch {
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When progress is non-null, report every 100k * progress_factor nodes.
-  // When cache fallback is disallowed, return false instead of using a partial
-  // score table when the configured cache cannot hold the complete table.
+  // dense_cache selects exact dense bounds; false selects projected dense
+  // bounds. A nonnegative exact_letters fixes the number of exact letters in
+  // the projection; a negative value selects the largest depth that fits.
+  // When cache fallback is disallowed, return false instead of using a weaker
+  // mode when the requested table does not fit.
   bool run(DfsSolutionSink* sink, FILE* progress = NULL,
-           int progress_factor = 1, bool allow_cache_fallback = true);
+           int progress_factor = 1, bool allow_cache_fallback = true,
+           bool dense_cache = true, int exact_letters = -1);
 
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
@@ -122,9 +126,6 @@ class DfsAnagramSearch {
   }
   uint64_t length_certificate_scans_kept() const {
     return certificate_scans_kept;
-  }
-  double length_certificate_prepare_seconds() const {
-    return certificate_prepare_seconds;
   }
   size_t length_certificate_table_bytes() const {
     return certificate_max_score.size() * sizeof(double) +
@@ -324,7 +325,6 @@ class DfsAnagramSearch {
   uint64_t certificate_group_rejects;
   uint64_t certificate_scans_skipped;
   uint64_t certificate_scans_kept;
-  double certificate_prepare_seconds;
 
   ScoreBoundMode bound_mode;
   std::unique_ptr<AtomicWord, AlignedFree> bound_values;

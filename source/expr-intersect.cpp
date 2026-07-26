@@ -39,7 +39,7 @@ void IntersectExprs(
       clock_t t2 = clock();
 
       if (getenv("DEBUG_FST") != NULL) {
-        fprintf(stderr, "intersect(%.2fs): %d & %d => %d\n",
+        fprintf(stderr, "intersect(%.1fs): %d & %d => %d\n",
             double(t2 - t1) / CLOCKS_PER_SEC,
             a.NumStates(), b.NumStates(), merged.NumStates());
       }

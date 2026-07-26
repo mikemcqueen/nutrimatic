@@ -581,13 +581,13 @@ int main(int argc, char* argv[]) {
 
   printf("\n");
   printf("words only:   %zu entries, %zu classes (collapse %.2fx),"
-         " %" PRId64 " nodes, %.2f s\n",
+         " %" PRId64 " nodes, %.1fs\n",
          words.counts.size(), wc,
          wc ? double(words.counts.size()) / double(wc) : 0.0,
          words.nodes_visited(), t1 - t0);
   printf("with phrases: %" PRId64 " phrase entries (%" PRId64 " pay for"
          " themselves, %" PRId64 " under section 5's literal test),"
-         " %" PRId64 " nodes, %.2f s\n",
+         " %" PRId64 " nodes, %.1fs\n",
          phrases.phrases, phrases.kept, phrases.kept_literal,
          phrases.nodes_visited(), t2 - t1);
   if (phrases.missing_words)
@@ -674,12 +674,12 @@ int main(int argc, char* argv[]) {
 
   printf("\nphase 2 DFS (max %d classes/solution):\n", cap);
   printf("  words only:   %zu classes, %" PRId64 " solutions, %" PRId64
-         " nodes (%" PRId64 " fits, %" PRId64 " iters), %.2f s\n",
+         " nodes (%" PRId64 " fits, %" PRId64 " iters), %.1fs\n",
          dfs_words.class_count(), dfs_words.solutions_found(),
          dfs_words.nodes_visited(), dfs_words.fits_count(),
          dfs_words.iters_count(), p1 - p0);
   printf("  with phrases: %zu classes, %" PRId64 " solutions, %" PRId64
-         " nodes (%" PRId64 " fits, %" PRId64 " iters), %.2f s\n",
+         " nodes (%" PRId64 " fits, %" PRId64 " iters), %.1fs\n",
          dfs_all.class_count(), dfs_all.solutions_found(),
          dfs_all.nodes_visited(), dfs_all.fits_count(),
          dfs_all.iters_count(), p2 - p1);
@@ -692,7 +692,7 @@ int main(int argc, char* argv[]) {
     dfs_words.run_reference(letters);
     double const r1 = now_seconds();
     printf("  reference (words, non-decreasing index, no forcing):"
-           " %" PRId64 " solutions, %" PRId64 " nodes, %.2f s\n",
+           " %" PRId64 " solutions, %" PRId64 " nodes, %.1fs\n",
            dfs_words.reference_solutions(), dfs_words.reference_nodes(), r1 - r0);
   }
 
