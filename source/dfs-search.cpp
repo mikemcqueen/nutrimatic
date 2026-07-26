@@ -407,6 +407,13 @@ static bool projected_action_quotient_enabled() {
       strcmp(enabled, "0") != 0;
 }
 
+static bool projected_support_sidecar_enabled() {
+  char const* enabled =
+      getenv("NUTRIMATIC_PROJECTED_SUPPORT_SIDECAR");
+  return enabled == NULL || enabled[0] == '\0' ||
+      strcmp(enabled, "0") != 0;
+}
+
 static bool projected_bottom_up_enabled() {
   char const* enabled =
       getenv("NUTRIMATIC_PROJECTED_BOTTOM_UP");
@@ -773,6 +780,7 @@ bool DfsAnagramSearch::prepare_projected_actions() {
   static_assert(sizeof(ProjectedAction) == 48,
                 "ProjectedAction must remain three 16-byte blocks");
   projected_actions.clear();
+  projected_action_support.clear();
   projected_repeated_requirements.clear();
   projected_bucket_starts.fill(0);
   projected_actions_ready = false;
@@ -893,12 +901,21 @@ bool DfsAnagramSearch::prepare_projected_actions() {
             return a.score_key_delta < b.score_key_delta;
           });
     }
+
+    // Strictly after the sort, in one place, so the sidecar cannot drift out
+    // of step with the actions it indexes.
+    projected_action_support.reserve(projected_actions.size());
+    for (size_t i = 0; i < projected_actions.size(); ++i)
+      projected_action_support.push_back(
+          projected_actions[i].exact_support_mask);
   } catch (...) {
     projected_actions.clear();
+    projected_action_support.clear();
     projected_repeated_requirements.clear();
     projected_bucket_starts.fill(0);
     return false;
   }
+  assert(projected_action_support.size() == projected_actions.size());
 
   projected_actions_ready = true;
   return true;
@@ -2007,6 +2024,14 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   // Resolved once, before any worker starts, so no AVX2 instruction can be
   // reached on a machine that lacks it and no bag pays for the decision.
   ProjectedKernel const kernel = projected_kernel_choice();
+  bool const sidecar = projected_support_sidecar_enabled() &&
+      projected_action_support.size() == projected_actions.size();
+  if (progress != NULL && !sidecar) {
+    dfs_diagnostic(
+        progress,
+        "phase 2: projected support-mask sidecar disabled\n");
+    fflush(progress);
+  }
   if (progress != NULL && kernel != PROJECTED_KERNEL_SCALAR) {
     dfs_diagnostic(
         progress,
@@ -2134,16 +2159,22 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
       // kernels out of line, a runtime branch here made the scalar path spill
       // its loop-invariant registers across a call it never makes, and that
       // cost 14% of setup.
-      auto scan = [&](auto kernel_tag, VectorWorker* worker,
-                      uint64_t exact_mask, uint64_t base_key,
-                      size_t begin, size_t end) {
+      auto scan = [&](auto kernel_tag, auto sidecar_tag,
+                      VectorWorker* worker, uint64_t exact_mask,
+                      uint64_t base_key, size_t begin, size_t end) {
         for (size_t action_index = begin;
              action_index < end; ++action_index) {
+          ++local_candidate_tests;
+          // Support filtering rejects most scanned actions at depth, so with
+          // the sidecar the rejection reads eight contiguous bytes and never
+          // touches the cold 48-byte record.
+          uint64_t const support =
+              decltype(sidecar_tag)::value
+                  ? projected_action_support[action_index]
+                  : projected_actions[action_index].exact_support_mask;
+          if ((support & ~exact_mask) != 0) continue;
           ProjectedAction const& action =
               projected_actions[action_index];
-          ++local_candidate_tests;
-          if ((action.exact_support_mask & ~exact_mask) != 0)
-            continue;
           uint32_t const* repeated =
               action.repeated_count == 0
                   ? NULL
@@ -2226,19 +2257,25 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
         uint64_t const base_key =
             exact_key * uint64_t(score_wild_span);
 
-        if (kernel == PROJECTED_KERNEL_SCALAR) {
-          scan(std::integral_constant<
-                   ProjectedKernel, PROJECTED_KERNEL_SCALAR>(),
-               worker, exact_mask, base_key, begin, end);
-        } else if (kernel == PROJECTED_KERNEL_AVX2) {
-          scan(std::integral_constant<
-                   ProjectedKernel, PROJECTED_KERNEL_AVX2>(),
-               worker, exact_mask, base_key, begin, end);
-        } else {
-          scan(std::integral_constant<
-                   ProjectedKernel, PROJECTED_KERNEL_VERIFY>(),
-               worker, exact_mask, base_key, begin, end);
-        }
+        auto dispatch = [&](auto sidecar_tag) {
+          if (kernel == PROJECTED_KERNEL_SCALAR) {
+            scan(std::integral_constant<
+                     ProjectedKernel, PROJECTED_KERNEL_SCALAR>(),
+                 sidecar_tag, worker, exact_mask, base_key, begin, end);
+          } else if (kernel == PROJECTED_KERNEL_AVX2) {
+            scan(std::integral_constant<
+                     ProjectedKernel, PROJECTED_KERNEL_AVX2>(),
+                 sidecar_tag, worker, exact_mask, base_key, begin, end);
+          } else {
+            scan(std::integral_constant<
+                     ProjectedKernel, PROJECTED_KERNEL_VERIFY>(),
+                 sidecar_tag, worker, exact_mask, base_key, begin, end);
+          }
+        };
+        if (sidecar)
+          dispatch(std::true_type());
+        else
+          dispatch(std::false_type());
 
         for (size_t wild = 0; wild < score_wild_span; ++wild) {
           double const best = worker->best[wild];
