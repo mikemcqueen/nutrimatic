@@ -231,18 +231,33 @@ this plan before source work begins.
 - [ ] Record the current branch head and `git status --short`.
 - [ ] Build the untouched source.
 - [ ] Run the common smoke suite.
-- [ ] Capture one serial 38-letter reference at the established projected
-      depth and output limit:
+- [ ] Capture one serial 48-letter reference at the established projected
+      depth and output limit. Preserve complete stdout in the ignored
+      `results/` directory so Phase 5 can inspect the cutoff bucket and compare
+      rows above it:
 
   ```bash
+  mkdir -p results
+  BASELINE_OUTPUT=results/dfs-codex-1-baseline.stdout
+  BASELINE_LOG=results/dfs-codex-1-baseline.stderr
   NUTRIMATIC_PROJECTED_SCORE_D=15 \
-    ./build/dfs-anagrams "$IDX" "${S6:0:38}" \
-      -m 4 -n 1000 -C 32 -F -T 20
+    ./build/dfs-anagrams "$IDX" "${S6:0:48}" \
+      -n 100000 -C 1024 -F -p 10000 \
+      >"$BASELINE_OUTPUT" 2>"$BASELINE_LOG"
+  test "$(wc -l <"$BASELINE_OUTPUT")" -eq 100000
+  sha256sum "$BASELINE_OUTPUT"
+  head -n 99000 "$BASELINE_OUTPUT" | sha256sum
+  tail -n 1 "$BASELINE_OUTPUT"
   ```
 
-- [ ] Record stdout SHA-256, setup time, search time, DFS nodes, solutions,
-      spellings expanded, retained results, and projected work counters in the
-      implementation log section at the end of this file.
+- [ ] Confirm the `dfs-anagrams` command itself exits successfully before
+      accepting either hash. Do not use a live `dfs-anagrams | head` pipeline,
+      because early pipe closure can hide an upstream failure.
+- [ ] Record the artifact path and row count, full-output SHA-256, SHA-256 of
+      the first 99,000 output rows, printed cutoff score, setup time, search
+      time, DFS nodes, solutions, spellings expanded, retained results, and
+      projected work counters in the implementation log section at the end of
+      this file. Retain the ignored output artifact through Phase 5.
 - [ ] Review both documents for agreement with the current source.
 - [ ] Run `git diff --check`.
 
@@ -477,7 +492,11 @@ Do not add per-node output.
       certificate disabled, shadowed, and active.
 - [ ] Disabled and shadow modes have identical node, solution, and traversal
       counters.
-- [ ] Shadow and active modes report the same group decisions.
+- [ ] Exercise the group-rejection predicate at floors below, equal to, and
+      above its conservatively padded envelope.
+- [ ] Do not require equal aggregate group-decision counters from shadow and
+      active modes: active skipping removes downstream nodes that shadow mode
+      still visits.
 - [ ] Active mode skips at least one whole group on the synthetic fixture.
 - [ ] A sink without a floor never claims certificate skips.
 - [ ] Score cache disabled (`-C 0 -F` equivalent in the library) does not
@@ -722,9 +741,10 @@ Otherwise run the one-worker serial path. In particular:
       requested.
 - [ ] `DfsTopN` uses more than one worker on a small fixture with the task
       target overridden low.
-- [ ] Serial and parallel searches retain identical spellings and scores.
+- [ ] On a fixture with no cutoff-score tie, serial and parallel searches
+      retain identical spellings and scores.
 - [ ] Serial and parallel searches report the same result for certificate
-      disabled and active modes.
+      disabled and active modes, using the same tie-aware comparison.
 - [ ] Parallel search works with score bounds off.
 - [ ] `SCORE_BOUND_PREFIX` falls back to one search worker.
 - [ ] `search_tasks_generated()` is nonzero when parallel work is used.
@@ -807,11 +827,12 @@ The required correctness result is:
 Parallel node counts may differ slightly because floor publication order
 changes.
 
-For a million-row CLI smoke comparison, hashing the first 99% of sorted output
-is a useful quick signal:
+For the 100,000-row CLI baseline comparison, hashing the first 99% of output
+is a useful quick signal. `dfs-anagrams` already prints retained results in
+descending score order with deterministic tie ordering:
 
 ```bash
-head -n 990000 output.txt | sha256sum
+head -n 99000 output.txt | sha256sum
 ```
 
 It is not the correctness definition and must not influence production code.
@@ -822,7 +843,26 @@ tests should compare exact `DfsSpelling::log_score` values.
 
 ### Reference workload
 
-Start with the established 38-letter quick differential:
+First rerun the exact Phase 0 workload after integration. Use one search thread
+with `NUTRIMATIC_LENGTH_CERTIFICATE=0` for the unchanged serial path, then run
+the other correctness-matrix cells with the same letters, depth, cache,
+progress factor, and top-N:
+
+```bash
+NUTRIMATIC_PROJECTED_SCORE_D=15 \
+  ./build/dfs-anagrams "$IDX" "${S6:0:48}" \
+    -n 100000 -C 1024 -F -p 10000 --search-threads N \
+    >results/dfs-codex-1-integrated-MODE.stdout \
+    2>results/dfs-codex-1-integrated-MODE.stderr
+```
+
+Prefix the disabled cells with `NUTRIMATIC_LENGTH_CERTIFICATE=0`; leave the
+variable unset for active cells. Replace `MODE` with a distinct matrix-cell
+name. The disabled one-thread output must match the complete Phase 0 artifact
+byte-for-byte. For the other cells, apply the cutoff-tie comparison above and
+compare their first-99,000-row smoke hashes with the Phase 0 prefix hash.
+
+Then run the established 38-letter quick differential:
 
 ```bash
 NUTRIMATIC_PROJECTED_SCORE_D=13 \
@@ -883,7 +923,8 @@ with disproportionate work remains visible.
       38-letter reference.
 - [ ] Parallel search provides a useful wall-time improvement on the
       top-1,000,000 reference; a top-1,000-only win is insufficient.
-- [ ] The combined phase-2 time improves over the original serial baseline.
+- [ ] On the exact 48-letter, top-100,000 command, the combined phase-2 time
+      improves over the Phase 0 serial baseline.
 - [ ] Peak RSS remains within the expected certificate tables plus shallow
       task/worker storage.
 - [ ] Aggregate CPU growth is recorded and judged acceptable.
@@ -1032,8 +1073,12 @@ speedup ratios.
 branch head:
 build:
 smoke tests:
-38-letter command:
-stdout SHA-256:
+48-letter command:
+baseline output artifact:
+retained output rows:
+full stdout SHA-256:
+99,000-row stdout SHA-256:
+printed cutoff score:
 setup:
 search:
 DFS nodes:
