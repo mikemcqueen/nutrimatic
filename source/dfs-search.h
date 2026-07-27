@@ -48,7 +48,8 @@ class DfsAnagramSearch {
                    double restart, int64_t corpus_total,
                    size_t score_cache_bytes = 0,
                    size_t preprocess_threads = 1,
-                   size_t search_threads = 1);
+                   size_t search_threads = 1,
+                   double word_bonus = 0.0);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When the ambient diagnostic stream (dfs_set_diagnostic_stream()) is set,
