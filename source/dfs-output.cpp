@@ -9,6 +9,8 @@
 #include <queue>
 #include <utility>
 
+#include "dfs-diagnostic.h"
+
 static bool weaker(HeapSlot const& a, HeapSlot const& b) {
   if (a.log_score != b.log_score) return a.log_score < b.log_score;
   RetainedEntry const& ea = *a.retained;
@@ -68,7 +70,8 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
     result_limit(limit),
     expanded(0),
     published_floor_bits(0),
-    published_full(false) {
+    published_full(false),
+    floor_announced(false) {
   assert(class_list != NULL);
   static_assert(sizeof(double) == sizeof(uint64_t),
                 "published score floors must remain eight bytes");
@@ -79,6 +82,13 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
 void DfsTopN::publish_floor() {
   if (heap.size() != result_limit) return;
   double const floor = heap[0].log_score;
+  if (!floor_announced) {
+    floor_announced = true;
+    dfs_diagnostic(
+        "phase 3: top-%zu queue filled after %zu spellings expanded, "
+        "floor %.6f\n",
+        result_limit, expanded, floor);
+  }
   uint64_t bits;
   memcpy(&bits, &floor, sizeof(bits));
   published_floor_bits.store(bits, std::memory_order_relaxed);
@@ -272,6 +282,7 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
     // resets publication in one coherent state transition.
     std::lock_guard<std::mutex> const guard(heap_mutex);
     published_full.store(false, std::memory_order_release);
+    floor_announced = false;
     results.reserve(heap.size());
     for (size_t i = 0; i < heap.size(); ++i) {
       RetainedEntry* const entry = heap[i].retained;

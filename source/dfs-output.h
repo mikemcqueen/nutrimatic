@@ -84,6 +84,11 @@ class DfsTopN: public DfsSolutionSink {
   mutable std::mutex heap_mutex;
   std::atomic<uint64_t> published_floor_bits;
   std::atomic<bool> published_full;
+  // publish_floor() is only ever called while heap_mutex is held (from
+  // emit()'s locked section), so this needs no atomicity of its own — it
+  // just remembers whether the one-time "queue filled" diagnostic already
+  // fired.
+  bool floor_announced;
   void publish_floor();
 };
 
