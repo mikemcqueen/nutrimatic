@@ -110,7 +110,14 @@ endforeach
 find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
 
-dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
+dfs_anagrams = executable('dfs-anagrams',
+  ['dfs-anagrams.cpp', 'dfs-cli-args.cpp'],
+  link_with: [optparse_lib, dfs_class_list_lib, index_lib],
+  dependencies: thread_dep,
+  install: true)
+
+query_index = executable('query-index',
+  ['query-index.cpp', 'dfs-cli-args.cpp'],
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
   dependencies: thread_dep,
   install: true)
@@ -172,6 +179,12 @@ test(
     dfs_anagrams,
     find_anagrams,
   ],
+  timeout: 30,
+)
+test(
+  'query-index-cli',
+  bash,
+  args: [files('test-query-index.sh'), query_index],
   timeout: 30,
 )
 
