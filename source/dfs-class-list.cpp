@@ -27,10 +27,12 @@ static std::string make_class_key(std::string const& text) {
 class DfsExtractor {
  public:
   DfsExtractor(IndexReader const* reader, std::string const& letters,
-               int min_word_len, bool include_phrases):
+               int min_word_len, bool include_phrases,
+               DfsDictionary const* dictionary):
       reader(reader),
       min_len(std::max(min_word_len, 1)),
       max_words(include_phrases ? int(letters.size()) / min_len : 1),
+      dictionary(dictionary),
       letters_left(int(letters.size())),
       nodes(0) {
     bag.fill(0);
@@ -77,6 +79,11 @@ class DfsExtractor {
     for (size_t i = 0; i < here.size(); ++i) {
       IndexReader::Choice const choice = here[i];
       if (choice.ch == ' ') {
+        if (dictionary != NULL &&
+            dictionary->find(
+                text.substr(text.size() - size_t(word_len),
+                            size_t(word_len))) == dictionary->end())
+          continue;
         text.push_back(' ');
         emit(choice.count, words + 1);
         if (words + 1 < max_words && letters_left >= min_len &&
@@ -100,6 +107,7 @@ class DfsExtractor {
   IndexReader const* const reader;
   int const min_len;
   int const max_words;
+  DfsDictionary const* const dictionary;
   std::array<int, 256> bag;
   int letters_left;
   std::string text;
@@ -120,12 +128,13 @@ static bool same_member(DfsClassMember const& a, DfsClassMember const& b) {
 
 DfsClassList::DfsClassList(IndexReader const* reader,
                            std::string const& letters,
-                           int min_word_len, bool include_phrases):
+                           int min_word_len, bool include_phrases,
+                           DfsDictionary const* dictionary):
     minimum_word_len(std::max(min_word_len, 1)), entries(0), nodes(0) {
   frequencies.fill(0);
 
   DfsExtractor extractor(
-      reader, letters, minimum_word_len, include_phrases);
+      reader, letters, minimum_word_len, include_phrases, dictionary);
   extractor.run();
   nodes = extractor.nodes_visited();
 

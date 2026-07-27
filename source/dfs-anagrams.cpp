@@ -12,6 +12,7 @@
 #include <stdlib.h>
 
 #include <algorithm>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -92,6 +93,7 @@ static bool parse_mib(char const* in, char const* what, size_t* out) {
 
 struct Args {
   char const* index_file;
+  char const* dictionary_file;
   std::string letters;
   int min_word_len;
   int max_words;
@@ -103,18 +105,20 @@ struct Args {
   int exact_letters;
   bool allow_cache_fallback;
   bool dense_cache;
+  bool verbose;
 };
 
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [-u used-letters] [-m min-word-length] [-n top]"
+      " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
-      " [-D|--dense-cache] [-F|--allow-cache-fallback]\n"
+      " [-D|--dense-cache] [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
+      "  --dict PATH filters entries to words in the dictionary\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
@@ -124,13 +128,17 @@ static void usage(char const* program) {
       "  -D, --dense-cache requests an exact dense score cache instead of"
       " the default projected dense cache\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
-      " requested table does not fit\n",
+      " requested table does not fit\n"
+      "  -v, --verbose reports search task splitting\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
       DEFAULT_SCORE_CACHE_MIB);
 }
 
+static int const OPT_DICT = 256;
+
 static struct optparse_long const long_options[] = {
   { "used-letters", 'u', OPTPARSE_REQUIRED },
+  { "dict", OPT_DICT, OPTPARSE_REQUIRED },
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
   { "top", 'n', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
@@ -140,10 +148,12 @@ static struct optparse_long const long_options[] = {
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
   { "dense-cache", 'D', OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
+  { "verbose", 'v', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
 
 static bool parse_args(char* argv[], Args* out) {
+  out->dictionary_file = NULL;
   out->min_word_len = DEFAULT_MIN_WORD_LEN;
   out->top = DEFAULT_TOP;
   out->progress_factor = 1;
@@ -153,6 +163,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->exact_letters = -1;
   out->allow_cache_fallback = false;
   out->dense_cache = false;
+  out->verbose = false;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -164,6 +175,9 @@ static bool parse_args(char* argv[], Args* out) {
     switch (opt) {
       case 'u':
         used += options.optarg;
+        break;
+      case OPT_DICT:
+        out->dictionary_file = options.optarg;
         break;
       case 'm':
         if (!parse_count(options.optarg, "--min-word-length",
@@ -214,6 +228,9 @@ static bool parse_args(char* argv[], Args* out) {
       case 'D':
         out->dense_cache = true;
         break;
+      case 'v':
+        out->verbose = true;
+        break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
         usage(argv[0]);
@@ -260,6 +277,37 @@ static bool parse_args(char* argv[], Args* out) {
   return true;
 }
 
+static bool load_dictionary(char const* path, DfsDictionary* dictionary) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    fprintf(stderr, "error: can't open dictionary \"%s\"\n", path);
+    return false;
+  }
+
+  std::string line;
+  while (std::getline(input, line)) {
+    if (line.find('-') != std::string::npos) continue;
+
+    std::string word;
+    word.reserve(line.size());
+    for (size_t i = 0; i < line.size(); ++i) {
+      unsigned char const ch = (unsigned char) line[i];
+      if (ch >= 'A' && ch <= 'Z')
+        word.push_back(char(ch - 'A' + 'a'));
+      else if ((ch >= 'a' && ch <= 'z') ||
+               (ch >= '0' && ch <= '9'))
+        word.push_back(char(ch));
+    }
+    if (!word.empty()) dictionary->insert(word);
+  }
+
+  if (!input.eof()) {
+    fprintf(stderr, "error: can't read dictionary \"%s\"\n", path);
+    return false;
+  }
+  return true;
+}
+
 int main(int argc, char* argv[]) {
   dfs_reset_diagnostic_clock();
 
@@ -282,6 +330,13 @@ int main(int argc, char* argv[]) {
       args.exact_letters, args.top, preprocess_threads, args.search_threads,
       args.score_cache_bytes / MIB);
 
+  DfsDictionary dictionary;
+  DfsDictionary const* dictionary_filter = NULL;
+  if (args.dictionary_file != NULL) {
+    if (!load_dictionary(args.dictionary_file, &dictionary)) return 1;
+    dictionary_filter = &dictionary;
+  }
+
   FILE* fp = fopen(args.index_file, "rb");
   if (fp == NULL) {
     fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
@@ -299,7 +354,8 @@ int main(int argc, char* argv[]) {
   }
 
   IndexReader reader(fp);
-  DfsClassList classes(&reader, args.letters, args.min_word_len);
+  DfsClassList classes(&reader, args.letters, args.min_word_len, true,
+                       dictionary_filter);
   dfs_diagnostic(
       stderr, "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -314,7 +370,7 @@ int main(int argc, char* argv[]) {
   DfsTopN output(&classes, size_t(args.top));
   if (!search.run(args.top == 0 ? NULL : &output, stderr,
                   args.progress_factor, args.allow_cache_fallback,
-                  args.dense_cache, args.exact_letters))
+                  args.dense_cache, args.exact_letters, args.verbose))
     return 2;
   dfs_diagnostic(
       stderr, "phase 2 timing: %.1fs setup, %.1fs search, "
