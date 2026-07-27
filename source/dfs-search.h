@@ -51,14 +51,15 @@ class DfsAnagramSearch {
                    size_t search_threads = 1);
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
-  // When progress is non-null, report every 100k * progress_factor nodes.
-  // dense_cache selects exact dense bounds; false selects projected dense
-  // bounds. A nonnegative exact_letters fixes the number of exact letters in
-  // the projection; a negative value selects the largest depth that fits.
-  // When cache fallback is disallowed, return false instead of using a weaker
-  // mode when the requested table does not fit. verbose reports serial task
-  // splitting to progress when parallel search is selected.
-  bool run(DfsSolutionSink* sink, FILE* progress = NULL,
+  // When the ambient diagnostic stream (dfs_set_diagnostic_stream()) is set,
+  // report every 100k * progress_factor nodes. dense_cache selects exact
+  // dense bounds; false selects projected dense bounds. A nonnegative
+  // exact_letters fixes the number of exact letters in the projection; a
+  // negative value selects the largest depth that fits. When cache fallback
+  // is disallowed, return false instead of using a weaker mode when the
+  // requested table does not fit. verbose reports serial task splitting to
+  // the diagnostic stream when parallel search is selected.
+  bool run(DfsSolutionSink* sink,
            int progress_factor = 1, bool allow_cache_fallback = true,
            bool dense_cache = true, int exact_letters = -1,
            bool verbose = false);
@@ -268,16 +269,13 @@ class DfsAnagramSearch {
   void consider_parallel_bound_candidate(
       uint32_t class_index, BoundWorker* worker, double* best,
       double* max_rounding_error);
-  bool compute_score_bound_parallel(
-      size_t requested_threads, FILE* progress);
+  bool compute_score_bound_parallel(size_t requested_threads);
   double compute_projected_score_bound(BoundWorker* worker);
   void consider_projected_bound_candidate(
       size_t action_index, BoundWorker* worker, double* best,
       double* max_rounding_error);
-  bool compute_projected_score_bound_parallel(
-      size_t requested_threads, FILE* progress);
-  bool compute_projected_score_bound_bottom_up(
-      size_t requested_threads, FILE* progress);
+  bool compute_projected_score_bound_parallel(size_t requested_threads);
+  bool compute_projected_score_bound_bottom_up(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
   bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
@@ -362,7 +360,7 @@ class DfsAnagramSearch {
   int64_t bound_prunes;
 
   std::vector<size_t> path;
-  FILE* progress_stream;
+  bool progress_enabled;
   int64_t progress_interval;
   int64_t next_progress;
   int64_t nodes;

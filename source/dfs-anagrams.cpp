@@ -310,6 +310,7 @@ static bool load_dictionary(char const* path, DfsDictionary* dictionary) {
 
 int main(int argc, char* argv[]) {
   dfs_reset_diagnostic_clock();
+  dfs_set_diagnostic_stream(stderr);
 
   Args args;
   if (!parse_args(argv, &args)) return 2;
@@ -326,7 +327,7 @@ int main(int argc, char* argv[]) {
     }
   }
   dfs_diagnostic(
-      stderr, "depth %d top %d threads %zu search threads %d cache %zu\n",
+      "depth %d top %d threads %zu search threads %d cache %zu\n",
       args.exact_letters, args.top, preprocess_threads, args.search_threads,
       args.score_cache_bytes / MIB);
 
@@ -345,11 +346,11 @@ int main(int argc, char* argv[]) {
 
   if (args.max_words > 0) {
     dfs_diagnostic(
-        stderr, "%zu letters \"%s\", words of %d+, at most %d word%s\n",
+        "%zu letters \"%s\", words of %d+, at most %d word%s\n",
         args.letters.size(), args.letters.c_str(), args.min_word_len,
         args.max_words, args.max_words == 1 ? "" : "s");
   } else {
-    dfs_diagnostic(stderr, "%zu letters \"%s\", no minimum word length\n",
+    dfs_diagnostic("%zu letters \"%s\", no minimum word length\n",
                    args.letters.size(), args.letters.c_str());
   }
 
@@ -357,7 +358,7 @@ int main(int argc, char* argv[]) {
   DfsClassList classes(&reader, args.letters, args.min_word_len, true,
                        dictionary_filter);
   dfs_diagnostic(
-      stderr, "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
+      "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
       (long long) classes.nodes_visited());
   fflush(stderr);
@@ -368,12 +369,12 @@ int main(int argc, char* argv[]) {
       args.score_cache_bytes, preprocess_threads,
       size_t(args.search_threads));
   DfsTopN output(&classes, size_t(args.top));
-  if (!search.run(args.top == 0 ? NULL : &output, stderr,
+  if (!search.run(args.top == 0 ? NULL : &output,
                   args.progress_factor, args.allow_cache_fallback,
                   args.dense_cache, args.exact_letters, args.verbose))
     return 2;
   dfs_diagnostic(
-      stderr, "phase 2 timing: %.1fs setup, %.1fs search, "
+      "phase 2 timing: %.1fs setup, %.1fs search, "
       "%llu successful bound transitions, %llu nextafter calls\n",
       search.phase_two_setup_seconds(),
       search.phase_two_search_seconds(),
@@ -382,17 +383,17 @@ int main(int argc, char* argv[]) {
   if (search.score_bound_mode() ==
       DfsAnagramSearch::SCORE_BOUND_PROJECTED)
     dfs_diagnostic(
-        stderr, "phase 2 projected work: %llu candidate tests, "
+        "phase 2 projected work: %llu candidate tests, "
         "%llu fitting transitions\n",
         (unsigned long long) search.score_bound_candidate_tests(),
         (unsigned long long) search.score_bound_fitting_transitions());
   if (search.length_certificate_enabled()) {
     dfs_diagnostic(
-        stderr, "phase 2 length certificate: %s, %zu table bytes\n",
+        "phase 2 length certificate: %s, %zu table bytes\n",
         search.length_certificate_skipping() ? "active" : "shadow",
         search.length_certificate_table_bytes());
     dfs_diagnostic(
-        stderr, "phase 2   %llu group tests, %llu rejected, "
+        "phase 2   %llu group tests, %llu rejected, "
         "%llu class scans kept, %llu skipped\n",
         (unsigned long long) search.length_certificate_group_tests(),
         (unsigned long long) search.length_certificate_group_rejects(),
@@ -401,15 +402,15 @@ int main(int argc, char* argv[]) {
   }
   if (search.search_threads_used() > 1)
     dfs_diagnostic(
-        stderr, "phase 2 search parallelism: %d requested, %zu used, "
+        "phase 2 search parallelism: %d requested, %zu used, "
         "%llu tasks\n",
         args.search_threads, search.search_threads_used(),
         (unsigned long long) search.search_tasks_generated());
   dfs_diagnostic(
-      stderr, "phase 2 score cache: %zu bound entries, %zu bound bytes\n",
+      "phase 2 score cache: %zu bound entries, %zu bound bytes\n",
       search.score_bound_entries(), search.score_bound_bytes_charged());
   dfs_diagnostic(
-      stderr, "phase 2 complete: %lld nodes, %lld solutions, "
+      "phase 2 complete: %lld nodes, %lld solutions, "
       "%zu spellings expanded, %zu retained\n",
       (long long) search.nodes_visited(),
       (long long) search.solutions_found(),

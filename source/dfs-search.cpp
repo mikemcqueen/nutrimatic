@@ -506,7 +506,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     bound_nextafter_calls(0),
     bound_charged_bytes(0),
     bound_prunes(0),
-    progress_stream(NULL),
+    progress_enabled(false),
     progress_interval(0),
     next_progress(0),
     nodes(0),
@@ -1119,12 +1119,13 @@ void DfsAnagramSearch::publish_parallel_score_bound(
   }
 }
 
-bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
+bool DfsAnagramSearch::run(DfsSolutionSink* sink,
                            int progress_factor,
                            bool allow_cache_fallback,
                            bool dense_cache,
                            int exact_letters,
                            bool verbose) {
+  FILE* const progress = dfs_diagnostic_stream();
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const setup_start = PhaseClock::now();
   bound_states_computed = 0;
@@ -1328,41 +1329,41 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   if (progress != NULL) {
     if (!encodable) {
       dfs_diagnostic(
-          progress, "phase 2 preflight: theoretical state count exceeds the "
+          "phase 2 preflight: theoretical state count exceeds the "
           "supported range; dense score-table size and minimum -C "
           "unavailable\n");
     } else if (bag_mask != 0 && dense_sizes_available) {
       size_t const minimum_mib =
           float_bytes / MIB + size_t(float_bytes % MIB != 0);
       dfs_diagnostic(
-          progress, "phase 2 preflight: %llu theoretical states, "
+          "phase 2 preflight: %llu theoretical states, "
           "%llu effective non-root states\n",
           (unsigned long long) state_count,
           (unsigned long long) effective_states);
       dfs_diagnostic(
-          progress, "phase 2 preflight: "
+          "phase 2 preflight: "
           "%zu double/%zu float dense score-table bytes, "
           "minimum -C %zu MiB (%zu bytes)\n",
           double_bytes, float_bytes, minimum_mib, float_bytes);
     } else if (bag_mask != 0) {
       dfs_diagnostic(
-          progress, "phase 2 preflight: %llu theoretical states, "
+          "phase 2 preflight: %llu theoretical states, "
           "%llu effective non-root states\n",
           (unsigned long long) state_count,
           (unsigned long long) effective_states);
       dfs_diagnostic(
-          progress, "phase 2 preflight: dense score-table size and minimum -C "
+          "phase 2 preflight: dense score-table size and minimum -C "
           "exceed the supported range\n");
     } else {
       dfs_diagnostic(
-          progress, "phase 2 preflight: empty bag; no score table needed\n");
+          "phase 2 preflight: empty bag; no score table needed\n");
     }
     if (score_projection_requested && encodable) {
       size_t projected_bytes = 0;
       bool const projected_size_ok = dense_bound_requirements(
           score_effective_states, sizeof(float), &projected_bytes);
       dfs_diagnostic(
-          progress, "phase 2 preflight: projected score table keeps %zu "
+          "phase 2 preflight: projected score table keeps %zu "
           "rarest letters exact, merges %zu wildcard letters; "
           "%llu states, ",
           score_exact_letters, score_wild_letters,
@@ -1373,7 +1374,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
         fputs("size exceeds the supported range\n", progress);
       if (projected_actions_ready)
         dfs_diagnostic(
-            progress, "phase 2 preflight: %zu concrete classes, "
+            "phase 2 preflight: %zu concrete classes, "
             "%zu projected actions (quotient %s)\n",
             class_list->classes().size(),
             projected_actions.size(),
@@ -1431,7 +1432,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   }
   prepare_score_bounds(state_count, sink);
   if (progress != NULL) {
-    dfs_diagnostic(progress, "phase 2 preflight: score-bound mode %s",
+    dfs_diagnostic("phase 2 preflight: score-bound mode %s",
                    score_bound_mode_name(bound_mode));
     if (bound_mode != SCORE_BOUND_OFF)
       fprintf(progress, " (%zu-byte values, capacity %zu, %s coverage)",
@@ -1440,7 +1441,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
     fputc('\n', progress);
     if (bound_mode == SCORE_BOUND_PROJECTED)
       dfs_diagnostic(
-          progress, "phase 2 preflight: projected evaluator %s\n",
+          "phase 2 preflight: projected evaluator %s\n",
           bound_plain_float_values.get() != NULL
               ? "bottom-up plain"
               : "recursive atomic");
@@ -1451,15 +1452,14 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
       bool const computed =
           bound_plain_float_values.get() != NULL
               ? compute_projected_score_bound_bottom_up(
-                    requested_preprocess_threads, progress)
+                    requested_preprocess_threads)
               : compute_projected_score_bound_parallel(
-                    requested_preprocess_threads, progress);
+                    requested_preprocess_threads);
       if (!computed)
         clear_score_bounds();
     } else {
       bool const ran_parallel =
-          compute_score_bound_parallel(
-              requested_preprocess_threads, progress);
+          compute_score_bound_parallel(requested_preprocess_threads);
       if (!ran_parallel)
         root_score_bound = compute_score_bound();
       if (!ran_parallel) root_score_bound_ready = true;
@@ -1468,7 +1468,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
 
   path.clear();
   path.reserve(letters.size());
-  progress_stream = progress;
+  progress_enabled = progress != NULL;
   progress_interval =
       int64_t(100000) * int64_t(std::max(progress_factor, 1));
   next_progress = progress_interval;
@@ -1479,19 +1479,16 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, FILE* progress,
   PhaseClock::time_point const search_start = PhaseClock::now();
   setup_seconds =
       std::chrono::duration<double>(search_start - setup_start).count();
-  if (progress_stream != NULL) {
+  if (progress_enabled) {
     dfs_diagnostic(
-        progress_stream,
         "phase 2: precomputed %zu bounded states in %.1fs\n",
         bound_states_computed, setup_seconds);
     if (bound_mode == SCORE_BOUND_PREFIX)
       dfs_diagnostic(
-          progress_stream,
           "phase 2: dense-prefix bounds will be constructed lazily "
           "during search for score keys below %zu once a score floor "
           "is available\n",
           bound_capacity);
-    fflush(progress_stream);
   }
   if (!hot_classes_ready) {
     walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
@@ -1987,7 +1984,8 @@ uint64_t DfsAnagramSearch::test_projected_wild_update(
 }
 
 bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
-    size_t requested_threads, FILE* progress) {
+    size_t requested_threads) {
+  FILE* const progress = dfs_diagnostic_stream();
   if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
       bound_capacity == 0 ||
       bound_plain_float_values.get() == NULL ||
@@ -2031,10 +2029,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   ProjectedKernel const kernel = projected_kernel_choice();
   if (progress != NULL && kernel != PROJECTED_KERNEL_SCALAR) {
     dfs_diagnostic(
-        progress,
         "phase 2: projected wildcard update kernel %s\n",
         projected_kernel_name(kernel));
-    fflush(progress);
   }
 
   float* const values = bound_plain_float_values.get();
@@ -2307,11 +2303,9 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     if (!announced_threads && progress != NULL &&
         active_workers > 1) {
       dfs_diagnostic(
-          progress,
           "phase 2: using up to %zu threads to calculate projected "
           "score bounds bottom-up\n",
           worker_count);
-      fflush(progress);
       announced_threads = true;
     }
     work(0);
@@ -2323,11 +2317,9 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     if (!workers[i].verify_mismatch) continue;
     if (progress != NULL) {
       dfs_diagnostic(
-          progress,
           "phase 2: projected %s kernel disagreed with the scalar "
           "kernel; abandoning the score bound\n",
           projected_kernel_name(kernel));
-      fflush(progress);
     }
     return false;
   }
@@ -2405,7 +2397,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
 }
 
 bool DfsAnagramSearch::compute_projected_score_bound_parallel(
-    size_t requested_threads, FILE* progress) {
+    size_t requested_threads) {
+  FILE* const progress = dfs_diagnostic_stream();
   if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
       bound_capacity == 0)
     return false;
@@ -2459,10 +2452,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   }
   if (progress != NULL && worker_count > 1) {
     dfs_diagnostic(
-        progress,
         "phase 2: using %zu threads to calculate projected score bounds\n",
         worker_count);
-    fflush(progress);
   }
 
   std::atomic<size_t> next_candidate(0);
@@ -2527,7 +2518,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
 }
 
 bool DfsAnagramSearch::compute_score_bound_parallel(
-    size_t requested_threads, FILE* progress) {
+    size_t requested_threads) {
+  FILE* const progress = dfs_diagnostic_stream();
   if (bound_mode != SCORE_BOUND_DENSE || requested_threads < 2 ||
       !bound_complete || bound_capacity == 0)
     return false;
@@ -2578,10 +2570,8 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
   }
   if (progress != NULL && worker_count > 1) {
     dfs_diagnostic(
-        progress,
         "phase 2: using %zu threads to calculate dense score bounds\n",
         worker_count);
-    fflush(progress);
   }
 
   std::atomic<size_t> next_candidate(0);
@@ -2763,7 +2753,7 @@ void DfsAnagramSearch::walk(SearchWorker* worker, size_t letters_left,
                             double representative_log_score,
                             DfsSolutionSink* sink) {
   ++worker->nodes;
-  if (DFS_UNLIKELY(progress_stream != NULL &&
+  if (DFS_UNLIKELY(progress_enabled &&
                    worker->nodes == worker->next_progress))
     report_search_progress(worker);
 
@@ -2851,7 +2841,7 @@ void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
   worker->split_depth = 0;
   worker->produced = NULL;
   worker->next_progress =
-      progress_stream == NULL ? INT64_MAX : progress_interval;
+      progress_enabled ? progress_interval : INT64_MAX;
   worker->reported_solutions = 0;
 }
 
@@ -2872,9 +2862,8 @@ void DfsAnagramSearch::report_search_progress(
       progress_solutions.fetch_add(
           new_solutions, std::memory_order_relaxed) +
       new_solutions;
-  dfs_diagnostic(progress_stream, "phase 2: %lld nodes, %lld solutions\n",
+  dfs_diagnostic("phase 2: %lld nodes, %lld solutions\n",
                  (long long) total_nodes, (long long) total_solutions);
-  fflush(progress_stream);
 }
 
 void DfsAnagramSearch::merge_search_worker(
@@ -2903,7 +2892,7 @@ bool DfsAnagramSearch::run_parallel_search(
   walk(&seed, letters.size(), 0, 0.0, sink);
   if (verbose)
     dfs_diagnostic(
-        progress_stream, "info: added %zu child tasks (%zu total)\n",
+        "info: added %zu child tasks (%zu total)\n",
         tasks.size(), tasks.size());
 
   size_t head = 0;
@@ -2925,14 +2914,14 @@ bool DfsAnagramSearch::run_parallel_search(
     tasks.insert(tasks.end(), children.begin(), children.end());
     if (verbose)
       dfs_diagnostic(
-          progress_stream, "info: added %zu child tasks (%zu total)\n",
+          "info: added %zu child tasks (%zu total)\n",
           children.size(), tasks.size() - head);
   }
   merge_search_worker(seed);
   search_tasks_created = uint64_t(tasks.size() - head);
   if (verbose)
     dfs_diagnostic(
-        progress_stream, "info: task splitting complete (%llu total)\n",
+        "info: task splitting complete (%llu total)\n",
         (unsigned long long) search_tasks_created);
   if (head >= tasks.size()) return true;
 
@@ -2953,7 +2942,6 @@ bool DfsAnagramSearch::run_parallel_search(
       if (slot >= tasks.size()) {
         if (verbose)
           dfs_diagnostic(
-              progress_stream,
               "info: search worker %zu exited\n", index);
         break;
       }
@@ -2961,13 +2949,11 @@ bool DfsAnagramSearch::run_parallel_search(
         claimed_task = true;
         if (verbose)
           dfs_diagnostic(
-              progress_stream,
               "info: worker %zu claimed first task\n", index);
       }
       size_t const tasks_left = tasks.size() - slot - 1;
       if (verbose && tasks_left % task_progress_factor == 0)
         dfs_diagnostic(
-            progress_stream,
             "info: worker %zu popped task (%zu total)\n",
             index, tasks_left);
       SearchTask const& task = tasks[slot];
@@ -3044,10 +3030,9 @@ void DfsAnagramSearch::walk_unoptimized(
     size_t letters_left, int old_rarest_rank, size_t entry_point,
     double representative_log_score, DfsSolutionSink* sink) {
   ++nodes;
-  if (progress_stream != NULL && nodes == next_progress) {
-    dfs_diagnostic(progress_stream, "phase 2: %lld nodes, %lld solutions\n",
+  if (progress_enabled && nodes == next_progress) {
+    dfs_diagnostic("phase 2: %lld nodes, %lld solutions\n",
                    (long long) nodes, (long long) solutions);
-    fflush(progress_stream);
     if (next_progress <= INT64_MAX - progress_interval)
       next_progress += progress_interval;
     else
