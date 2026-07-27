@@ -1,4 +1,5 @@
 #include "dfs-class-list.h"
+#include "dfs-diagnostic.h"
 #include "dfs-output.h"
 #include "dfs-search.h"
 #include "index.h"
@@ -389,9 +390,12 @@ static int smoke_test() {
     FILE* projected_diagnostics = tmpfile();
     check(projected_diagnostics != NULL,
           "could not create projected diagnostic stream");
-    projected.run(&projected_output, projected_diagnostics);
+    FILE* const previous_diagnostic_stream =
+        dfs_set_diagnostic_stream(projected_diagnostics);
+    projected.run(&projected_output);
     std::string const projected_message =
         read_stream(projected_diagnostics);
+    dfs_set_diagnostic_stream(previous_diagnostic_stream);
     fclose(projected_diagnostics);
     check(setenv(
               "NUTRIMATIC_PROJECTED_BOTTOM_UP", "0", 1) == 0,
@@ -608,9 +612,12 @@ static int smoke_test() {
     FILE* exhausted_diagnostics = tmpfile();
     check(exhausted_diagnostics != NULL,
           "could not create exhaustion diagnostic stream");
-    exhausted.run(&exhausted_output, exhausted_diagnostics);
+    FILE* const previous_exhausted_diagnostic_stream =
+        dfs_set_diagnostic_stream(exhausted_diagnostics);
+    exhausted.run(&exhausted_output);
     std::string const exhaustion_message =
         read_stream(exhausted_diagnostics);
+    dfs_set_diagnostic_stream(previous_exhausted_diagnostic_stream);
     fclose(exhausted_diagnostics);
     std::vector<DfsSpelling> const exhausted_spellings =
         exhausted_output.take_sorted_results();

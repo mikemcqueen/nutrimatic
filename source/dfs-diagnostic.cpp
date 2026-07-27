@@ -13,10 +13,22 @@ namespace {
 typedef std::chrono::steady_clock DiagnosticClock;
 DiagnosticClock::time_point diagnostic_start = DiagnosticClock::now();
 
+FILE* g_diagnostic_stream = NULL;
+
 }  // namespace
 
 void dfs_reset_diagnostic_clock() {
   diagnostic_start = DiagnosticClock::now();
+}
+
+FILE* dfs_set_diagnostic_stream(FILE* stream) {
+  FILE* const previous = g_diagnostic_stream;
+  g_diagnostic_stream = stream;
+  return previous;
+}
+
+FILE* dfs_diagnostic_stream() {
+  return g_diagnostic_stream;
 }
 
 void dfs_check_failed(char const* file, int line, char const* expr) {
@@ -27,7 +39,8 @@ void dfs_check_failed(char const* file, int line, char const* expr) {
   abort();
 }
 
-void dfs_diagnostic(FILE* stream, char const* format, ...) {
+void dfs_diagnostic(char const* format, ...) {
+  FILE* const stream = g_diagnostic_stream;
   if (stream == NULL) return;
 
   uint64_t const elapsed_seconds =

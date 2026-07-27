@@ -5,11 +5,20 @@
 
 void dfs_reset_diagnostic_clock();
 
-// Writes a timestamped line to stream and flushes it. A NULL stream is a
-// no-op, so callers can gate on their own "should I log?" condition without
-// separately checking whether a progress/verbose stream was supplied.
-void dfs_diagnostic(FILE* stream, char const* format, ...)
-    __attribute__((format(printf, 2, 3)));
+// Returns the previous stream, so callers that want to restore it can do so
+// with no separate save step. NULL disables dfs_diagnostic() entirely.
+FILE* dfs_set_diagnostic_stream(FILE* stream);
+
+// The stream dfs_diagnostic() currently writes to (possibly NULL). For the
+// rare caller that composes a line across multiple raw fprintf/fputc calls
+// instead of a single dfs_diagnostic() call.
+FILE* dfs_diagnostic_stream();
+
+// Writes a timestamped line to the current diagnostic stream and flushes it.
+// A NULL stream is a no-op, so callers can gate on their own "should I log?"
+// condition without separately checking whether diagnostics are enabled.
+void dfs_diagnostic(char const* format, ...)
+    __attribute__((format(printf, 1, 2)));
 
 // Invariant check that survives NDEBUG. The release build sets b_ndebug=true,
 // so plain assert() is compiled out there; use DFS_CHECK for the few
