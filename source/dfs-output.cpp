@@ -9,11 +9,12 @@
 #include <queue>
 #include <utility>
 
-static bool weaker(DfsSpelling const& a, DfsSpelling const& b) {
+static bool weaker(HeapSlot const& a, HeapSlot const& b) {
   if (a.log_score != b.log_score) return a.log_score < b.log_score;
-  if (a.word_set_key != b.word_set_key)
-    return a.word_set_key > b.word_set_key;
-  return a.text > b.text;
+  RetainedEntry const& ea = *a.retained;
+  RetainedEntry const& eb = *b.retained;
+  if (ea.first != eb.first) return ea.first > eb.first;
+  return ea.second.text > eb.second.text;
 }
 
 static std::string make_word_set_key(std::string const& text) {
@@ -72,7 +73,7 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
   static_assert(sizeof(double) == sizeof(uint64_t),
                 "published score floors must remain eight bytes");
   heap.reserve(result_limit);
-  positions.reserve(result_limit);
+  retained.reserve(result_limit);
 }
 
 void DfsTopN::publish_floor() {
@@ -137,7 +138,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
           current.log_score <= floor_log_score())
         break;
       ++expanded;
-      if (offer(spelling)) publish_floor();
+      if (offer(std::move(spelling))) publish_floor();
     }
 
     // Every tuple has one canonical parent: decrement its first nonzero
@@ -186,37 +187,57 @@ double DfsTopN::floor_log_score() const {
   return heap[0].log_score;
 }
 
-bool DfsTopN::offer(DfsSpelling const& spelling) {
-  std::unordered_map<std::string, size_t>::iterator found =
-      positions.find(spelling.word_set_key);
-  if (found != positions.end()) {
-    size_t const position = found->second;
-    if (heap[position].log_score >= spelling.log_score) return false;
-    heap[position] = spelling;
+bool DfsTopN::offer(DfsSpelling spelling) {
+  RetainedMap::iterator found = retained.find(spelling.word_set_key);
+  if (found != retained.end()) {
+    if (found->second.log_score >= spelling.log_score) return false;
+    found->second.text = std::move(spelling.text);
+    found->second.log_score = spelling.log_score;
+    size_t const position = found->second.heap_pos;
+    heap[position].log_score = spelling.log_score;
     sift_down(position);
     return true;
   }
 
   if (heap.size() < result_limit) {
     size_t const position = heap.size();
-    heap.push_back(spelling);
-    positions[spelling.word_set_key] = position;
+    RetainedSpelling value;
+    value.text = std::move(spelling.text);
+    value.log_score = spelling.log_score;
+    value.heap_pos = position;
+    std::pair<RetainedMap::iterator, bool> const inserted =
+        retained.emplace(std::move(spelling.word_set_key), std::move(value));
+    HeapSlot slot;
+    slot.log_score = spelling.log_score;
+    slot.retained = &*inserted.first;
+    heap.push_back(slot);
     sift_up(position);
     return true;
   }
 
   if (spelling.log_score <= heap[0].log_score) return false;
-  positions.erase(heap[0].word_set_key);
-  heap[0] = spelling;
-  positions[spelling.word_set_key] = 0;
+
+  // The incoming key is known absent (the find() above happened under the
+  // same lock), so recycle the evicted node instead of freeing and
+  // reallocating: extract it, overwrite its key and value, and reinsert.
+  RetainedEntry* const evicted = heap[0].retained;
+  RetainedMap::node_type node = retained.extract(evicted->first);
+  node.key() = std::move(spelling.word_set_key);
+  node.mapped().text = std::move(spelling.text);
+  node.mapped().log_score = spelling.log_score;
+  node.mapped().heap_pos = 0;
+  RetainedMap::insert_return_type const reinserted =
+      retained.insert(std::move(node));
+  heap[0].log_score = spelling.log_score;
+  heap[0].retained = &*reinserted.position;
   sift_down(0);
   return true;
 }
 
 void DfsTopN::swap_heap_entries(size_t a, size_t b) {
   std::swap(heap[a], heap[b]);
-  positions[heap[a].word_set_key] = a;
-  positions[heap[b].word_set_key] = b;
+  heap[a].retained->second.heap_pos = a;
+  heap[b].retained->second.heap_pos = b;
 }
 
 void DfsTopN::sift_up(size_t position) {
@@ -251,8 +272,17 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
     // resets publication in one coherent state transition.
     std::lock_guard<std::mutex> const guard(heap_mutex);
     published_full.store(false, std::memory_order_release);
-    results.swap(heap);
-    std::unordered_map<std::string, size_t>().swap(positions);
+    results.reserve(heap.size());
+    for (size_t i = 0; i < heap.size(); ++i) {
+      RetainedEntry* const entry = heap[i].retained;
+      DfsSpelling spelling;
+      spelling.log_score = entry->second.log_score;
+      spelling.text = std::move(entry->second.text);
+      spelling.word_set_key = entry->first;
+      results.push_back(std::move(spelling));
+    }
+    std::vector<HeapSlot>().swap(heap);
+    RetainedMap().swap(retained);
   }
   std::sort(results.begin(), results.end(),
             [](DfsSpelling const& a, DfsSpelling const& b) {

@@ -4,6 +4,10 @@
 #include <stdio.h>
 
 void dfs_reset_diagnostic_clock();
+
+// Writes a timestamped line to stream and flushes it. A NULL stream is a
+// no-op, so callers can gate on their own "should I log?" condition without
+// separately checking whether a progress/verbose stream was supplied.
 void dfs_diagnostic(FILE* stream, char const* format, ...)
     __attribute__((format(printf, 2, 3)));
 

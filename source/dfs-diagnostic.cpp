@@ -28,6 +28,8 @@ void dfs_check_failed(char const* file, int line, char const* expr) {
 }
 
 void dfs_diagnostic(FILE* stream, char const* format, ...) {
+  if (stream == NULL) return;
+
   uint64_t const elapsed_seconds =
       uint64_t(std::chrono::duration_cast<std::chrono::seconds>(
           DiagnosticClock::now() - diagnostic_start).count());
@@ -61,4 +63,5 @@ void dfs_diagnostic(FILE* stream, char const* format, ...) {
       line.data() + prefix_size, size_t(message_size) + 1, format, args);
   va_end(args);
   fwrite(line.data(), 1, line_size, stream);
+  fflush(stream);
 }

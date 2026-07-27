@@ -2901,12 +2901,10 @@ bool DfsAnagramSearch::run_parallel_search(
   seed.split_depth = 1;
   seed.produced = &tasks;
   walk(&seed, letters.size(), 0, 0.0, sink);
-  if (verbose && progress_stream != NULL) {
+  if (verbose)
     dfs_diagnostic(
         progress_stream, "info: added %zu child tasks (%zu total)\n",
         tasks.size(), tasks.size());
-    fflush(progress_stream);
-  }
 
   size_t head = 0;
   std::vector<SearchTask> children;
@@ -2925,21 +2923,17 @@ bool DfsAnagramSearch::run_parallel_search(
     walk(&seed, task.letters_left, task.entry_point,
          task.representative_log_score, sink);
     tasks.insert(tasks.end(), children.begin(), children.end());
-    if (verbose && progress_stream != NULL) {
+    if (verbose)
       dfs_diagnostic(
           progress_stream, "info: added %zu child tasks (%zu total)\n",
           children.size(), tasks.size() - head);
-      fflush(progress_stream);
-    }
   }
   merge_search_worker(seed);
   search_tasks_created = uint64_t(tasks.size() - head);
-  if (verbose && progress_stream != NULL) {
+  if (verbose)
     dfs_diagnostic(
-        progress_stream, "info: tasking splitting complete (%llu total)\n",
+        progress_stream, "info: task splitting complete (%llu total)\n",
         (unsigned long long) search_tasks_created);
-    fflush(progress_stream);
-  }
   if (head >= tasks.size()) return true;
 
   size_t const worker_count =
@@ -2957,32 +2951,25 @@ bool DfsAnagramSearch::run_parallel_search(
       size_t const slot =
           next_task.fetch_add(1, std::memory_order_relaxed);
       if (slot >= tasks.size()) {
-        if (verbose && progress_stream != NULL) {
+        if (verbose)
           dfs_diagnostic(
               progress_stream,
               "info: search worker %zu exited\n", index);
-          fflush(progress_stream);
-        }
         break;
       }
       if (!claimed_task) {
         claimed_task = true;
-        if (verbose && progress_stream != NULL) {
+        if (verbose)
           dfs_diagnostic(
               progress_stream,
               "info: worker %zu claimed first task\n", index);
-          fflush(progress_stream);
-        }
       }
       size_t const tasks_left = tasks.size() - slot - 1;
-      if (verbose && progress_stream != NULL &&
-          tasks_left % task_progress_factor == 0) {
+      if (verbose && tasks_left % task_progress_factor == 0)
         dfs_diagnostic(
             progress_stream,
             "info: worker %zu popped task (%zu total)\n",
             index, tasks_left);
-        fflush(progress_stream);
-      }
       SearchTask const& task = tasks[slot];
       worker.bag = task.bag;
       worker.bag_mask = task.bag_mask;
