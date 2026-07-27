@@ -1,5 +1,6 @@
 #include "dfs-search.h"
 
+#include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
 
 #include <assert.h>
@@ -463,7 +464,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    double restart, int64_t corpus_total,
                                    size_t score_cache_bytes,
                                    size_t preprocess_threads,
-                                   size_t search_threads):
+                                   size_t search_threads,
+                                   double word_bonus):
     class_list(classes),
     letters(letters),
     restart_log_rate(make_restart_log_rate(restart, corpus_total)),
@@ -529,12 +531,16 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                 "atomic float bound words must be trivially destructible");
 
   std::vector<DfsAnagramClass> const& all_classes = class_list->classes();
+  double const bonus_factor = multi_word_bonus(word_bonus);
   best_member_log_scores.reserve(all_classes.size());
   for (size_t i = 0; i < all_classes.size(); ++i) {
     assert(!all_classes[i].members.empty());
-    assert(all_classes[i].members[0].count > 0);
-    best_member_log_scores.push_back(
-        log(double(all_classes[i].members[0].count)));
+    DfsClassMember const& best = all_classes[i].members[0];
+    assert(best.count > 0);
+    double const score = best.word_count > 1
+        ? double(best.count) * bonus_factor
+        : double(best.count);
+    best_member_log_scores.push_back(log(score));
   }
 }
 

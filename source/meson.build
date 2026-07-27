@@ -73,6 +73,7 @@ dfs_class_list_lib = library(
   'dfs-class-list',
   [
     'dfs-class-list.cpp',
+    'dfs-cli-args.cpp',
     'dfs-diagnostic.cpp',
     'dfs-search.cpp',
     'dfs-output.cpp',
@@ -110,14 +111,12 @@ endforeach
 find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
 
-dfs_anagrams = executable('dfs-anagrams',
-  ['dfs-anagrams.cpp', 'dfs-cli-args.cpp'],
+dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
   dependencies: thread_dep,
   install: true)
 
-query_index = executable('query-index',
-  ['query-index.cpp', 'dfs-cli-args.cpp'],
+query_index = executable('query-index', 'query-index.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
   dependencies: thread_dep,
   install: true)

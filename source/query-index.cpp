@@ -21,11 +21,6 @@ static int const DEFAULT_MIN_WORD_LEN = 1;
 static int const DEFAULT_TOP = 100;
 static double const DEFAULT_WORD_BONUS = 0.0;
 
-// Matches the restart cost dfs-anagrams.cpp hardcodes for phase 2, since
-// --word-bonus previews how a member would fare against that penalty once
-// phase 2 actually chains it into a multi-class match.
-static double const RESTART = 1e-6;
-
 struct Args {
   char const* index_file;
   char const* dictionary_file;
@@ -125,15 +120,6 @@ static bool parse_args(char* argv[], Args* out) {
   return true;
 }
 
-// (1/RESTART)^word_bonus, applied once to any member spanning more than one
-// word: at word_bonus=1 this cancels a phase-2 restart's cost outright (in
-// log space, -1 * log(RESTART) exactly offsets the + log(RESTART) a restart
-// adds); at 0.5 it offsets half of it, and so on. See dfs-search.cpp's
-// restart_log_rate for the penalty this is meant to preview offsetting.
-static double word_bonus_factor(double word_bonus) {
-  return pow(RESTART, -word_bonus);
-}
-
 struct RankedMember {
   double score;
   DfsClassMember const* member;
@@ -179,7 +165,7 @@ int main(int argc, char* argv[]) {
                      anagram_class.members.begin(),
                      anagram_class.members.end());
 
-  double const bonus_factor = word_bonus_factor(args.word_bonus);
+  double const bonus_factor = multi_word_bonus(args.word_bonus);
   std::vector<RankedMember> ranked;
   ranked.reserve(flattened.size());
   for (DfsClassMember const& member : flattened) {

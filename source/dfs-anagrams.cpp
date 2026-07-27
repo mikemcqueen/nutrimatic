@@ -22,6 +22,7 @@ static int const DEFAULT_TOP = 10000;
 static size_t const DEFAULT_SCORE_CACHE_MIB = 64;
 static unsigned int const DEFAULT_MAX_PREPROCESS_THREADS = 20;
 static size_t const MIB = size_t(1024) * size_t(1024);
+static double const DEFAULT_WORD_BONUS = 0.0;
 
 static bool parse_mib(char const* in, char const* what, size_t* out) {
   if (*in == '\0' || *in == '-') {
@@ -52,6 +53,7 @@ struct Args {
   int preprocess_threads;
   int search_threads;
   int exact_letters;
+  double word_bonus;
   bool allow_cache_fallback;
   bool dense_cache;
   bool verbose;
@@ -63,7 +65,7 @@ static void usage(char const* program) {
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
-      " [-d projection-depth]"
+      " [-d projection-depth] [-w word-bonus]"
       " [-D|--dense-cache] [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
@@ -74,13 +76,17 @@ static void usage(char const* program) {
       "  -S, --search-threads defaults to 1\n"
       "  -d, --projection-depth keeps this many rarest letter types exact in"
       " the projected cache; the default is the largest depth that fits -C\n"
+      "  -w, --word-bonus N boosts classes whose best member spans more than"
+      " one corpus word by (1/%.0g)^N, offsetting that much of the restart"
+      " penalty phase 2 charges for chaining separate classes; defaults to"
+      " %g (no boost)\n"
       "  -D, --dense-cache requests an exact dense score cache instead of"
       " the default projected dense cache\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
       program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DEFAULT_SCORE_CACHE_MIB);
+      DEFAULT_SCORE_CACHE_MIB, RESTART, DEFAULT_WORD_BONUS);
 }
 
 static int const OPT_DICT = 256;
@@ -95,6 +101,7 @@ static struct optparse_long const long_options[] = {
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { "search-threads", 'S', OPTPARSE_REQUIRED },
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
+  { "word-bonus", 'w', OPTPARSE_REQUIRED },
   { "dense-cache", 'D', OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
@@ -110,6 +117,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->preprocess_threads = 0;
   out->search_threads = 1;
   out->exact_letters = -1;
+  out->word_bonus = DEFAULT_WORD_BONUS;
   out->allow_cache_fallback = false;
   out->dense_cache = false;
   out->verbose = false;
@@ -169,6 +177,10 @@ static bool parse_args(char* argv[], Args* out) {
       case 'd':
         if (!parse_count(options.optarg, "--projection-depth",
                          &out->exact_letters))
+          return false;
+        break;
+      case 'w':
+        if (!parse_double(options.optarg, "--word-bonus", &out->word_bonus))
           return false;
         break;
       case 'F':
@@ -281,11 +293,10 @@ int main(int argc, char* argv[]) {
       (long long) classes.nodes_visited());
   fflush(stderr);
 
-  double const restart = 1e-6;
   DfsAnagramSearch search(
-      &classes, args.letters, restart, reader.count(),
+      &classes, args.letters, RESTART, reader.count(),
       args.score_cache_bytes, preprocess_threads,
-      size_t(args.search_threads));
+      size_t(args.search_threads), args.word_bonus);
   DfsTopN output(&classes, size_t(args.top));
   if (!search.run(args.top == 0 ? NULL : &output,
                   args.progress_factor, args.allow_cache_fallback,
