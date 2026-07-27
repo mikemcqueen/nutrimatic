@@ -79,6 +79,9 @@ fi
 grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words$' \
   "$test_dir/all.stderr" ||
   fail "search header is missing from stderr"
+grep -Eq "${diagnostic_prefix}depth -1 top 10 threads 1 search threads 1 cache 64$" \
+  "$test_dir/all.stderr" ||
+  fail "resolved argument diagnostic is missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 1 complete:" "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 2 preflight: 16 theoretical states, 8 effective non-root states$" \

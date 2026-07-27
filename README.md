@@ -1,5 +1,19 @@
 # The source for [Nutrimatic](http://nutrimatic.org/)
 
+### Notes on this fork
+
+While there are some optimizations to the original tools, and some tweaks
+to their output which probably breaks the CGI interface, the main addition
+is dfs-anagrams, a depth-first search approach to finding anagrams, while
+still leveraging the wikipedia index for score, that doesn't grow memory
+exponentially as input length increases.
+
+It stores results in a sorted top-n heap, so you still get the same ordered
+results as find-anagrams.
+
+A fair amount of it is x86-specific unfortunately, necessary for squeezing
+out the maximum performance.
+
 ### Build from source (the easy scripted way)
 
 (If this doesn't work for you, see the manual steps below.)

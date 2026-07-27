@@ -266,6 +266,22 @@ int main(int argc, char* argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
 
+  size_t preprocess_threads = size_t(args.preprocess_threads);
+  if (preprocess_threads == 0) {
+    preprocess_threads = 1;
+    if (args.letters.size() >= 26) {
+      unsigned int const available = std::thread::hardware_concurrency();
+      if (available > 1) {
+        preprocess_threads = size_t(std::min(
+            available, DEFAULT_MAX_PREPROCESS_THREADS));
+      }
+    }
+  }
+  dfs_diagnostic(
+      stderr, "depth %d top %d threads %zu search threads %d cache %zu\n",
+      args.exact_letters, args.top, preprocess_threads, args.search_threads,
+      args.score_cache_bytes / MIB);
+
   FILE* fp = fopen(args.index_file, "rb");
   if (fp == NULL) {
     fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
@@ -291,17 +307,6 @@ int main(int argc, char* argv[]) {
   fflush(stderr);
 
   double const restart = 1e-6;
-  size_t preprocess_threads = size_t(args.preprocess_threads);
-  if (preprocess_threads == 0) {
-    preprocess_threads = 1;
-    if (args.letters.size() >= 26) {
-      unsigned int const available = std::thread::hardware_concurrency();
-      if (available > 1) {
-        preprocess_threads = size_t(std::min(
-            available, DEFAULT_MAX_PREPROCESS_THREADS));
-      }
-    }
-  }
   DfsAnagramSearch search(
       &classes, args.letters, restart, reader.count(),
       args.score_cache_bytes, preprocess_threads,
