@@ -192,12 +192,16 @@ static void heap_churn_test() {
 
     // Evict the root, then improve the new root twice after the heap has moved.
     output.emit(std::vector<size_t>(1, indexes[5]), log(60.0));
+    // Improve the score of the key that just recycled the evicted node. If
+    // eviction left a stale heap_pos or slot pointer behind, this either
+    // corrupts the wrong slot or is silently dropped.
+    output.emit(std::vector<size_t>(1, indexes[5]), log(65.0));
     output.emit(std::vector<size_t>(1, indexes[2]), log(80.0));
     output.emit(std::vector<size_t>(1, indexes[0]), log(55.0));
 
     std::vector<DfsSpelling> const results = output.take_sorted_results();
     char const* expected_keys[] = { "cc", "dd", "ff", "aa", "ee" };
-    double const expected_scores[] = { 80.0, 70.0, 60.0, 55.0, 50.0 };
+    double const expected_scores[] = { 80.0, 70.0, 65.0, 55.0, 50.0 };
     check(results.size() == 5, "heap churn changed the top-N size");
     for (size_t i = 0; i < results.size(); ++i) {
       check(results[i].word_set_key == expected_keys[i],
