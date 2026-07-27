@@ -7,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -57,10 +56,12 @@ class DfsAnagramSearch {
   // bounds. A nonnegative exact_letters fixes the number of exact letters in
   // the projection; a negative value selects the largest depth that fits.
   // When cache fallback is disallowed, return false instead of using a weaker
-  // mode when the requested table does not fit.
+  // mode when the requested table does not fit. verbose reports serial task
+  // splitting to progress when parallel search is selected.
   bool run(DfsSolutionSink* sink, FILE* progress = NULL,
            int progress_factor = 1, bool allow_cache_fallback = true,
-           bool dense_cache = true, int exact_letters = -1);
+           bool dense_cache = true, int exact_letters = -1,
+           bool verbose = false);
 
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
@@ -241,7 +242,8 @@ class DfsAnagramSearch {
   void report_search_progress(SearchWorker* worker);
   void merge_search_worker(SearchWorker const& worker);
   bool run_parallel_search(
-      DfsSolutionSink* sink, size_t threads, size_t target_tasks);
+      DfsSolutionSink* sink, size_t threads, size_t target_tasks,
+      size_t task_progress_factor, bool verbose);
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;
@@ -372,7 +374,6 @@ class DfsAnagramSearch {
   uint64_t search_tasks_created;
   std::atomic<int64_t> progress_nodes;
   std::atomic<int64_t> progress_solutions;
-  std::mutex progress_mutex;
 };
 
 #endif

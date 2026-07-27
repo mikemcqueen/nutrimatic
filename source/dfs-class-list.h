@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -13,6 +14,8 @@ class IndexReader;
 // Phase 1 of dfs-anagrams: extract every makeable corpus segment, then collapse
 // spellings with the same letter multiset into one class for the phase-2 DFS.
 static int const DFS_SYMBOL_COUNT = 36;
+
+typedef std::unordered_set<std::string> DfsDictionary;
 
 int dfs_symbol_index(unsigned char ch);
 
@@ -34,9 +37,11 @@ class DfsClassList {
   // letters must contain only lowercase a-z and digits. Phrases are extracted
   // by default, up to the cap implied by min_word_len and the bag length.
   // include_phrases=false exists for words-only validation against the phase-0
-  // reference counts; dfs-anagrams leaves it at its production default.
+  // reference counts; dfs-anagrams leaves it at its production default. The
+  // optional dictionary is borrowed and restricts every emitted phrase word.
   DfsClassList(IndexReader const* reader, std::string const& letters,
-               int min_word_len, bool include_phrases = true);
+               int min_word_len, bool include_phrases = true,
+               DfsDictionary const* dictionary = NULL);
 
   std::vector<DfsAnagramClass> const& classes() const { return class_list; }
   size_t entry_count() const { return entries; }

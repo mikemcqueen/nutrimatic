@@ -3,8 +3,10 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <chrono>
+#include <vector>
 
 namespace {
 
@@ -32,13 +34,31 @@ void dfs_diagnostic(FILE* stream, char const* format, ...) {
   uint64_t const hours = elapsed_seconds / 3600;
   uint64_t const minutes = (elapsed_seconds / 60) % 60;
   uint64_t const seconds = elapsed_seconds % 60;
-  fprintf(stream, "[%02llu:%02llu:%02llu] ",
-          (unsigned long long) hours,
-          (unsigned long long) minutes,
-          (unsigned long long) seconds);
+  char prefix[32];
+  int const prefix_size = snprintf(
+      prefix, sizeof(prefix), "[%02llu:%02llu:%02llu] ",
+      (unsigned long long) hours,
+      (unsigned long long) minutes,
+      (unsigned long long) seconds);
+  if (prefix_size < 0) return;
 
   va_list args;
   va_start(args, format);
-  vfprintf(stream, format, args);
+  va_list measure;
+  va_copy(measure, args);
+  int const message_size = vsnprintf(NULL, 0, format, measure);
+  va_end(measure);
+  if (message_size < 0) {
+    va_end(args);
+    return;
+  }
+
+  size_t const line_size =
+      size_t(prefix_size) + size_t(message_size);
+  std::vector<char> line(line_size + 1);
+  memcpy(line.data(), prefix, size_t(prefix_size));
+  vsnprintf(
+      line.data() + prefix_size, size_t(message_size) + 1, format, args);
   va_end(args);
+  fwrite(line.data(), 1, line_size, stream);
 }
