@@ -349,13 +349,13 @@ static char const* projected_kernel_name(ProjectedKernel kernel) {
   return "scalar";
 }
 
-// Bound the error in fl(fl(class_score + restart) + child). IEEE double
+// Bound the error in fl(fl(class_score + boundary) + child). IEEE double
 // round-to-nearest incurs less than one DBL_EPSILON times the sum of operand
 // magnitudes here. The factor of four also covers rounding while calculating
 // the magnitude and subnormal results (the added 1 dominates their error).
 static double score_candidate_rounding_error(
-    double class_score, double restart, double child) {
-  double magnitude = fabs(class_score) + fabs(restart);
+    double class_score, double boundary, double child) {
+  double magnitude = fabs(class_score) + fabs(boundary);
   magnitude += fabs(child);
   magnitude += 1.0;
   return magnitude * DBL_EPSILON * 4.0;
@@ -455,15 +455,17 @@ void DfsAnagramSearch::AlignedFree::operator()(void* pointer) const {
 
 DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    std::string const& letters,
-                                   double restart, int64_t corpus_total,
+                                   double segment_penalty,
+                                   int64_t corpus_total,
                                    size_t score_cache_bytes,
                                    size_t preprocess_threads,
                                    size_t search_threads,
                                    double word_bonus):
     class_list(classes),
     letters(letters),
-    score_model(restart, corpus_total, word_bonus),
-    restart_log_rate(score_model.restart_log_rate()),
+    score_model(segment_penalty, corpus_total, word_bonus),
+    segment_boundary_log_score(
+        score_model.segment_boundary_log_score()),
     max_depth(derived_max_depth(classes, letters.size())),
     score_cache_budget(score_cache_bytes),
     requested_preprocess_threads(std::max(size_t(1), preprocess_threads)),
@@ -729,12 +731,12 @@ bool DfsAnagramSearch::prepare_length_certificate() {
           continue;
         double const child = length_tail_bounds[left - length];
         double const candidate =
-            best_score[length] + restart_log_rate + child;
+            best_score[length] + segment_boundary_log_score + child;
         best = std::max(best, candidate);
         max_rounding_error = std::max(
             max_rounding_error,
             score_candidate_rounding_error(
-                best_score[length], restart_log_rate, child));
+                best_score[length], segment_boundary_log_score, child));
       }
       if (best != -HUGE_VAL)
         length_tail_bounds[left] = round_score_bound_up(
@@ -759,12 +761,12 @@ bool DfsAnagramSearch::length_certificate_rejects(
   if (group_best == -HUGE_VAL || tail == -HUGE_VAL) return true;
   long double const upper =
       static_cast<long double>(representative_log_score) +
-      static_cast<long double>(restart_log_rate) +
+      static_cast<long double>(segment_boundary_log_score) +
       static_cast<long double>(group_best) +
       static_cast<long double>(tail);
   long double const magnitude =
       fabsl(static_cast<long double>(representative_log_score)) +
-      fabsl(static_cast<long double>(restart_log_rate)) +
+      fabsl(static_cast<long double>(segment_boundary_log_score)) +
       fabsl(static_cast<long double>(group_best)) +
       fabsl(static_cast<long double>(tail)) +
       fabsl(static_cast<long double>(floor)) + 1.0L;
@@ -866,9 +868,9 @@ bool DfsAnagramSearch::prepare_projected_actions() {
       ProjectedAction action;
       action.score_key_delta = score_key_deltas.get()[id];
       double const class_score = best_member_log_scores[id];
-      action.partial_score = class_score + restart_log_rate;
+      action.partial_score = class_score + segment_boundary_log_score;
       action.rounding_error_base =
-          fabs(class_score) + fabs(restart_log_rate);
+          fabs(class_score) + fabs(segment_boundary_log_score);
       action.repeated_offset =
           uint32_t(projected_repeated_requirements.size());
       action.packed_lengths =
@@ -2006,13 +2008,13 @@ void DfsAnagramSearch::consider_bound_candidate(
 
   if (child == -HUGE_VAL) return;
   ++bound_transitions;
-  double const partial = class_score + restart_log_rate;
+  double const partial = class_score + segment_boundary_log_score;
   double const candidate_bound = partial + child;
   *best = std::max(*best, candidate_bound);
   *max_rounding_error = std::max(
       *max_rounding_error,
       score_candidate_rounding_error(
-          class_score, restart_log_rate, child));
+          class_score, segment_boundary_log_score, child));
 }
 
 double DfsAnagramSearch::compute_score_bound() {
@@ -2099,13 +2101,13 @@ void DfsAnagramSearch::consider_parallel_bound_candidate(
 
   if (child == -HUGE_VAL) return;
   ++worker->transitions;
-  double const partial = class_score + restart_log_rate;
+  double const partial = class_score + segment_boundary_log_score;
   double const candidate_bound = partial + child;
   *best = std::max(*best, candidate_bound);
   *max_rounding_error = std::max(
       *max_rounding_error,
       score_candidate_rounding_error(
-          class_score, restart_log_rate, child));
+          class_score, segment_boundary_log_score, child));
 }
 
 double DfsAnagramSearch::compute_parallel_score_bound(
@@ -2982,8 +2984,8 @@ bool DfsAnagramSearch::should_prune(
   Reachability const reachability = cached_reachability(
       worker->score_key, worker->path.empty());
   if (reachability == REACHABILITY_NO) return true;
-  // H charges a restart to every class it adds. That is exact below the first
-  // chosen class, but the root's first class does not pay a restart.
+  // H charges a boundary to every class it adds. That is exact below the first
+  // chosen class, but the root's first class does not pay a boundary.
   if (worker->path.empty()) return false;
 
   double floor;

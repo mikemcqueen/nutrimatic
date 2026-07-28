@@ -49,10 +49,11 @@ static int64_t member_count(DfsClassList const& classes, size_t class_index,
 
 static double representative_score(
     DfsClassList const& classes, std::vector<size_t> const& path,
-    double restart, int64_t corpus_total) {
+    double segment_penalty, int64_t corpus_total) {
   double score = 0.0;
   for (size_t i = 0; i < path.size(); ++i) {
-    if (i != 0) score += log(restart) - log(double(corpus_total));
+    if (i != 0)
+      score -= log(segment_penalty) + log(double(corpus_total));
     score += log(double(classes.classes()[path[i]].members[0].count));
   }
   return score;
@@ -106,10 +107,11 @@ static void exhaustive_product_test() {
     path.push_back(cde);
     path.push_back(fg);
 
-    double const restart = 1e-6;
+    double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
     DfsTopN output(&classes, 14);
     output.emit(
-        path, representative_score(classes, path, restart, reader.count()));
+        path, representative_score(
+            classes, path, segment_penalty, reader.count()));
     std::vector<DfsSpelling> const actual = output.take_sorted_results();
 
     std::vector<Expected> expected;
@@ -119,8 +121,8 @@ static void exhaustive_product_test() {
         classes.classes()[cde].members;
     std::vector<DfsClassMember> const& fg_members =
         classes.classes()[fg].members;
-    double const restart_rate =
-        log(restart) - log(double(reader.count()));
+    double const segment_boundary =
+        -log(segment_penalty) - log(double(reader.count()));
     for (size_t ai = 0; ai < ab_members.size(); ++ai)
       for (size_t ci = 0; ci < cde_members.size(); ++ci)
         for (size_t fi = 0; fi < fg_members.size(); ++fi) {
@@ -128,7 +130,7 @@ static void exhaustive_product_test() {
           row.log_score =
               log(double(ab_members[ai].count)) +
               log(double(cde_members[ci].count)) +
-              log(double(fg_members[fi].count)) + 2.0 * restart_rate;
+              log(double(fg_members[fi].count)) + 2.0 * segment_boundary;
           std::vector<std::string> words;
           words.push_back(ab_members[ai].text);
           words.push_back(cde_members[ci].text);
@@ -373,11 +375,12 @@ static void repeated_class_test() {
     size_t const ab = find_class(classes, "ab");
     size_t const cd = find_class(classes, "cd");
     std::vector<size_t> path(3, ab);
-    double const restart = 1e-6;
+    double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
 
     DfsTopN output(&classes, 14);
     output.emit(
-        path, representative_score(classes, path, restart, reader.count()));
+        path, representative_score(
+            classes, path, segment_penalty, reader.count()));
     std::vector<DfsSpelling> const results = output.take_sorted_results();
 
     char const* expected_keys[] = {
@@ -385,13 +388,13 @@ static void repeated_class_test() {
     };
     int64_t const high = member_count(classes, ab, "ab");
     int64_t const low = member_count(classes, ab, "ba");
-    double const restart_rate =
-        log(restart) - log(double(reader.count()));
+    double const segment_boundary =
+        -log(segment_penalty) - log(double(reader.count()));
     double const expected_scores[] = {
-      3.0 * log(double(high)) + 2.0 * restart_rate,
-      2.0 * log(double(high)) + log(double(low)) + 2.0 * restart_rate,
-      log(double(high)) + 2.0 * log(double(low)) + 2.0 * restart_rate,
-      3.0 * log(double(low)) + 2.0 * restart_rate,
+      3.0 * log(double(high)) + 2.0 * segment_boundary,
+      2.0 * log(double(high)) + log(double(low)) + 2.0 * segment_boundary,
+      log(double(high)) + 2.0 * log(double(low)) + 2.0 * segment_boundary,
+      3.0 * log(double(low)) + 2.0 * segment_boundary,
     };
 
     check(results.size() == 4,
@@ -413,7 +416,7 @@ static void repeated_class_test() {
     mixed_output.emit(
         mixed_path,
         representative_score(
-            classes, mixed_path, restart, reader.count()));
+            classes, mixed_path, segment_penalty, reader.count()));
     std::vector<DfsSpelling> const mixed_results =
         mixed_output.take_sorted_results();
 
@@ -429,7 +432,7 @@ static void repeated_class_test() {
           row.log_score =
               log(double(ab_members[first].count)) +
               log(double(ab_members[second].count)) +
-              log(double(cd_members[third].count)) + 2.0 * restart_rate;
+              log(double(cd_members[third].count)) + 2.0 * segment_boundary;
           std::vector<std::string> words;
           words.push_back(ab_members[first].text);
           words.push_back(ab_members[second].text);
@@ -480,11 +483,12 @@ static void large_repeated_class_test() {
     DfsClassList classes(&reader, "abcd", 4, false);
     size_t const abcd = find_class(classes, "abcd");
     std::vector<size_t> path(6, abcd);
-    double const restart = 1e-6;
+    double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
 
     DfsTopN output(&classes, 10000);
     output.emit(
-        path, representative_score(classes, path, restart, reader.count()));
+        path, representative_score(
+            classes, path, segment_penalty, reader.count()));
     std::vector<DfsSpelling> const results = output.take_sorted_results();
 
     // Ten members chosen six times with repetition:
@@ -517,10 +521,10 @@ static void search_output_integration_test() {
   {
     IndexReader reader(fp);
     std::string const letters = "abcd";
-    double const restart = 1e-6;
+    double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
     DfsClassList classes(&reader, letters, 2);
     DfsAnagramSearch search(
-        &classes, letters, restart, reader.count());
+        &classes, letters, segment_penalty, reader.count());
     DfsTopN output(&classes, 14);
     search.run(&output);
 
@@ -533,16 +537,16 @@ static void search_output_integration_test() {
     char const* expected_keys[] = { "ab cd", "ab dc", "ba cd", "ba dc" };
     size_t const ab = find_class(classes, "ab");
     size_t const cd = find_class(classes, "cd");
-    double const restart_rate =
-        log(restart) - log(double(reader.count()));
+    double const segment_boundary =
+        -log(segment_penalty) - log(double(reader.count()));
     double const expected_scores[] = {
       log(70.0),
       log(double(member_count(classes, ab, "ab"))) +
-          log(double(member_count(classes, cd, "dc"))) + restart_rate,
+          log(double(member_count(classes, cd, "dc"))) + segment_boundary,
       log(double(member_count(classes, ab, "ba"))) +
-          log(double(member_count(classes, cd, "cd"))) + restart_rate,
+          log(double(member_count(classes, cd, "cd"))) + segment_boundary,
       log(double(member_count(classes, ab, "ba"))) +
-          log(double(member_count(classes, cd, "dc"))) + restart_rate,
+          log(double(member_count(classes, cd, "dc"))) + segment_boundary,
     };
     for (size_t i = 0; i < results.size(); ++i) {
       check(results[i].word_set_key == expected_keys[i],

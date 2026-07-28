@@ -55,19 +55,33 @@ expect_score_failure() {
     fail "$name printed output before rejecting the sequence"
 }
 
-# The synthetic corpus total is 136. Each comma after the first contributes
-# one production restart (1e-6 / 136); spaces inside an exact entry do not.
-assert_close "$(score_value ab)" 10 \
-  "one exact entry should score its own count"
-assert_close "$(score_value 'ab,cd')" "$(awk 'BEGIN { print 10 * 7e-6 / 136 }')" \
-  "two entries should pay one restart"
-assert_close "$(score_value 'ab cd')" 70 \
-  "a multi-word entry should remain one segment"
-assert_close "$(score_value 'ab,cd,ab')" \
-  "$(awk 'BEGIN { print 10 * 7 * 10 * (1e-6 / 136)^2 }')" \
-  "three entries should pay two restarts"
+# The synthetic corpus total is 136. Each comma after the first divides by
+# corpus_total * P; spaces inside an exact entry do not add a segment.
+default_two_entry_score=$(score_value 'ab,cd')
+assert_close "$default_two_entry_score" \
+  "$(awk 'BEGIN { print 10 * 7 / (136 * 1000000) }')" \
+  "the default should preserve the production segment penalty"
+assert_close "$(score_value 'ab,cd' -P 1000000)" \
+  "$default_two_entry_score" \
+  "explicit default segment penalty should match the omitted option"
+
+for penalty in 1 100 1000000; do
+  assert_close "$(score_value ab -P "$penalty")" 10 \
+    "one exact entry should be invariant at P=$penalty"
+done
+
+assert_close "$(score_value 'ab,cd' -P 100)" \
+  "$(awk 'BEGIN { print 10 * 7 / (136 * 100) }')" \
+  "two entries should pay one segment penalty"
+assert_close "$(score_value 'ab,cd,ab' --segment-penalty 100)" \
+  "$(awk 'BEGIN { print 10 * 7 * 10 / (136 * 100)^2 }')" \
+  "three entries should pay two segment penalties"
+for penalty in 1 100 1000000; do
+  assert_close "$(score_value 'ab cd' -P "$penalty")" 70 \
+    "a multi-word entry should remain one segment at P=$penalty"
+done
 assert_close "$(score_value 'ab,ab')" \
-  "$(awk 'BEGIN { print 10 * 10e-6 / 136 }')" \
+  "$(awk 'BEGIN { print 10 * 10 / (136 * 1000000) }')" \
   "repeated entries should contribute repeatedly"
 
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
@@ -80,13 +94,21 @@ expect_score_failure 'ab,,cd' empty-entry
 expect_score_failure a prefix-only
 expect_score_failure 'ab  cd' malformed-spacing
 
-assert_close "$(score_value 'ab cd' --word-bonus 1)" 70000000 \
-  "--word-bonus should apply once to a multi-word segment"
+assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
+  "--word-bonus should retain its million-fold boost at P=1"
 assert_close "$(score_value ab --word-bonus 1)" 10 \
   "--word-bonus should not apply to a single-word segment"
-assert_close "$(score_value 'ab cd,ab' --word-bonus 1)" \
-  "$(awk 'BEGIN { print 70 * 10e-6 / 136 * 1e6 }')" \
+assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
+  "$(awk 'BEGIN { print 70 * 10 / 136 * 1e6 }')" \
   "a mixed sequence should bonus only its multi-word segment"
+
+expect_score_failure ab penalty-zero -P 0
+grep -q '^error: --segment-penalty must be at least 1$' \
+  "$test_dir/penalty-zero.stderr" ||
+  fail "zero segment-penalty diagnostic is unclear"
+expect_score_failure ab penalty-fraction --segment-penalty 0.5
+expect_score_failure ab penalty-malformed -P nope
+expect_score_failure ab penalty-nonfinite -P inf
 
 expect_score_failure ab incompatible-option -n 1
 grep -q -- '--top cannot be used with --score' \
@@ -99,6 +121,12 @@ grep -q -- '--top cannot be used with --score' \
   > "$test_dir/completable-off.stdout" 2> "$test_dir/completable-off.stderr"
 [[ $(wc -l < "$test_dir/completable-off.stdout") -eq 4 ]] ||
   fail "expected all four wxyz-bag entries without --require-completable"
+"$query_index" "$synthetic_index" wxyz -m 2 -n 10 -P 1 \
+  > "$test_dir/penalty-one-ranking.stdout" \
+  2> "$test_dir/penalty-one-ranking.stderr"
+cmp "$test_dir/completable-off.stdout" \
+    "$test_dir/penalty-one-ranking.stdout" ||
+  fail "segment penalty changed ordinary one-entry ranking"
 
 "$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable -d 0 -S 2 \
@@ -120,6 +148,17 @@ grep -Eq 'phase 2 exact memo: [0-9]+ states computed, [0-9]+ hits$' \
 grep -q 'phase 2 exact validation parallelism: 2 requested, 2 used' \
   "$test_dir/completable-on.stderr" ||
   fail "-S did not enable parallel exact validation"
+grep -Eq 'segment penalty 1000000$' \
+  "$test_dir/completable-on.stderr" ||
+  fail "phase-2 diagnostic omitted the segment penalty"
+
+"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+  --require-completable -d 0 -S 2 -P 1 \
+  > "$test_dir/completable-penalty-one.stdout" \
+  2> "$test_dir/completable-penalty-one.stderr"
+cmp "$test_dir/completable-on.stdout" \
+    "$test_dir/completable-penalty-one.stdout" ||
+  fail "segment penalty changed exact completability filtering"
 
 # Filtering is score-independent. In particular, an extreme negative bonus
 # must not make the phrase-only completion of "f" look unreachable.

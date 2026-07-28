@@ -54,7 +54,7 @@ class DfsAnagramSearch {
   };
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
-                   double restart, int64_t corpus_total,
+                   double segment_penalty, int64_t corpus_total,
                    size_t score_cache_bytes = 0,
                    size_t preprocess_threads = 1,
                    size_t search_threads = 1,
@@ -365,7 +365,7 @@ class DfsAnagramSearch {
   DfsClassList const* const class_list;
   std::string const letters;
   DfsScoreModel const score_model;
-  double const restart_log_rate;
+  double const segment_boundary_log_score;
   std::vector<double> best_member_log_scores;
   size_t const max_depth;
   size_t const score_cache_budget;

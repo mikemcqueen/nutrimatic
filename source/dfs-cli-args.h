@@ -38,6 +38,10 @@ bool parse_mib(char const* in, char const* what, size_t* out);
 // `what` and returns false on any parse failure or non-finite value.
 bool parse_double(char const* in, char const* what, double* out);
 
+// Parses a finite segment penalty at least 1. Values below 1 would make
+// appended segments score-improving and invalidate phase-2 pruning.
+bool parse_segment_penalty(char const* in, double* out);
+
 // Applies dfs-anagrams' short-input default adjustment and validates that the
 // resulting minimum can fit in the remaining bag.
 bool finalize_min_word_length(

@@ -29,10 +29,28 @@ expect_status() {
     fail "expected exit $expected, got $actual from: $*"
 }
 
+assert_close() {
+  local actual=$1
+  local expected=$2
+  local description=$3
+  awk -v actual="$actual" -v expected="$expected" '
+    BEGIN {
+      difference = actual - expected
+      if (difference < 0) difference = -difference
+      scale = expected < 0 ? -expected : expected
+      if (scale == 0) scale = 1
+      exit difference <= scale * 0.0006 ? 0 : 1
+    }
+  ' || fail "$description: expected $expected, got $actual"
+}
+
 "$make_index" "$index_file"
 
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -P 1000000 \
+  > "$test_dir/explicit-default.stdout" \
+  2> "$test_dir/explicit-default.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --cache-size 0 \
   --allow-cache-fallback \
@@ -53,6 +71,8 @@ expect_status() {
   -S 1 \
   > "$test_dir/search-thread-one.stdout" \
   2> "$test_dir/search-thread-one.stderr"
+cmp "$test_dir/all.stdout" "$test_dir/explicit-default.stdout" ||
+  fail "explicit default segment penalty changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/uncached.stdout" ||
   fail "score cache changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/thread-one.stdout" ||
@@ -79,7 +99,7 @@ fi
 grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words$' \
   "$test_dir/all.stderr" ||
   fail "search header is missing from stderr"
-grep -Eq "${diagnostic_prefix}depth -1 top 10 threads 1 search threads 1 cache 64$" \
+grep -Eq "${diagnostic_prefix}depth -1 top 10 threads 1 search threads 1 cache 64 segment penalty 1000000$" \
   "$test_dir/all.stderr" ||
   fail "resolved argument diagnostic is missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 1 complete:" "$test_dir/all.stderr" ||
@@ -133,6 +153,30 @@ head -n 2 "$test_dir/all.stdout" > "$test_dir/expected-top.stdout"
 cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
   fail "--top did not retain the two highest-scoring word sets"
 
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -P 1 \
+  > "$test_dir/penalty-one.stdout" \
+  2> "$test_dir/penalty-one.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --segment-penalty 1 --cache-size 0 --allow-cache-fallback \
+  > "$test_dir/penalty-one-uncached.stdout" \
+  2> "$test_dir/penalty-one-uncached.stderr"
+cmp "$test_dir/penalty-one.stdout" \
+    "$test_dir/penalty-one-uncached.stdout" ||
+  fail "cache mode changed stdout at a non-default segment penalty"
+default_split_score=$(awk '$2 == "ab" && $3 == "dc" { print $1 }' \
+  "$test_dir/all.stdout")
+penalty_one_split_score=$(awk '$2 == "ab" && $3 == "dc" { print $1 }' \
+  "$test_dir/penalty-one.stdout")
+[[ -n $default_split_score && -n $penalty_one_split_score ]] ||
+  fail "known two-segment spelling was not retained"
+assert_close "$penalty_one_split_score" \
+  "$(awk -v score="$default_split_score" \
+      'BEGIN { print score * 1000000 }')" \
+  "P=1 should remove one million-fold penalty from two segments"
+assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
+    "$test_dir/penalty-one.stdout")" 70 \
+  "one-segment phrase should be invariant"
+
 "$dfs_anagrams" "$index_file" abcd -u ab -m 2 -n 10 \
   > "$test_dir/used.stdout" 2> "$test_dir/used.stderr"
 "$dfs_anagrams" "$index_file" cd -m 2 -n 10 \
@@ -157,6 +201,14 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
 grep -q '^error: --projection-depth cannot be used with --dense-cache$' \
   "$test_dir/status.stderr" ||
   fail "conflicting cache-mode diagnostic is missing"
+expect_status 2 "$dfs_anagrams" "$index_file" abc -P 0
+grep -q '^error: --segment-penalty must be at least 1$' \
+  "$test_dir/status.stderr" ||
+  fail "zero segment-penalty diagnostic is unclear"
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --segment-penalty 0.5
+expect_status 2 "$dfs_anagrams" "$index_file" abc -P nope
+expect_status 2 "$dfs_anagrams" "$index_file" abc -P inf
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --cache-size 0
 grep -Eq "${diagnostic_prefix}phase 2 preflight: 16 theoretical states, 8 effective non-root states$" \

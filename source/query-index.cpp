@@ -29,6 +29,7 @@ struct Args {
   int min_word_len;
   int top;
   bool words_only;
+  double segment_penalty;
   double word_bonus;
   bool require_completable;
   size_t score_cache_bytes;
@@ -44,7 +45,7 @@ struct Args {
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [--score] [--word-bonus N]"
+      " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-w|--words-only] [--require-completable]"
       " [-C|--cache-size MiB] [-T|--preprocess-threads N]"
@@ -53,12 +54,15 @@ static void usage(char const* program) {
       " [-D|--dense-cache] [-F|--allow-cache-fallback]\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
       "    entries and prints its DFS-model score\n"
+      "  -P, --segment-penalty P divides the score by P for each selected"
+      " index entry after the first; P must be at least 1 and defaults to"
+      " %.0f\n"
+      "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 for no limit\n"
       "  --dict PATH filters entries to words in the dictionary\n"
       "  -w, --words-only excludes multi-word phrases\n"
-      "  --word-bonus N boosts multi-word members by (1/%.0g)^N, previewing\n"
-      "    how much of a phase-2 restart penalty a bonus of N would offset;\n"
+      "  --word-bonus N boosts multi-word members by %.0f^N;\n"
       "    defaults to %g (no boost)\n"
       "  --require-completable drops classes whose removal leaves a\n"
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
@@ -71,8 +75,9 @@ static void usage(char const* program) {
       "    the default is the largest depth that fits -C\n"
       "  -D, --dense-cache requests an exact dense score cache\n"
       "  -F, --allow-cache-fallback allows score-cache fallback\n",
-      program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP, DFS_RESTART,
-      DEFAULT_WORD_BONUS, DFS_DEFAULT_SCORE_CACHE_MIB);
+      program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_DEFAULT_MIN_WORD_LEN,
+      DEFAULT_TOP, DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS,
+      DFS_DEFAULT_SCORE_CACHE_MIB);
 }
 
 static int const OPT_DICT = 256;
@@ -86,6 +91,7 @@ static struct optparse_long const long_options[] = {
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
   { "top", 'n', OPTPARSE_REQUIRED },
   { "words-only", 'w', OPTPARSE_NONE },
+  { "segment-penalty", 'P', OPTPARSE_REQUIRED },
   { "word-bonus", OPT_WORD_BONUS, OPTPARSE_REQUIRED },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
@@ -108,6 +114,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
   out->top = DEFAULT_TOP;
   out->words_only = false;
+  out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   out->word_bonus = DEFAULT_WORD_BONUS;
   out->require_completable = false;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
@@ -150,6 +157,11 @@ static bool parse_args(char* argv[], Args* out) {
       case 'w':
         out->words_only = true;
         mark_score_incompatible(out, "--words-only");
+        break;
+      case 'P':
+        if (!parse_segment_penalty(
+                options.optarg, &out->segment_penalty))
+          return false;
         break;
       case OPT_WORD_BONUS:
         if (!parse_double(options.optarg, "--word-bonus", &out->word_bonus))
@@ -299,7 +311,7 @@ static bool print_sequence_score(
   }
 
   DfsScoreModel const model(
-      DFS_RESTART, reader.count(), args.word_bonus);
+      args.segment_penalty, reader.count(), args.word_bonus);
   double log_score = model.first_segment_log_score(
       counts[0], entries[0].find(' ') != std::string::npos);
   for (size_t i = 1; i < entries.size(); ++i)
@@ -360,11 +372,12 @@ int main(int argc, char* argv[]) {
     size_t const preprocess_threads = resolve_preprocess_threads(
         args.preprocess_threads, args.letters.size());
     dfs_diagnostic(
-        "depth %d preprocess threads %zu search threads %d cache %zu\n",
+        "depth %d preprocess threads %zu search threads %d cache %zu "
+        "segment penalty %.17g\n",
         args.exact_letters, preprocess_threads, args.search_threads,
-        args.score_cache_bytes / DFS_MIB);
+        args.score_cache_bytes / DFS_MIB, args.segment_penalty);
     DfsAnagramSearch search(
-        &classes, args.letters, DFS_RESTART, reader.count(),
+        &classes, args.letters, args.segment_penalty, reader.count(),
         args.score_cache_bytes, preprocess_threads,
         size_t(args.search_threads),
         /*word_bonus=*/0.0);
@@ -388,7 +401,7 @@ int main(int argc, char* argv[]) {
   }
 
   DfsScoreModel const model(
-      DFS_RESTART, reader.count(), args.word_bonus);
+      args.segment_penalty, reader.count(), args.word_bonus);
   std::vector<RankedMember> ranked;
   ranked.reserve(classes.entry_count());
   for (size_t class_index = 0;

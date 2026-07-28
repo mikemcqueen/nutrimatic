@@ -89,6 +89,15 @@ bool parse_double(char const* in, char const* what, double* out) {
   return true;
 }
 
+bool parse_segment_penalty(char const* in, double* out) {
+  if (!parse_double(in, "--segment-penalty", out)) return false;
+  if (*out < 1.0) {
+    fputs("error: --segment-penalty must be at least 1\n", stderr);
+    return false;
+  }
+  return true;
+}
+
 bool finalize_min_word_length(
     std::string const& letters, bool explicitly_given, int* min_word_len) {
   if (!explicitly_given && *min_word_len > int(letters.size()))

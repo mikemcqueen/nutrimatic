@@ -29,6 +29,7 @@ struct Args {
   int preprocess_threads;
   int search_threads;
   int exact_letters;
+  double segment_penalty;
   double word_bonus;
   bool allow_cache_fallback;
   bool dense_cache;
@@ -42,6 +43,7 @@ static void usage(char const* program) {
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth] [-w word-bonus]"
+      " [-P segment-penalty]"
       " [-D|--dense-cache] [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d\n"
@@ -52,17 +54,20 @@ static void usage(char const* program) {
       "  -S, --search-threads defaults to 1\n"
       "  -d, --projection-depth keeps this many rarest letter types exact in"
       " the projected cache; the default is the largest depth that fits -C\n"
+      "  -P, --segment-penalty P divides the score by P for each selected"
+      " index entry after the first; P must be at least 1 and defaults to"
+      " %.0f\n"
+      "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  -w, --word-bonus N boosts classes whose best member spans more than"
-      " one corpus word by (1/%.0g)^N, offsetting that much of the restart"
-      " penalty phase 2 charges for chaining separate classes; defaults to"
-      " %g (no boost)\n"
+      " one corpus word by %.0f^N; defaults to %g (no boost)\n"
       "  -D, --dense-cache requests an exact dense score cache instead of"
       " the default projected dense cache\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
       program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_RESTART, DEFAULT_WORD_BONUS);
+      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY,
+      DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS);
 }
 
 static int const OPT_DICT = 256;
@@ -78,6 +83,7 @@ static struct optparse_long const long_options[] = {
   { "search-threads", 'S', OPTPARSE_REQUIRED },
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
   { "word-bonus", 'w', OPTPARSE_REQUIRED },
+  { "segment-penalty", 'P', OPTPARSE_REQUIRED },
   { "dense-cache", 'D', OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
@@ -93,6 +99,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->preprocess_threads = 0;
   out->search_threads = 1;
   out->exact_letters = -1;
+  out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   out->word_bonus = DEFAULT_WORD_BONUS;
   out->allow_cache_fallback = false;
   out->dense_cache = false;
@@ -159,6 +166,11 @@ static bool parse_args(char* argv[], Args* out) {
         if (!parse_double(options.optarg, "--word-bonus", &out->word_bonus))
           return false;
         break;
+      case 'P':
+        if (!parse_segment_penalty(
+                options.optarg, &out->segment_penalty))
+          return false;
+        break;
       case 'F':
         out->allow_cache_fallback = true;
         break;
@@ -217,9 +229,10 @@ int main(int argc, char* argv[]) {
   size_t const preprocess_threads = resolve_preprocess_threads(
       args.preprocess_threads, args.letters.size());
   dfs_diagnostic(
-      "depth %d top %d threads %zu search threads %d cache %zu\n",
+      "depth %d top %d threads %zu search threads %d cache %zu "
+      "segment penalty %.17g\n",
       args.exact_letters, args.top, preprocess_threads, args.search_threads,
-      args.score_cache_bytes / DFS_MIB);
+      args.score_cache_bytes / DFS_MIB, args.segment_penalty);
 
   DfsDictionary dictionary;
   DfsDictionary const* dictionary_filter = NULL;
@@ -254,7 +267,7 @@ int main(int argc, char* argv[]) {
   fflush(stderr);
 
   DfsAnagramSearch search(
-      &classes, args.letters, DFS_RESTART, reader.count(),
+      &classes, args.letters, args.segment_penalty, reader.count(),
       args.score_cache_bytes, preprocess_threads,
       size_t(args.search_threads), args.word_bonus);
   DfsTopN output(&classes, size_t(args.top));
