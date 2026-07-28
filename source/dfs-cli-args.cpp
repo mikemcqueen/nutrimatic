@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <algorithm>
 #include <fstream>
 #include <string>
+#include <thread>
 
 bool clean_letters(char const* in, char const* what, std::string* out) {
   for (; *in != '\0'; ++in) {
@@ -59,6 +61,23 @@ bool parse_count(char const* in, char const* what, int* out) {
   return true;
 }
 
+bool parse_mib(char const* in, char const* what, size_t* out) {
+  if (*in == '\0' || *in == '-') {
+    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    return false;
+  }
+  errno = 0;
+  char* end;
+  unsigned long long const value = strtoull(in, &end, 10);
+  if (*end != '\0' || errno == ERANGE ||
+      value > static_cast<unsigned long long>(SIZE_MAX / DFS_MIB)) {
+    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    return false;
+  }
+  *out = size_t(value) * DFS_MIB;
+  return true;
+}
+
 bool parse_double(char const* in, char const* what, double* out) {
   char* end;
   double const value = strtod(in, &end);
@@ -68,6 +87,29 @@ bool parse_double(char const* in, char const* what, double* out) {
   }
   *out = value;
   return true;
+}
+
+bool finalize_min_word_length(
+    std::string const& letters, bool explicitly_given, int* min_word_len) {
+  if (!explicitly_given && *min_word_len > int(letters.size()))
+    *min_word_len = int(letters.size());
+
+  if (*min_word_len > int(letters.size())) {
+    fprintf(stderr,
+        "error: no word of %d letters fits in the %zu left in \"%s\"\n",
+        *min_word_len, letters.size(), letters.c_str());
+    return false;
+  }
+  return true;
+}
+
+size_t resolve_preprocess_threads(int requested, size_t letter_count) {
+  if (requested != 0) return size_t(requested);
+  if (letter_count < 26) return 1;
+  unsigned int const available = std::thread::hardware_concurrency();
+  if (available <= 1) return 1;
+  return size_t(std::min(
+      available, DFS_DEFAULT_MAX_PREPROCESS_THREADS));
 }
 
 bool load_dictionary(char const* path, DfsDictionary* dictionary) {

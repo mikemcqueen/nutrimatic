@@ -6,40 +6,15 @@
 #include "index.h"
 #include "optparse.h"
 
-#include <errno.h>
-#include <limits.h>
 #include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #include <algorithm>
 #include <string>
-#include <thread>
 #include <vector>
 
-static int const DEFAULT_MIN_WORD_LEN = 4;
 static int const DEFAULT_TOP = 10000;
-static size_t const DEFAULT_SCORE_CACHE_MIB = 64;
-static unsigned int const DEFAULT_MAX_PREPROCESS_THREADS = 20;
-static size_t const MIB = size_t(1024) * size_t(1024);
 static double const DEFAULT_WORD_BONUS = 0.0;
-
-static bool parse_mib(char const* in, char const* what, size_t* out) {
-  if (*in == '\0' || *in == '-') {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
-    return false;
-  }
-  errno = 0;
-  char* end;
-  unsigned long long const value = strtoull(in, &end, 10);
-  if (*end != '\0' || errno == ERANGE ||
-      value > static_cast<unsigned long long>(SIZE_MAX / MIB)) {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
-    return false;
-  }
-  *out = size_t(value) * MIB;
-  return true;
-}
 
 struct Args {
   char const* index_file;
@@ -85,8 +60,8 @@ static void usage(char const* program) {
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
-      program, DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DEFAULT_SCORE_CACHE_MIB, RESTART, DEFAULT_WORD_BONUS);
+      program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
+      DFS_DEFAULT_SCORE_CACHE_MIB, RESTART, DEFAULT_WORD_BONUS);
 }
 
 static int const OPT_DICT = 256;
@@ -110,10 +85,10 @@ static struct optparse_long const long_options[] = {
 
 static bool parse_args(char* argv[], Args* out) {
   out->dictionary_file = NULL;
-  out->min_word_len = DEFAULT_MIN_WORD_LEN;
+  out->min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
   out->top = DEFAULT_TOP;
   out->progress_factor = 1;
-  out->score_cache_bytes = DEFAULT_SCORE_CACHE_MIB * MIB;
+  out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
   out->preprocess_threads = 0;
   out->search_threads = 1;
   out->exact_letters = -1;
@@ -221,16 +196,9 @@ static bool parse_args(char* argv[], Args* out) {
   out->index_file = index_file;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
 
-  if (!min_word_len_given &&
-      out->min_word_len > int(out->letters.size()))
-    out->min_word_len = int(out->letters.size());
-
-  if (out->min_word_len > int(out->letters.size())) {
-    fprintf(stderr,
-        "error: no word of %d letters fits in the %zu left in \"%s\"\n",
-        out->min_word_len, out->letters.size(), out->letters.c_str());
+  if (!finalize_min_word_length(
+          out->letters, min_word_len_given, &out->min_word_len))
     return false;
-  }
 
   out->max_words = out->min_word_len > 1
       ? int(out->letters.size()) / out->min_word_len
@@ -245,21 +213,12 @@ int main(int argc, char* argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
 
-  size_t preprocess_threads = size_t(args.preprocess_threads);
-  if (preprocess_threads == 0) {
-    preprocess_threads = 1;
-    if (args.letters.size() >= 26) {
-      unsigned int const available = std::thread::hardware_concurrency();
-      if (available > 1) {
-        preprocess_threads = size_t(std::min(
-            available, DEFAULT_MAX_PREPROCESS_THREADS));
-      }
-    }
-  }
+  size_t const preprocess_threads = resolve_preprocess_threads(
+      args.preprocess_threads, args.letters.size());
   dfs_diagnostic(
       "depth %d top %d threads %zu search threads %d cache %zu\n",
       args.exact_letters, args.top, preprocess_threads, args.search_threads,
-      args.score_cache_bytes / MIB);
+      args.score_cache_bytes / DFS_MIB);
 
   DfsDictionary dictionary;
   DfsDictionary const* dictionary_filter = NULL;
