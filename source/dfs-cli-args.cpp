@@ -142,7 +142,3 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   }
   return true;
 }
-
-double multi_word_bonus(double word_bonus) {
-  return pow(RESTART, -word_bonus);
-}

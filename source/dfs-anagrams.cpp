@@ -2,6 +2,7 @@
 #include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
+#include "dfs-score.h"
 #include "dfs-search.h"
 #include "index.h"
 #include "optparse.h"
@@ -61,7 +62,7 @@ static void usage(char const* program) {
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
       program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DFS_DEFAULT_SCORE_CACHE_MIB, RESTART, DEFAULT_WORD_BONUS);
+      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_RESTART, DEFAULT_WORD_BONUS);
 }
 
 static int const OPT_DICT = 256;
@@ -253,7 +254,7 @@ int main(int argc, char* argv[]) {
   fflush(stderr);
 
   DfsAnagramSearch search(
-      &classes, args.letters, RESTART, reader.count(),
+      &classes, args.letters, DFS_RESTART, reader.count(),
       args.score_cache_bytes, preprocess_threads,
       size_t(args.search_threads), args.word_bonus);
   DfsTopN output(&classes, size_t(args.top));

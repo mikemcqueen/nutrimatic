@@ -1,6 +1,5 @@
 #include "dfs-search.h"
 
-#include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
 
 #include <assert.h>
@@ -40,12 +39,6 @@ uint32_t const FLOAT_BOUND_UNSEEN = UINT32_C(0x7fc00001);
 uint32_t const FLOAT_BOUND_COMPUTING = UINT32_C(0x7fc00002);
 size_t const CACHE_ALIGNMENT = 64;
 size_t const MIB = size_t(1024) * size_t(1024);
-
-static double make_restart_log_rate(double restart, int64_t corpus_total) {
-  assert(restart > 0.0);
-  assert(corpus_total > 0);
-  return log(restart) - log(double(corpus_total));
-}
 
 static size_t derived_max_depth(DfsClassList const* classes,
                                 size_t letter_count) {
@@ -469,7 +462,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    double word_bonus):
     class_list(classes),
     letters(letters),
-    restart_log_rate(make_restart_log_rate(restart, corpus_total)),
+    score_model(restart, corpus_total, word_bonus),
+    restart_log_rate(score_model.restart_log_rate()),
     max_depth(derived_max_depth(classes, letters.size())),
     score_cache_budget(score_cache_bytes),
     requested_preprocess_threads(std::max(size_t(1), preprocess_threads)),
@@ -539,16 +533,13 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                 "atomic float bound words must be trivially destructible");
 
   std::vector<DfsAnagramClass> const& all_classes = class_list->classes();
-  double const bonus_factor = multi_word_bonus(word_bonus);
   best_member_log_scores.reserve(all_classes.size());
   for (size_t i = 0; i < all_classes.size(); ++i) {
     assert(!all_classes[i].members.empty());
     DfsClassMember const& best = all_classes[i].members[0];
     assert(best.count > 0);
-    double const score = best.word_count > 1
-        ? double(best.count) * bonus_factor
-        : double(best.count);
-    best_member_log_scores.push_back(log(score));
+    best_member_log_scores.push_back(score_model.first_segment_log_score(
+        best.count, best.word_count > 1));
   }
 }
 
@@ -3045,8 +3036,8 @@ void DfsAnagramSearch::visit_fitting_class(
     double const next_log_score =
         first_class
             ? class_score
-            : representative_log_score + restart_log_rate +
-                  class_score;
+            : score_model.append_log_score(
+                  representative_log_score, class_score);
     ++worker->solutions;
     if (sink != NULL) sink->emit(worker->path, next_log_score);
     worker->path.pop_back();
@@ -3060,8 +3051,8 @@ void DfsAnagramSearch::visit_fitting_class(
   double const next_log_score =
       first_class
           ? class_score
-          : representative_log_score + restart_log_rate +
-                class_score;
+          : score_model.append_log_score(
+                representative_log_score, class_score);
   uint32_t const* requirements =
       packed_letters.get() + fit.letters_offset;
   uint32_t const requirement_count =
@@ -3351,8 +3342,8 @@ void DfsAnagramSearch::visit_unoptimized_class(
   double const next_log_score =
       path.empty()
           ? candidate_log_score
-          : representative_log_score + restart_log_rate +
-                candidate_log_score;
+          : score_model.append_log_score(
+                representative_log_score, candidate_log_score);
   size_t const candidate_length = candidate.key.size();
   assert(candidate_length <= letters_left);
   size_t const next_letters_left = letters_left - candidate_length;

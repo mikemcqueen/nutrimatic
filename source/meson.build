@@ -75,6 +75,7 @@ dfs_class_list_lib = library(
     'dfs-class-list.cpp',
     'dfs-cli-args.cpp',
     'dfs-diagnostic.cpp',
+    'dfs-score.cpp',
     'dfs-search.cpp',
     'dfs-output.cpp',
   ],

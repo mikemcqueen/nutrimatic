@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <queue>
+#include <string>
 #include <vector>
 
 /*
@@ -93,6 +94,10 @@ class IndexReader {
   int children(Node parent, int64_t count,
                char min, char max,
                std::vector<Choice>* out) const;
+
+  // Looks up one complete index entry. Index entries have an implicit trailing
+  // space, which is consumed here so a mere trie prefix is never accepted.
+  bool exact_entry_count(std::string const& entry, int64_t* count) const;
 
  private:
   const unsigned char* data;

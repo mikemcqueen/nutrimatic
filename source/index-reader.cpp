@@ -127,6 +127,38 @@ int IndexReader::children(off_t n, int64_t count,
   return count;
 }
 
+bool IndexReader::exact_entry_count(
+    std::string const& entry, int64_t* result) const {
+  Node node = root();
+  int64_t parent_count = count();
+  CharSet allowed;
+  std::vector<Choice> choices;
+
+  for (size_t i = 0; i <= entry.size(); ++i) {
+    unsigned char const ch =
+        i == entry.size() ? (unsigned char) ' '
+                          : (unsigned char) entry[i];
+    allowed.clear();
+    allowed.set(ch);
+    choices.clear();
+    children(node, parent_count, allowed, &choices);
+    if (choices.empty()) return false;
+    assert(choices.size() == 1);
+    node = choices[0].next;
+    parent_count = choices[0].count;
+  }
+
+  // A choice's count includes entries below it. The count belonging exactly
+  // to the selected trailing-space node is the residual returned after its
+  // children are removed.
+  allowed.fill();
+  choices.clear();
+  int64_t const exact = children(node, parent_count, allowed, &choices);
+  if (exact <= 0) return false;
+  *result = exact;
+  return true;
+}
+
 void IndexReader::fail(off_t n, const char* message) const {
   fprintf(stderr, "error: pos %lld = 0x%02x: %s\n", static_cast<long long>(n),
       data[n], message);

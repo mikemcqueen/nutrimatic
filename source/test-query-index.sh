@@ -20,6 +20,79 @@ fail() {
 synthetic_index="$test_dir/test.index"
 "$make_index" "$synthetic_index"
 
+score_value() {
+  "$query_index" "$synthetic_index" "$1" --score "${@:2}" |
+    awk '{ print $1 }'
+}
+
+assert_close() {
+  local actual=$1
+  local expected=$2
+  local description=$3
+  awk -v actual="$actual" -v expected="$expected" '
+    BEGIN {
+      difference = actual - expected
+      if (difference < 0) difference = -difference
+      scale = expected < 0 ? -expected : expected
+      if (scale == 0) scale = 1
+      exit difference <= scale * 0.0006 ? 0 : 1
+    }
+  ' || fail "$description: expected $expected, got $actual"
+}
+
+expect_score_failure() {
+  local sequence=$1
+  local name=$2
+  shift 2
+  set +e
+  "$query_index" "$synthetic_index" "$sequence" --score "$@" \
+    > "$test_dir/$name.stdout" 2> "$test_dir/$name.stderr"
+  local status=$?
+  set -e
+  [[ $status -eq 2 ]] ||
+    fail "$name should exit 2, got $status"
+  [[ ! -s "$test_dir/$name.stdout" ]] ||
+    fail "$name printed output before rejecting the sequence"
+}
+
+# The synthetic corpus total is 136. Each comma after the first contributes
+# one production restart (1e-6 / 136); spaces inside an exact entry do not.
+assert_close "$(score_value ab)" 10 \
+  "one exact entry should score its own count"
+assert_close "$(score_value 'ab,cd')" "$(awk 'BEGIN { print 10 * 7e-6 / 136 }')" \
+  "two entries should pay one restart"
+assert_close "$(score_value 'ab cd')" 70 \
+  "a multi-word entry should remain one segment"
+assert_close "$(score_value 'ab,cd,ab')" \
+  "$(awk 'BEGIN { print 10 * 7 * 10 * (1e-6 / 136)^2 }')" \
+  "three entries should pay two restarts"
+assert_close "$(score_value 'ab,ab')" \
+  "$(awk 'BEGIN { print 10 * 10e-6 / 136 }')" \
+  "repeated entries should contribute repeatedly"
+
+[[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
+  fail "spaces adjacent to commas should not affect scoring"
+
+expect_score_failure missing missing-entry
+grep -q 'index has no entry "missing"' "$test_dir/missing-entry.stderr" ||
+  fail "missing-entry error does not name the failed item"
+expect_score_failure 'ab,,cd' empty-entry
+expect_score_failure a prefix-only
+expect_score_failure 'ab  cd' malformed-spacing
+
+assert_close "$(score_value 'ab cd' --word-bonus 1)" 70000000 \
+  "--word-bonus should apply once to a multi-word segment"
+assert_close "$(score_value ab --word-bonus 1)" 10 \
+  "--word-bonus should not apply to a single-word segment"
+assert_close "$(score_value 'ab cd,ab' --word-bonus 1)" \
+  "$(awk 'BEGIN { print 70 * 10e-6 / 136 * 1e6 }')" \
+  "a mixed sequence should bonus only its multi-word segment"
+
+expect_score_failure ab incompatible-option -n 1
+grep -q -- '--top cannot be used with --score' \
+  "$test_dir/incompatible-option.stderr" ||
+  fail "score-mode option error is unclear"
+
 # "wx" and "yz" exactly tile each other's remainder of the "wxyz" bag; "xy"
 # leaves "wz" behind, which nothing in the synthetic index can complete.
 "$query_index" "$synthetic_index" wxyz -m 2 -n 10 \

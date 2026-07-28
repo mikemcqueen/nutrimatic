@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "dfs-class-list.h"
+#include "dfs-score.h"
 
 // Receives each phase-2 solution as a canonical list of indexes into
 // DfsClassList::classes(). The path storage is owned by the search and is only
@@ -363,6 +364,7 @@ class DfsAnagramSearch {
 
   DfsClassList const* const class_list;
   std::string const letters;
+  DfsScoreModel const score_model;
   double const restart_log_rate;
   std::vector<double> best_member_log_scores;
   size_t const max_depth;

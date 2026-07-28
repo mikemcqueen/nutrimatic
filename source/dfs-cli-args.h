@@ -11,10 +11,6 @@
 // (dfs-anagrams, query-index): letter-bag cleanup/subtraction, integer
 // option parsing, and dictionary loading.
 
-// The phase-2 restart cost dfs-anagrams hardcodes for chaining classes into
-// a multi-word match; shared so --word-bonus (query-index, dfs-anagrams)
-// previews or offsets the same penalty both tools actually use.
-inline constexpr double RESTART = 1e-6;
 inline constexpr int DFS_DEFAULT_MIN_WORD_LEN = 4;
 inline constexpr size_t DFS_DEFAULT_SCORE_CACHE_MIB = 64;
 inline constexpr unsigned int DFS_DEFAULT_MAX_PREPROCESS_THREADS = 20;
@@ -55,11 +51,5 @@ size_t resolve_preprocess_threads(int requested, size_t letter_count);
 // '-' and stripping characters outside a-z/0-9. Prints an error and returns
 // false if the file can't be opened or read.
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
-
-// (1/RESTART)^word_bonus, applied once to any member/class spanning more
-// than one word: at word_bonus=1 this cancels a phase-2 restart's cost
-// outright (in log space, -1 * log(RESTART) exactly offsets the
-// + log(RESTART) a restart adds); at 0.5 it offsets half of it, and so on.
-double multi_word_bonus(double word_bonus);
 
 #endif
