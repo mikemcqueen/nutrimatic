@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <new>
 #include <thread>
@@ -483,6 +484,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_wild_letters(0),
     score_wild_span(1),
     score_projection_requested(false),
+    exact_state_encodable(false),
     projected_actions_ready(false),
     projected_quotient_enabled(true),
     hot_classes_ready(false),
@@ -508,6 +510,12 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     bound_nextafter_calls(0),
     bound_charged_bytes(0),
     bound_prunes(0),
+    completable_checked(0),
+    completable_bound_reject_count(0),
+    completable_exact_bound_accept_count(0),
+    completable_exact_validation_count(0),
+    exact_memo_states(0),
+    exact_memo_hit_count(0),
     progress_enabled(false),
     progress_interval(0),
     next_progress(0),
@@ -942,10 +950,9 @@ void DfsAnagramSearch::clear_score_bounds() {
 }
 
 void DfsAnagramSearch::prepare_score_bounds(
-    uint64_t state_count, DfsSolutionSink* sink) {
+    uint64_t state_count, bool requested) {
   clear_score_bounds();
-  if (!hot_classes_ready || sink == NULL ||
-      !sink->supports_score_pruning() ||
+  if (!hot_classes_ready || !requested ||
       !score_bound_arithmetic_supported() ||
       score_cache_budget < CACHE_ALIGNMENT)
     return;
@@ -1076,6 +1083,21 @@ bool DfsAnagramSearch::load_score_bound(
   return true;
 }
 
+DfsAnagramSearch::Reachability DfsAnagramSearch::cached_reachability(
+    uint64_t score_key, bool original_root) const {
+  double value;
+  if (original_root) {
+    if (!root_score_bound_ready) return REACHABILITY_UNKNOWN;
+    value = root_score_bound;
+  } else if (!load_score_bound(score_key, &value)) {
+    return REACHABILITY_UNKNOWN;
+  }
+  if (value == -HUGE_VAL) return REACHABILITY_NO;
+  if (bound_mode != SCORE_BOUND_PROJECTED || score_wild_letters == 0)
+    return REACHABILITY_YES;
+  return REACHABILITY_UNKNOWN;
+}
+
 bool DfsAnagramSearch::store_score_bound(uint64_t key, double value) {
   if (bound_mode == SCORE_BOUND_OFF || key >= bound_capacity)
     return false;
@@ -1125,12 +1147,9 @@ void DfsAnagramSearch::publish_parallel_score_bound(
   }
 }
 
-bool DfsAnagramSearch::run(DfsSolutionSink* sink,
-                           int progress_factor,
-                           bool allow_cache_fallback,
-                           bool dense_cache,
-                           int exact_letters,
-                           bool verbose) {
+bool DfsAnagramSearch::prepare_phase_two(
+    int progress_factor, bool allow_cache_fallback, bool dense_cache,
+    int exact_letters, bool score_bounds_requested) {
   FILE* const progress = dfs_diagnostic_stream();
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const setup_start = PhaseClock::now();
@@ -1170,8 +1189,10 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
   }
 
   uint64_t state_count = 1;
+  exact_multipliers.fill(0);
   if (encodable) {
-    for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+    for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
+      exact_multipliers[size_t(rank)] = state_count;
       uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
       if (!checked_multiply_u64(state_count, radix, &state_count)) {
         encodable = false;
@@ -1179,6 +1200,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
       }
     }
   }
+  exact_state_encodable = encodable;
   bag_mask = 0;
   for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
     if (bag[size_t(rank)] != 0)
@@ -1389,8 +1411,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
     fflush(progress);
   }
   bool const score_bounds_applicable =
-      hot_classes_ready && sink != NULL &&
-      sink->supports_score_pruning() &&
+      hot_classes_ready && score_bounds_requested &&
       score_bound_arithmetic_supported() &&
       bag_mask != 0;
   int const certificate_mode = length_certificate_mode();
@@ -1436,7 +1457,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
       return false;
     }
   }
-  prepare_score_bounds(state_count, sink);
+  prepare_score_bounds(state_count, score_bounds_applicable);
   if (progress != NULL) {
     dfs_diagnostic("phase 2 preflight: score-bound mode %s",
                    score_bound_mode_name(bound_mode));
@@ -1482,9 +1503,9 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
   solutions = 0;
   bound_prunes = 0;
 
-  PhaseClock::time_point const search_start = PhaseClock::now();
+  PhaseClock::time_point const setup_end = PhaseClock::now();
   setup_seconds =
-      std::chrono::duration<double>(search_start - setup_start).count();
+      std::chrono::duration<double>(setup_end - setup_start).count();
   if (progress_enabled) {
     dfs_diagnostic(
         "phase 2: precomputed %zu bounded states in %.1fs\n",
@@ -1496,6 +1517,24 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
           "is available\n",
           bound_capacity);
   }
+  return true;
+}
+
+bool DfsAnagramSearch::run(DfsSolutionSink* sink,
+                           int progress_factor,
+                           bool allow_cache_fallback,
+                           bool dense_cache,
+                           int exact_letters,
+                           bool verbose) {
+  bool const score_bounds_requested =
+      sink != NULL && sink->supports_score_pruning();
+  if (!prepare_phase_two(
+          progress_factor, allow_cache_fallback, dense_cache,
+          exact_letters, score_bounds_requested))
+    return false;
+
+  typedef std::chrono::steady_clock PhaseClock;
+  PhaseClock::time_point const search_start = PhaseClock::now();
   if (!hot_classes_ready) {
     walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
   } else {
@@ -1517,6 +1556,316 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
   }
   search_seconds =
       std::chrono::duration<double>(PhaseClock::now() - search_start).count();
+  return true;
+}
+
+uint64_t DfsAnagramSearch::exact_bag_number(
+    SearchWorker const& worker) const {
+  assert(exact_state_encodable);
+  uint64_t key = 0;
+  for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
+    key += uint64_t(worker.bag[rank]) * exact_multipliers[rank];
+  return key;
+}
+
+std::string DfsAnagramSearch::exact_bag_string(
+    SearchWorker const& worker) const {
+  std::string key;
+  key.resize(DFS_SYMBOL_COUNT * sizeof(uint32_t));
+  for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
+    memcpy(&key[rank * sizeof(uint32_t)], &worker.bag[rank],
+           sizeof(uint32_t));
+  return key;
+}
+
+bool DfsAnagramSearch::exact_memo_lookup(
+    SearchWorker* worker, bool* value) {
+  if (exact_state_encodable) {
+    uint64_t const key = exact_bag_number(*worker);
+    size_t const shard =
+        std::hash<uint64_t>()(key) % EXACT_MEMO_SHARDS;
+    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
+    auto const found = exact_number_memo[shard].find(key);
+    if (found == exact_number_memo[shard].end()) return false;
+    *value = found->second;
+  } else {
+    std::string const key = exact_bag_string(*worker);
+    size_t const shard =
+        std::hash<std::string>()(key) % EXACT_MEMO_SHARDS;
+    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
+    auto const found = exact_string_memo[shard].find(key);
+    if (found == exact_string_memo[shard].end()) return false;
+    *value = found->second;
+  }
+  ++worker->exact_memo_hits;
+  return true;
+}
+
+void DfsAnagramSearch::exact_memo_store(
+    SearchWorker* worker, bool value) {
+  bool inserted;
+  if (exact_state_encodable) {
+    uint64_t const key = exact_bag_number(*worker);
+    size_t const shard =
+        std::hash<uint64_t>()(key) % EXACT_MEMO_SHARDS;
+    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
+    inserted = exact_number_memo[shard].emplace(key, value).second;
+  } else {
+    std::string const key = exact_bag_string(*worker);
+    size_t const shard =
+        std::hash<std::string>()(key) % EXACT_MEMO_SHARDS;
+    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
+    inserted = exact_string_memo[shard].emplace(key, value).second;
+  }
+  if (inserted) ++worker->exact_memo_states;
+}
+
+bool DfsAnagramSearch::exact_class_fits(
+    size_t class_index, SearchWorker const& worker) const {
+  if (hot_classes_ready)
+    return hot_class_fits(uint32_t(class_index), worker);
+
+  DfsAnagramClass const& candidate =
+      class_list->classes()[class_index];
+  std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
+      class_list->symbol_to_rank();
+  for (size_t i = 0; i < candidate.letters.size(); ++i) {
+    size_t const rank = size_t(
+        symbol_to_rank[size_t(candidate.letters[i].first)]);
+    if (worker.bag[rank] < candidate.letters[i].second) return false;
+  }
+  return true;
+}
+
+void DfsAnagramSearch::subtract_exact_class(
+    size_t class_index, SearchWorker* worker,
+    uint64_t* parent_bag_mask) {
+  *parent_bag_mask = worker->bag_mask;
+  if (hot_classes_ready) {
+    FitClass const& fit = fit_classes.get()[class_index];
+    uint32_t const* requirements =
+        packed_letters.get() + fit.letters_offset;
+    uint32_t const requirement_count =
+        hot_requirement_count(fit.packed_length_and_count);
+    for (uint32_t i = 0; i < requirement_count; ++i) {
+      uint32_t const requirement = requirements[i];
+      uint32_t const rank = packed_rank(requirement);
+      uint32_t& remaining = worker->bag[rank];
+      remaining -= packed_count(requirement);
+      if (remaining == 0) worker->bag_mask &= ~(UINT64_C(1) << rank);
+    }
+    worker->score_key -= score_key_deltas.get()[class_index];
+    return;
+  }
+
+  DfsAnagramClass const& candidate =
+      class_list->classes()[class_index];
+  std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
+      class_list->symbol_to_rank();
+  for (size_t i = 0; i < candidate.letters.size(); ++i) {
+    size_t const rank = size_t(
+        symbol_to_rank[size_t(candidate.letters[i].first)]);
+    worker->bag[rank] -= candidate.letters[i].second;
+    if (worker->bag[rank] == 0)
+      worker->bag_mask &= ~(UINT64_C(1) << rank);
+  }
+}
+
+void DfsAnagramSearch::restore_exact_class(
+    size_t class_index, SearchWorker* worker,
+    uint64_t parent_bag_mask) {
+  if (hot_classes_ready) {
+    FitClass const& fit = fit_classes.get()[class_index];
+    uint32_t const* requirements =
+        packed_letters.get() + fit.letters_offset;
+    uint32_t const requirement_count =
+        hot_requirement_count(fit.packed_length_and_count);
+    worker->score_key += score_key_deltas.get()[class_index];
+    for (uint32_t i = 0; i < requirement_count; ++i) {
+      uint32_t const requirement = requirements[i];
+      worker->bag[packed_rank(requirement)] += packed_count(requirement);
+    }
+  } else {
+    DfsAnagramClass const& candidate =
+        class_list->classes()[class_index];
+    std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
+        class_list->symbol_to_rank();
+    for (size_t i = 0; i < candidate.letters.size(); ++i) {
+      size_t const rank = size_t(
+          symbol_to_rank[size_t(candidate.letters[i].first)]);
+      worker->bag[rank] += candidate.letters[i].second;
+    }
+  }
+  worker->bag_mask = parent_bag_mask;
+}
+
+bool DfsAnagramSearch::exact_remainder_completable(
+    SearchWorker* worker, size_t letters_left,
+    ExactResultSource* source) {
+  if (letters_left == 0) {
+    if (source != NULL) *source = EXACT_RESULT_EMPTY;
+    return true;
+  }
+
+  bool memoized;
+  if (exact_memo_lookup(worker, &memoized)) {
+    if (source != NULL) *source = EXACT_RESULT_MEMO;
+    return memoized;
+  }
+
+  Reachability const reachability =
+      cached_reachability(worker->score_key, false);
+  if (reachability != REACHABILITY_UNKNOWN) {
+    bool const result = reachability == REACHABILITY_YES;
+    exact_memo_store(worker, result);
+    if (source != NULL)
+      *source = result ? EXACT_RESULT_BOUND_YES : EXACT_RESULT_BOUND_NO;
+    return result;
+  }
+
+  if (source != NULL) *source = EXACT_RESULT_SEARCH;
+  ++worker->nodes;
+  if (DFS_UNLIKELY(progress_enabled &&
+                   worker->nodes == worker->next_progress))
+    report_search_progress(worker);
+
+  bool result = false;
+  if (worker->bag_mask != 0) {
+    int const rank = __builtin_ctzll(worker->bag_mask);
+    int const forced_symbol =
+        class_list->rank_to_symbol()[size_t(rank)];
+    size_t begin = class_list->candidate_begin(forced_symbol);
+    size_t const end = class_list->candidate_end(forced_symbol);
+    if (hot_classes_ready)
+      begin = first_length_candidate(begin, end, letters_left);
+
+    std::vector<DfsAnagramClass> const& classes =
+        class_list->classes();
+    for (size_t class_index = begin; class_index < end; ++class_index) {
+      size_t const candidate_length = classes[class_index].key.size();
+      if (candidate_length > letters_left ||
+          !exact_class_fits(class_index, *worker))
+        continue;
+      uint64_t parent_bag_mask;
+      subtract_exact_class(class_index, worker, &parent_bag_mask);
+      result = exact_remainder_completable(
+          worker, letters_left - candidate_length);
+      restore_exact_class(
+          class_index, worker, parent_bag_mask);
+      if (result) break;
+    }
+  }
+  exact_memo_store(worker, result);
+  return result;
+}
+
+bool DfsAnagramSearch::find_completable_classes(
+    std::vector<bool>* completable, int progress_factor,
+    bool allow_cache_fallback, bool dense_cache, int exact_letters) {
+  assert(completable != NULL);
+  if (!prepare_phase_two(
+          progress_factor, allow_cache_fallback, dense_cache,
+          exact_letters, true))
+    return false;
+
+  std::vector<DfsAnagramClass> const& classes =
+      class_list->classes();
+  for (size_t shard = 0; shard < EXACT_MEMO_SHARDS; ++shard) {
+    exact_number_memo[shard].clear();
+    exact_string_memo[shard].clear();
+    if (exact_state_encodable)
+      exact_number_memo[shard].reserve(
+          classes.size() / EXACT_MEMO_SHARDS + 1);
+    else
+      exact_string_memo[shard].reserve(
+          classes.size() / EXACT_MEMO_SHARDS + 1);
+  }
+  completable_checked = 0;
+  completable_bound_reject_count = 0;
+  completable_exact_bound_accept_count = 0;
+  completable_exact_validation_count = 0;
+  exact_memo_states = 0;
+  exact_memo_hit_count = 0;
+
+  completable->assign(classes.size(), false);
+  std::vector<unsigned char> results(classes.size(), 0);
+  size_t const worker_count = std::min(
+      requested_search_threads, std::max(size_t(1), classes.size()));
+  std::atomic<size_t> next_class(0);
+  std::vector<SearchWorker> workers(worker_count);
+  std::vector<size_t> checked(worker_count, 0);
+  std::vector<size_t> bound_rejects(worker_count, 0);
+  std::vector<size_t> bound_accepts(worker_count, 0);
+  std::vector<size_t> exact_validations(worker_count, 0);
+  for (size_t i = 0; i < worker_count; ++i)
+    start_search_worker(&workers[i]);
+
+  typedef std::chrono::steady_clock PhaseClock;
+  PhaseClock::time_point const validation_start = PhaseClock::now();
+  auto const body = [&](size_t worker_index) {
+    SearchWorker& worker = workers[worker_index];
+    for (;;) {
+      size_t const class_index =
+          next_class.fetch_add(1, std::memory_order_relaxed);
+      if (class_index >= classes.size()) break;
+      ++checked[worker_index];
+      assert(exact_class_fits(class_index, worker));
+      uint64_t parent_bag_mask;
+      subtract_exact_class(class_index, &worker, &parent_bag_mask);
+      ExactResultSource source;
+      bool const result = exact_remainder_completable(
+          &worker, letters.size() - classes[class_index].key.size(),
+          &source);
+      restore_exact_class(class_index, &worker, parent_bag_mask);
+      results[class_index] = result;
+
+      if (source == EXACT_RESULT_BOUND_NO)
+        ++bound_rejects[worker_index];
+      else if (source == EXACT_RESULT_BOUND_YES)
+        ++bound_accepts[worker_index];
+      else if (source == EXACT_RESULT_SEARCH)
+        ++exact_validations[worker_index];
+    }
+  };
+  std::vector<std::thread> pool;
+  pool.reserve(worker_count - 1);
+  try {
+    for (size_t i = 1; i < worker_count; ++i)
+      pool.push_back(std::thread(body, i));
+  } catch (...) {
+    // Successfully launched workers and the caller share the class cursor,
+    // so they still finish the full batch if a later launch fails.
+  }
+  actual_search_threads = 1 + pool.size();
+  body(0);
+  for (size_t i = 0; i < pool.size(); ++i)
+    pool[i].join();
+  for (size_t class_index = 0; class_index < classes.size(); ++class_index)
+    (*completable)[class_index] = results[class_index] != 0;
+  for (size_t i = 0; i < actual_search_threads; ++i) {
+    merge_search_worker(workers[i]);
+    completable_checked += checked[i];
+    completable_bound_reject_count += bound_rejects[i];
+    completable_exact_bound_accept_count += bound_accepts[i];
+    completable_exact_validation_count += exact_validations[i];
+    exact_memo_states += workers[i].exact_memo_states;
+    exact_memo_hit_count += workers[i].exact_memo_hits;
+  }
+  search_seconds = std::chrono::duration<double>(
+      PhaseClock::now() - validation_start).count();
+
+  if (progress_enabled) {
+    dfs_diagnostic(
+        "phase 2 completability: %zu classes checked, "
+        "%zu rejected by bounds, %zu accepted by exact bounds, "
+        "%zu exact validations\n",
+        completable_checked, completable_bound_reject_count,
+        completable_exact_bound_accept_count,
+        completable_exact_validation_count);
+    dfs_diagnostic(
+        "phase 2 exact memo: %zu states computed, %zu hits\n",
+        exact_memo_states, exact_memo_hit_count);
+  }
   return true;
 }
 
@@ -2639,11 +2988,12 @@ bool DfsAnagramSearch::compute_score_bound_parallel(
 bool DfsAnagramSearch::should_prune(
     SearchWorker* worker, double representative_log_score,
     DfsSolutionSink* sink, size_t letters_left) {
-  if (bound_mode == SCORE_BOUND_OFF) return false;
+  Reachability const reachability = cached_reachability(
+      worker->score_key, worker->path.empty());
+  if (reachability == REACHABILITY_NO) return true;
   // H charges a restart to every class it adds. That is exact below the first
   // chosen class, but the root's first class does not pay a restart.
-  if (worker->path.empty())
-    return root_score_bound_ready && root_score_bound == -HUGE_VAL;
+  if (worker->path.empty()) return false;
 
   double floor;
   if (sink == NULL || !sink->score_floor(&floor)) return false;
@@ -2794,6 +3144,7 @@ void DfsAnagramSearch::walk(SearchWorker* worker, size_t letters_left,
     if (!hot_class_fits(id, *worker)) continue;
     visit_fitting_class(
         worker, id, letters_left, representative_log_score, sink);
+    if (DFS_UNLIKELY(sink != NULL && sink->should_stop())) return;
   }
 }
 
@@ -2827,6 +3178,7 @@ void DfsAnagramSearch::walk_certified(
       if (!hot_class_fits(id, *worker)) continue;
       visit_fitting_class(
           worker, id, letters_left, representative_log_score, sink);
+      if (DFS_UNLIKELY(sink != NULL && sink->should_stop())) return;
     }
   }
 }
@@ -2849,6 +3201,8 @@ void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
   worker->next_progress =
       progress_enabled ? progress_interval : INT64_MAX;
   worker->reported_solutions = 0;
+  worker->exact_memo_states = 0;
+  worker->exact_memo_hits = 0;
 }
 
 void DfsAnagramSearch::report_search_progress(

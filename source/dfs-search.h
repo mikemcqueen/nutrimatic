@@ -7,7 +7,9 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "dfs-class-list.h"
@@ -28,6 +30,12 @@ class DfsSolutionSink {
   // Parallel search shares one sink between workers. Sinks may opt in only
   // when emit() and score_floor() are safe to call concurrently.
   virtual bool supports_parallel_search() const { return false; }
+
+  // Search checks this after every emitted solution at each recursion level
+  // and unwinds as soon as it returns true. Default false preserves today's
+  // exhaustive enumeration for every existing sink.
+  virtual bool should_stop() const { return false; }
+
   virtual ~DfsSolutionSink() { }
 };
 
@@ -65,6 +73,15 @@ class DfsAnagramSearch {
            bool dense_cache = true, int exact_letters = -1,
            bool verbose = false);
 
+  // Tests every phase-1 class against one shared phase-2 preparation. The
+  // result is index-parallel to DfsClassList::classes() and is exact even when
+  // a projected score bound merges letter identities. Candidate classes are
+  // validated using the constructor's requested search-thread count.
+  bool find_completable_classes(
+      std::vector<bool>* completable, int progress_factor = 1,
+      bool allow_cache_fallback = false, bool dense_cache = false,
+      int exact_letters = -1);
+
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
   ScoreBoundMode score_bound_mode() const { return bound_mode; }
@@ -101,6 +118,22 @@ class DfsAnagramSearch {
     return projected_quotient_enabled;
   }
   int64_t score_bound_prunes() const { return bound_prunes; }
+  size_t completable_classes_checked() const {
+    return completable_checked;
+  }
+  size_t completable_bound_rejects() const {
+    return completable_bound_reject_count;
+  }
+  size_t completable_exact_bound_accepts() const {
+    return completable_exact_bound_accept_count;
+  }
+  size_t completable_exact_validations() const {
+    return completable_exact_validation_count;
+  }
+  size_t exact_memo_states_computed() const {
+    return exact_memo_states;
+  }
+  size_t exact_memo_hits() const { return exact_memo_hit_count; }
 
   // Test hook: one projected wildcard update over `count` contiguous wildcard
   // counts, exactly as the bottom-up evaluator performs it, returning the
@@ -219,16 +252,52 @@ class DfsAnagramSearch {
     std::vector<SearchTask>* produced;
     int64_t next_progress;
     int64_t reported_solutions;
+    size_t exact_memo_states;
+    size_t exact_memo_hits;
   };
 
+  enum Reachability {
+    REACHABILITY_UNKNOWN,
+    REACHABILITY_NO,
+    REACHABILITY_YES,
+  };
+
+  enum ExactResultSource {
+    EXACT_RESULT_EMPTY,
+    EXACT_RESULT_MEMO,
+    EXACT_RESULT_BOUND_NO,
+    EXACT_RESULT_BOUND_YES,
+    EXACT_RESULT_SEARCH,
+  };
+
+  bool prepare_phase_two(
+      int progress_factor, bool allow_cache_fallback, bool dense_cache,
+      int exact_letters, bool score_bounds_requested);
   bool prepare_hot_classes();
   bool prepare_projected_actions();
   bool prepare_length_certificate();
   bool length_certificate_rejects(
       size_t base, size_t length, size_t letters_left,
       double representative_log_score, double floor) const;
-  void prepare_score_bounds(uint64_t state_count, DfsSolutionSink* sink);
+  void prepare_score_bounds(uint64_t state_count, bool requested);
   void clear_score_bounds();
+  Reachability cached_reachability(
+      uint64_t score_key, bool original_root) const;
+  bool exact_remainder_completable(
+      SearchWorker* worker, size_t letters_left,
+      ExactResultSource* source = NULL);
+  bool exact_memo_lookup(SearchWorker* worker, bool* value);
+  void exact_memo_store(SearchWorker* worker, bool value);
+  uint64_t exact_bag_number(SearchWorker const& worker) const;
+  std::string exact_bag_string(SearchWorker const& worker) const;
+  bool exact_class_fits(
+      size_t class_index, SearchWorker const& worker) const;
+  void subtract_exact_class(
+      size_t class_index, SearchWorker* worker,
+      uint64_t* parent_bag_mask);
+  void restore_exact_class(
+      size_t class_index, SearchWorker* worker,
+      uint64_t parent_bag_mask);
 
   void walk(SearchWorker* worker, size_t letters_left,
             size_t entry_point, double representative_log_score,
@@ -303,6 +372,7 @@ class DfsAnagramSearch {
 
   // The hot bag and all masks use rarest-rank order.
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+  std::array<uint64_t, DFS_SYMBOL_COUNT> exact_multipliers;
   std::array<uint64_t, DFS_SYMBOL_COUNT> score_multipliers;
   uint64_t bag_mask;
   uint64_t current_score_key;
@@ -314,6 +384,7 @@ class DfsAnagramSearch {
   size_t score_wild_letters;
   size_t score_wild_span;
   bool score_projection_requested;
+  bool exact_state_encodable;
 
   std::unique_ptr<FitClass, AlignedFree> fit_classes;
   std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
@@ -359,6 +430,19 @@ class DfsAnagramSearch {
   uint64_t bound_nextafter_calls;
   size_t bound_charged_bytes;
   int64_t bound_prunes;
+
+  static size_t const EXACT_MEMO_SHARDS = 64;
+  std::array<std::unordered_map<uint64_t, bool>,
+             EXACT_MEMO_SHARDS> exact_number_memo;
+  std::array<std::unordered_map<std::string, bool>,
+             EXACT_MEMO_SHARDS> exact_string_memo;
+  std::array<std::mutex, EXACT_MEMO_SHARDS> exact_memo_mutexes;
+  size_t completable_checked;
+  size_t completable_bound_reject_count;
+  size_t completable_exact_bound_accept_count;
+  size_t completable_exact_validation_count;
+  size_t exact_memo_states;
+  size_t exact_memo_hit_count;
 
   std::vector<size_t> path;
   bool progress_enabled;

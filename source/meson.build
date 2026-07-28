@@ -183,7 +183,7 @@ test(
 test(
   'query-index-cli',
   bash,
-  args: [files('test-query-index.sh'), query_index],
+  args: [files('test-query-index.sh'), query_index, make_dfs_test_index],
   timeout: 30,
 )
 
