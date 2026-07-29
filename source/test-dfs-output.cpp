@@ -223,11 +223,28 @@ static void heap_churn_test() {
           "drained top-N output rejected a lower-scoring refill");
 
     DfsTopN zero_output(&classes, 0);
-    zero_output.emit(std::vector<size_t>(1, indexes[0]), log(100.0));
-    check(zero_output.size() == 0 &&
-              zero_output.spellings_expanded() == 0 &&
-              !zero_output.score_floor(&stale_floor),
-          "zero-limit top-N output was not inert");
+    zero_output.emit(std::vector<size_t>(1, indexes[0]), log(40.0));
+    zero_output.emit(std::vector<size_t>(1, indexes[1]), log(20.0));
+    zero_output.emit(std::vector<size_t>(1, indexes[2]), log(30.0));
+    zero_output.emit(std::vector<size_t>(1, indexes[1]), log(50.0));
+    zero_output.emit(std::vector<size_t>(1, indexes[2]), log(10.0));
+    check(zero_output.size() == 3,
+          "zero-limit output did not retain every unique key");
+    check(!zero_output.score_floor(&stale_floor),
+          "zero-limit output unexpectedly published a score floor");
+
+    std::vector<DfsSpelling> const zero_results =
+        zero_output.take_sorted_results();
+    char const* zero_expected_keys[] = { "bb", "aa", "cc" };
+    double const zero_expected_scores[] = { 50.0, 40.0, 30.0 };
+    check(zero_results.size() == 3,
+          "zero-limit output returned the wrong result count");
+    for (size_t i = 0; i < zero_results.size(); ++i) {
+      check(zero_results[i].word_set_key == zero_expected_keys[i],
+            "zero-limit output order is wrong");
+      check_close(zero_results[i].log_score, log(zero_expected_scores[i]),
+                  "zero-limit duplicate retained the wrong score");
+    }
   }
 
   fclose(fp);

@@ -46,7 +46,7 @@ static void usage(char const* program) {
       " [-P segment-penalty]"
       " [-D|--dense-cache] [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
-      "  -n defaults to %d\n"
+      "  -n defaults to %d; 0 returns all results\n"
       "  --dict PATH filters entries to words in the dictionary\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
@@ -271,7 +271,7 @@ int main(int argc, char* argv[]) {
       args.score_cache_bytes, preprocess_threads,
       size_t(args.search_threads), args.word_bonus);
   DfsTopN output(&classes, size_t(args.top));
-  if (!search.run(args.top == 0 ? NULL : &output,
+  if (!search.run(&output,
                   args.progress_factor, args.allow_cache_fallback,
                   args.dense_cache, args.exact_letters, args.verbose))
     return 2;

@@ -71,6 +71,8 @@ assert_close() {
   -S 1 \
   > "$test_dir/search-thread-one.stdout" \
   2> "$test_dir/search-thread-one.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 0 \
+  > "$test_dir/unlimited.stdout" 2> "$test_dir/unlimited.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/explicit-default.stdout" ||
   fail "explicit default segment penalty changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/uncached.stdout" ||
@@ -85,6 +87,8 @@ cmp "$test_dir/all.stdout" "$test_dir/depth-zero.stdout" ||
   fail "--projection-depth changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/search-thread-one.stdout" ||
   fail "-S 1 changed stdout"
+cmp "$test_dir/all.stdout" "$test_dir/unlimited.stdout" ||
+  fail "-n 0 did not return all results"
 grep -Eq \
   "${diagnostic_prefix}phase 2: using up to [2-4] threads to calculate projected score bounds bottom-up$" \
   "$test_dir/threaded.stderr" ||
@@ -122,6 +126,9 @@ grep -Eq "${diagnostic_prefix}phase 2 preflight: projected score table keeps 0 r
 grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode dense \\([48]-byte values, capacity [0-9]+, complete effective coverage\\)$" \
   "$test_dir/dense.stderr" ||
   fail "--dense-cache mode diagnostic is missing from stderr"
+grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode off$" \
+  "$test_dir/unlimited.stderr" ||
+  fail "-n 0 unexpectedly enabled score-bound pruning"
 grep -Eq "${diagnostic_prefix}phase 2: precomputed [0-9]+ bounded states in [0-9.]+s$" \
   "$test_dir/all.stderr" ||
   fail "phase-2 precompute timing is missing from stderr"
@@ -152,6 +159,9 @@ grep -Eq "${diagnostic_prefix}phase 2 complete: .* [0-9]+ retained$" \
 head -n 2 "$test_dir/all.stdout" > "$test_dir/expected-top.stdout"
 cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
   fail "--top did not retain the two highest-scoring word sets"
+[[ $(wc -l < "$test_dir/unlimited.stdout") -gt \
+   $(wc -l < "$test_dir/top.stdout") ]] ||
+  fail "-n 0 did not return more results than -n 2"
 
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -P 1 \
   > "$test_dir/penalty-one.stdout" \

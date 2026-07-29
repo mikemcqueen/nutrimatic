@@ -80,7 +80,7 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
 }
 
 void DfsTopN::publish_floor() {
-  if (heap.size() != result_limit) return;
+  if (result_limit == 0 || heap.size() != result_limit) return;
   double const floor = heap[0].log_score;
   if (!floor_announced) {
     floor_announced = true;
@@ -107,7 +107,7 @@ bool DfsTopN::score_floor(double* floor) const {
 
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_log_score) {
-  if (result_limit == 0 || class_indexes.empty()) return;
+  if (class_indexes.empty()) return;
   double published;
   if (score_floor(&published) &&
       representative_log_score <= published)
@@ -144,7 +144,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
       // The published floor may have strengthened while this spelling was
       // constructed. Since pending is score ordered and descendants cannot
       // improve on their parent, an authoritative cutoff ends this expansion.
-      if (heap.size() == result_limit &&
+      if (result_limit != 0 && heap.size() == result_limit &&
           current.log_score <= floor_log_score())
         break;
       ++expanded;
@@ -192,7 +192,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 }
 
 double DfsTopN::floor_log_score() const {
-  if (heap.size() != result_limit)
+  if (result_limit == 0 || heap.size() != result_limit)
     return -std::numeric_limits<double>::infinity();
   return heap[0].log_score;
 }
@@ -203,13 +203,15 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     if (found->second.log_score >= spelling.log_score) return false;
     found->second.text = std::move(spelling.text);
     found->second.log_score = spelling.log_score;
-    size_t const position = found->second.heap_pos;
-    heap[position].log_score = spelling.log_score;
-    sift_down(position);
+    if (result_limit != 0) {
+      size_t const position = found->second.heap_pos;
+      heap[position].log_score = spelling.log_score;
+      sift_down(position);
+    }
     return true;
   }
 
-  if (heap.size() < result_limit) {
+  if (result_limit == 0 || heap.size() < result_limit) {
     size_t const position = heap.size();
     RetainedSpelling value;
     value.text = std::move(spelling.text);
@@ -217,6 +219,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     value.heap_pos = position;
     std::pair<RetainedMap::iterator, bool> const inserted =
         retained.emplace(std::move(spelling.word_set_key), std::move(value));
+    if (result_limit == 0) return true;
     HeapSlot slot;
     slot.log_score = spelling.log_score;
     slot.retained = &*inserted.first;
@@ -283,9 +286,9 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
     std::lock_guard<std::mutex> const guard(heap_mutex);
     published_full.store(false, std::memory_order_release);
     floor_announced = false;
-    results.reserve(heap.size());
-    for (size_t i = 0; i < heap.size(); ++i) {
-      RetainedEntry* const entry = heap[i].retained;
+    results.reserve(retained.size());
+    for (RetainedMap::iterator entry = retained.begin();
+         entry != retained.end(); ++entry) {
       DfsSpelling spelling;
       spelling.log_score = entry->second.log_score;
       spelling.text = std::move(entry->second.text);

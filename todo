@@ -1,0 +1,6 @@
+* don't show dense cache details if dense cache isn't chosen
+* -S 0 (auto) default (hardware threads)
+* --require-completable auto
+* -P 10000 default
+* filter index entries containing configurable "skip words" during phase 1,
+  especially `the`

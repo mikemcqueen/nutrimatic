@@ -1,9 +1,10 @@
 *.tmp
+tmp/
 /build*/
 /.env/
-tmp/
 /setup.sh
 /results/
+/idx/
 
 # Python
 *.pyc

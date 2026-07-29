@@ -16,8 +16,9 @@ struct DfsSpelling {
 };
 
 // The dedup table's payload. The map key (not duplicated here) is the
-// word-set key; heap_pos is this entry's current slot in DfsTopN::heap so a
-// heap swap can fix up both sides in O(1).
+// word-set key. When the result limit is nonzero, heap_pos is this entry's
+// current slot in DfsTopN::heap so a heap swap can fix up both sides in O(1);
+// it is not meaningful in unlimited mode.
 struct RetainedSpelling {
   std::string text;
   double log_score;
@@ -37,9 +38,10 @@ struct HeapSlot {
 };
 
 // Phase 3 of dfs-anagrams: lazily expand each class solution into spellings and
-// retain the global top N. `retained` is the dedup table and owns all string
-// storage; `heap` orders pointers into it by score and is bounded by N. A map
-// node's address is stable across rehash, so the heap can hold raw pointers.
+// retain the global top N, or every spelling when N is zero. `retained` is the
+// dedup table and owns all string storage; `heap` orders pointers into it by
+// score and is bounded by N when N is nonzero. A map node's address is stable
+// across rehash, so the heap can hold raw pointers.
 class DfsTopN: public DfsSolutionSink {
  public:
   DfsTopN(DfsClassList const* classes, size_t limit);
@@ -52,12 +54,12 @@ class DfsTopN: public DfsSolutionSink {
 
   // These observers and take_sorted_results() are used only after all search
   // workers have joined.
-  size_t size() const { return heap.size(); }
+  size_t size() const { return retained.size(); }
   size_t limit() const { return result_limit; }
   size_t spellings_expanded() const { return expanded; }
 
-  // Drains the heap into descending score order. Equal-score rows use their
-  // word-set key and text as deterministic tie-breaks.
+  // Drains the retained spellings into descending score order. Equal-score
+  // rows use their word-set key and text as deterministic tie-breaks.
   std::vector<DfsSpelling> take_sorted_results();
 
  private:
