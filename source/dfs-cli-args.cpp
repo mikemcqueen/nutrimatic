@@ -50,6 +50,14 @@ bool subtract_letters(std::string const& bag, std::string const& used,
   return true;
 }
 
+bool check_bag_length(std::string const& bag) {
+  if (bag.size() <= DFS_MAX_BAG_LETTERS) return true;
+  fprintf(stderr,
+      "error: %zu letters after removing used letters, %zu maximum\n",
+      bag.size(), DFS_MAX_BAG_LETTERS);
+  return false;
+}
+
 bool parse_count(char const* in, char const* what, int* out) {
   char* end;
   long const value = strtol(in, &end, 10);

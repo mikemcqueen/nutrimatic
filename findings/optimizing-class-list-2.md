@@ -118,6 +118,44 @@ The string content is used by the internal tie-break sort (`:202`) and by
 plus a tie-break on packed letters replaces it; the tests can look classes up by
 letter counts.
 
+## Decisions after review
+
+`plans/optimizing-class-list-claude.md` implements the recommendations below
+with four departures, all decided after the measurements in this document:
+
+1. **No letters arena.** Recommendation 1 keeps a `C × ~9 × 2` = 720 MB arena of
+   `(symbol, count)` pairs. But once the overflow policy aborts rather than
+   degrading, `letters` has exactly two readers, both once per class —
+   `rarest_rank` (`dfs-class-list.cpp:191`) and `prepare_hot_classes()`
+   (`dfs-search.cpp:565-639`) — because the `!hot_classes_ready` branches that
+   read it per DFS node become dead. The signature is a bijection onto subbags,
+   so the letters decode from it in fewer than 36 divisions. 720 MB was caching
+   a value read twice.
+2. **No escape tables.** Recommendation 1's `uint8_t member_count` escape and
+   recommendation 3's `UINT32_MAX` count escape are both replaced by checked
+   aborts, and the field widths stay `uint8_t`. Measured worst case for members
+   per class on `wiki-merged.5`: **`ainost` has 210 members at `-m 1`** (167 at
+   `-m 2`), `aeinst` 197, `ainors` 188. Max members per class peaks at 5-7
+   letter classes and *falls* with class length — 170 at length 6, 22 at
+   length 16, 2 at length 24 in a 32-letter `-m 2` run — so it is a corpus
+   property that saturates rather than scaling with bag length. 210 of 255 is
+   thin margin, and a larger corpus rather than a longer bag is what would fire
+   the abort; accepted deliberately.
+3. **Flat 128-letter input cap** at argument parse, rather than recommendation
+   3's `min_word_len`-dependent rejection at 171 letters (`-m 2`) or 128
+   (`-m 1`). One number covers every `-m`, since `-m 1` is the worst case:
+   `128 + 127 = 255` is exactly `uint8_t text_length`. Longest input in
+   `setup.sh` is 117 letters.
+4. **Pointers, not `uint64_t` offsets**, in both records. Same 8 bytes, one load
+   instead of a shift, a mask and two loads. The offsets bought relocatability
+   for a future file-backed sidecar, which is not in scope.
+
+The projected total below is therefore wrong in two directions: it charges
+720 MB for a letters arena that is not built, and omits the transient
+intermediate member arena (`E × 24` ≈ 1.4 GB) that the counting-sort build
+needs. Corrected: ~2.8 GB steady, ~5.0 GB build peak, against a success
+criterion of 6 GB for 90-letter `$S1` phase 1.
+
 ## Recommended changes, ordered by bytes recovered
 
 Targets use the extrapolated 90-letter scale: E ≈ 60 M, C ≈ 40 M.
@@ -418,9 +456,10 @@ unsupported-bag causes: the arithmetic overflows, the `UINT32_MAX` / `SIZE_MAX`
 size caps at `:557–570`, and `allocate_aligned` failure at `:572`.
 
 Should a real bag ever hit the abort, the retained packed-letters key is the
-escape hatch — it costs **no extra memory**, because recommendation 1 already
-stores the `(symbol, count)` bytes in the shared letters arena, so the table holds
-an arena offset and compares by `memcmp`.
+escape hatch. Note that the "no extra memory" argument for it assumed
+recommendation 1's letters arena, which the plan does not build (see "Decisions
+after review"), so reviving that fallback would mean storing the
+`(symbol, count)` bytes somewhere first.
 
 For the record, the numeric key is also the faster of the two, though not by much:
 an 8-byte compare instead of a ≤44-byte `memcmp`, plus O(1) incremental
@@ -481,11 +520,15 @@ sorted (or counting-sorted on `count`) in place with no parallel array and no
 | Component | 90 letters |
 |---|---|
 | class records (`C × 24`) | 960 MB |
-| letters arena (`C × ~9 × 2`) | 720 MB |
+| letters arena (`C × ~9 × 2`) — *not built, see "Decisions after review"* | 720 MB |
 | member records (`E × 16`) | 960 MB |
 | text arena (`E × ~14`) | 840 MB |
 | grouping table (transient, freed pre-phase-2) | ~770 MB |
 | **peak** | **~4.2 GB** |
+
+Corrected for the decisions above — no letters arena, plus the transient
+intermediate member arena the counting-sort build needs — this is ~2.8 GB steady
+and ~5.0 GB at the build peak.
 
 Against a current-representation projection of ~21 GB — which is why 64 letters
 already dies at 11 GB. That is **~5x**, and it turns the 90-letter case from

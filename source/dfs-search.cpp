@@ -37,7 +37,6 @@ uint64_t const BOUND_UNSEEN = UINT64_C(0x7ff8000000000001);
 uint64_t const BOUND_COMPUTING = UINT64_C(0x7ff8000000000002);
 uint32_t const FLOAT_BOUND_UNSEEN = UINT32_C(0x7fc00001);
 uint32_t const FLOAT_BOUND_COMPUTING = UINT32_C(0x7fc00002);
-size_t const CACHE_ALIGNMENT = 64;
 size_t const MIB = size_t(1024) * size_t(1024);
 
 static size_t derived_max_depth(DfsClassList const* classes,
@@ -46,47 +45,13 @@ static size_t derived_max_depth(DfsClassList const* classes,
   return letter_count / size_t(classes->min_word_length());
 }
 
-static bool checked_multiply_u64(uint64_t a, uint64_t b, uint64_t* out) {
-  if (a != 0 && b > UINT64_MAX / a) return false;
-  *out = a * b;
-  return true;
-}
-
-static bool checked_add_u64(uint64_t a, uint64_t b, uint64_t* out) {
-  if (b > UINT64_MAX - a) return false;
-  *out = a + b;
-  return true;
-}
-
-static bool round_up_alignment(size_t bytes, size_t* rounded) {
-  if (bytes > SIZE_MAX - (CACHE_ALIGNMENT - 1)) return false;
-  *rounded = (bytes + CACHE_ALIGNMENT - 1) &
-      ~(CACHE_ALIGNMENT - 1);
-  return true;
-}
-
 static bool dense_bound_requirements(
     uint64_t state_count, size_t value_bytes, size_t* dense_bytes) {
   if (state_count > SIZE_MAX / value_bytes ||
-      !round_up_alignment(
+      !dfs_round_up_alignment(
           size_t(state_count) * value_bytes, dense_bytes))
     return false;
   return true;
-}
-
-static void* allocate_aligned(size_t bytes) {
-  if (bytes == 0) return NULL;
-  size_t rounded;
-  if (!round_up_alignment(bytes, &rounded)) return NULL;
-  return aligned_alloc(CACHE_ALIGNMENT, rounded);
-}
-
-static void* allocate_aligned_exact(size_t bytes) {
-  if (bytes == 0) return NULL;
-  void* result = NULL;
-  return posix_memalign(&result, CACHE_ALIGNMENT, bytes) == 0
-      ? result
-      : NULL;
 }
 
 static uint64_t double_to_bits(double value) {
@@ -449,10 +414,6 @@ static char const* score_bound_mode_name(
 
 }  // namespace
 
-void DfsAnagramSearch::AlignedFree::operator()(void* pointer) const {
-  free(pointer);
-}
-
 DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    std::string const& letters,
                                    double segment_penalty,
@@ -484,6 +445,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     projected_actions_ready(false),
     projected_quotient_enabled(true),
     hot_classes_ready(false),
+    empty_class_list(false),
+    unsupported_reason(NULL),
     length_certificate_requested(false),
     length_certificate_shadow(false),
     length_certificate_ready(false),
@@ -534,15 +497,29 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   static_assert(std::is_trivially_destructible<AtomicFloatWord>::value,
                 "atomic float bound words must be trivially destructible");
 
-  std::vector<DfsAnagramClass> const& all_classes = class_list->classes();
+  // members[0] is exactly what a global member sort destroys, and this is the
+  // only production read of the member store outside output.
+  assert(!class_list->members_invalidated());
+  DfsClassSpan const all_classes = class_list->classes();
   best_member_log_scores.reserve(all_classes.size());
   for (size_t i = 0; i < all_classes.size(); ++i) {
-    assert(!all_classes[i].members.empty());
-    DfsClassMember const& best = all_classes[i].members[0];
+    assert(class_list->member_count(i) > 0);
+    DfsMemberView const best = class_list->member(i, 0);
     assert(best.count > 0);
     best_member_log_scores.push_back(score_model.first_segment_log_score(
         best.count, best.word_count > 1));
   }
+}
+
+// The non-hot fallbacks below are retained as source but unreachable: any bag
+// phase 1 accepted is one phase 2 can prepare, so failing here means an
+// invariant broke rather than a query being too large.
+void DfsAnagramSearch::require_hot_classes() const {
+  if (hot_classes_ready) return;
+  dfs_diagnostic_to_stream(stderr,
+      "error: phase 2 cannot search this bag (%s)\n",
+      unsupported_reason != NULL ? unsupported_reason : "reason not recorded");
+  abort();
 }
 
 bool DfsAnagramSearch::prepare_hot_classes() {
@@ -553,85 +530,95 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   score_wild_lengths.reset();
   packed_letters.reset();
 
-  std::vector<DfsAnagramClass> const& classes = class_list->classes();
-  if (classes.empty() || classes.size() > UINT32_MAX ||
-      classes.size() > SIZE_MAX / sizeof(FitClass) ||
-      classes.size() > SIZE_MAX / sizeof(uint16_t) ||
-      letters.size() > UINT16_MAX)
+  auto const unsupported = [this](char const* reason) {
+    unsupported_reason = reason;
     return false;
+  };
+
+  DfsClassSpan const classes = class_list->classes();
+  assert(!classes.empty());
+  if (classes.size() > UINT32_MAX ||
+      classes.size() > SIZE_MAX / sizeof(FitClass) ||
+      classes.size() > SIZE_MAX / sizeof(uint16_t))
+    return unsupported("too many classes to index");
+  if (letters.size() > UINT16_MAX)
+    return unsupported("bag longer than a wildcard length field holds");
 
   size_t requirements = 0;
   for (size_t ci = 0; ci < classes.size(); ++ci) {
-    if (classes[ci].letters.size() > UINT8_MAX ||
-        requirements > UINT32_MAX - classes[ci].letters.size())
-      return false;
-    requirements += classes[ci].letters.size();
+    if (requirements > UINT32_MAX - classes[ci].letters_count)
+      return unsupported("too many packed letter requirements");
+    requirements += classes[ci].letters_count;
   }
-  if (requirements > SIZE_MAX / sizeof(uint32_t)) return false;
+  if (requirements > SIZE_MAX / sizeof(uint32_t))
+    return unsupported("packed letter requirements exceed the address space");
 
   FitClass* fit = static_cast<FitClass*>(
-      allocate_aligned(classes.size() * sizeof(FitClass)));
-  if (fit == NULL) return false;
-  std::unique_ptr<FitClass, AlignedFree> new_fit(fit);
+      dfs_allocate_aligned(classes.size() * sizeof(FitClass)));
+  if (fit == NULL) return unsupported("could not allocate the fit classes");
+  std::unique_ptr<FitClass, DfsAlignedFree> new_fit(fit);
 
   uint64_t* score_deltas = static_cast<uint64_t*>(
-      allocate_aligned(classes.size() * sizeof(uint64_t)));
-  if (score_deltas == NULL) return false;
-  std::unique_ptr<uint64_t, AlignedFree> new_score_deltas(score_deltas);
+      dfs_allocate_aligned(classes.size() * sizeof(uint64_t)));
+  if (score_deltas == NULL)
+    return unsupported("could not allocate the score-key deltas");
+  std::unique_ptr<uint64_t, DfsAlignedFree> new_score_deltas(score_deltas);
 
   uint16_t* wild_lengths = static_cast<uint16_t*>(
-      allocate_aligned(classes.size() * sizeof(uint16_t)));
-  if (wild_lengths == NULL) return false;
-  std::unique_ptr<uint16_t, AlignedFree> new_wild_lengths(wild_lengths);
+      dfs_allocate_aligned(classes.size() * sizeof(uint16_t)));
+  if (wild_lengths == NULL)
+    return unsupported("could not allocate the wildcard lengths");
+  std::unique_ptr<uint16_t, DfsAlignedFree> new_wild_lengths(wild_lengths);
 
   uint32_t* packed = NULL;
   if (requirements != 0) {
     packed = static_cast<uint32_t*>(
-        allocate_aligned(requirements * sizeof(uint32_t)));
-    if (packed == NULL) return false;
+        dfs_allocate_aligned(requirements * sizeof(uint32_t)));
+    if (packed == NULL)
+      return unsupported("could not allocate the packed letters");
   }
-  std::unique_ptr<uint32_t, AlignedFree> new_packed(packed);
+  std::unique_ptr<uint32_t, DfsAlignedFree> new_packed(packed);
 
   size_t offset = 0;
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
+  uint16_t decoded[DFS_SYMBOL_COUNT];
   for (size_t ci = 0; ci < classes.size(); ++ci) {
-    DfsAnagramClass const& source = classes[ci];
+    DfsClassRecord const& source = classes[ci];
+    size_t const letter_count = class_list->decode_class_letters(ci, decoded);
+    assert(letter_count == source.letters_count);
     uint64_t score_delta = 0;
     uint32_t wild_length = 0;
     uint64_t support = 0;
     uint32_t repeated = 0;
 
-    for (size_t i = 0; i < source.letters.size(); ++i) {
-      uint32_t const count = source.letters[i].second;
-      if (count > (UINT32_MAX >> 6)) return false;
-      if (count > 1) ++repeated;
-    }
+    for (size_t i = 0; i < letter_count; ++i)
+      if (dfs_class_letter_count(decoded[i]) > 1) ++repeated;
 
     size_t write = offset;
     for (int repeated_pass = 1; repeated_pass >= 0; --repeated_pass) {
-      for (size_t i = 0; i < source.letters.size(); ++i) {
-        uint32_t const count = source.letters[i].second;
+      for (size_t i = 0; i < letter_count; ++i) {
+        uint32_t const count = dfs_class_letter_count(decoded[i]);
         if ((count > 1) != (repeated_pass != 0)) continue;
         uint32_t const rank = uint32_t(symbol_to_rank[
-            size_t(source.letters[i].first)]);
+            size_t(dfs_class_letter_symbol(decoded[i]))]);
         packed[write++] = (count << 6) | rank;
       }
     }
-    assert(write == offset + source.letters.size());
+    assert(write == offset + letter_count);
 
-    for (size_t i = 0; i < source.letters.size(); ++i) {
-      uint32_t const count = source.letters[i].second;
+    for (size_t i = 0; i < letter_count; ++i) {
+      uint32_t const count = dfs_class_letter_count(decoded[i]);
       uint32_t const rank = uint32_t(symbol_to_rank[
-          size_t(source.letters[i].first)]);
+          size_t(dfs_class_letter_symbol(decoded[i]))]);
       support |= UINT64_C(1) << rank;
       uint64_t term;
       uint64_t next;
       if ((score_exact_mask & (UINT64_C(1) << rank)) != 0) {
-        if (!checked_multiply_u64(
+        if (!dfs_checked_multiply_u64(
                 count, score_multipliers[rank], &term) ||
-            !checked_add_u64(score_delta, term, &next))
-          return false;
+            !dfs_checked_add_u64(score_delta, term, &next))
+          return unsupported("score-key delta overflowed 64 bits");
         score_delta = next;
       } else {
         wild_length += count;
@@ -641,16 +628,16 @@ bool DfsAnagramSearch::prepare_hot_classes() {
     fit[ci].support_mask = support;
     fit[ci].letters_offset = uint32_t(offset);
     fit[ci].packed_length_and_count =
-        uint32_t(source.key.size()) |
-        (uint32_t(source.letters.size()) << 16) |
+        uint32_t(source.key_length) |
+        (uint32_t(letter_count) << 16) |
         (repeated << 24);
     uint64_t flat_score_delta;
-    if (!checked_multiply_u64(
+    if (!dfs_checked_multiply_u64(
             score_delta, uint64_t(score_wild_span), &flat_score_delta) ||
-        !checked_add_u64(
+        !dfs_checked_add_u64(
             flat_score_delta, uint64_t(wild_length),
             &flat_score_delta))
-      return false;
+      return unsupported("flattened score-key delta overflowed 64 bits");
     score_deltas[ci] = flat_score_delta;
     wild_lengths[ci] = uint16_t(wild_length);
     offset = write;
@@ -677,11 +664,10 @@ bool DfsAnagramSearch::prepare_length_certificate() {
   if (letters.size() == SIZE_MAX) return false;
 
   try {
-    std::vector<DfsAnagramClass> const& classes =
-        class_list->classes();
+    DfsClassSpan const classes = class_list->classes();
     size_t max_length = 0;
     for (size_t i = 0; i < classes.size(); ++i)
-      max_length = std::max(max_length, classes[i].key.size());
+      max_length = std::max<size_t>(max_length, classes[i].key_length);
     if (max_length == SIZE_MAX) return false;
     certificate_stride = max_length + 1;
     if (certificate_stride != 0 &&
@@ -702,7 +688,7 @@ bool DfsAnagramSearch::prepare_length_certificate() {
       size_t const base = rank * certificate_stride;
       size_t previous_length = SIZE_MAX;
       for (size_t i = begin; i < end; ++i) {
-        size_t const length = classes[i].key.size();
+        size_t const length = classes[i].key_length;
         if (length >= certificate_stride ||
             length > letters.size())
           return fail();
@@ -788,8 +774,7 @@ bool DfsAnagramSearch::prepare_projected_actions() {
   projected_quotient_enabled =
       projected_action_quotient_enabled();
 
-  std::vector<DfsAnagramClass> const& classes =
-      class_list->classes();
+  DfsClassSpan const classes = class_list->classes();
   if (classes.size() > UINT32_MAX) return false;
 
   struct DeltaClass {
@@ -947,7 +932,7 @@ void DfsAnagramSearch::prepare_score_bounds(
   clear_score_bounds();
   if (!hot_classes_ready || !requested ||
       !score_bound_arithmetic_supported() ||
-      score_cache_budget < CACHE_ALIGNMENT)
+      score_cache_budget < DFS_CACHE_ALIGNMENT)
     return;
 
   if (score_projection_requested) {
@@ -964,12 +949,12 @@ void DfsAnagramSearch::prepare_score_bounds(
         score_effective_states / score_wild_span <= UINT32_MAX;
     if (projected_bottom_up_enabled() && bottom_up_eligible) {
       float* values = static_cast<float*>(
-          allocate_aligned(float_bytes));
+          dfs_allocate_aligned(float_bytes));
       if (values == NULL) return;
       bound_plain_float_values.reset(values);
     } else {
       AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
-          allocate_aligned(float_bytes));
+          dfs_allocate_aligned(float_bytes));
       if (values == NULL) return;
       for (size_t i = 0; i < size_t(score_effective_states); ++i) {
         new (&values[i]) AtomicFloatWord;
@@ -1001,7 +986,7 @@ void DfsAnagramSearch::prepare_score_bounds(
       effective_states, sizeof(double), &double_bytes);
   if (double_size_ok && double_bytes <= score_cache_budget) {
     AtomicWord* values = static_cast<AtomicWord*>(
-        allocate_aligned(double_bytes));
+        dfs_allocate_aligned(double_bytes));
     if (values == NULL) return;
     for (size_t i = 0; i < size_t(effective_states); ++i) {
       new (&values[i]) AtomicWord;
@@ -1031,8 +1016,8 @@ void DfsAnagramSearch::prepare_score_bounds(
             : size_t(selected_entries) * sizeof(float);
     AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
         complete_float
-            ? allocate_aligned(selected_bytes)
-            : allocate_aligned_exact(selected_bytes));
+            ? dfs_allocate_aligned(selected_bytes)
+            : dfs_allocate_aligned_exact(selected_bytes));
     if (values == NULL) return;
     for (size_t i = 0; i < size_t(selected_entries); ++i) {
       new (&values[i]) AtomicFloatWord;
@@ -1187,12 +1172,16 @@ bool DfsAnagramSearch::prepare_phase_two(
     for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
       exact_multipliers[size_t(rank)] = state_count;
       uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
-      if (!checked_multiply_u64(state_count, radix, &state_count)) {
+      if (!dfs_checked_multiply_u64(state_count, radix, &state_count)) {
         encodable = false;
         break;
       }
     }
   }
+  // Phase 1 aborts when this same product overflows, and its symbol-ordered
+  // multipliers are the commuted form of the rank-ordered ones above, so the
+  // two verdicts cannot drift.
+  assert(encodable);
   exact_state_encodable = encodable;
   bag_mask = 0;
   for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
@@ -1236,7 +1225,7 @@ bool DfsAnagramSearch::prepare_phase_two(
       for (size_t d = 0; d <= present_ranks.size(); ++d) {
         size_t const wild_total = letters.size() - exact_total;
         uint64_t projected_states;
-        bool const states_ok = checked_multiply_u64(
+        bool const states_ok = dfs_checked_multiply_u64(
             exact_product, uint64_t(wild_total + 1),
             &projected_states);
         uint64_t effective = projected_states;
@@ -1255,7 +1244,7 @@ bool DfsAnagramSearch::prepare_phase_two(
         if (d != present_ranks.size()) {
           int const rank = present_ranks[d];
           uint64_t next_product;
-          if (!checked_multiply_u64(
+          if (!dfs_checked_multiply_u64(
                   exact_product,
                   uint64_t(bag[size_t(rank)]) + 1,
                   &next_product))
@@ -1282,7 +1271,7 @@ bool DfsAnagramSearch::prepare_phase_two(
     for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
       if ((score_exact_mask & (UINT64_C(1) << rank)) == 0) continue;
       score_multipliers[size_t(rank)] = exact_product;
-      if (!checked_multiply_u64(
+      if (!dfs_checked_multiply_u64(
               exact_product, uint64_t(bag[size_t(rank)]) + 1,
               &exact_product)) {
         encodable = false;
@@ -1290,7 +1279,7 @@ bool DfsAnagramSearch::prepare_phase_two(
       }
     }
     if (encodable &&
-        !checked_multiply_u64(
+        !dfs_checked_multiply_u64(
             exact_product, uint64_t(score_wild_span),
             &score_state_count))
       encodable = false;
@@ -1310,7 +1299,7 @@ bool DfsAnagramSearch::prepare_phase_two(
     for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
       score_multipliers[size_t(rank)] = exact_score_states;
       uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
-      if (!checked_multiply_u64(
+      if (!dfs_checked_multiply_u64(
               exact_score_states, radix, &exact_score_states)) {
         encodable = false;
         break;
@@ -1328,7 +1317,10 @@ bool DfsAnagramSearch::prepare_phase_two(
 
   current_score_key = encodable ? score_state_count - 1 : 0;
   current_letters_left = letters.size();
-  hot_classes_ready = encodable && prepare_hot_classes();
+  unsupported_reason = encodable ? NULL : "bag state count exceeds 64 bits";
+  empty_class_list = class_list->classes().empty();
+  hot_classes_ready =
+      encodable && !empty_class_list && prepare_hot_classes();
   if (hot_classes_ready && score_projection_requested)
     prepare_projected_actions();
   uint64_t effective_states = 0;
@@ -1528,9 +1520,12 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
 
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const search_start = PhaseClock::now();
-  if (!hot_classes_ready) {
-    walk_unoptimized(letters.size(), 0, 0, 0.0, sink);
-  } else {
+  if (empty_class_list) {
+    search_seconds = 0.0;
+    return true;
+  }
+  require_hot_classes();
+  {
     bool const parallel_eligible =
         requested_search_threads > 1 &&
         (sink == NULL || sink->supports_parallel_search()) &&
@@ -1618,14 +1613,14 @@ bool DfsAnagramSearch::exact_class_fits(
   if (hot_classes_ready)
     return hot_class_fits(uint32_t(class_index), worker);
 
-  DfsAnagramClass const& candidate =
-      class_list->classes()[class_index];
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
-  for (size_t i = 0; i < candidate.letters.size(); ++i) {
+  uint16_t decoded[DFS_SYMBOL_COUNT];
+  size_t const count = class_list->decode_class_letters(class_index, decoded);
+  for (size_t i = 0; i < count; ++i) {
     size_t const rank = size_t(
-        symbol_to_rank[size_t(candidate.letters[i].first)]);
-    if (worker.bag[rank] < candidate.letters[i].second) return false;
+        symbol_to_rank[size_t(dfs_class_letter_symbol(decoded[i]))]);
+    if (worker.bag[rank] < dfs_class_letter_count(decoded[i])) return false;
   }
   return true;
 }
@@ -1651,14 +1646,14 @@ void DfsAnagramSearch::subtract_exact_class(
     return;
   }
 
-  DfsAnagramClass const& candidate =
-      class_list->classes()[class_index];
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
-  for (size_t i = 0; i < candidate.letters.size(); ++i) {
+  uint16_t decoded[DFS_SYMBOL_COUNT];
+  size_t const count = class_list->decode_class_letters(class_index, decoded);
+  for (size_t i = 0; i < count; ++i) {
     size_t const rank = size_t(
-        symbol_to_rank[size_t(candidate.letters[i].first)]);
-    worker->bag[rank] -= candidate.letters[i].second;
+        symbol_to_rank[size_t(dfs_class_letter_symbol(decoded[i]))]);
+    worker->bag[rank] -= dfs_class_letter_count(decoded[i]);
     if (worker->bag[rank] == 0)
       worker->bag_mask &= ~(UINT64_C(1) << rank);
   }
@@ -1679,14 +1674,15 @@ void DfsAnagramSearch::restore_exact_class(
       worker->bag[packed_rank(requirement)] += packed_count(requirement);
     }
   } else {
-    DfsAnagramClass const& candidate =
-        class_list->classes()[class_index];
     std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
         class_list->symbol_to_rank();
-    for (size_t i = 0; i < candidate.letters.size(); ++i) {
+    uint16_t decoded[DFS_SYMBOL_COUNT];
+    size_t const count =
+        class_list->decode_class_letters(class_index, decoded);
+    for (size_t i = 0; i < count; ++i) {
       size_t const rank = size_t(
-          symbol_to_rank[size_t(candidate.letters[i].first)]);
-      worker->bag[rank] += candidate.letters[i].second;
+          symbol_to_rank[size_t(dfs_class_letter_symbol(decoded[i]))]);
+      worker->bag[rank] += dfs_class_letter_count(decoded[i]);
     }
   }
   worker->bag_mask = parent_bag_mask;
@@ -1732,10 +1728,9 @@ bool DfsAnagramSearch::exact_remainder_completable(
     if (hot_classes_ready)
       begin = first_length_candidate(begin, end, letters_left);
 
-    std::vector<DfsAnagramClass> const& classes =
-        class_list->classes();
+    DfsClassSpan const classes = class_list->classes();
     for (size_t class_index = begin; class_index < end; ++class_index) {
-      size_t const candidate_length = classes[class_index].key.size();
+      size_t const candidate_length = classes[class_index].key_length;
       if (candidate_length > letters_left ||
           !exact_class_fits(class_index, *worker))
         continue;
@@ -1761,8 +1756,8 @@ bool DfsAnagramSearch::find_completable_classes(
           exact_letters, true))
     return false;
 
-  std::vector<DfsAnagramClass> const& classes =
-      class_list->classes();
+  DfsClassSpan const classes = class_list->classes();
+  if (!classes.empty()) require_hot_classes();
   for (size_t shard = 0; shard < EXACT_MEMO_SHARDS; ++shard) {
     exact_number_memo[shard].clear();
     exact_string_memo[shard].clear();
@@ -1807,7 +1802,7 @@ bool DfsAnagramSearch::find_completable_classes(
       subtract_exact_class(class_index, &worker, &parent_bag_mask);
       ExactResultSource source;
       bool const result = exact_remainder_completable(
-          &worker, letters.size() - classes[class_index].key.size(),
+          &worker, letters.size() - classes[class_index].key_length,
           &source);
       restore_exact_class(class_index, &worker, parent_bag_mask);
       results[class_index] = result;
@@ -3339,14 +3334,13 @@ bool DfsAnagramSearch::run_parallel_search(
 void DfsAnagramSearch::visit_unoptimized_class(
     size_t class_index, size_t letters_left, int rank,
     double representative_log_score, DfsSolutionSink* sink) {
-  DfsAnagramClass const& candidate = class_list->classes()[class_index];
   double const candidate_log_score = best_member_log_scores[class_index];
   double const next_log_score =
       path.empty()
           ? candidate_log_score
           : score_model.append_log_score(
                 representative_log_score, candidate_log_score);
-  size_t const candidate_length = candidate.key.size();
+  size_t const candidate_length = class_list->class_length(class_index);
   assert(candidate_length <= letters_left);
   size_t const next_letters_left = letters_left - candidate_length;
 
@@ -3364,17 +3358,19 @@ void DfsAnagramSearch::visit_unoptimized_class(
 
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
-  for (size_t i = 0; i < candidate.letters.size(); ++i) {
+  uint16_t decoded[DFS_SYMBOL_COUNT];
+  size_t const count = class_list->decode_class_letters(class_index, decoded);
+  for (size_t i = 0; i < count; ++i) {
     size_t const requirement_rank = size_t(
-        symbol_to_rank[size_t(candidate.letters[i].first)]);
-    bag[requirement_rank] -= candidate.letters[i].second;
+        symbol_to_rank[size_t(dfs_class_letter_symbol(decoded[i]))]);
+    bag[requirement_rank] -= dfs_class_letter_count(decoded[i]);
   }
   walk_unoptimized(next_letters_left, rank, class_index,
                    next_log_score, sink);
-  for (size_t i = 0; i < candidate.letters.size(); ++i) {
+  for (size_t i = 0; i < count; ++i) {
     size_t const requirement_rank = size_t(
-        symbol_to_rank[size_t(candidate.letters[i].first)]);
-    bag[requirement_rank] += candidate.letters[i].second;
+        symbol_to_rank[size_t(dfs_class_letter_symbol(decoded[i]))]);
+    bag[requirement_rank] += dfs_class_letter_count(decoded[i]);
   }
   path.pop_back();
 }
@@ -3403,14 +3399,15 @@ void DfsAnagramSearch::walk_unoptimized(
   size_t const end = class_list->candidate_end(forced_symbol);
   std::array<int, DFS_SYMBOL_COUNT> const& symbol_to_rank =
       class_list->symbol_to_rank();
-  std::vector<DfsAnagramClass> const& classes = class_list->classes();
+  uint16_t decoded[DFS_SYMBOL_COUNT];
   for (size_t class_index = start; class_index < end; ++class_index) {
-    DfsAnagramClass const& candidate = classes[class_index];
+    size_t const count =
+        class_list->decode_class_letters(class_index, decoded);
     bool fits = true;
-    for (size_t i = 0; i < candidate.letters.size(); ++i) {
+    for (size_t i = 0; i < count; ++i) {
       size_t const requirement_rank = size_t(
-          symbol_to_rank[size_t(candidate.letters[i].first)]);
-      if (bag[requirement_rank] < candidate.letters[i].second) {
+          symbol_to_rank[size_t(dfs_class_letter_symbol(decoded[i]))]);
+      if (bag[requirement_rank] < dfs_class_letter_count(decoded[i])) {
         fits = false;
         break;
       }

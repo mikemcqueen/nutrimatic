@@ -247,19 +247,41 @@ static bool parse_args(char* argv[], Args* out) {
   if (!clean_letters(letters, "letters", &bag)) return false;
   if (!clean_letters(used.c_str(), "used letters", &remove)) return false;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
+  if (!check_bag_length(out->letters)) return false;
   return finalize_min_word_length(
       out->letters, min_word_len_given, &out->min_word_len);
 }
 
-struct RankedMember {
-  double log_score;
-  DfsClassMember const* member;
-};
-
-static bool ranked_order(RankedMember const& a, RankedMember const& b) {
-  if (a.log_score != b.log_score) return a.log_score > b.log_score;
-  return a.member->text < b.member->text;
+// With the default --word-bonus 0 the two multi_word groups collapse and
+// log(count) descending is integer count descending: over this corpus's count
+// range log is injective in double, so an integer compare reproduces the
+// score order exactly, ties included, and the text tie-break still decides
+// them.
+static bool count_order(DfsPackedMember const& a, DfsPackedMember const& b) {
+  if (a.count != b.count) return a.count > b.count;
+  return dfs_member_text_compare(a, b) < 0;
 }
+
+static bool is_phrase(DfsPackedMember const& member) {
+  return member.word_count > 1;
+}
+
+// Rewriting this as count * exp(bonus) versus count would round differently
+// from log(count) + bonus, breaking exact ties differently and so changing the
+// text tie-break. It stays the identical expression, applied O(E) times in the
+// merge instead of O(E log E) times in a sort.
+struct ScoreOrder {
+  DfsScoreModel const* model;
+
+  bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
+    double const a_score =
+        model->first_segment_log_score(a.count, is_phrase(a));
+    double const b_score =
+        model->first_segment_log_score(b.count, is_phrase(b));
+    if (a_score != b_score) return a_score > b_score;
+    return dfs_member_text_compare(a, b) < 0;
+  }
+};
 
 static bool parse_score_sequence(
     std::string const& sequence, std::vector<std::string>* entries) {
@@ -402,36 +424,51 @@ int main(int argc, char* argv[]) {
 
   DfsScoreModel const model(
       args.segment_penalty, reader.count(), args.word_bonus);
-  std::vector<RankedMember> ranked;
-  ranked.reserve(classes.entry_count());
-  for (size_t class_index = 0;
-       class_index < classes.classes().size(); ++class_index) {
-    if (!completable[class_index]) continue;
-    DfsAnagramClass const& anagram_class = classes.classes()[class_index];
-    for (size_t member_index = 0;
-         member_index < anagram_class.members.size(); ++member_index) {
-      DfsClassMember const& member = anagram_class.members[member_index];
-      if (args.words_only && member.word_count != 1) continue;
-      ranked.push_back({
-          model.first_segment_log_score(
-              member.count, member.word_count > 1),
-          &member,
-      });
-    }
-  }
+  // The class -> member grouping has no reader left: phase 2 touched it once at
+  // setup and its search is already destroyed, and printing needs only each
+  // member's count and text.
+  DfsMemberSpan const survivors =
+      classes.retain_members(completable, args.words_only);
+  size_t const top = args.top == 0
+      ? survivors.count
+      : std::min(survivors.count, size_t(args.top));
 
-  size_t const top = args.top == 0 ? ranked.size()
-                                    : std::min(ranked.size(), size_t(args.top));
-  std::partial_sort(ranked.begin(), ranked.begin() + top,
-                    ranked.end(), ranked_order);
-
-  for (size_t i = 0; i < top; ++i) {
+  DfsPackedMember* const first = survivors.data;
+  DfsPackedMember* const last = first + survivors.count;
+  auto const print_row = [&](DfsPackedMember const& row) {
     if (args.word_bonus == 0.0)
-      printf("%lld %s\n", (long long) ranked[i].member->count,
-             ranked[i].member->text.c_str());
+      printf("%lld %.*s\n", (long long) row.count,
+             int(row.text_length), row.text);
     else
-      printf("%#.4g %s\n", model.displayed_score(ranked[i].log_score),
-             ranked[i].member->text.c_str());
+      printf("%#.4g %.*s\n",
+             model.displayed_score(model.first_segment_log_score(
+                 row.count, is_phrase(row))),
+             int(row.text_length), row.text);
+  };
+
+  if (args.word_bonus == 0.0) {
+    std::partial_sort(first, first + top, last, count_order);
+    for (size_t i = 0; i < top; ++i) print_row(first[i]);
+  } else {
+    DfsPackedMember* const mid = std::partition(first, last, is_phrase);
+    size_t const phrase_top = std::min(top, size_t(mid - first));
+    size_t const word_top = std::min(top, size_t(last - mid));
+    std::partial_sort(first, first + phrase_top, mid, count_order);
+    std::partial_sort(mid, mid + word_top, last, count_order);
+
+    ScoreOrder const order = { &model };
+    size_t phrase = 0;
+    size_t word = 0;
+    for (size_t printed = 0; printed < top; ++printed) {
+      bool take_phrase;
+      if (phrase == phrase_top)
+        take_phrase = false;
+      else if (word == word_top)
+        take_phrase = true;
+      else
+        take_phrase = order(first[phrase], mid[word]);
+      print_row(take_phrase ? first[phrase++] : mid[word++]);
+    }
   }
   return 0;
 }

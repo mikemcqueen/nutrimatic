@@ -208,6 +208,7 @@ static bool parse_args(char* argv[], Args* out) {
 
   out->index_file = index_file;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
+  if (!check_bag_length(out->letters)) return false;
 
   if (!finalize_min_word_length(
           out->letters, min_word_len_given, &out->min_word_len))

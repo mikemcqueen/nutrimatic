@@ -31,7 +31,7 @@ class CollectSolutions: public DfsSolutionSink {
     ordered_scores.push_back(log_score);
     std::vector<std::string> keys;
     for (size_t i = 0; i < indexes.size(); ++i)
-      keys.push_back(classes->classes()[indexes[i]].key);
+      keys.push_back(classes->class_key(indexes[i]));
     std::sort(keys.begin(), keys.end());
 
     std::string key;

@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "dfs-alloc.h"
 #include "dfs-class-list.h"
 #include "dfs-score.h"
 
@@ -184,10 +185,6 @@ class DfsAnagramSearch {
  private:
   static size_t const MAX_SPLIT_DEPTH = 6;
 
-  struct AlignedFree {
-    void operator()(void* pointer) const;
-  };
-
   struct AtomicWord {
     std::atomic<uint64_t> value;
   };
@@ -274,6 +271,7 @@ class DfsAnagramSearch {
   bool prepare_phase_two(
       int progress_factor, bool allow_cache_fallback, bool dense_cache,
       int exact_letters, bool score_bounds_requested);
+  void require_hot_classes() const;
   bool prepare_hot_classes();
   bool prepare_projected_actions();
   bool prepare_length_certificate();
@@ -388,10 +386,10 @@ class DfsAnagramSearch {
   bool score_projection_requested;
   bool exact_state_encodable;
 
-  std::unique_ptr<FitClass, AlignedFree> fit_classes;
-  std::unique_ptr<uint64_t, AlignedFree> score_key_deltas;
-  std::unique_ptr<uint16_t, AlignedFree> score_wild_lengths;
-  std::unique_ptr<uint32_t, AlignedFree> packed_letters;
+  std::unique_ptr<FitClass, DfsAlignedFree> fit_classes;
+  std::unique_ptr<uint64_t, DfsAlignedFree> score_key_deltas;
+  std::unique_ptr<uint16_t, DfsAlignedFree> score_wild_lengths;
+  std::unique_ptr<uint32_t, DfsAlignedFree> packed_letters;
   std::vector<ProjectedAction> projected_actions;
   // Index-parallel to projected_actions, and the only copy of an action's
   // exact-support mask: the bottom-up scan rejects most actions on it alone,
@@ -403,6 +401,12 @@ class DfsAnagramSearch {
   bool projected_actions_ready;
   bool projected_quotient_enabled;
   bool hot_classes_ready;
+  // A bag with no classes has no results, which is not the same thing as a bag
+  // phase 2 cannot prepare; only the latter aborts.
+  bool empty_class_list;
+  // Which of prepare_hot_classes()'s failure paths fired, for the abort
+  // message. NULL until one does.
+  char const* unsupported_reason;
   bool length_certificate_requested;
   bool length_certificate_shadow;
   bool length_certificate_ready;
@@ -416,9 +420,9 @@ class DfsAnagramSearch {
   uint64_t certificate_scans_kept;
 
   ScoreBoundMode bound_mode;
-  std::unique_ptr<AtomicWord, AlignedFree> bound_values;
-  std::unique_ptr<AtomicFloatWord, AlignedFree> bound_float_values;
-  std::unique_ptr<float, AlignedFree> bound_plain_float_values;
+  std::unique_ptr<AtomicWord, DfsAlignedFree> bound_values;
+  std::unique_ptr<AtomicFloatWord, DfsAlignedFree> bound_float_values;
+  std::unique_ptr<float, DfsAlignedFree> bound_plain_float_values;
   size_t bound_capacity;
   size_t bound_value_bytes;
   bool bound_complete;

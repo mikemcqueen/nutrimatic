@@ -51,16 +51,17 @@ struct ExpansionOrder {
 };
 
 static double spelling_log_score(
-    std::vector<DfsAnagramClass> const& classes,
+    DfsClassList const& classes,
     std::vector<size_t> const& class_indexes,
     std::vector<size_t> const& member_indexes,
     double representative_log_score) {
   double score = representative_log_score;
   for (size_t i = 0; i < class_indexes.size(); ++i) {
     if (member_indexes[i] == 0) continue;
-    DfsAnagramClass const& anagram_class = classes[class_indexes[i]];
-    score += log(double(anagram_class.members[member_indexes[i]].count)) -
-             log(double(anagram_class.members[0].count));
+    size_t const class_index = class_indexes[i];
+    score +=
+        log(double(classes.member(class_index, member_indexes[i]).count)) -
+        log(double(classes.member(class_index, 0).count));
   }
   return score;
 }
@@ -73,6 +74,9 @@ DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
     published_full(false),
     floor_announced(false) {
   assert(class_list != NULL);
+  // Expansion indexes members by (class_index, member_index) throughout, so a
+  // list whose grouping has been dropped cannot be expanded at all.
+  assert(!class_list->members_invalidated());
   static_assert(sizeof(double) == sizeof(uint64_t),
                 "published score floors must remain eight bytes");
   heap.reserve(result_limit);
@@ -113,7 +117,6 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
       representative_log_score <= published)
     return;
 
-  std::vector<DfsAnagramClass> const& classes = class_list->classes();
   ExpansionCandidate first;
   first.log_score = representative_log_score;
   first.member_indexes.assign(class_indexes.size(), 0);
@@ -131,12 +134,10 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
     DfsSpelling spelling;
     spelling.log_score = current.log_score;
     for (size_t i = 0; i < class_indexes.size(); ++i) {
-      DfsAnagramClass const& anagram_class =
-          classes[class_indexes[i]];
-      assert(current.member_indexes[i] < anagram_class.members.size());
+      DfsMemberView const view = class_list->member(
+          class_indexes[i], current.member_indexes[i]);
       if (!spelling.text.empty()) spelling.text.push_back(' ');
-      spelling.text +=
-          anagram_class.members[current.member_indexes[i]].text;
+      spelling.text.append(view.text, view.text_length);
     }
     spelling.word_set_key = make_word_set_key(spelling.text);
     {
@@ -159,10 +160,9 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
          dimension < class_indexes.size() && earlier_indexes_are_zero;
          ++dimension) {
       size_t const class_index = class_indexes[dimension];
-      DfsAnagramClass const& anagram_class = classes[class_index];
       size_t const old_member = current.member_indexes[dimension];
       size_t const new_member = old_member + 1;
-      if (new_member < anagram_class.members.size()) {
+      if (new_member < class_list->member_count(class_index)) {
         ExpansionCandidate next = current;
         next.member_indexes[dimension] = new_member;
 
@@ -180,7 +180,8 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
           }
         if (canonical) {
           next.log_score =
-              spelling_log_score(classes, class_indexes, next.member_indexes,
+              spelling_log_score(*class_list, class_indexes,
+                                 next.member_indexes,
                                  representative_log_score);
           if (!score_floor(&published) || next.log_score > published)
             pending.push(std::move(next));

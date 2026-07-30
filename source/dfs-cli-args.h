@@ -27,6 +27,11 @@ bool clean_letters(char const* in, char const* what, std::string* out);
 bool subtract_letters(std::string const& bag, std::string const& used,
                       std::string* out);
 
+// Rejects a bag wider than DFS_MAX_BAG_LETTERS. Call this on the
+// post-subtraction bag, not on the raw argument: the packed-record field widths
+// depend on what phase 1 extracts, and subtraction only shrinks.
+bool check_bag_length(std::string const& bag);
+
 // Parses a non-negative base-10 integer from `in`. Prints an error naming
 // `what` and returns false on any parse failure or out-of-range value.
 bool parse_count(char const* in, char const* what, int* out);

@@ -32,17 +32,29 @@ static void check_close(double actual, double expected,
 static size_t find_class(DfsClassList const& classes,
                          std::string const& key) {
   for (size_t i = 0; i < classes.classes().size(); ++i)
-    if (classes.classes()[i].key == key) return i;
+    if (classes.class_key(i) == key) return i;
   fprintf(stderr, "FAIL: class \"%s\" is missing\n", key.c_str());
   exit(1);
 }
 
+static std::string member_text(DfsMemberView const& view) {
+  return std::string(view.text, view.text_length);
+}
+
+static std::vector<DfsMemberView> class_members(
+    DfsClassList const& classes, size_t class_index) {
+  std::vector<DfsMemberView> members;
+  for (size_t i = 0; i < classes.member_count(class_index); ++i)
+    members.push_back(classes.member(class_index, i));
+  return members;
+}
+
 static int64_t member_count(DfsClassList const& classes, size_t class_index,
                             std::string const& text) {
-  std::vector<DfsClassMember> const& members =
-      classes.classes()[class_index].members;
-  for (size_t i = 0; i < members.size(); ++i)
-    if (members[i].text == text) return members[i].count;
+  for (size_t i = 0; i < classes.member_count(class_index); ++i) {
+    DfsMemberView const view = classes.member(class_index, i);
+    if (member_text(view) == text) return view.count;
+  }
   fprintf(stderr, "FAIL: member \"%s\" is missing\n", text.c_str());
   exit(1);
 }
@@ -54,7 +66,7 @@ static double representative_score(
   for (size_t i = 0; i < path.size(); ++i) {
     if (i != 0)
       score -= log(segment_penalty) + log(double(corpus_total));
-    score += log(double(classes.classes()[path[i]].members[0].count));
+    score += log(double(classes.member(path[i], 0).count));
   }
   return score;
 }
@@ -115,12 +127,9 @@ static void exhaustive_product_test() {
     std::vector<DfsSpelling> const actual = output.take_sorted_results();
 
     std::vector<Expected> expected;
-    std::vector<DfsClassMember> const& ab_members =
-        classes.classes()[ab].members;
-    std::vector<DfsClassMember> const& cde_members =
-        classes.classes()[cde].members;
-    std::vector<DfsClassMember> const& fg_members =
-        classes.classes()[fg].members;
+    std::vector<DfsMemberView> const ab_members = class_members(classes, ab);
+    std::vector<DfsMemberView> const cde_members = class_members(classes, cde);
+    std::vector<DfsMemberView> const fg_members = class_members(classes, fg);
     double const segment_boundary =
         -log(segment_penalty) - log(double(reader.count()));
     for (size_t ai = 0; ai < ab_members.size(); ++ai)
@@ -132,9 +141,9 @@ static void exhaustive_product_test() {
               log(double(cde_members[ci].count)) +
               log(double(fg_members[fi].count)) + 2.0 * segment_boundary;
           std::vector<std::string> words;
-          words.push_back(ab_members[ai].text);
-          words.push_back(cde_members[ci].text);
-          words.push_back(fg_members[fi].text);
+          words.push_back(member_text(ab_members[ai]));
+          words.push_back(member_text(cde_members[ci]));
+          words.push_back(member_text(fg_members[fi]));
           row.key = word_set_key(words);
           expected.push_back(row);
         }
@@ -438,10 +447,8 @@ static void repeated_class_test() {
         mixed_output.take_sorted_results();
 
     std::vector<Expected> mixed_expected;
-    std::vector<DfsClassMember> const& ab_members =
-        classes.classes()[ab].members;
-    std::vector<DfsClassMember> const& cd_members =
-        classes.classes()[cd].members;
+    std::vector<DfsMemberView> const ab_members = class_members(classes, ab);
+    std::vector<DfsMemberView> const cd_members = class_members(classes, cd);
     for (size_t first = 0; first < ab_members.size(); ++first)
       for (size_t second = first; second < ab_members.size(); ++second)
         for (size_t third = 0; third < cd_members.size(); ++third) {
@@ -451,9 +458,9 @@ static void repeated_class_test() {
               log(double(ab_members[second].count)) +
               log(double(cd_members[third].count)) + 2.0 * segment_boundary;
           std::vector<std::string> words;
-          words.push_back(ab_members[first].text);
-          words.push_back(ab_members[second].text);
-          words.push_back(cd_members[third].text);
+          words.push_back(member_text(ab_members[first]));
+          words.push_back(member_text(ab_members[second]));
+          words.push_back(member_text(cd_members[third]));
           row.key = word_set_key(words);
           mixed_expected.push_back(row);
         }
