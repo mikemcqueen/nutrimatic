@@ -238,6 +238,9 @@ class DfsAnagramSearch {
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     uint64_t bag_mask;
     uint64_t score_key;
+    // Phase-1's exact mixed-radix signature, maintained incrementally for
+    // completability memoization. Unlike score_key, it never projects letters.
+    uint64_t exact_key;
     std::vector<size_t> path;
     int64_t nodes;
     int64_t solutions;
@@ -372,10 +375,10 @@ class DfsAnagramSearch {
 
   // The hot bag and all masks use rarest-rank order.
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
-  std::array<uint64_t, DFS_SYMBOL_COUNT> exact_multipliers;
   std::array<uint64_t, DFS_SYMBOL_COUNT> score_multipliers;
   uint64_t bag_mask;
   uint64_t current_score_key;
+  uint64_t exact_root_key;
   size_t current_letters_left;
   uint64_t score_exact_mask;
   uint64_t score_state_count;
@@ -443,6 +446,13 @@ class DfsAnagramSearch {
   std::array<std::unordered_map<std::string, bool>,
              EXACT_MEMO_SHARDS> exact_string_memo;
   std::array<std::mutex, EXACT_MEMO_SHARDS> exact_memo_mutexes;
+  // The common <=62-bit exact-key path packs key and boolean into one atomic
+  // open-addressed slot. The sharded maps above are allocation/key-width
+  // fallbacks, not a second cache.
+  std::unique_ptr<AtomicWord, DfsAlignedFree> exact_flat_memo;
+  size_t exact_flat_capacity;
+  size_t exact_flat_entry_limit;
+  std::atomic<size_t> exact_flat_entries;
   size_t completable_checked;
   size_t completable_bound_reject_count;
   size_t completable_exact_bound_accept_count;

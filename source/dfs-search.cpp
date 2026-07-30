@@ -433,6 +433,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     requested_search_threads(std::max(size_t(1), search_threads)),
     bag_mask(0),
     current_score_key(0),
+    exact_root_key(0),
     current_letters_left(0),
     score_exact_mask(0),
     score_state_count(0),
@@ -469,6 +470,9 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     bound_nextafter_calls(0),
     bound_charged_bytes(0),
     bound_prunes(0),
+    exact_flat_capacity(0),
+    exact_flat_entry_limit(0),
+    exact_flat_entries(0),
     completable_checked(0),
     completable_bound_reject_count(0),
     completable_exact_bound_accept_count(0),
@@ -1167,10 +1171,8 @@ bool DfsAnagramSearch::prepare_phase_two(
   }
 
   uint64_t state_count = 1;
-  exact_multipliers.fill(0);
   if (encodable) {
     for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
-      exact_multipliers[size_t(rank)] = state_count;
       uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
       if (!dfs_checked_multiply_u64(state_count, radix, &state_count)) {
         encodable = false;
@@ -1183,6 +1185,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   // two verdicts cannot drift.
   assert(encodable);
   exact_state_encodable = encodable;
+  exact_root_key = state_count - 1;
   bag_mask = 0;
   for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
     if (bag[size_t(rank)] != 0)
@@ -1550,10 +1553,15 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
 uint64_t DfsAnagramSearch::exact_bag_number(
     SearchWorker const& worker) const {
   assert(exact_state_encodable);
-  uint64_t key = 0;
-  for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
-    key += uint64_t(worker.bag[rank]) * exact_multipliers[rank];
-  return key;
+  return worker.exact_key;
+}
+
+static uint64_t exact_memo_hash(uint64_t value) {
+  value ^= value >> 30;
+  value *= UINT64_C(0xbf58476d1ce4e5b9);
+  value ^= value >> 27;
+  value *= UINT64_C(0x94d049bb133111eb);
+  return value ^ (value >> 31);
 }
 
 std::string DfsAnagramSearch::exact_bag_string(
@@ -1568,6 +1576,23 @@ std::string DfsAnagramSearch::exact_bag_string(
 
 bool DfsAnagramSearch::exact_memo_lookup(
     SearchWorker* worker, bool* value) {
+  if (exact_flat_memo.get() != NULL) {
+    uint64_t const key_bits = worker->exact_key << 2;
+    size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
+        (exact_flat_capacity - 1);
+    for (;;) {
+      uint64_t const stored = exact_flat_memo.get()[slot].value.load(
+          std::memory_order_relaxed);
+      if (stored == 0) return false;
+      if ((stored & ~UINT64_C(3)) == key_bits) {
+        *value = (stored & UINT64_C(3)) == 2;
+        ++worker->exact_memo_hits;
+        return true;
+      }
+      slot = (slot + 1) & (exact_flat_capacity - 1);
+    }
+  }
+
   if (exact_state_encodable) {
     uint64_t const key = exact_bag_number(*worker);
     size_t const shard =
@@ -1591,6 +1616,31 @@ bool DfsAnagramSearch::exact_memo_lookup(
 
 void DfsAnagramSearch::exact_memo_store(
     SearchWorker* worker, bool value) {
+  if (exact_flat_memo.get() != NULL) {
+    if (exact_flat_entries.load(std::memory_order_relaxed) >=
+        exact_flat_entry_limit)
+      return;
+    uint64_t const key_bits = worker->exact_key << 2;
+    uint64_t const desired = key_bits | (value ? 2 : 1);
+    size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
+        (exact_flat_capacity - 1);
+    for (;;) {
+      uint64_t stored = exact_flat_memo.get()[slot].value.load(
+          std::memory_order_relaxed);
+      if ((stored & ~UINT64_C(3)) == key_bits && stored != 0)
+        return;
+      if (stored == 0 &&
+          exact_flat_memo.get()[slot].value.compare_exchange_strong(
+              stored, desired, std::memory_order_relaxed,
+              std::memory_order_relaxed)) {
+        exact_flat_entries.fetch_add(1, std::memory_order_relaxed);
+        ++worker->exact_memo_states;
+        return;
+      }
+      slot = (slot + 1) & (exact_flat_capacity - 1);
+    }
+  }
+
   bool inserted;
   if (exact_state_encodable) {
     uint64_t const key = exact_bag_number(*worker);
@@ -1629,6 +1679,7 @@ void DfsAnagramSearch::subtract_exact_class(
     size_t class_index, SearchWorker* worker,
     uint64_t* parent_bag_mask) {
   *parent_bag_mask = worker->bag_mask;
+  worker->exact_key -= class_list->classes()[class_index].signature;
   if (hot_classes_ready) {
     FitClass const& fit = fit_classes.get()[class_index];
     uint32_t const* requirements =
@@ -1685,6 +1736,7 @@ void DfsAnagramSearch::restore_exact_class(
       worker->bag[rank] += dfs_class_letter_count(decoded[i]);
     }
   }
+  worker->exact_key += class_list->classes()[class_index].signature;
   worker->bag_mask = parent_bag_mask;
 }
 
@@ -1758,9 +1810,42 @@ bool DfsAnagramSearch::find_completable_classes(
 
   DfsClassSpan const classes = class_list->classes();
   if (!classes.empty()) require_hot_classes();
+  exact_flat_memo.reset();
+  exact_flat_capacity = 0;
+  exact_flat_entry_limit = 0;
+  exact_flat_entries.store(0, std::memory_order_relaxed);
+  if (exact_state_encodable &&
+      exact_root_key <= (UINT64_MAX >> 2) &&
+      classes.size() <= SIZE_MAX / 2) {
+    size_t const wanted = std::max<size_t>(classes.size() * 2, 2);
+    size_t capacity = 1;
+    while (capacity < wanted && capacity <= SIZE_MAX / 2)
+      capacity *= 2;
+    if (capacity >= wanted &&
+        capacity <= SIZE_MAX / sizeof(AtomicWord)) {
+      AtomicWord* slots = static_cast<AtomicWord*>(
+          dfs_allocate_aligned(capacity * sizeof(AtomicWord)));
+      if (slots != NULL) {
+        for (size_t i = 0; i < capacity; ++i) {
+          new (&slots[i]) AtomicWord;
+          slots[i].value.store(0, std::memory_order_relaxed);
+        }
+        exact_flat_memo.reset(slots);
+        exact_flat_capacity = capacity;
+        exact_flat_entry_limit = capacity - capacity / 4;
+        if (progress_enabled)
+          dfs_diagnostic(
+              "phase 2 exact memo table: %zu slots, %zu bytes\n",
+              exact_flat_capacity,
+              exact_flat_capacity * sizeof(AtomicWord));
+      }
+    }
+  }
   for (size_t shard = 0; shard < EXACT_MEMO_SHARDS; ++shard) {
     exact_number_memo[shard].clear();
     exact_string_memo[shard].clear();
+    if (exact_flat_memo.get() != NULL)
+      continue;
     if (exact_state_encodable)
       exact_number_memo[shard].reserve(
           classes.size() / EXACT_MEMO_SHARDS + 1);
@@ -3175,6 +3260,7 @@ void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
   worker->bag = bag;
   worker->bag_mask = bag_mask;
   worker->score_key = current_score_key;
+  worker->exact_key = exact_root_key;
   worker->path.clear();
   worker->path.reserve(letters.size());
   worker->nodes = 0;

@@ -20,6 +20,7 @@
 
 static int const DEFAULT_TOP = 100;
 static double const DEFAULT_WORD_BONUS = 0.0;
+static size_t const LONG_COMPLETABILITY_INPUT = 50;
 
 struct Args {
   char const* index_file;
@@ -33,6 +34,7 @@ struct Args {
   double word_bonus;
   bool require_completable;
   size_t score_cache_bytes;
+  bool cache_size_given;
   int preprocess_threads;
   int search_threads;
   int exact_letters;
@@ -66,8 +68,10 @@ static void usage(char const* program) {
       "    defaults to %g (no boost)\n"
       "  --require-completable drops classes whose removal leaves a\n"
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
-      "    -m), using one shared phase-2 cache plus exact validation\n"
+      "    -m), using shared exact validation and optional projected bounds\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
+      "    automatic projected caching is skipped for %zu+ letters unless\n"
+      "    -C, -d, or -D explicitly requests it\n"
       "  -T, --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
       "  -S, --search-threads defaults to 1\n"
@@ -77,7 +81,7 @@ static void usage(char const* program) {
       "  -F, --allow-cache-fallback allows score-cache fallback\n",
       program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_DEFAULT_MIN_WORD_LEN,
       DEFAULT_TOP, DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS,
-      DFS_DEFAULT_SCORE_CACHE_MIB);
+      DFS_DEFAULT_SCORE_CACHE_MIB, LONG_COMPLETABILITY_INPUT);
 }
 
 static int const OPT_DICT = 256;
@@ -118,6 +122,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->word_bonus = DEFAULT_WORD_BONUS;
   out->require_completable = false;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
+  out->cache_size_given = false;
   out->preprocess_threads = 0;
   out->search_threads = 1;
   out->exact_letters = -1;
@@ -178,6 +183,7 @@ static bool parse_args(char* argv[], Args* out) {
         if (!parse_mib(options.optarg, "--cache-size",
                        &out->score_cache_bytes))
           return false;
+        out->cache_size_given = true;
         mark_score_incompatible(out, "--cache-size");
         break;
       case 'T':
@@ -391,21 +397,34 @@ int main(int argc, char* argv[]) {
 
   std::vector<bool> completable(classes.classes().size(), true);
   if (args.require_completable) {
+    bool const skip_automatic_projected_cache =
+        args.letters.size() >= LONG_COMPLETABILITY_INPUT &&
+        !args.cache_size_given && args.exact_letters < 0 &&
+        !args.dense_cache;
+    if (skip_automatic_projected_cache)
+      dfs_diagnostic(
+          "phase 2: skipping automatic projected score cache for "
+          "%zu-letter completability query\n",
+          args.letters.size());
     size_t const preprocess_threads = resolve_preprocess_threads(
         args.preprocess_threads, args.letters.size());
     dfs_diagnostic(
         "depth %d preprocess threads %zu search threads %d cache %zu "
         "segment penalty %.17g\n",
         args.exact_letters, preprocess_threads, args.search_threads,
-        args.score_cache_bytes / DFS_MIB, args.segment_penalty);
+        (skip_automatic_projected_cache ? 0 : args.score_cache_bytes) /
+            DFS_MIB,
+        args.segment_penalty);
     DfsAnagramSearch search(
         &classes, args.letters, args.segment_penalty, reader.count(),
-        args.score_cache_bytes, preprocess_threads,
+        skip_automatic_projected_cache ? 0 : args.score_cache_bytes,
+        preprocess_threads,
         size_t(args.search_threads),
         /*word_bonus=*/0.0);
     if (!search.find_completable_classes(
             &completable, /*progress_factor=*/1,
-            args.allow_cache_fallback, args.dense_cache,
+            args.allow_cache_fallback || skip_automatic_projected_cache,
+            args.dense_cache,
             args.exact_letters))
       return 2;
     if (search.search_threads_used() > 1)
