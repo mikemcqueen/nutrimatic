@@ -17,8 +17,18 @@ FILE* dfs_diagnostic_stream();
 // Writes a timestamped line to the current diagnostic stream and flushes it.
 // A NULL stream is a no-op, so callers can gate on their own "should I log?"
 // condition without separately checking whether diagnostics are enabled.
+//
+// The line is assembled in a fixed stack buffer and truncated if it does not
+// fit, so this allocates nothing and is safe to call on an out-of-memory path.
 void dfs_diagnostic(char const* format, ...)
     __attribute__((format(printf, 1, 2)));
+
+// As dfs_diagnostic(), but writes to an explicit stream instead of the global
+// one. Fatal paths use this with stderr: it reports unconditionally even when
+// diagnostics are disabled, and unlike dfs_set_diagnostic_stream() it mutates
+// no shared state, which matters because worker threads can abort concurrently.
+void dfs_diagnostic_to_stream(FILE* stream, char const* format, ...)
+    __attribute__((format(printf, 2, 3)));
 
 // Invariant check that survives NDEBUG. The release build sets b_ndebug=true,
 // so plain assert() is compiled out there; use DFS_CHECK for the few
