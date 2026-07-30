@@ -253,6 +253,10 @@ class DfsAnagramSearch {
     int64_t reported_solutions;
     size_t exact_memo_states;
     size_t exact_memo_hits;
+    uint64_t exact_lookahead_full_windows;
+    uint64_t exact_lookahead_known_true_wins;
+    uint64_t exact_lookahead_reprobes_decided;
+    uint64_t exact_lookahead_recursive_expansions;
   };
 
   enum Reachability {
@@ -267,6 +271,12 @@ class DfsAnagramSearch {
     EXACT_RESULT_BOUND_NO,
     EXACT_RESULT_BOUND_YES,
     EXACT_RESULT_SEARCH,
+  };
+
+  enum ExactChildResult {
+    EXACT_CHILD_FALSE,
+    EXACT_CHILD_TRUE,
+    EXACT_CHILD_UNKNOWN,
   };
 
   bool prepare_phase_two(
@@ -286,8 +296,20 @@ class DfsAnagramSearch {
   bool exact_remainder_completable(
       SearchWorker* worker, size_t letters_left,
       ExactResultSource* source = NULL);
-  bool exact_memo_lookup(SearchWorker* worker, bool* value);
-  void exact_memo_store(SearchWorker* worker, bool value);
+  ExactChildResult classify_exact_child(
+      SearchWorker* worker, uint32_t class_index,
+      size_t candidate_length, size_t letters_left);
+  bool exact_candidates_immediate(
+      SearchWorker* worker, size_t letters_left);
+  bool exact_candidates_lookahead(
+      SearchWorker* worker, size_t letters_left);
+  bool exact_buffered_candidates(
+      SearchWorker* worker, size_t letters_left,
+      uint32_t const* class_ids, size_t count);
+  bool exact_memo_lookup(
+      SearchWorker* worker, uint64_t exact_key, bool* value);
+  void exact_memo_store(
+      SearchWorker* worker, uint64_t exact_key, bool value);
   bool exact_class_fits(
       size_t class_index, SearchWorker const& worker) const;
   void subtract_exact_class(
@@ -448,6 +470,11 @@ class DfsAnagramSearch {
   size_t completable_exact_validation_count;
   size_t exact_memo_states;
   size_t exact_memo_hit_count;
+  size_t exact_memo_lookahead;
+  uint64_t exact_lookahead_full_windows;
+  uint64_t exact_lookahead_known_true_wins;
+  uint64_t exact_lookahead_reprobes_decided;
+  uint64_t exact_lookahead_recursive_expansions;
 
   std::vector<size_t> path;
   bool progress_enabled;

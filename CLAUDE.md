@@ -30,4 +30,6 @@ you can then use ${S6:0:N} for various letter counts.
 
 ## CONCURRENT SESSIONS
 
-There may be other instances of dfs-anagrams running. Check before you run an instance if you're accurate timing data.
+There may be other instances of query-index or dfs-anagrams running. Check for
+both in the host process table, outside any sandbox PID namespace, before
+every run where accurate timing data matters.

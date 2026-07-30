@@ -37,6 +37,8 @@ uint64_t const BOUND_COMPUTING = UINT64_C(0x7ff8000000000002);
 uint32_t const FLOAT_BOUND_UNSEEN = UINT32_C(0x7fc00001);
 uint32_t const FLOAT_BOUND_COMPUTING = UINT32_C(0x7fc00002);
 size_t const MIB = size_t(1024) * size_t(1024);
+size_t const EXACT_MEMO_LOOKAHEAD_MAX = 64;
+size_t const EXACT_MEMO_LOOKAHEAD_DEFAULT = 16;
 
 static size_t derived_max_depth(DfsClassList const* classes,
                                 size_t letter_count) {
@@ -396,6 +398,23 @@ static size_t search_task_target(size_t threads) {
   return target;
 }
 
+static size_t exact_memo_lookahead_choice() {
+  // This is called once per exact-validation batch, never in the recurrence.
+  char const* forced = getenv("NUTRIMATIC_EXACT_MEMO_LOOKAHEAD");
+  if (forced == NULL || forced[0] == '\0')
+    return EXACT_MEMO_LOOKAHEAD_DEFAULT;
+  for (char const* p = forced; *p != '\0'; ++p)
+    if (*p < '0' || *p > '9')
+      return EXACT_MEMO_LOOKAHEAD_DEFAULT;
+  errno = 0;
+  char* end = NULL;
+  unsigned long long const parsed = strtoull(forced, &end, 10);
+  if (errno == 0 && end != forced && *end == '\0' &&
+      parsed <= EXACT_MEMO_LOOKAHEAD_MAX)
+    return size_t(parsed);
+  return EXACT_MEMO_LOOKAHEAD_DEFAULT;
+}
+
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
@@ -477,6 +496,11 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     completable_exact_validation_count(0),
     exact_memo_states(0),
     exact_memo_hit_count(0),
+    exact_memo_lookahead(EXACT_MEMO_LOOKAHEAD_DEFAULT),
+    exact_lookahead_full_windows(0),
+    exact_lookahead_known_true_wins(0),
+    exact_lookahead_reprobes_decided(0),
+    exact_lookahead_recursive_expansions(0),
     progress_enabled(false),
     progress_interval(0),
     next_progress(0),
@@ -1556,15 +1580,15 @@ static uint64_t exact_memo_hash(uint64_t value) {
 }
 
 bool DfsAnagramSearch::exact_memo_lookup(
-    SearchWorker* worker, bool* value) {
+    SearchWorker* worker, uint64_t exact_key, bool* value) {
   assert(exact_flat_memo.get() != NULL);
-  size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
+  size_t slot = size_t(exact_memo_hash(exact_key)) &
       (exact_flat_capacity - 1);
   for (;;) {
     uint64_t const stored = exact_flat_memo.get()[slot].value.load(
         std::memory_order_relaxed);
     if (stored == 0) return false;
-    if ((stored - 1) / 2 == worker->exact_key) {
+    if ((stored - 1) / 2 == exact_key) {
       *value = (stored & UINT64_C(1)) == 0;
       ++worker->exact_memo_hits;
       return true;
@@ -1574,28 +1598,32 @@ bool DfsAnagramSearch::exact_memo_lookup(
 }
 
 void DfsAnagramSearch::exact_memo_store(
-    SearchWorker* worker, bool value) {
+    SearchWorker* worker, uint64_t exact_key, bool value) {
   assert(exact_flat_memo.get() != NULL);
-  if (exact_flat_entries.load(std::memory_order_relaxed) >=
-      exact_flat_entry_limit)
-    return;
-  assert(worker->exact_key <= (UINT64_MAX - 2) / 2);
+  assert(exact_key <= (UINT64_MAX - 2) / 2);
   uint64_t const desired =
-      worker->exact_key * UINT64_C(2) + (value ? 2 : 1);
-  size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
+      exact_key * UINT64_C(2) + (value ? 2 : 1);
+  size_t slot = size_t(exact_memo_hash(exact_key)) &
       (exact_flat_capacity - 1);
   for (;;) {
     uint64_t stored = exact_flat_memo.get()[slot].value.load(
         std::memory_order_relaxed);
-    if (stored != 0 && (stored - 1) / 2 == worker->exact_key)
+    if (stored != 0 && (stored - 1) / 2 == exact_key)
       return;
-    if (stored == 0 &&
-        exact_flat_memo.get()[slot].value.compare_exchange_strong(
-            stored, desired, std::memory_order_relaxed,
-            std::memory_order_relaxed)) {
-      exact_flat_entries.fetch_add(1, std::memory_order_relaxed);
-      ++worker->exact_memo_states;
-      return;
+    if (stored == 0) {
+      if (exact_flat_entries.load(std::memory_order_relaxed) >=
+          exact_flat_entry_limit)
+        return;
+      if (exact_flat_memo.get()[slot].value.compare_exchange_strong(
+              stored, desired, std::memory_order_relaxed,
+              std::memory_order_relaxed)) {
+        exact_flat_entries.fetch_add(1, std::memory_order_relaxed);
+        ++worker->exact_memo_states;
+        return;
+      }
+      // Recheck the slot after losing the race. The winner may have inserted
+      // this exact key; advancing immediately would create a duplicate entry.
+      continue;
     }
     slot = (slot + 1) & (exact_flat_capacity - 1);
   }
@@ -1683,6 +1711,143 @@ void DfsAnagramSearch::restore_exact_class(
   worker->bag_mask = parent_bag_mask;
 }
 
+inline DfsAnagramSearch::ExactChildResult
+DfsAnagramSearch::classify_exact_child(
+    SearchWorker* worker, uint32_t class_index,
+    size_t candidate_length, size_t letters_left) {
+  assert(hot_classes_ready);
+  if (candidate_length == letters_left)
+    return EXACT_CHILD_TRUE;
+
+  DfsClassSpan const classes = class_list->classes();
+  uint64_t const child_exact_key =
+      worker->exact_key - classes[class_index].signature;
+  bool child_result;
+  if (exact_memo_lookup(worker, child_exact_key, &child_result))
+    return child_result ? EXACT_CHILD_TRUE : EXACT_CHILD_FALSE;
+
+  uint64_t const child_score_key =
+      worker->score_key - score_key_deltas.get()[class_index];
+  Reachability const child_reachability =
+      cached_reachability(child_score_key, false);
+  if (child_reachability == REACHABILITY_UNKNOWN)
+    return EXACT_CHILD_UNKNOWN;
+
+  child_result = child_reachability == REACHABILITY_YES;
+  exact_memo_store(worker, child_exact_key, child_result);
+  return child_result ? EXACT_CHILD_TRUE : EXACT_CHILD_FALSE;
+}
+
+bool DfsAnagramSearch::exact_candidates_immediate(
+    SearchWorker* worker, size_t letters_left) {
+  if (worker->bag_mask == 0) return false;
+
+  int const rank = __builtin_ctzll(worker->bag_mask);
+  int const forced_symbol =
+      class_list->rank_to_symbol()[size_t(rank)];
+  size_t begin = class_list->candidate_begin(forced_symbol);
+  size_t const end = class_list->candidate_end(forced_symbol);
+  if (hot_classes_ready)
+    begin = first_length_candidate(begin, end, letters_left);
+
+  DfsClassSpan const classes = class_list->classes();
+  for (size_t class_index = begin; class_index < end; ++class_index) {
+    size_t const candidate_length = classes[class_index].key_length;
+    if (candidate_length > letters_left ||
+        !exact_class_fits(class_index, *worker))
+      continue;
+
+    ExactChildResult const child = classify_exact_child(
+        worker, uint32_t(class_index), candidate_length, letters_left);
+    if (child == EXACT_CHILD_TRUE) return true;
+    if (child == EXACT_CHILD_FALSE) continue;
+
+    uint64_t parent_bag_mask;
+    subtract_exact_class(class_index, worker, &parent_bag_mask);
+    bool const result = exact_remainder_completable(
+        worker, letters_left - candidate_length);
+    restore_exact_class(class_index, worker, parent_bag_mask);
+    if (result) return true;
+  }
+  return false;
+}
+
+bool DfsAnagramSearch::exact_buffered_candidates(
+    SearchWorker* worker, size_t letters_left,
+    uint32_t const* class_ids, size_t count) {
+  DfsClassSpan const classes = class_list->classes();
+  for (size_t i = 0; i < count; ++i) {
+    uint32_t const class_index = class_ids[i];
+    size_t const candidate_length = classes[class_index].key_length;
+    ExactChildResult const child = classify_exact_child(
+        worker, class_index, candidate_length, letters_left);
+    if (child != EXACT_CHILD_UNKNOWN) {
+      ++worker->exact_lookahead_reprobes_decided;
+      if (child == EXACT_CHILD_TRUE) {
+        ++worker->exact_lookahead_known_true_wins;
+        return true;
+      }
+      continue;
+    }
+
+    ++worker->exact_lookahead_recursive_expansions;
+    uint64_t parent_bag_mask;
+    subtract_exact_class(class_index, worker, &parent_bag_mask);
+    bool const result = exact_remainder_completable(
+        worker, letters_left - candidate_length);
+    restore_exact_class(class_index, worker, parent_bag_mask);
+    if (result) return true;
+  }
+  return false;
+}
+
+bool DfsAnagramSearch::exact_candidates_lookahead(
+    SearchWorker* worker, size_t letters_left) {
+  assert(exact_memo_lookahead > 0);
+  assert(exact_memo_lookahead <= EXACT_MEMO_LOOKAHEAD_MAX);
+  if (worker->bag_mask == 0) return false;
+
+  int const rank = __builtin_ctzll(worker->bag_mask);
+  int const forced_symbol =
+      class_list->rank_to_symbol()[size_t(rank)];
+  size_t begin = class_list->candidate_begin(forced_symbol);
+  size_t const end = class_list->candidate_end(forced_symbol);
+  if (hot_classes_ready)
+    begin = first_length_candidate(begin, end, letters_left);
+
+  uint32_t buffered[EXACT_MEMO_LOOKAHEAD_MAX];
+  size_t buffered_count = 0;
+  DfsClassSpan const classes = class_list->classes();
+  for (size_t class_index = begin; class_index < end; ++class_index) {
+    size_t const candidate_length = classes[class_index].key_length;
+    if (candidate_length > letters_left ||
+        !exact_class_fits(class_index, *worker))
+      continue;
+
+    ExactChildResult const child = classify_exact_child(
+        worker, uint32_t(class_index), candidate_length, letters_left);
+    if (child == EXACT_CHILD_TRUE) {
+      if (buffered_count != 0)
+        ++worker->exact_lookahead_known_true_wins;
+      return true;
+    }
+    if (child == EXACT_CHILD_FALSE) continue;
+
+    buffered[buffered_count++] = uint32_t(class_index);
+    if (buffered_count != exact_memo_lookahead) continue;
+
+    ++worker->exact_lookahead_full_windows;
+    if (exact_buffered_candidates(
+            worker, letters_left, buffered, buffered_count))
+      return true;
+    buffered_count = 0;
+  }
+
+  return buffered_count != 0 &&
+      exact_buffered_candidates(
+          worker, letters_left, buffered, buffered_count);
+}
+
 bool DfsAnagramSearch::exact_remainder_completable(
     SearchWorker* worker, size_t letters_left,
     ExactResultSource* source) {
@@ -1692,7 +1857,7 @@ bool DfsAnagramSearch::exact_remainder_completable(
   }
 
   bool memoized;
-  if (exact_memo_lookup(worker, &memoized)) {
+  if (exact_memo_lookup(worker, worker->exact_key, &memoized)) {
     if (source != NULL) *source = EXACT_RESULT_MEMO;
     return memoized;
   }
@@ -1701,7 +1866,7 @@ bool DfsAnagramSearch::exact_remainder_completable(
       cached_reachability(worker->score_key, false);
   if (reachability != REACHABILITY_UNKNOWN) {
     bool const result = reachability == REACHABILITY_YES;
-    exact_memo_store(worker, result);
+    exact_memo_store(worker, worker->exact_key, result);
     if (source != NULL)
       *source = result ? EXACT_RESULT_BOUND_YES : EXACT_RESULT_BOUND_NO;
     return result;
@@ -1713,32 +1878,12 @@ bool DfsAnagramSearch::exact_remainder_completable(
                    worker->nodes == worker->next_progress))
     report_search_progress(worker);
 
-  bool result = false;
-  if (worker->bag_mask != 0) {
-    int const rank = __builtin_ctzll(worker->bag_mask);
-    int const forced_symbol =
-        class_list->rank_to_symbol()[size_t(rank)];
-    size_t begin = class_list->candidate_begin(forced_symbol);
-    size_t const end = class_list->candidate_end(forced_symbol);
-    if (hot_classes_ready)
-      begin = first_length_candidate(begin, end, letters_left);
+  bool const result =
+      exact_memo_lookahead == 0
+          ? exact_candidates_immediate(worker, letters_left)
+          : exact_candidates_lookahead(worker, letters_left);
 
-    DfsClassSpan const classes = class_list->classes();
-    for (size_t class_index = begin; class_index < end; ++class_index) {
-      size_t const candidate_length = classes[class_index].key_length;
-      if (candidate_length > letters_left ||
-          !exact_class_fits(class_index, *worker))
-        continue;
-      uint64_t parent_bag_mask;
-      subtract_exact_class(class_index, worker, &parent_bag_mask);
-      result = exact_remainder_completable(
-          worker, letters_left - candidate_length);
-      restore_exact_class(
-          class_index, worker, parent_bag_mask);
-      if (result) break;
-    }
-  }
-  exact_memo_store(worker, result);
+  exact_memo_store(worker, worker->exact_key, result);
   return result;
 }
 
@@ -1831,6 +1976,11 @@ bool DfsAnagramSearch::find_completable_classes(
   completable_exact_validation_count = 0;
   exact_memo_states = 0;
   exact_memo_hit_count = 0;
+  exact_memo_lookahead = exact_memo_lookahead_choice();
+  exact_lookahead_full_windows = 0;
+  exact_lookahead_known_true_wins = 0;
+  exact_lookahead_reprobes_decided = 0;
+  exact_lookahead_recursive_expansions = 0;
 
   completable->assign(classes.size(), false);
   std::vector<unsigned char> results(classes.size(), 0);
@@ -1895,6 +2045,14 @@ bool DfsAnagramSearch::find_completable_classes(
     completable_exact_validation_count += exact_validations[i];
     exact_memo_states += workers[i].exact_memo_states;
     exact_memo_hit_count += workers[i].exact_memo_hits;
+    exact_lookahead_full_windows +=
+        workers[i].exact_lookahead_full_windows;
+    exact_lookahead_known_true_wins +=
+        workers[i].exact_lookahead_known_true_wins;
+    exact_lookahead_reprobes_decided +=
+        workers[i].exact_lookahead_reprobes_decided;
+    exact_lookahead_recursive_expansions +=
+        workers[i].exact_lookahead_recursive_expansions;
   }
   search_seconds = std::chrono::duration<double>(
       PhaseClock::now() - validation_start).count();
@@ -1910,6 +2068,15 @@ bool DfsAnagramSearch::find_completable_classes(
     dfs_diagnostic(
         "phase 2 exact memo: %zu states computed, %zu hits\n",
         exact_memo_states, exact_memo_hit_count);
+    dfs_diagnostic(
+        "phase 2 exact lookahead: width %zu, %llu full windows, "
+        "%llu known-true wins, %llu re-probes decided, "
+        "%llu recursive expansions\n",
+        exact_memo_lookahead,
+        (unsigned long long)exact_lookahead_full_windows,
+        (unsigned long long)exact_lookahead_known_true_wins,
+        (unsigned long long)exact_lookahead_reprobes_decided,
+        (unsigned long long)exact_lookahead_recursive_expansions);
   }
   return true;
 }
@@ -3249,6 +3416,10 @@ void DfsAnagramSearch::start_search_worker(SearchWorker* worker) {
   worker->reported_solutions = 0;
   worker->exact_memo_states = 0;
   worker->exact_memo_hits = 0;
+  worker->exact_lookahead_full_windows = 0;
+  worker->exact_lookahead_known_true_wins = 0;
+  worker->exact_lookahead_reprobes_decided = 0;
+  worker->exact_lookahead_recursive_expansions = 0;
 }
 
 void DfsAnagramSearch::report_search_progress(
