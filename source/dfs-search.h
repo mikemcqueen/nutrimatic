@@ -7,9 +7,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "dfs-alloc.h"
@@ -290,8 +288,6 @@ class DfsAnagramSearch {
       ExactResultSource* source = NULL);
   bool exact_memo_lookup(SearchWorker* worker, bool* value);
   void exact_memo_store(SearchWorker* worker, bool value);
-  uint64_t exact_bag_number(SearchWorker const& worker) const;
-  std::string exact_bag_string(SearchWorker const& worker) const;
   bool exact_class_fits(
       size_t class_index, SearchWorker const& worker) const;
   void subtract_exact_class(
@@ -387,7 +383,6 @@ class DfsAnagramSearch {
   size_t score_wild_letters;
   size_t score_wild_span;
   bool score_projection_requested;
-  bool exact_state_encodable;
 
   std::unique_ptr<FitClass, DfsAlignedFree> fit_classes;
   std::unique_ptr<uint64_t, DfsAlignedFree> score_key_deltas;
@@ -440,15 +435,9 @@ class DfsAnagramSearch {
   size_t bound_charged_bytes;
   int64_t bound_prunes;
 
-  static size_t const EXACT_MEMO_SHARDS = 64;
-  std::array<std::unordered_map<uint64_t, bool>,
-             EXACT_MEMO_SHARDS> exact_number_memo;
-  std::array<std::unordered_map<std::string, bool>,
-             EXACT_MEMO_SHARDS> exact_string_memo;
-  std::array<std::mutex, EXACT_MEMO_SHARDS> exact_memo_mutexes;
-  // The common <=62-bit exact-key path packs key and boolean into one atomic
-  // open-addressed slot. The sharded maps above are allocation/key-width
-  // fallbacks, not a second cache.
+  // Packs the exact key and boolean into one atomic open-addressed slot.
+  // Completability setup fails rather than falling back to an unbounded map
+  // when the packed key, table size, or allocation does not fit.
   std::unique_ptr<AtomicWord, DfsAlignedFree> exact_flat_memo;
   size_t exact_flat_capacity;
   size_t exact_flat_entry_limit;

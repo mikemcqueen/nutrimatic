@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <functional>
 #include <limits>
 #include <new>
 #include <thread>
@@ -442,7 +441,6 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_wild_letters(0),
     score_wild_span(1),
     score_projection_requested(false),
-    exact_state_encodable(false),
     projected_actions_ready(false),
     projected_quotient_enabled(true),
     hot_classes_ready(false),
@@ -1184,7 +1182,6 @@ bool DfsAnagramSearch::prepare_phase_two(
   // multipliers are the commuted form of the rank-ordered ones above, so the
   // two verdicts cannot drift.
   assert(encodable);
-  exact_state_encodable = encodable;
   exact_root_key = state_count - 1;
   bag_mask = 0;
   for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
@@ -1550,12 +1547,6 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
   return true;
 }
 
-uint64_t DfsAnagramSearch::exact_bag_number(
-    SearchWorker const& worker) const {
-  assert(exact_state_encodable);
-  return worker.exact_key;
-}
-
 static uint64_t exact_memo_hash(uint64_t value) {
   value ^= value >> 30;
   value *= UINT64_C(0xbf58476d1ce4e5b9);
@@ -1564,98 +1555,50 @@ static uint64_t exact_memo_hash(uint64_t value) {
   return value ^ (value >> 31);
 }
 
-std::string DfsAnagramSearch::exact_bag_string(
-    SearchWorker const& worker) const {
-  std::string key;
-  key.resize(DFS_SYMBOL_COUNT * sizeof(uint32_t));
-  for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
-    memcpy(&key[rank * sizeof(uint32_t)], &worker.bag[rank],
-           sizeof(uint32_t));
-  return key;
-}
-
 bool DfsAnagramSearch::exact_memo_lookup(
     SearchWorker* worker, bool* value) {
-  if (exact_flat_memo.get() != NULL) {
-    uint64_t const key_bits = worker->exact_key << 2;
-    size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
-        (exact_flat_capacity - 1);
-    for (;;) {
-      uint64_t const stored = exact_flat_memo.get()[slot].value.load(
-          std::memory_order_relaxed);
-      if (stored == 0) return false;
-      if ((stored & ~UINT64_C(3)) == key_bits) {
-        *value = (stored & UINT64_C(3)) == 2;
-        ++worker->exact_memo_hits;
-        return true;
-      }
-      slot = (slot + 1) & (exact_flat_capacity - 1);
+  assert(exact_flat_memo.get() != NULL);
+  size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
+      (exact_flat_capacity - 1);
+  for (;;) {
+    uint64_t const stored = exact_flat_memo.get()[slot].value.load(
+        std::memory_order_relaxed);
+    if (stored == 0) return false;
+    if ((stored - 1) / 2 == worker->exact_key) {
+      *value = (stored & UINT64_C(1)) == 0;
+      ++worker->exact_memo_hits;
+      return true;
     }
+    slot = (slot + 1) & (exact_flat_capacity - 1);
   }
-
-  if (exact_state_encodable) {
-    uint64_t const key = exact_bag_number(*worker);
-    size_t const shard =
-        std::hash<uint64_t>()(key) % EXACT_MEMO_SHARDS;
-    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
-    auto const found = exact_number_memo[shard].find(key);
-    if (found == exact_number_memo[shard].end()) return false;
-    *value = found->second;
-  } else {
-    std::string const key = exact_bag_string(*worker);
-    size_t const shard =
-        std::hash<std::string>()(key) % EXACT_MEMO_SHARDS;
-    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
-    auto const found = exact_string_memo[shard].find(key);
-    if (found == exact_string_memo[shard].end()) return false;
-    *value = found->second;
-  }
-  ++worker->exact_memo_hits;
-  return true;
 }
 
 void DfsAnagramSearch::exact_memo_store(
     SearchWorker* worker, bool value) {
-  if (exact_flat_memo.get() != NULL) {
-    if (exact_flat_entries.load(std::memory_order_relaxed) >=
-        exact_flat_entry_limit)
+  assert(exact_flat_memo.get() != NULL);
+  if (exact_flat_entries.load(std::memory_order_relaxed) >=
+      exact_flat_entry_limit)
+    return;
+  assert(worker->exact_key <= (UINT64_MAX - 2) / 2);
+  uint64_t const desired =
+      worker->exact_key * UINT64_C(2) + (value ? 2 : 1);
+  size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
+      (exact_flat_capacity - 1);
+  for (;;) {
+    uint64_t stored = exact_flat_memo.get()[slot].value.load(
+        std::memory_order_relaxed);
+    if (stored != 0 && (stored - 1) / 2 == worker->exact_key)
       return;
-    uint64_t const key_bits = worker->exact_key << 2;
-    uint64_t const desired = key_bits | (value ? 2 : 1);
-    size_t slot = size_t(exact_memo_hash(worker->exact_key)) &
-        (exact_flat_capacity - 1);
-    for (;;) {
-      uint64_t stored = exact_flat_memo.get()[slot].value.load(
-          std::memory_order_relaxed);
-      if ((stored & ~UINT64_C(3)) == key_bits && stored != 0)
-        return;
-      if (stored == 0 &&
-          exact_flat_memo.get()[slot].value.compare_exchange_strong(
-              stored, desired, std::memory_order_relaxed,
-              std::memory_order_relaxed)) {
-        exact_flat_entries.fetch_add(1, std::memory_order_relaxed);
-        ++worker->exact_memo_states;
-        return;
-      }
-      slot = (slot + 1) & (exact_flat_capacity - 1);
+    if (stored == 0 &&
+        exact_flat_memo.get()[slot].value.compare_exchange_strong(
+            stored, desired, std::memory_order_relaxed,
+            std::memory_order_relaxed)) {
+      exact_flat_entries.fetch_add(1, std::memory_order_relaxed);
+      ++worker->exact_memo_states;
+      return;
     }
+    slot = (slot + 1) & (exact_flat_capacity - 1);
   }
-
-  bool inserted;
-  if (exact_state_encodable) {
-    uint64_t const key = exact_bag_number(*worker);
-    size_t const shard =
-        std::hash<uint64_t>()(key) % EXACT_MEMO_SHARDS;
-    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
-    inserted = exact_number_memo[shard].emplace(key, value).second;
-  } else {
-    std::string const key = exact_bag_string(*worker);
-    size_t const shard =
-        std::hash<std::string>()(key) % EXACT_MEMO_SHARDS;
-    std::lock_guard<std::mutex> lock(exact_memo_mutexes[shard]);
-    inserted = exact_string_memo[shard].emplace(key, value).second;
-  }
-  if (inserted) ++worker->exact_memo_states;
 }
 
 bool DfsAnagramSearch::exact_class_fits(
@@ -1814,45 +1757,74 @@ bool DfsAnagramSearch::find_completable_classes(
   exact_flat_capacity = 0;
   exact_flat_entry_limit = 0;
   exact_flat_entries.store(0, std::memory_order_relaxed);
-  if (exact_state_encodable &&
-      exact_root_key <= (UINT64_MAX >> 2) &&
-      classes.size() <= SIZE_MAX / 2) {
-    size_t const wanted = std::max<size_t>(classes.size() * 2, 2);
-    size_t capacity = 1;
-    while (capacity < wanted && capacity <= SIZE_MAX / 2)
-      capacity *= 2;
-    if (capacity >= wanted &&
-        capacity <= SIZE_MAX / sizeof(AtomicWord)) {
-      AtomicWord* slots = static_cast<AtomicWord*>(
-          dfs_allocate_aligned(capacity * sizeof(AtomicWord)));
-      if (slots != NULL) {
-        for (size_t i = 0; i < capacity; ++i) {
-          new (&slots[i]) AtomicWord;
-          slots[i].value.store(0, std::memory_order_relaxed);
-        }
-        exact_flat_memo.reset(slots);
-        exact_flat_capacity = capacity;
-        exact_flat_entry_limit = capacity - capacity / 4;
-        if (progress_enabled)
-          dfs_diagnostic(
-              "phase 2 exact memo table: %zu slots, %zu bytes\n",
-              exact_flat_capacity,
-              exact_flat_capacity * sizeof(AtomicWord));
-      }
+  uint64_t packed_root_key;
+  if (!dfs_checked_multiply_u64(
+          exact_root_key, UINT64_C(2), &packed_root_key) ||
+      !dfs_checked_add_u64(
+          packed_root_key, UINT64_C(2), &packed_root_key)) {
+    dfs_diagnostic_to_stream(
+        stderr,
+        "error: phase 2 exact memo key arithmetic overflowed 64 bits\n");
+    return false;
+  }
+
+  static_assert(sizeof(size_t) <= sizeof(uint64_t),
+                "exact memo sizing requires at most 64-bit size_t");
+  uint64_t wanted;
+  if (!dfs_checked_multiply_u64(
+          uint64_t(classes.size()), UINT64_C(2), &wanted)) {
+    dfs_diagnostic_to_stream(
+        stderr,
+        "error: phase 2 exact memo table sizing overflowed 64 bits\n");
+    return false;
+  }
+  wanted = std::max<uint64_t>(wanted, UINT64_C(2));
+  uint64_t capacity = 1;
+  while (capacity < wanted) {
+    if (!dfs_checked_multiply_u64(
+            capacity, UINT64_C(2), &capacity)) {
+      dfs_diagnostic_to_stream(
+          stderr,
+          "error: phase 2 exact memo table sizing overflowed 64 bits\n");
+      return false;
     }
   }
-  for (size_t shard = 0; shard < EXACT_MEMO_SHARDS; ++shard) {
-    exact_number_memo[shard].clear();
-    exact_string_memo[shard].clear();
-    if (exact_flat_memo.get() != NULL)
-      continue;
-    if (exact_state_encodable)
-      exact_number_memo[shard].reserve(
-          classes.size() / EXACT_MEMO_SHARDS + 1);
-    else
-      exact_string_memo[shard].reserve(
-          classes.size() / EXACT_MEMO_SHARDS + 1);
+  uint64_t table_bytes;
+  if (!dfs_checked_multiply_u64(
+          capacity, uint64_t(sizeof(AtomicWord)), &table_bytes)) {
+    dfs_diagnostic_to_stream(
+        stderr,
+        "error: phase 2 exact memo table sizing overflowed 64 bits\n");
+    return false;
   }
+  if (capacity > SIZE_MAX || table_bytes > SIZE_MAX) {
+    dfs_diagnostic_to_stream(
+        stderr,
+        "error: phase 2 exact memo table exceeds the address space\n");
+    return false;
+  }
+
+  AtomicWord* slots = static_cast<AtomicWord*>(
+      dfs_allocate_aligned(size_t(table_bytes)));
+  if (slots == NULL) {
+    dfs_diagnostic_to_stream(
+        stderr,
+        "error: phase 2 could not allocate the %llu-byte exact memo table\n",
+        (unsigned long long)table_bytes);
+    return false;
+  }
+  for (size_t i = 0; i < size_t(capacity); ++i) {
+    new (&slots[i]) AtomicWord;
+    slots[i].value.store(0, std::memory_order_relaxed);
+  }
+  exact_flat_memo.reset(slots);
+  exact_flat_capacity = size_t(capacity);
+  exact_flat_entry_limit =
+      exact_flat_capacity - exact_flat_capacity / 4;
+  if (progress_enabled)
+    dfs_diagnostic(
+        "phase 2 exact memo table: %zu slots, %llu bytes\n",
+        exact_flat_capacity, (unsigned long long)table_bytes);
   completable_checked = 0;
   completable_bound_reject_count = 0;
   completable_exact_bound_accept_count = 0;

@@ -152,6 +152,32 @@ grep -Eq 'segment penalty 1000000$' \
   "$test_dir/completable-on.stderr" ||
   fail "phase-2 diagnostic omitted the segment penalty"
 
+# A 2^62-state bag needs 63 bits and still fits the flat memo encoding.
+wide_exact_bag=
+for symbol in {a..z} {0..4}; do
+  wide_exact_bag+="${symbol}${symbol}${symbol}"
+done
+"$query_index" "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
+  --require-completable -C 0 -F \
+  > "$test_dir/exact-key-63-bit.stdout" \
+  2> "$test_dir/exact-key-63-bit.stderr" ||
+  fail "a 63-bit exact state count should fit the flat memo"
+# One more radix-3 symbol makes 3 * 2^62 states: the class signature
+# still fits in uint64_t, but packing its key with a verdict does not.
+wide_exact_bag+="55"
+set +e
+"$query_index" "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
+  --require-completable -C 0 -F \
+  > "$test_dir/exact-key-overflow.stdout" \
+  2> "$test_dir/exact-key-overflow.stderr"
+status=$?
+set -e
+[[ $status -eq 2 ]] ||
+  fail "exact-key overflow should exit 2, got $status"
+grep -q 'error: phase 2 exact memo key arithmetic overflowed 64 bits$' \
+  "$test_dir/exact-key-overflow.stderr" ||
+  fail "exact-key overflow diagnostic is missing"
+
 "$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable -d 0 -S 2 -P 1 \
   > "$test_dir/completable-penalty-one.stdout" \
