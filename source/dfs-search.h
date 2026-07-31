@@ -299,6 +299,9 @@ class DfsAnagramSearch {
   ExactChildResult classify_exact_child(
       SearchWorker* worker, uint32_t class_index,
       size_t candidate_length, size_t letters_left);
+  // The tail of exact_remainder_completable, entered directly when the caller
+  // has already probed the memo and the score bound for this exact key.
+  bool exact_expand_node(SearchWorker* worker, size_t letters_left);
   bool exact_candidates_immediate(
       SearchWorker* worker, size_t letters_left);
   bool exact_candidates_lookahead(
@@ -407,6 +410,10 @@ class DfsAnagramSearch {
   bool score_projection_requested;
 
   std::unique_ptr<FitClass, DfsAlignedFree> fit_classes;
+  // The exact scan rejects ~99.98% of candidates on the support mask alone,
+  // so the masks also live in their own contiguous array: 8 bytes per stride
+  // instead of FitClass's 16, and vector-loadable four at a time.
+  std::unique_ptr<uint64_t, DfsAlignedFree> class_supports;
   std::unique_ptr<uint64_t, DfsAlignedFree> score_key_deltas;
   std::unique_ptr<uint16_t, DfsAlignedFree> score_wild_lengths;
   std::unique_ptr<uint32_t, DfsAlignedFree> packed_letters;
@@ -420,6 +427,9 @@ class DfsAnagramSearch {
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_bucket_starts;
   bool projected_actions_ready;
   bool projected_quotient_enabled;
+  // Resolved in the constructor, before any worker starts, so no dispatch
+  // happens on the scan path itself.
+  bool const support_scan_vector;
   bool hot_classes_ready;
   // A bag with no classes has no results, which is not the same thing as a bag
   // phase 2 cannot prepare; only the latter aborts.
@@ -440,6 +450,9 @@ class DfsAnagramSearch {
   uint64_t certificate_scans_kept;
 
   ScoreBoundMode bound_mode;
+  // With bounds off cached_reachability answers UNKNOWN for every key, so the
+  // exact recurrence can skip maintaining and probing score keys entirely.
+  bool score_bounds_active() const { return bound_mode != SCORE_BOUND_OFF; }
   std::unique_ptr<AtomicWord, DfsAlignedFree> bound_values;
   std::unique_ptr<AtomicFloatWord, DfsAlignedFree> bound_float_values;
   std::unique_ptr<float, DfsAlignedFree> bound_plain_float_values;

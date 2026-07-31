@@ -315,6 +315,67 @@ static char const* projected_kernel_name(ProjectedKernel kernel) {
   return "scalar";
 }
 
+// Returns the first index in [begin, end) whose support mask fits in the bag,
+// or end. A candidate fits when it needs no letter the bag has run out of,
+// which is exactly (support & ~bag_mask) == 0. Callers depend on this
+// returning the *first* such index, so the scan order is unchanged.
+static size_t next_support_fit_scalar(
+    uint64_t const* supports, size_t begin, size_t end, uint64_t absent) {
+  for (size_t i = begin; i < end; ++i)
+    if ((supports[i] & absent) == 0) return i;
+  return end;
+}
+
+#if defined(__x86_64__)
+__attribute__((target("avx2"))) static size_t next_support_fit_avx2(
+    uint64_t const* supports, size_t begin, size_t end, uint64_t absent) {
+  __m256i const absent_lanes = _mm256_set1_epi64x(int64_t(absent));
+  __m256i const zero = _mm256_setzero_si256();
+  size_t i = begin;
+  for (; i + 16 <= end; i += 16) {
+    __m256i const* const block =
+        reinterpret_cast<__m256i const*>(supports + i);
+    int mask = 0;
+    for (int lane = 0; lane < 4; ++lane) {
+      __m256i const needed = _mm256_and_si256(
+          _mm256_loadu_si256(block + lane), absent_lanes);
+      mask |= _mm256_movemask_pd(_mm256_castsi256_pd(
+          _mm256_cmpeq_epi64(needed, zero))) << (lane * 4);
+    }
+    if (mask != 0) return i + size_t(__builtin_ctz(unsigned(mask)));
+  }
+  for (; i + 4 <= end; i += 4) {
+    __m256i const needed = _mm256_and_si256(
+        _mm256_loadu_si256(reinterpret_cast<__m256i const*>(supports + i)),
+        absent_lanes);
+    int const mask = _mm256_movemask_pd(_mm256_castsi256_pd(
+        _mm256_cmpeq_epi64(needed, zero)));
+    if (mask != 0) return i + size_t(__builtin_ctz(unsigned(mask)));
+  }
+  return next_support_fit_scalar(supports, i, end, absent);
+}
+#endif
+
+static bool support_scan_avx2_enabled() {
+#if defined(__x86_64__)
+  char const* mode = getenv("NUTRIMATIC_SUPPORT_SIMD");
+  if (mode != NULL && mode[0] != '\0' && strcmp(mode, "1") != 0)
+    return false;
+  return __builtin_cpu_supports("avx2");
+#else
+  return false;
+#endif
+}
+
+static size_t next_support_fit(
+    bool vector, uint64_t const* supports, size_t begin, size_t end,
+    uint64_t absent) {
+#if defined(__x86_64__)
+  if (vector) return next_support_fit_avx2(supports, begin, end, absent);
+#endif
+  return next_support_fit_scalar(supports, begin, end, absent);
+}
+
 // Bound the error in fl(fl(class_score + boundary) + child). IEEE double
 // round-to-nearest incurs less than one DBL_EPSILON times the sum of operand
 // magnitudes here. The factor of four also covers rounding while calculating
@@ -462,6 +523,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_projection_requested(false),
     projected_actions_ready(false),
     projected_quotient_enabled(true),
+    support_scan_vector(support_scan_avx2_enabled()),
     hot_classes_ready(false),
     empty_class_list(false),
     unsupported_reason(NULL),
@@ -552,6 +614,7 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   static_assert(sizeof(FitClass) == 16,
                 "FitClass must remain four per cache line");
   fit_classes.reset();
+  class_supports.reset();
   score_key_deltas.reset();
   score_wild_lengths.reset();
   packed_letters.reset();
@@ -583,6 +646,12 @@ bool DfsAnagramSearch::prepare_hot_classes() {
       dfs_allocate_aligned(classes.size() * sizeof(FitClass)));
   if (fit == NULL) return unsupported("could not allocate the fit classes");
   std::unique_ptr<FitClass, DfsAlignedFree> new_fit(fit);
+
+  uint64_t* supports = static_cast<uint64_t*>(
+      dfs_allocate_aligned(classes.size() * sizeof(uint64_t)));
+  if (supports == NULL)
+    return unsupported("could not allocate the support masks");
+  std::unique_ptr<uint64_t, DfsAlignedFree> new_supports(supports);
 
   uint64_t* score_deltas = static_cast<uint64_t*>(
       dfs_allocate_aligned(classes.size() * sizeof(uint64_t)));
@@ -652,6 +721,7 @@ bool DfsAnagramSearch::prepare_hot_classes() {
     }
 
     fit[ci].support_mask = support;
+    supports[ci] = support;
     fit[ci].letters_offset = uint32_t(offset);
     fit[ci].packed_length_and_count =
         uint32_t(source.key_length) |
@@ -670,6 +740,7 @@ bool DfsAnagramSearch::prepare_hot_classes() {
   }
 
   fit_classes = std::move(new_fit);
+  class_supports = std::move(new_supports);
   score_key_deltas = std::move(new_score_deltas);
   score_wild_lengths = std::move(new_wild_lengths);
   packed_letters = std::move(new_packed);
@@ -1664,7 +1735,8 @@ void DfsAnagramSearch::subtract_exact_class(
       remaining -= packed_count(requirement);
       if (remaining == 0) worker->bag_mask &= ~(UINT64_C(1) << rank);
     }
-    worker->score_key -= score_key_deltas.get()[class_index];
+    if (score_bounds_active())
+      worker->score_key -= score_key_deltas.get()[class_index];
     return;
   }
 
@@ -1690,7 +1762,8 @@ void DfsAnagramSearch::restore_exact_class(
         packed_letters.get() + fit.letters_offset;
     uint32_t const requirement_count =
         hot_requirement_count(fit.packed_length_and_count);
-    worker->score_key += score_key_deltas.get()[class_index];
+    if (score_bounds_active())
+      worker->score_key += score_key_deltas.get()[class_index];
     for (uint32_t i = 0; i < requirement_count; ++i) {
       uint32_t const requirement = requirements[i];
       worker->bag[packed_rank(requirement)] += packed_count(requirement);
@@ -1726,6 +1799,8 @@ DfsAnagramSearch::classify_exact_child(
   if (exact_memo_lookup(worker, child_exact_key, &child_result))
     return child_result ? EXACT_CHILD_TRUE : EXACT_CHILD_FALSE;
 
+  if (!score_bounds_active()) return EXACT_CHILD_UNKNOWN;
+
   uint64_t const child_score_key =
       worker->score_key - score_key_deltas.get()[class_index];
   Reachability const child_reachability =
@@ -1740,22 +1815,30 @@ DfsAnagramSearch::classify_exact_child(
 
 bool DfsAnagramSearch::exact_candidates_immediate(
     SearchWorker* worker, size_t letters_left) {
+  assert(hot_classes_ready);
   if (worker->bag_mask == 0) return false;
 
   int const rank = __builtin_ctzll(worker->bag_mask);
   int const forced_symbol =
       class_list->rank_to_symbol()[size_t(rank)];
-  size_t begin = class_list->candidate_begin(forced_symbol);
+  size_t const begin = first_length_candidate(
+      class_list->candidate_begin(forced_symbol),
+      class_list->candidate_end(forced_symbol), letters_left);
   size_t const end = class_list->candidate_end(forced_symbol);
-  if (hot_classes_ready)
-    begin = first_length_candidate(begin, end, letters_left);
 
-  DfsClassSpan const classes = class_list->classes();
-  for (size_t class_index = begin; class_index < end; ++class_index) {
-    size_t const candidate_length = classes[class_index].key_length;
-    if (candidate_length > letters_left ||
-        !exact_class_fits(class_index, *worker))
+  FitClass const* const fits = fit_classes.get();
+  uint64_t const* const supports = class_supports.get();
+  uint64_t const absent = ~worker->bag_mask;
+  auto const next_fit = [&](size_t from) {
+    return next_support_fit(support_scan_vector, supports, from, end, absent);
+  };
+  for (size_t class_index = next_fit(begin); class_index < end;
+       class_index = next_fit(class_index + 1)) {
+    FitClass const& candidate = fits[class_index];
+    if (!hot_class_multiplicity_fits(uint32_t(class_index), *worker))
       continue;
+    size_t const candidate_length =
+        hot_letter_length(candidate.packed_length_and_count);
 
     ExactChildResult const child = classify_exact_child(
         worker, uint32_t(class_index), candidate_length, letters_left);
@@ -1764,8 +1847,8 @@ bool DfsAnagramSearch::exact_candidates_immediate(
 
     uint64_t parent_bag_mask;
     subtract_exact_class(class_index, worker, &parent_bag_mask);
-    bool const result = exact_remainder_completable(
-        worker, letters_left - candidate_length);
+    bool const result =
+        exact_expand_node(worker, letters_left - candidate_length);
     restore_exact_class(class_index, worker, parent_bag_mask);
     if (result) return true;
   }
@@ -1793,8 +1876,8 @@ bool DfsAnagramSearch::exact_buffered_candidates(
     ++worker->exact_lookahead_recursive_expansions;
     uint64_t parent_bag_mask;
     subtract_exact_class(class_index, worker, &parent_bag_mask);
-    bool const result = exact_remainder_completable(
-        worker, letters_left - candidate_length);
+    bool const result =
+        exact_expand_node(worker, letters_left - candidate_length);
     restore_exact_class(class_index, worker, parent_bag_mask);
     if (result) return true;
   }
@@ -1805,24 +1888,32 @@ bool DfsAnagramSearch::exact_candidates_lookahead(
     SearchWorker* worker, size_t letters_left) {
   assert(exact_memo_lookahead > 0);
   assert(exact_memo_lookahead <= EXACT_MEMO_LOOKAHEAD_MAX);
+  assert(hot_classes_ready);
   if (worker->bag_mask == 0) return false;
 
   int const rank = __builtin_ctzll(worker->bag_mask);
   int const forced_symbol =
       class_list->rank_to_symbol()[size_t(rank)];
-  size_t begin = class_list->candidate_begin(forced_symbol);
+  size_t const begin = first_length_candidate(
+      class_list->candidate_begin(forced_symbol),
+      class_list->candidate_end(forced_symbol), letters_left);
   size_t const end = class_list->candidate_end(forced_symbol);
-  if (hot_classes_ready)
-    begin = first_length_candidate(begin, end, letters_left);
 
   uint32_t buffered[EXACT_MEMO_LOOKAHEAD_MAX];
   size_t buffered_count = 0;
-  DfsClassSpan const classes = class_list->classes();
-  for (size_t class_index = begin; class_index < end; ++class_index) {
-    size_t const candidate_length = classes[class_index].key_length;
-    if (candidate_length > letters_left ||
-        !exact_class_fits(class_index, *worker))
+  FitClass const* const fits = fit_classes.get();
+  uint64_t const* const supports = class_supports.get();
+  uint64_t const absent = ~worker->bag_mask;
+  auto const next_fit = [&](size_t from) {
+    return next_support_fit(support_scan_vector, supports, from, end, absent);
+  };
+  for (size_t class_index = next_fit(begin); class_index < end;
+       class_index = next_fit(class_index + 1)) {
+    FitClass const& candidate = fits[class_index];
+    if (!hot_class_multiplicity_fits(uint32_t(class_index), *worker))
       continue;
+    size_t const candidate_length =
+        hot_letter_length(candidate.packed_length_and_count);
 
     ExactChildResult const child = classify_exact_child(
         worker, uint32_t(class_index), candidate_length, letters_left);
@@ -1873,6 +1964,11 @@ bool DfsAnagramSearch::exact_remainder_completable(
   }
 
   if (source != NULL) *source = EXACT_RESULT_SEARCH;
+  return exact_expand_node(worker, letters_left);
+}
+
+bool DfsAnagramSearch::exact_expand_node(
+    SearchWorker* worker, size_t letters_left) {
   ++worker->nodes;
   if (DFS_UNLIKELY(progress_enabled &&
                    worker->nodes == worker->next_progress))
