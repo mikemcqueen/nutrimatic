@@ -245,13 +245,8 @@ static ProjectedWildUpdateFn projected_wild_update_impl();
 resolved **once** in `compute_projected_score_bound_bottom_up()` before the
 layer loop and passed to the workers as a plain function pointer — not
 re-resolved per bag, and not a function-local static in the hot path.
-Selection rules, following the existing env conventions
-(`source/dfs-search.cpp:235-256`):
-
-- `NUTRIMATIC_PROJECTED_SIMD` unset or `1`: auto — AVX2 if
-  `__builtin_cpu_supports("avx2")`, else scalar. Land this phase with the
-  default **off** (opt-in `1`) and flip it in 3d, mirroring how the bottom-up
-  evaluator and projected cache were promoted (`f7cb1e6`).
+The finalized implementation makes AVX2 mandatory for projected wildcard
+updates.
 - `0`: force scalar.
 - `verify`: shadow mode, mirroring `NUTRIMATIC_LENGTH_CERTIFICATE=shadow`. Copy
   the `best` / `max_rounding_error` spans, run the SIMD kernel, re-run the
@@ -305,18 +300,14 @@ Then the end-to-end coverage:
   the synthetic test index (`make-dfs-test-index`) produces a non-trivial
   exact projection at that `d`; if it cannot, fall back to asserting the same
   equivalence through `source/test-dfs-cli-differential.sh`.
-- One run of that same case with `NUTRIMATIC_PROJECTED_SIMD=verify`, plus one
-  with `=0`, checking identical results. On a non-AVX2 machine both paths are
-  scalar and the test degenerates harmlessly.
+- Exercise the mandatory AVX2 path with the same projected case.
 
 Commit: `Cover the projected SIMD kernel`.
 
 ### 3d. Measure and decide the default
 
-Run the full A/B from phase 1 with `NUTRIMATIC_PROJECTED_SIMD` `0` vs `1`, on
-an uncontended machine, single-thread for the kernel comparison plus one
-multi-thread confirmation. Required evidence: setup seconds, search seconds,
-**setup + search**, all counters, and stdout hash equality.
+The completed A/B compared scalar and AVX2 runs on an uncontended machine,
+single-thread for the kernel comparison plus one multi-thread confirmation.
 
 If setup + search improves and the hash matches, flip the default to auto in a
 separate commit (`Enable the projected SIMD kernel by default`) with the

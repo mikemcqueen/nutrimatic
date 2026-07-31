@@ -267,8 +267,7 @@ Own all projected-bound behavior:
 - recursive atomic projected evaluator;
 - bottom-up layered projected evaluator;
 - projected parallel setup;
-- wildcard scalar, AVX2, and verify kernels;
-- `NUTRIMATIC_PROJECTED_SIMD`;
+- mandatory AVX2 wildcard kernel;
 - `NUTRIMATIC_PROJECTED_BOTTOM_UP`;
 - projected diagnostics and counters;
 - the projected wildcard test hook.
@@ -662,9 +661,8 @@ ProjectedComputeResult compute_projected_bounds(
     ScoreBoundStorage* destination);
 ```
 
-`ProjectedKernelMode` should be resolved once from
-`NUTRIMATIC_PROJECTED_SIMD` before workers start. The kernel functions can
-remain free functions in `dfs-search-projected.cpp`.
+The mandatory AVX2 kernel can remain a free function in
+`dfs-search-projected.cpp`.
 
 After a complete projected table has been constructed, the full action table
 is no longer required during ordinary search. A later memory cleanup could
@@ -952,13 +950,12 @@ worker code:
 |---|---|
 | `NUTRIMATIC_PROJECTED_SCORE`, `NUTRIMATIC_PROJECTED_SCORE_D` | preparation / score-key layout |
 | `NUTRIMATIC_PROJECTED_BOTTOM_UP` | projected bound builder |
-| `NUTRIMATIC_PROJECTED_SIMD` | projected wildcard kernel |
 | `NUTRIMATIC_SUPPORT_SIMD` | exact-completion support scan |
 | `NUTRIMATIC_EXACT_MEMO_LOOKAHEAD` | exact-completion search |
 | `NUTRIMATIC_LENGTH_CERTIFICATE` | length certificate |
 | `NUTRIMATIC_SEARCH_TASKS` | ordinary search runner |
 
-This table also clarifies that the two SIMD switches have unrelated owners.
+This table clarifies that the support-scan SIMD switch has its own owner.
 
 ## Dependency rules
 
@@ -1089,7 +1086,6 @@ Important invariants are:
 
 Performance-sensitive differentials should cover:
 
-- default versus `NUTRIMATIC_PROJECTED_SIMD=0`;
 - default versus `NUTRIMATIC_SUPPORT_SIMD=0`;
 - projected bottom-up versus recursive atomic construction;
 - one single-thread and one multi-thread preparation;

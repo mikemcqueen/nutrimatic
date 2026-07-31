@@ -18,9 +18,7 @@
 #include <thread>
 #include <type_traits>
 
-#if defined(__i386__) || defined(__x86_64__)
 #include <immintrin.h>
-#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 #define DFS_LIKELY(value) __builtin_expect(!!(value), 1)
@@ -153,9 +151,9 @@ static double round_score_bound_up(
 // contiguously, so `children` is an ascending contiguous float range; that is
 // what lets a vector kernel load whole lane groups.
 //
-// This is the portable baseline, and the reference every other kernel must
-// reproduce bit for bit. The expressions and their association order are
-// fixed: partial_score + child for the score, and
+// This scalar helper handles the AVX2 kernel's short tail. The expressions
+// and their association order are fixed: partial_score + child for the score,
+// and
 // ((rounding_error_base + fabs(child)) + 1.0) * (DBL_EPSILON * 4.0) for the
 // error envelope. A -HUGE_VAL child is dead: it must not reach either maximum
 // (fabs would poison the envelope with inf) and must not be counted.
@@ -181,16 +179,6 @@ projected_wild_update_scalar(
   }
   return finite;
 }
-
-// Which wildcard-update kernel the bottom-up evaluator runs. Resolved once per
-// preprocessing run, never per bag or per action.
-enum ProjectedKernel {
-  PROJECTED_KERNEL_SCALAR,
-  PROJECTED_KERNEL_AVX2,
-  PROJECTED_KERNEL_VERIFY  // run both and compare, for tests and debugging
-};
-
-#if defined(__x86_64__)
 
 // Four wildcard counts at a time, in the scalar kernel's exact arithmetic.
 //
@@ -251,68 +239,6 @@ projected_wild_update_avx2(
   return finite + projected_wild_update_scalar(
       partial_score, rounding_error_base, children + i, best + i,
       max_rounding_error + i, count - i);
-}
-
-#endif  // defined(__x86_64__)
-
-// The non-scalar kernels, kept out of line so the scalar path stays a plain
-// inlined loop. `mismatch` is set, never cleared, when verification fails.
-static uint64_t projected_wild_update_checked(
-    ProjectedKernel kernel, double partial_score,
-    double rounding_error_base, float const* children, double* best,
-    double* max_rounding_error, size_t count, double* scratch_best,
-    double* scratch_error, bool* mismatch) {
-#if defined(__x86_64__)
-  if (kernel == PROJECTED_KERNEL_AVX2)
-    return projected_wild_update_avx2(
-        partial_score, rounding_error_base, children, best,
-        max_rounding_error, count);
-  size_t const bytes = count * sizeof(double);
-  memcpy(scratch_best, best, bytes);
-  memcpy(scratch_error, max_rounding_error, bytes);
-  uint64_t const vector_finite = projected_wild_update_avx2(
-      partial_score, rounding_error_base, children, best,
-      max_rounding_error, count);
-  uint64_t const scalar_finite = projected_wild_update_scalar(
-      partial_score, rounding_error_base, children, scratch_best,
-      scratch_error, count);
-  if (vector_finite != scalar_finite ||
-      memcmp(best, scratch_best, bytes) != 0 ||
-      memcmp(max_rounding_error, scratch_error, bytes) != 0)
-    *mismatch = true;
-  return scalar_finite;
-#else
-  (void)kernel;
-  (void)scratch_best;
-  (void)scratch_error;
-  (void)mismatch;
-  return projected_wild_update_scalar(
-      partial_score, rounding_error_base, children, best,
-      max_rounding_error, count);
-#endif
-}
-
-// NUTRIMATIC_PROJECTED_SIMD selects the wildcard-update kernel: unset or "1"
-// takes the best available vector kernel, "verify" runs it against the scalar
-// kernel and fails preprocessing on any difference, and anything else, "0"
-// included, stays scalar.
-static ProjectedKernel projected_kernel_choice() {
-  char const* mode = getenv("NUTRIMATIC_PROJECTED_SIMD");
-  bool const verify = mode != NULL && strcmp(mode, "verify") == 0;
-  if (!verify && mode != NULL && mode[0] != '\0' &&
-      strcmp(mode, "1") != 0)
-    return PROJECTED_KERNEL_SCALAR;
-#if defined(__x86_64__)
-  if (__builtin_cpu_supports("avx2"))
-    return verify ? PROJECTED_KERNEL_VERIFY : PROJECTED_KERNEL_AVX2;
-#endif
-  return PROJECTED_KERNEL_SCALAR;
-}
-
-static char const* projected_kernel_name(ProjectedKernel kernel) {
-  if (kernel == PROJECTED_KERNEL_AVX2) return "avx2";
-  if (kernel == PROJECTED_KERNEL_VERIFY) return "avx2 verify";
-  return "scalar";
 }
 
 // Returns the first index in [begin, end) whose support mask fits in the bag,
@@ -2629,16 +2555,8 @@ double DfsAnagramSearch::compute_projected_score_bound(
 uint64_t DfsAnagramSearch::test_projected_wild_update(
     double partial_score, double rounding_error_base,
     float const* children, double* best, double* max_rounding_error,
-    size_t count, bool vector) {
-#if defined(__x86_64__)
-  if (vector && __builtin_cpu_supports("avx2"))
-    return projected_wild_update_avx2(
-        partial_score, rounding_error_base, children, best,
-        max_rounding_error, count);
-#else
-  (void)vector;
-#endif
-  return projected_wild_update_scalar(
+    size_t count) {
+  return projected_wild_update_avx2(
       partial_score, rounding_error_base, children, best,
       max_rounding_error, count);
 }
@@ -2661,36 +2579,25 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
     std::vector<double> best;
     std::vector<double> max_rounding_error;
-    // Shadow copies, used only by PROJECTED_KERNEL_VERIFY.
-    std::vector<double> verify_best;
-    std::vector<double> verify_error;
     uint64_t candidate_tests;
     uint64_t fitting_transitions;
     uint64_t transitions;
     uint64_t nextafter_calls;
-    bool verify_mismatch;
 
     explicit VectorWorker(size_t wild_span):
         best(wild_span),
         max_rounding_error(wild_span),
-        verify_best(wild_span),
-        verify_error(wild_span),
         candidate_tests(0),
         fitting_transitions(0),
         transitions(0),
-        nextafter_calls(0),
-        verify_mismatch(false) {
+        nextafter_calls(0) {
       bag.fill(0);
     }
   };
 
-  // Resolved once, before any worker starts, so no AVX2 instruction can be
-  // reached on a machine that lacks it and no bag pays for the decision.
-  ProjectedKernel const kernel = projected_kernel_choice();
-  if (progress != NULL && kernel != PROJECTED_KERNEL_SCALAR) {
+  if (progress != NULL) {
     dfs_diagnostic(
-        "phase 2: projected wildcard update kernel %s\n",
-        projected_kernel_name(kernel));
+        "phase 2: projected wildcard update kernel avx2\n");
   }
 
   float* const values = bound_plain_float_values.get();
@@ -2807,13 +2714,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
       uint64_t local_transitions = 0;
       uint64_t local_nextafter_calls = 0;
 
-      // The kernel choice is constant for the whole run, so specialize the
-      // action scan on it instead of branching inside it. With the vector
-      // kernels out of line, a runtime branch here made the scalar path spill
-      // its loop-invariant registers across a call it never makes, and that
-      // cost 14% of setup.
-      auto scan = [&](auto kernel_tag, VectorWorker* worker,
-                      uint64_t exact_mask, uint64_t base_key,
+      auto scan = [&](VectorWorker* worker, uint64_t exact_mask,
+                      uint64_t base_key,
                       size_t begin, size_t end) {
         for (size_t action_index = begin;
              action_index < end; ++action_index) {
@@ -2867,19 +2769,9 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
           double* const error =
               &worker->max_rounding_error[wild_length];
           local_fitting_transitions += count;
-          if constexpr (decltype(kernel_tag)::value ==
-                        PROJECTED_KERNEL_SCALAR) {
-            local_transitions += projected_wild_update_scalar(
-                action.partial_score, action.rounding_error_base,
-                children, best, error, count);
-          } else {
-            local_transitions += projected_wild_update_checked(
-                decltype(kernel_tag)::value, action.partial_score,
-                action.rounding_error_base, children, best, error,
-                count, worker->verify_best.data(),
-                worker->verify_error.data(),
-                &worker->verify_mismatch);
-          }
+          local_transitions += projected_wild_update_avx2(
+              action.partial_score, action.rounding_error_base,
+              children, best, error, count);
         }
       };
 
@@ -2914,19 +2806,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
         uint64_t const base_key =
             exact_key * uint64_t(score_wild_span);
 
-        if (kernel == PROJECTED_KERNEL_SCALAR) {
-          scan(std::integral_constant<
-                   ProjectedKernel, PROJECTED_KERNEL_SCALAR>(),
-               worker, exact_mask, base_key, begin, end);
-        } else if (kernel == PROJECTED_KERNEL_AVX2) {
-          scan(std::integral_constant<
-                   ProjectedKernel, PROJECTED_KERNEL_AVX2>(),
-               worker, exact_mask, base_key, begin, end);
-        } else {
-          scan(std::integral_constant<
-                   ProjectedKernel, PROJECTED_KERNEL_VERIFY>(),
-               worker, exact_mask, base_key, begin, end);
-        }
+        scan(worker, exact_mask, base_key, begin, end);
 
         for (size_t wild = 0; wild < score_wild_span; ++wild) {
           double const best = worker->best[wild];
@@ -2971,17 +2851,6 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     work(0);
     for (size_t i = 0; i < background.size(); ++i)
       background[i].join();
-  }
-
-  for (size_t i = 0; i < workers.size(); ++i) {
-    if (!workers[i].verify_mismatch) continue;
-    if (progress != NULL) {
-      dfs_diagnostic(
-          "phase 2: projected %s kernel disagreed with the scalar "
-          "kernel; abandoning the score bound\n",
-          projected_kernel_name(kernel));
-    }
-    return false;
   }
 
   for (size_t i = 0; i < workers.size(); ++i) {

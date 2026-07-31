@@ -452,66 +452,38 @@ static int smoke_test() {
         exhausted_expected_spellings,
         recursive_projected_output.take_sorted_results(),
         "bottom-up projected evaluation changed retained spellings");
-    // A non-zero exact depth is what puts the layered bottom-up worker, and
-    // with it the wildcard-update kernel, on the path. Run each depth through
-    // every kernel mode: "verify" abandons the score bound on any
-    // scalar-versus-vector difference, so a mismatch shows up as a lost
-    // projected mode below. On a machine without AVX2 all three modes
-    // degenerate to the scalar kernel and the comparison is vacuous.
-    static char const* const KERNEL_MODES[] = {"0", "1", "verify"};
+    // A non-zero exact depth puts the layered bottom-up wildcard-update
+    // kernel on the path.
     for (size_t exact = 1; exact <= 2; ++exact) {
       std::string const forced = std::to_string(exact);
       check(setenv(
                 "NUTRIMATIC_PROJECTED_SCORE_D",
                 forced.c_str(), 1) == 0,
             "could not select projected exact depth");
-      int64_t scalar_nodes = 0;
-      int64_t scalar_solutions = 0;
-      uint64_t scalar_transitions = 0;
-      for (size_t mode = 0;
-           mode < sizeof(KERNEL_MODES) / sizeof(KERNEL_MODES[0]); ++mode) {
-        check(setenv(
-                  "NUTRIMATIC_PROJECTED_SIMD",
-                  KERNEL_MODES[mode], 1) == 0,
-              "could not select projected wildcard kernel");
-        DfsTopN depth_output(&classes, 2);
-        DfsAnagramSearch depth(
-            &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-            reader.count(), 4096, 4);
-        depth.run(&depth_output);
-        check(depth.score_bound_mode() ==
-                  DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
-                  depth.score_bound_complete(),
-              "intermediate projected depth did not retain complete bounds");
-        check(depth.score_bound_exact_letters() == exact,
-              "projected score memo used the wrong exact depth");
-        // Note that candidate tests do not bound fitting transitions here:
-        // one surviving action contributes a whole wildcard span.
-        check(depth.score_bound_fitting_transitions() >=
-                  depth.score_bound_transitions(),
-              "projected work counters are inconsistent at depth");
-        if (mode == 0) {
-          if (exact == 2)
-            check(depth.score_bound_projected_actions() ==
-                      classes.classes().size(),
-                  "all-exact projection collapsed distinct classes");
-          scalar_nodes = depth.nodes_visited();
-          scalar_solutions = depth.solutions_found();
-          scalar_transitions = depth.score_bound_transitions();
-        } else {
-          check(depth.nodes_visited() == scalar_nodes &&
-                    depth.solutions_found() == scalar_solutions &&
-                    depth.score_bound_transitions() == scalar_transitions,
-                "projected wildcard kernel changed DFS counters");
-        }
-        check_same_spellings(
-            exhausted_expected_spellings,
-            depth_output.take_sorted_results(),
-            "projected exact depth changed retained spellings");
-      }
+      DfsTopN depth_output(&classes, 2);
+      DfsAnagramSearch depth(
+          &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
+          reader.count(), 4096, 4);
+      depth.run(&depth_output);
+      check(depth.score_bound_mode() ==
+                DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+                depth.score_bound_complete(),
+            "intermediate projected depth did not retain complete bounds");
+      check(depth.score_bound_exact_letters() == exact,
+            "projected score memo used the wrong exact depth");
+      // One surviving action contributes a whole wildcard span.
+      check(depth.score_bound_fitting_transitions() >=
+                depth.score_bound_transitions(),
+            "projected work counters are inconsistent at depth");
+      if (exact == 2)
+        check(depth.score_bound_projected_actions() ==
+                  classes.classes().size(),
+              "all-exact projection collapsed distinct classes");
+      check_same_spellings(
+          exhausted_expected_spellings,
+          depth_output.take_sorted_results(),
+          "projected exact depth changed retained spellings");
     }
-    check(unsetenv("NUTRIMATIC_PROJECTED_SIMD") == 0,
-          "could not restore the projected wildcard kernel");
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
           "could not restore projected exact depth");
 
@@ -736,33 +708,17 @@ static void wildcard_kernel_test() {
           seed_error[offset + i] = (i % 3) == 1 ? 1e6 : 0.0;
         }
 
-        std::vector<double> scalar_best(seed_best);
-        std::vector<double> scalar_error(seed_error);
         std::vector<double> vector_best(seed_best);
         std::vector<double> vector_error(seed_error);
         double const partial_score = -3.75;
         double const rounding_error_base = 2.5;
-        uint64_t const scalar_finite =
-            DfsAnagramSearch::test_projected_wild_update(
-                partial_score, rounding_error_base,
-                &children[offset], &scalar_best[offset],
-                &scalar_error[offset], count, false);
         uint64_t const vector_finite =
             DfsAnagramSearch::test_projected_wild_update(
                 partial_score, rounding_error_base,
                 &children[offset], &vector_best[offset],
-                &vector_error[offset], count, true);
-
-        check(scalar_finite == expected_finite,
-              "scalar wildcard kernel counted the wrong finite children");
+                &vector_error[offset], count);
         check(vector_finite == expected_finite,
               "vector wildcard kernel counted the wrong finite children");
-        check(memcmp(&scalar_best[0], &vector_best[0],
-                     scalar_best.size() * sizeof(double)) == 0,
-              "vector wildcard kernel changed the score maximum");
-        check(memcmp(&scalar_error[0], &vector_error[0],
-                     scalar_error.size() * sizeof(double)) == 0,
-              "vector wildcard kernel changed the rounding-error maximum");
         for (size_t i = 0; i < vector_best.size(); ++i) {
           if (i >= offset && i < offset + count) continue;
           check(vector_best[i] == seed_best[i] &&

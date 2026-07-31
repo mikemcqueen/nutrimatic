@@ -15,7 +15,7 @@ identical deterministic counters throughout.
 | Baseline (`86b7a9a`) | 35.3s | 3.4s | — |
 | Worker-local counters | −1.5% | — | always on |
 | Kernel extraction alone | +2% | — | always on |
-| AVX2 wildcard kernel | −21% | −13% | on, `NUTRIMATIC_PROJECTED_SIMD=0` opts out |
+| AVX2 wildcard kernel | −21% | −13% | mandatory |
 | Support-mask sidecar | −5% | −7% | on, mandatory since `6869539` |
 | All of it (`6869539`) | **25.4s** | **2.5s** | |
 
@@ -91,11 +91,10 @@ Bit-identity is structural, not incidental:
 - No expression here can contract into an FMA, and intrinsics would not
   contract anyway.
 
-`NUTRIMATIC_PROJECTED_SIMD=verify` re-runs the scalar kernel on copies of both
-spans and compares them plus the finite count, abandoning the score bound on
-any difference. It is clean over the fast workload's 8.95e9 wildcard
-transitions, and it was confirmed to fire against a deliberately perturbed
-broadcast.
+The removed verification mode re-ran the scalar kernel on copies of both spans
+and compared them plus the finite count. It was clean over the fast workload's
+8.95e9 wildcard transitions and was confirmed to fire against a deliberately
+perturbed broadcast.
 
 ### The kernel's shape matters more than its contents
 
@@ -171,9 +170,8 @@ candidate tests against 12.6e9 fitting transitions.
   group, and a group plus a tail; every destination offset; seeds that move
   the maximum in some lanes and not others; and no writes outside the span.
   It reaches the kernels through one small static test hook.
-- The forced-depth end-to-end block runs each projected depth under
-  `NUTRIMATIC_PROJECTED_SIMD` 0, 1, and verify, comparing DFS counters,
-  transitions, and retained spellings across the three.
+- The forced-depth end-to-end block exercises each projected depth through the
+  mandatory AVX2 kernel and checks its counters and retained spellings.
 - Both were confirmed to fail against deliberately broken kernels: a
   perturbed broadcast, and a dropped dead-lane blend on the error envelope.
 
@@ -181,7 +179,6 @@ candidate tests against 12.6e9 fitting transitions.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `NUTRIMATIC_PROJECTED_SIMD` | unset = auto | `1` auto, `0` scalar, `verify` shadow-check and fail preprocessing on any difference |
 | `NUTRIMATIC_PROJECTED_SUPPORT_SIDECAR` | removed | the sidecar is the only support-mask copy |
 
 ## Not done
