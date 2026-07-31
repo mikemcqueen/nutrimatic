@@ -18,10 +18,9 @@ constexpr size_t EXACT_MEMO_LOOKAHEAD_DEFAULT = 16;
 
 bool support_scan_avx2_enabled();
 
-uint32_t float_to_bits(float value);
-float bits_to_float(uint32_t bits);
-float round_float_score_bound_up(double value);
-void bound_wait_backoff(unsigned int* spins);
+bool projected_bound_requirements(
+    uint64_t state_count, size_t value_bytes, size_t* bytes);
+bool projected_score_bound_arithmetic_supported();
 
 uint32_t packed_rank(uint32_t requirement);
 uint32_t packed_count(uint32_t requirement);

@@ -5,7 +5,6 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <fenv.h>
 #include <float.h>
 #include <limits.h>
 #include <math.h>
@@ -14,12 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <limits>
-#include <new>
 #include <thread>
-#include <type_traits>
-
-#include <immintrin.h>
 
 namespace {
 
@@ -31,50 +25,7 @@ static size_t derived_max_depth(DfsClassList const* classes,
   return letter_count / size_t(classes->min_word_length());
 }
 
-static bool dense_bound_requirements(
-    uint64_t state_count, size_t value_bytes, size_t* dense_bytes) {
-  if (state_count > SIZE_MAX / value_bytes ||
-      !dfs_round_up_alignment(
-          size_t(state_count) * value_bytes, dense_bytes))
-    return false;
-  return true;
-}
-
 }  // namespace
-
-uint32_t float_to_bits(float value) {
-  uint32_t bits;
-  memcpy(&bits, &value, sizeof(bits));
-  return bits;
-}
-
-float bits_to_float(uint32_t bits) {
-  float value;
-  memcpy(&value, &bits, sizeof(value));
-  return value;
-}
-
-float round_float_score_bound_up(double value) {
-  if (value == -HUGE_VAL) return -HUGE_VALF;
-  if (value == HUGE_VAL) return HUGE_VALF;
-  float rounded = float(value);
-  if (isinf(rounded) && rounded < 0.0f)
-    return -FLT_MAX;
-  if (double(rounded) < value)
-    rounded = nextafterf(rounded, HUGE_VALF);
-  return rounded;
-}
-
-void bound_wait_backoff(unsigned int* spins) {
-#if defined(__i386__) || defined(__x86_64__)
-  _mm_pause();
-#else
-  std::atomic_signal_fence(std::memory_order_seq_cst);
-#endif
-  ++*spins;
-  if ((*spins & 255U) == 0)
-    std::this_thread::yield();
-}
 
 uint32_t packed_rank(uint32_t requirement) {
   return requirement & 63U;
@@ -134,19 +85,6 @@ static double score_candidate_rounding_error(
   magnitude += fabs(child);
   magnitude += 1.0;
   return magnitude * DBL_EPSILON * 4.0;
-}
-
-static bool score_bound_arithmetic_supported() {
-#if defined(__FAST_MATH__)
-  return false;
-#else
-  return std::numeric_limits<double>::is_iec559 &&
-      std::numeric_limits<float>::is_iec559 &&
-      FLT_RADIX == 2 && DBL_MANT_DIG == 53 &&
-      FLT_MANT_DIG == 24 &&
-      LDBL_MANT_DIG >= DBL_MANT_DIG &&
-      fegetround() == FE_TONEAREST;
-#endif
 }
 
 static int length_certificate_mode() {
@@ -553,102 +491,6 @@ bool DfsAnagramSearch::length_certificate_rejects(
   return upper + padding <= static_cast<long double>(floor);
 }
 
-void DfsAnagramSearch::clear_score_bounds() {
-  bound_mode = SCORE_BOUND_OFF;
-  bound_float_values.reset();
-  bound_plain_float_values.reset();
-  bound_capacity = 0;
-  bound_value_bytes = 0;
-  bound_complete = false;
-  root_score_bound = HUGE_VAL;
-  root_score_bound_ready = false;
-  bound_entries = 0;
-  bound_charged_bytes = 0;
-}
-
-void DfsAnagramSearch::prepare_score_bounds(bool requested) {
-  clear_score_bounds();
-  if (!hot_classes_ready || !requested ||
-      !score_bound_arithmetic_supported() ||
-      score_cache_budget < DFS_CACHE_ALIGNMENT)
-    return;
-
-  if (!projected_actions_ready) return;
-  size_t float_bytes = 0;
-  if (score_effective_states == 0 ||
-      score_effective_states > SIZE_MAX ||
-      !dense_bound_requirements(
-          score_effective_states, sizeof(float), &float_bytes) ||
-      float_bytes > score_cache_budget)
-    return;
-  bool const bottom_up_eligible =
-      score_wild_span != 0 &&
-      score_effective_states / score_wild_span <= UINT32_MAX;
-  if (bottom_up_eligible) {
-    float* values = static_cast<float*>(dfs_allocate_aligned(float_bytes));
-    if (values == NULL) return;
-    bound_plain_float_values.reset(values);
-  } else {
-    AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
-        dfs_allocate_aligned(float_bytes));
-    if (values == NULL) return;
-    for (size_t i = 0; i < size_t(score_effective_states); ++i) {
-      new (&values[i]) AtomicFloatWord;
-      values[i].value.store(FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
-    }
-    bound_float_values.reset(values);
-  }
-  bound_capacity = size_t(score_effective_states);
-  bound_value_bytes = sizeof(float);
-  bound_complete = true;
-  bound_mode = SCORE_BOUND_PROJECTED;
-  bound_charged_bytes = float_bytes;
-}
-
-bool DfsAnagramSearch::load_score_bound(
-    uint64_t key, double* value) const {
-  if (bound_mode == SCORE_BOUND_OFF || key >= bound_capacity)
-    return false;
-  assert(bound_value_bytes == sizeof(float));
-  if (bound_plain_float_values.get() != NULL) {
-    *value = double(bound_plain_float_values.get()[size_t(key)]);
-    return true;
-  }
-  uint32_t const stored =
-      bound_float_values.get()[size_t(key)].value.load(
-          std::memory_order_relaxed);
-  if (stored == FLOAT_BOUND_UNSEEN ||
-      stored == FLOAT_BOUND_COMPUTING)
-    return false;
-  *value = double(bits_to_float(stored));
-  return true;
-}
-
-DfsAnagramSearch::Reachability DfsAnagramSearch::cached_reachability(
-    uint64_t score_key, bool original_root) const {
-  double value;
-  if (original_root) {
-    if (!root_score_bound_ready) return REACHABILITY_UNKNOWN;
-    value = root_score_bound;
-  } else if (!load_score_bound(score_key, &value)) {
-    return REACHABILITY_UNKNOWN;
-  }
-  if (value == -HUGE_VAL) return REACHABILITY_NO;
-  if (bound_mode != SCORE_BOUND_PROJECTED || score_wild_letters == 0)
-    return REACHABILITY_YES;
-  return REACHABILITY_UNKNOWN;
-}
-
-void DfsAnagramSearch::publish_parallel_score_bound(
-    uint64_t key, double value) {
-  assert(key < bound_capacity);
-  assert(bound_value_bytes == sizeof(float));
-  assert(bound_plain_float_values.get() == NULL);
-  bound_float_values.get()[size_t(key)].value.store(
-      float_to_bits(round_float_score_bound_up(value)),
-      std::memory_order_release);
-}
-
 bool DfsAnagramSearch::prepare_phase_two(
     int64_t progress_factor, bool allow_cache_fallback, int exact_letters,
     bool score_bounds_requested) {
@@ -756,7 +598,7 @@ bool DfsAnagramSearch::prepare_phase_two(
         }
         size_t bytes = 0;
         if (states_ok &&
-            dense_bound_requirements(
+            projected_bound_requirements(
                 effective, sizeof(float), &bytes) &&
             bytes <= score_cache_budget)
           selected_exact_letters = d;
@@ -825,7 +667,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   if (progress != NULL) {
     if (encodable) {
       size_t projected_bytes = 0;
-      bool const projected_size_ok = dense_bound_requirements(
+      bool const projected_size_ok = projected_bound_requirements(
           score_effective_states, sizeof(float), &projected_bytes);
       dfs_diagnostic(
           "phase 2 preflight: projected score table keeps %zu "
@@ -848,7 +690,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   }
   bool const score_bounds_applicable =
       hot_classes_ready && score_bounds_requested &&
-      score_bound_arithmetic_supported() &&
+      projected_score_bound_arithmetic_supported() &&
       bag_mask != 0;
   int const certificate_mode = length_certificate_mode();
   length_certificate_requested =
@@ -861,7 +703,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   if (!allow_cache_fallback && score_bounds_applicable) {
     size_t required_bytes = 0;
     char const* mode_name = "projected dense";
-    bool const size_available = dense_bound_requirements(
+    bool const size_available = projected_bound_requirements(
         score_effective_states, sizeof(float), &required_bytes);
     if (!size_available) {
       if (progress != NULL) {
