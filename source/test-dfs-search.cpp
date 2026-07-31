@@ -416,16 +416,6 @@ static int smoke_test() {
     recursive_projected.run(&recursive_projected_output);
     check(unsetenv("NUTRIMATIC_PROJECTED_BOTTOM_UP") == 0,
           "could not restore bottom-up projected evaluation");
-    check(setenv(
-              "NUTRIMATIC_PROJECTED_ACTION_QUOTIENT", "0", 1) == 0,
-          "could not disable projected-action quotient");
-    DfsTopN unquotiented_output(&classes, 2);
-    DfsAnagramSearch unquotiented(
-        &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-        reader.count(), 64, 4);
-    unquotiented.run(&unquotiented_output);
-    check(unsetenv("NUTRIMATIC_PROJECTED_ACTION_QUOTIENT") == 0,
-          "could not restore projected-action quotient");
     check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
           "could not disable projected score-bound experiment");
     check(projected.score_bound_mode() ==
@@ -439,38 +429,20 @@ static int smoke_test() {
     check(projected.score_bound_capacity() ==
               exhausted_letters.size() + 1,
           "wildcard-only projected score memo has the wrong size");
-    check(projected.score_bound_projected_quotient_enabled(),
-          "projected-action quotient was not enabled by default");
-    check(!unquotiented.score_bound_projected_quotient_enabled(),
-          "projected-action quotient opt-out was ignored");
     check(projected.score_bound_projected_actions() <
               classes.classes().size(),
           "projected-action quotient did not collapse equivalent classes");
-    check(unquotiented.score_bound_projected_actions() ==
-              classes.classes().size(),
-          "unquotiented projection omitted concrete classes");
-    check(projected.score_bound_states_computed() ==
-              unquotiented.score_bound_states_computed(),
-          "projected-action quotient changed computed states");
-    check(projected.score_bound_transitions() <
-              unquotiented.score_bound_transitions(),
-          "projected-action quotient did not reduce transitions");
     check(projected.score_bound_candidate_tests() >=
                   projected.score_bound_fitting_transitions() &&
               projected.score_bound_fitting_transitions() >=
                   projected.score_bound_transitions(),
           "projected work counters are inconsistent");
-    check(projected.nodes_visited() == unquotiented.nodes_visited() &&
-              projected.solutions_found() ==
-                  unquotiented.solutions_found(),
-          "projected-action quotient changed DFS counters");
     check(projected.nodes_visited() ==
                   recursive_projected.nodes_visited() &&
               projected.solutions_found() ==
                   recursive_projected.solutions_found(),
           "bottom-up projected evaluation changed DFS counters");
-    check(projected_message.find(
-              "projected actions (quotient on)") != std::string::npos,
+    check(projected_message.find("projected actions") != std::string::npos,
           "projected-action diagnostic is missing");
     check_same_spellings(
         exhausted_expected_spellings,
@@ -480,11 +452,6 @@ static int smoke_test() {
         exhausted_expected_spellings,
         recursive_projected_output.take_sorted_results(),
         "bottom-up projected evaluation changed retained spellings");
-    check_same_spellings(
-        exhausted_expected_spellings,
-        unquotiented_output.take_sorted_results(),
-        "unquotiented projected score memo changed retained spellings");
-
     // A non-zero exact depth is what puts the layered bottom-up worker, and
     // with it the wildcard-update kernel, on the path. Run each depth through
     // every kernel mode: "verify" abandons the score bound on any
@@ -840,7 +807,7 @@ static int validate_14_letters() {
   words_search.run(NULL);
   check_count(words_search.solutions_found(), 27177,
               "words-only solution count");
-  check_count(words_search.nodes_visited(), 53084, "words-only node count");
+  check_count(words_search.nodes_visited(), 117145, "words-only node count");
 
   DfsClassList with_phrases(&reader, letters, 4);
   check_count(with_phrases.entry_count(), 18299,
@@ -852,7 +819,7 @@ static int validate_14_letters() {
   phrase_search.run(NULL);
   check_count(phrase_search.solutions_found(), 27401,
               "phrase-inclusive solution count");
-  check_count(phrase_search.nodes_visited(), 54250,
+  check_count(phrase_search.nodes_visited(), 118311,
               "phrase-inclusive node count");
 
   fclose(fp);

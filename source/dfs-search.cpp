@@ -422,13 +422,6 @@ static bool projected_score_experiment(
       strcmp(enabled, "0") != 0;
 }
 
-static bool projected_action_quotient_enabled() {
-  char const* enabled =
-      getenv("NUTRIMATIC_PROJECTED_ACTION_QUOTIENT");
-  return enabled == NULL || enabled[0] == '\0' ||
-      strcmp(enabled, "0") != 0;
-}
-
 static bool projected_bottom_up_enabled() {
   char const* enabled =
       getenv("NUTRIMATIC_PROJECTED_BOTTOM_UP");
@@ -522,7 +515,6 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_wild_span(1),
     score_projection_requested(false),
     projected_actions_ready(false),
-    projected_quotient_enabled(true),
     support_scan_vector(support_scan_avx2_enabled()),
     hot_classes_ready(false),
     empty_class_list(false),
@@ -872,8 +864,6 @@ bool DfsAnagramSearch::prepare_projected_actions() {
   projected_repeated_requirements.clear();
   projected_bucket_starts.fill(0);
   projected_actions_ready = false;
-  projected_quotient_enabled =
-      projected_action_quotient_enabled();
 
   DfsClassSpan const classes = class_list->classes();
   if (classes.size() > UINT32_MAX) return false;
@@ -891,25 +881,20 @@ bool DfsAnagramSearch::prepare_projected_actions() {
       entry.class_id = uint32_t(i);
       by_delta.push_back(entry);
     }
-    if (projected_quotient_enabled) {
-      std::sort(
-          by_delta.begin(), by_delta.end(),
-          [&](DeltaClass const& a, DeltaClass const& b) {
-            if (a.delta != b.delta) return a.delta < b.delta;
-            double const a_score =
-                best_member_log_scores[a.class_id];
-            double const b_score =
-                best_member_log_scores[b.class_id];
-            if (a_score != b_score) return a_score > b_score;
-            return a.class_id < b.class_id;
-          });
-    }
+    std::sort(
+        by_delta.begin(), by_delta.end(),
+        [&](DeltaClass const& a, DeltaClass const& b) {
+          if (a.delta != b.delta) return a.delta < b.delta;
+          double const a_score = best_member_log_scores[a.class_id];
+          double const b_score = best_member_log_scores[b.class_id];
+          if (a_score != b_score) return a_score > b_score;
+          return a.class_id < b.class_id;
+        });
 
     std::vector<uint32_t> representatives;
     representatives.reserve(by_delta.size());
     for (size_t i = 0; i < by_delta.size(); ++i) {
-      if (!projected_quotient_enabled || i == 0 ||
-          by_delta[i].delta != by_delta[i - 1].delta)
+      if (i == 0 || by_delta[i].delta != by_delta[i - 1].delta)
         representatives.push_back(by_delta[i].class_id);
     }
 
@@ -1487,10 +1472,9 @@ bool DfsAnagramSearch::prepare_phase_two(
       if (projected_actions_ready)
         dfs_diagnostic(
             "phase 2 preflight: %zu concrete classes, "
-            "%zu projected actions (quotient %s)\n",
+            "%zu projected actions\n",
             class_list->classes().size(),
-            projected_actions.size(),
-            projected_quotient_enabled ? "on" : "off");
+            projected_actions.size());
     }
     fflush(progress);
   }

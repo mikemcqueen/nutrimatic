@@ -951,7 +951,6 @@ worker code:
 | Variable | Owning component |
 |---|---|
 | `NUTRIMATIC_PROJECTED_SCORE`, `NUTRIMATIC_PROJECTED_SCORE_D` | preparation / score-key layout |
-| `NUTRIMATIC_PROJECTED_ACTION_QUOTIENT` | projected action builder |
 | `NUTRIMATIC_PROJECTED_BOTTOM_UP` | projected bound builder |
 | `NUTRIMATIC_PROJECTED_SIMD` | projected wildcard kernel |
 | `NUTRIMATIC_SUPPORT_SIMD` | exact-completion support scan |
@@ -1006,7 +1005,6 @@ Verify:
 
 - scalar, default, and `verify` projected kernels;
 - bottom-up and recursive projected evaluators;
-- quotient on and off;
 - deterministic transition and result equality.
 
 ### 3. Extract exact completion mechanically

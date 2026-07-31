@@ -114,9 +114,6 @@ class DfsAnagramSearch {
   size_t score_bound_projected_actions() const {
     return projected_actions.size();
   }
-  bool score_bound_projected_quotient_enabled() const {
-    return projected_quotient_enabled;
-  }
   int64_t score_bound_prunes() const { return bound_prunes; }
   size_t completable_classes_checked() const {
     return completable_checked;
@@ -441,7 +438,6 @@ class DfsAnagramSearch {
   std::vector<uint32_t> projected_repeated_requirements;
   std::array<size_t, DFS_SYMBOL_COUNT + 2> projected_bucket_starts;
   bool projected_actions_ready;
-  bool projected_quotient_enabled;
   // Resolved in the constructor, before any worker starts, so no dispatch
   // happens on the scan path itself.
   bool const support_scan_vector;

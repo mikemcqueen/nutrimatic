@@ -53,9 +53,7 @@ The production quotient is enabled by default. The current implementation:
   partial score, and fixed rounding-error arithmetic in a compact projected
   action;
 - reports concrete classes, distinct projected actions, candidate tests,
-  fitting transitions, and successful transitions; and
-- accepts `NUTRIMATIC_PROJECTED_ACTION_QUOTIENT=0` as a temporary validation
-  opt-out.
+  fitting transitions, and successful transitions.
 
 The automatic depth selector still chooses the largest projected dense table
 that fits the memory budget. It does not yet include action fanout or expected
