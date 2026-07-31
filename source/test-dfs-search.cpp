@@ -390,8 +390,6 @@ static int smoke_test() {
         expanded_dense_output.take_sorted_results(),
         "full-budget dense score memo changed retained spellings");
 
-    check(setenv("NUTRIMATIC_PROJECTED_SCORE_D", "0", 1) == 0,
-          "could not enable projected score-bound experiment");
     DfsTopN projected_output(&classes, 2);
     DfsAnagramSearch projected(
         &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
@@ -401,23 +399,13 @@ static int smoke_test() {
           "could not create projected diagnostic stream");
     FILE* const previous_diagnostic_stream =
         dfs_set_diagnostic_stream(projected_diagnostics);
-    projected.run(&projected_output);
+    projected.run(&projected_output,
+                  /*progress_factor=*/1, /*allow_cache_fallback=*/true,
+                  /*dense_cache=*/false, /*exact_letters=*/0);
     std::string const projected_message =
         read_stream(projected_diagnostics);
     dfs_set_diagnostic_stream(previous_diagnostic_stream);
     fclose(projected_diagnostics);
-    check(setenv(
-              "NUTRIMATIC_PROJECTED_BOTTOM_UP", "0", 1) == 0,
-          "could not select recursive projected evaluation");
-    DfsTopN recursive_projected_output(&classes, 2);
-    DfsAnagramSearch recursive_projected(
-        &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-        reader.count(), 64, 4);
-    recursive_projected.run(&recursive_projected_output);
-    check(unsetenv("NUTRIMATIC_PROJECTED_BOTTOM_UP") == 0,
-          "could not restore bottom-up projected evaluation");
-    check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
-          "could not disable projected score-bound experiment");
     check(projected.score_bound_mode() ==
               DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
               projected.score_bound_complete(),
@@ -437,34 +425,22 @@ static int smoke_test() {
               projected.score_bound_fitting_transitions() >=
                   projected.score_bound_transitions(),
           "projected work counters are inconsistent");
-    check(projected.nodes_visited() ==
-                  recursive_projected.nodes_visited() &&
-              projected.solutions_found() ==
-                  recursive_projected.solutions_found(),
-          "bottom-up projected evaluation changed DFS counters");
     check(projected_message.find("projected actions") != std::string::npos,
           "projected-action diagnostic is missing");
     check_same_spellings(
         exhausted_expected_spellings,
         projected_output.take_sorted_results(),
         "projected score memo changed retained spellings");
-    check_same_spellings(
-        exhausted_expected_spellings,
-        recursive_projected_output.take_sorted_results(),
-        "bottom-up projected evaluation changed retained spellings");
     // A non-zero exact depth puts the layered bottom-up wildcard-update
     // kernel on the path.
     for (size_t exact = 1; exact <= 2; ++exact) {
-      std::string const forced = std::to_string(exact);
-      check(setenv(
-                "NUTRIMATIC_PROJECTED_SCORE_D",
-                forced.c_str(), 1) == 0,
-            "could not select projected exact depth");
       DfsTopN depth_output(&classes, 2);
       DfsAnagramSearch depth(
           &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
           reader.count(), 4096, 4);
-      depth.run(&depth_output);
+      depth.run(&depth_output,
+                /*progress_factor=*/1, /*allow_cache_fallback=*/true,
+                /*dense_cache=*/false, /*exact_letters=*/int(exact));
       check(depth.score_bound_mode() ==
                 DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
                 depth.score_bound_complete(),
@@ -484,9 +460,6 @@ static int smoke_test() {
           depth_output.take_sorted_results(),
           "projected exact depth changed retained spellings");
     }
-    check(unsetenv("NUTRIMATIC_PROJECTED_SCORE_D") == 0,
-          "could not restore projected exact depth");
-
     CollectSolutions boundary_expected(&classes);
     DfsAnagramSearch boundary_exhaustive(
         &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,

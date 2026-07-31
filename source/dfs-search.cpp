@@ -327,34 +327,6 @@ static bool score_bound_arithmetic_supported() {
 #endif
 }
 
-static bool projected_score_experiment(
-    size_t* forced_exact_letters, bool* has_forced_exact_letters) {
-  *forced_exact_letters = 0;
-  *has_forced_exact_letters = false;
-  char const* forced = getenv("NUTRIMATIC_PROJECTED_SCORE_D");
-  if (forced != NULL && forced[0] != '\0') {
-    errno = 0;
-    char* end = NULL;
-    unsigned long long const parsed = strtoull(forced, &end, 10);
-    if (errno == 0 && end != forced && *end == '\0' &&
-        parsed <= SIZE_MAX) {
-      *forced_exact_letters = size_t(parsed);
-      *has_forced_exact_letters = true;
-      return true;
-    }
-  }
-  char const* enabled = getenv("NUTRIMATIC_PROJECTED_SCORE");
-  return enabled != NULL && enabled[0] != '\0' &&
-      strcmp(enabled, "0") != 0;
-}
-
-static bool projected_bottom_up_enabled() {
-  char const* enabled =
-      getenv("NUTRIMATIC_PROJECTED_BOTTOM_UP");
-  return enabled == NULL || enabled[0] == '\0' ||
-      strcmp(enabled, "0") != 0;
-}
-
 static int length_certificate_mode() {
   char const* mode = getenv("NUTRIMATIC_LENGTH_CERTIFICATE");
   if (mode == NULL || mode[0] == '\0' || strcmp(mode, "1") == 0)
@@ -959,7 +931,7 @@ void DfsAnagramSearch::prepare_score_bounds(
     bool const bottom_up_eligible =
         score_wild_span != 0 &&
         score_effective_states / score_wild_span <= UINT32_MAX;
-    if (projected_bottom_up_enabled() && bottom_up_eligible) {
+    if (bottom_up_eligible) {
       float* values = static_cast<float*>(
           dfs_allocate_aligned(float_bytes));
       if (values == NULL) return;
@@ -1200,13 +1172,11 @@ bool DfsAnagramSearch::prepare_phase_two(
 
   size_t forced_exact_letters = 0;
   bool has_forced_exact_letters = false;
-  bool const projection_experiment = projected_score_experiment(
-      &forced_exact_letters, &has_forced_exact_letters);
   if (exact_letters >= 0) {
     forced_exact_letters = size_t(exact_letters);
     has_forced_exact_letters = true;
   }
-  score_projection_requested = !dense_cache || projection_experiment;
+  score_projection_requested = !dense_cache;
   projected_actions_ready = false;
   projected_actions.clear();
   projected_repeated_requirements.clear();

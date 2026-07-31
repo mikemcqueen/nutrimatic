@@ -268,7 +268,6 @@ Own all projected-bound behavior:
 - bottom-up layered projected evaluator;
 - projected parallel setup;
 - mandatory AVX2 wildcard kernel;
-- `NUTRIMATIC_PROJECTED_BOTTOM_UP`;
 - projected diagnostics and counters;
 - the projected wildcard test hook.
 
@@ -948,8 +947,6 @@ worker code:
 
 | Variable | Owning component |
 |---|---|
-| `NUTRIMATIC_PROJECTED_SCORE`, `NUTRIMATIC_PROJECTED_SCORE_D` | preparation / score-key layout |
-| `NUTRIMATIC_PROJECTED_BOTTOM_UP` | projected bound builder |
 | `NUTRIMATIC_SUPPORT_SIMD` | exact-completion support scan |
 | `NUTRIMATIC_EXACT_MEMO_LOOKAHEAD` | exact-completion search |
 | `NUTRIMATIC_LENGTH_CERTIFICATE` | length certificate |
@@ -1001,7 +998,7 @@ forces the shared-helper boundary to become explicit.
 Verify:
 
 - scalar, default, and `verify` projected kernels;
-- bottom-up and recursive projected evaluators;
+- bottom-up projected evaluation;
 - deterministic transition and result equality.
 
 ### 3. Extract exact completion mechanically
@@ -1087,7 +1084,7 @@ Important invariants are:
 Performance-sensitive differentials should cover:
 
 - default versus `NUTRIMATIC_SUPPORT_SIMD=0`;
-- projected bottom-up versus recursive atomic construction;
+- projected bottom-up construction;
 - one single-thread and one multi-thread preparation;
 - one `--require-completable` exact-validation run;
 - one ordinary phase-two search with a score-aware sink.
