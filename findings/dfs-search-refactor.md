@@ -44,7 +44,6 @@ subsystem that uses them. Some shared helpers are counted separately.
 | Current area | Principal line ranges | Approximate size | Responsibility |
 |---|---:|---:|---|
 | Shared arithmetic, packing, and selection helpers | 29-149, 379-494 | 240 | bit conversion, upward rounding, environment choices, configuration parsing |
-| Projected wildcard SIMD | 150-317 | 168 | scalar, AVX2, verify, and dispatch |
 | Exact support-mask SIMD | 318-378 | 61 | scalar and AVX2 first-fitting-candidate scan |
 | Construction and common preparation | 496-749, 1225-1643 | 675 | constructor, hot layout, phase-two configuration, public `run()` |
 | Length certificate | 750-861, 3459-3493 | 147 | certificate tables, rejection calculation, grouped scan |
@@ -575,8 +574,7 @@ class ScoreBounds {
   // Read-only and safe for concurrent completion workers.
   Reachability reachability(uint64_t score_key, bool root) const;
 
-  // Returns false when no upper bound is available. May populate a lazy
-  // dense-prefix entry, so the full state is explicit in the call.
+  // Returns false when no upper bound is available.
   bool upper_bound(
       BoundStateView state, bool root, double* value);
 
@@ -595,11 +593,6 @@ For projected tables with wildcard letters, a finite value is an upper bound
 but does not prove exact reachability. Keeping `reachability()` separate from
 `upper_bound()` makes that distinction part of the API instead of a caller
 convention.
-
-The `upper_bound()` state parameter also removes the current prefix-mode
-behavior where `should_prune()` copies worker state into shared object
-scratch. Prefix mode remains serial by policy, but its mutation is contained
-inside the bounds component.
 
 Suggested grouped statistics:
 
@@ -754,9 +747,6 @@ class DfsSearchRunner {
 `Results` initially contains only `Stats`. Keeping the return envelope distinct
 from the retained statistics leaves room for a later execution outcome without
 putting transient result state into `DfsSearchStats`.
-
-`ScoreBounds*` is non-const only because dense-prefix mode may lazily fill
-entries. Complete dense and projected modes perform read-only lookups.
 
 The private `DfsSearchRunner::Worker` then needs only:
 
@@ -995,12 +985,6 @@ Move projected-only free functions and member definitions, update Meson, and
 make no API or algorithm changes. This removes the largest coherent block and
 forces the shared-helper boundary to become explicit.
 
-Verify:
-
-- scalar, default, and `verify` projected kernels;
-- bottom-up projected evaluation;
-- deterministic transition and result equality.
-
 ### 3. Extract exact completion mechanically
 
 Move the exact memo, recurrence, batch scheduling, support SIMD scan, and
@@ -1008,9 +992,8 @@ related environment parsing.
 
 Verify:
 
-- `NUTRIMATIC_SUPPORT_SIMD=0` versus default output;
 - memo-lookahead zero and default;
-- bounds off, dense, and projected modes;
+- bounds off, and projected modes;
 - deterministic memo and DFS counters.
 
 ### 4. Extract generic bounds
@@ -1020,10 +1003,9 @@ Move allocation, storage, dense/prefix recurrence, and pruning. Keep
 
 Verify:
 
-- double dense, float dense, and float prefix modes;
+- float prefix mode only
 - serial and parallel preprocessing;
 - exact upward-rounded results and `nextafter` counts;
-- cache fallback allowed and disallowed.
 
 ### 5. Extract ordinary traversal and certificate
 

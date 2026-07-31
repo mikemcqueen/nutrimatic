@@ -47,8 +47,6 @@ class DfsAnagramSearch {
  public:
   enum ScoreBoundMode {
     SCORE_BOUND_OFF,
-    SCORE_BOUND_DENSE,
-    SCORE_BOUND_PREFIX,
     SCORE_BOUND_PROJECTED,
   };
 
@@ -61,16 +59,15 @@ class DfsAnagramSearch {
 
   // A null sink runs the search as a counter. Statistics are reset on each run.
   // When the ambient diagnostic stream (dfs_set_diagnostic_stream()) is set,
-  // report every 100k * progress_factor nodes. dense_cache selects exact
-  // dense bounds; false selects projected dense bounds. A nonnegative
-  // exact_letters fixes the number of exact letters in the projection; a
+  // report every 100k * progress_factor nodes. A nonnegative exact_letters
+  // fixes the number of exact letters in the projection; a
   // negative value selects the largest depth that fits. When cache fallback
   // is disallowed, return false instead of using a weaker mode when the
   // requested table does not fit. verbose reports serial task splitting to
   // the diagnostic stream when parallel search is selected.
   bool run(DfsSolutionSink* sink,
            int64_t progress_factor = 1, bool allow_cache_fallback = true,
-           bool dense_cache = true, int exact_letters = -1,
+           int exact_letters = -1,
            bool verbose = false);
 
   // Tests every phase-1 class against one shared phase-2 preparation. The
@@ -79,7 +76,7 @@ class DfsAnagramSearch {
   // validated using the constructor's requested search-thread count.
   bool find_completable_classes(
       std::vector<bool>* completable, int64_t progress_factor = 1,
-      bool allow_cache_fallback = false, bool dense_cache = false,
+      bool allow_cache_fallback = false,
       int exact_letters = -1);
 
   int64_t nodes_visited() const { return nodes; }
@@ -283,8 +280,8 @@ class DfsAnagramSearch {
   };
 
   bool prepare_phase_two(
-      int64_t progress_factor, bool allow_cache_fallback, bool dense_cache,
-      int exact_letters, bool score_bounds_requested);
+      int64_t progress_factor, bool allow_cache_fallback, int exact_letters,
+      bool score_bounds_requested);
   void require_hot_classes() const;
   bool prepare_hot_classes();
   bool prepare_projected_actions();
@@ -292,7 +289,7 @@ class DfsAnagramSearch {
   bool length_certificate_rejects(
       size_t base, size_t length, size_t letters_left,
       double representative_log_score, double floor) const;
-  void prepare_score_bounds(uint64_t state_count, bool requested);
+  void prepare_score_bounds(bool requested);
   void clear_score_bounds();
   Reachability cached_reachability(
       uint64_t score_key, bool original_root) const;
@@ -354,24 +351,12 @@ class DfsAnagramSearch {
       uint32_t class_index, SearchWorker const& worker) const;
   bool hot_class_multiplicity_fits(
       FitClassMetadata metadata, SearchWorker const& worker) const;
-  bool hot_class_fits(uint32_t class_index,
-                      BoundWorker const& worker) const;
-  bool hot_class_multiplicity_fits(
-      uint32_t class_index, BoundWorker const& worker) const;
   bool projected_action_fits(
       size_t action_index, BoundWorker const& worker) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
   size_t first_projected_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
-  double compute_score_bound();
-  void consider_bound_candidate(uint32_t class_index, double* best,
-                                double* max_rounding_error);
-  double compute_parallel_score_bound(BoundWorker* worker);
-  void consider_parallel_bound_candidate(
-      uint32_t class_index, BoundWorker* worker, double* best,
-      double* max_rounding_error);
-  bool compute_score_bound_parallel(size_t requested_threads);
   double compute_projected_score_bound(BoundWorker* worker);
   void consider_projected_bound_candidate(
       size_t action_index, BoundWorker* worker, double* best,
@@ -379,7 +364,6 @@ class DfsAnagramSearch {
   bool compute_projected_score_bound_parallel(size_t requested_threads);
   bool compute_projected_score_bound_bottom_up(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
-  bool store_score_bound(uint64_t key, double value);
   void publish_parallel_score_bound(uint64_t key, double value);
   bool should_prune(SearchWorker* worker,
                     double representative_log_score,
@@ -416,7 +400,6 @@ class DfsAnagramSearch {
   size_t score_exact_letters;
   size_t score_wild_letters;
   size_t score_wild_span;
-  bool score_projection_requested;
 
   std::unique_ptr<FitClass, DfsAlignedFree> fit_classes;
   // The exact scan rejects ~99.98% of candidates on the support mask alone,
@@ -461,7 +444,6 @@ class DfsAnagramSearch {
   // With bounds off cached_reachability answers UNKNOWN for every key, so the
   // exact recurrence can skip maintaining and probing score keys entirely.
   bool score_bounds_active() const { return bound_mode != SCORE_BOUND_OFF; }
-  std::unique_ptr<AtomicWord, DfsAlignedFree> bound_values;
   std::unique_ptr<AtomicFloatWord, DfsAlignedFree> bound_float_values;
   std::unique_ptr<float, DfsAlignedFree> bound_plain_float_values;
   size_t bound_capacity;

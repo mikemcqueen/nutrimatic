@@ -62,9 +62,6 @@ assert_close() {
   --preprocess-threads 4 \
   > "$test_dir/threaded.stdout" 2> "$test_dir/threaded.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
-  -D \
-  > "$test_dir/dense.stdout" 2> "$test_dir/dense.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   -d 0 \
   > "$test_dir/depth-zero.stdout" 2> "$test_dir/depth-zero.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
@@ -85,8 +82,6 @@ cmp "$test_dir/all.stdout" "$test_dir/thread-one.stdout" ||
   fail "--preprocess-threads 1 changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/threaded.stdout" ||
   fail "threaded preprocessing changed stdout"
-cmp "$test_dir/all.stdout" "$test_dir/dense.stdout" ||
-  fail "--dense-cache changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/depth-zero.stdout" ||
   fail "--projection-depth changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/search-thread-one.stdout" ||
@@ -114,12 +109,6 @@ grep -Eq "${diagnostic_prefix}depth -1 top 10 threads 1 search threads 1 cache 6
   fail "resolved argument diagnostic is missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 1 complete:" "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
-grep -Eq "${diagnostic_prefix}phase 2 preflight: 16 theoretical states, 8 effective non-root states$" \
-  "$test_dir/all.stderr" ||
-  fail "phase-2 state-count diagnostics are missing from stderr"
-grep -Eq "${diagnostic_prefix}phase 2 preflight: 64 double/64 float dense score-table bytes, minimum -C 1 MiB \\(64 bytes\\)$" \
-  "$test_dir/all.stderr" ||
-  fail "phase-2 cache sizing diagnostics are missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode projected dense \\(4-byte values, capacity [0-9]+, complete effective coverage\\)$" \
   "$test_dir/all.stderr" ||
   fail "default projected cache mode diagnostic is missing from stderr"
@@ -129,9 +118,6 @@ grep -Eq "${diagnostic_prefix}phase 2 preflight: projected score table keeps 4 r
 grep -Eq "${diagnostic_prefix}phase 2 preflight: projected score table keeps 0 rarest letters exact, merges 4 wildcard letters;" \
   "$test_dir/depth-zero.stderr" ||
   fail "--projection-depth diagnostic is missing from stderr"
-grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode dense \\([48]-byte values, capacity [0-9]+, complete effective coverage\\)$" \
-  "$test_dir/dense.stderr" ||
-  fail "--dense-cache mode diagnostic is missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode off$" \
   "$test_dir/unlimited.stderr" ||
   fail "-n 0 unexpectedly enabled score-bound pruning"
@@ -212,11 +198,6 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --search-threads nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --projection-depth nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
-  --dense-cache --projection-depth 0
-grep -q '^error: --projection-depth cannot be used with --dense-cache$' \
-  "$test_dir/status.stderr" ||
-  fail "conflicting cache-mode diagnostic is missing"
 expect_status 2 "$dfs_anagrams" "$index_file" abc -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
   "$test_dir/status.stderr" ||
@@ -227,30 +208,10 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc -P nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc -P inf
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --cache-size 0
-grep -Eq "${diagnostic_prefix}phase 2 preflight: 16 theoretical states, 8 effective non-root states$" \
-  "$test_dir/status.stderr" ||
-  fail "undersized cache omitted phase-2 state-count diagnostics"
-grep -Eq "${diagnostic_prefix}phase 2 preflight: 64 double/64 float dense score-table bytes, minimum -C 1 MiB \\(64 bytes\\)$" \
-  "$test_dir/status.stderr" ||
-  fail "undersized cache omitted phase-2 sizing diagnostics"
 grep -q '^error: projected dense score table requires at least 1 MiB; supplied cache is 0 MiB$' \
   "$test_dir/status.stderr" ||
   fail "undersized projected-cache diagnostic is missing"
 grep -q '^       use -C 1 or --allow-cache-fallback$' \
   "$test_dir/status.stderr" ||
   fail "projected-cache recovery diagnostic is missing"
-expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
-  --dense-cache --cache-size 0
-grep -q '^error: dense score table requires at least 1 MiB; supplied cache is 0 MiB$' \
-  "$test_dir/status.stderr" ||
-  fail "undersized dense-cache diagnostic is missing"
-grep -q '^       use -C 1 or --allow-cache-fallback$' \
-  "$test_dir/status.stderr" ||
-  fail "dense-cache recovery diagnostic is missing"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
-  --dense-cache --cache-size 0 --allow-cache-fallback \
-  > "$test_dir/dense-fallback.stdout" \
-  2> "$test_dir/dense-fallback.stderr"
-cmp "$test_dir/all.stdout" "$test_dir/dense-fallback.stdout" ||
-  fail "--dense-cache fallback changed stdout"
 expect_status 1 "$dfs_anagrams" "$test_dir/missing.index" abcd

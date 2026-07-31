@@ -32,7 +32,6 @@ struct Args {
   double segment_penalty;
   double word_bonus;
   bool allow_cache_fallback;
-  bool dense_cache;
   bool verbose;
 };
 
@@ -44,7 +43,7 @@ static void usage(char const* program) {
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth] [-w word-bonus]"
       " [-P segment-penalty]"
-      " [-D|--dense-cache] [-F|--allow-cache-fallback] [-v|--verbose]\n"
+      " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
       "  --dict PATH filters entries to words in the dictionary\n"
@@ -60,8 +59,6 @@ static void usage(char const* program) {
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  -w, --word-bonus N boosts classes whose best member spans more than"
       " one corpus word by %.0f^N; defaults to %g (no boost)\n"
-      "  -D, --dense-cache requests an exact dense score cache instead of"
-      " the default projected dense cache\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
@@ -84,7 +81,6 @@ static struct optparse_long const long_options[] = {
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
   { "word-bonus", 'w', OPTPARSE_REQUIRED },
   { "segment-penalty", 'P', OPTPARSE_REQUIRED },
-  { "dense-cache", 'D', OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -102,7 +98,6 @@ static bool parse_args(char* argv[], Args* out) {
   out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   out->word_bonus = DEFAULT_WORD_BONUS;
   out->allow_cache_fallback = false;
-  out->dense_cache = false;
   out->verbose = false;
 
   struct optparse options;
@@ -174,9 +169,6 @@ static bool parse_args(char* argv[], Args* out) {
       case 'F':
         out->allow_cache_fallback = true;
         break;
-      case 'D':
-        out->dense_cache = true;
-        break;
       case 'v':
         out->verbose = true;
         break;
@@ -185,12 +177,6 @@ static bool parse_args(char* argv[], Args* out) {
         usage(argv[0]);
         return false;
     }
-  }
-
-  if (out->dense_cache && out->exact_letters >= 0) {
-    fputs("error: --projection-depth cannot be used with --dense-cache\n",
-          stderr);
-    return false;
   }
 
   char const* index_file = optparse_arg(&options);
@@ -274,7 +260,7 @@ int main(int argc, char* argv[]) {
   DfsTopN output(&classes, size_t(args.top));
   if (!search.run(&output,
                   args.progress_factor, args.allow_cache_fallback,
-                  args.dense_cache, args.exact_letters, args.verbose))
+                  args.exact_letters, args.verbose))
     return 2;
   dfs_diagnostic(
       "phase 2 timing: %.1fs setup, %.1fs search, "

@@ -30,8 +30,6 @@
 
 namespace {
 
-uint64_t const BOUND_UNSEEN = UINT64_C(0x7ff8000000000001);
-uint64_t const BOUND_COMPUTING = UINT64_C(0x7ff8000000000002);
 uint32_t const FLOAT_BOUND_UNSEEN = UINT32_C(0x7fc00001);
 uint32_t const FLOAT_BOUND_COMPUTING = UINT32_C(0x7fc00002);
 size_t const MIB = size_t(1024) * size_t(1024);
@@ -51,18 +49,6 @@ static bool dense_bound_requirements(
           size_t(state_count) * value_bytes, dense_bytes))
     return false;
   return true;
-}
-
-static uint64_t double_to_bits(double value) {
-  uint64_t bits;
-  memcpy(&bits, &value, sizeof(bits));
-  return bits;
-}
-
-static double bits_to_double(uint64_t bits) {
-  double value;
-  memcpy(&value, &bits, sizeof(value));
-  return value;
 }
 
 static uint32_t float_to_bits(float value) {
@@ -370,10 +356,6 @@ static size_t exact_memo_lookahead_choice() {
 static char const* score_bound_mode_name(
     DfsAnagramSearch::ScoreBoundMode mode) {
   switch (mode) {
-    case DfsAnagramSearch::SCORE_BOUND_DENSE:
-      return "dense";
-    case DfsAnagramSearch::SCORE_BOUND_PREFIX:
-      return "dense prefix";
     case DfsAnagramSearch::SCORE_BOUND_PROJECTED:
       return "projected dense";
     case DfsAnagramSearch::SCORE_BOUND_OFF:
@@ -411,7 +393,6 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     score_exact_letters(0),
     score_wild_letters(0),
     score_wild_span(1),
-    score_projection_requested(false),
     projected_actions_ready(false),
     support_scan_vector(support_scan_avx2_enabled()),
     hot_classes_ready(false),
@@ -899,7 +880,6 @@ bool DfsAnagramSearch::prepare_projected_actions() {
 
 void DfsAnagramSearch::clear_score_bounds() {
   bound_mode = SCORE_BOUND_OFF;
-  bound_values.reset();
   bound_float_values.reset();
   bound_plain_float_values.reset();
   bound_capacity = 0;
@@ -911,125 +891,49 @@ void DfsAnagramSearch::clear_score_bounds() {
   bound_charged_bytes = 0;
 }
 
-void DfsAnagramSearch::prepare_score_bounds(
-    uint64_t state_count, bool requested) {
+void DfsAnagramSearch::prepare_score_bounds(bool requested) {
   clear_score_bounds();
   if (!hot_classes_ready || !requested ||
       !score_bound_arithmetic_supported() ||
       score_cache_budget < DFS_CACHE_ALIGNMENT)
     return;
 
-  if (score_projection_requested) {
-    if (!projected_actions_ready) return;
-    size_t float_bytes = 0;
-    if (score_effective_states == 0 ||
-        score_effective_states > SIZE_MAX ||
-        !dense_bound_requirements(
-            score_effective_states, sizeof(float), &float_bytes) ||
-        float_bytes > score_cache_budget)
-      return;
-    bool const bottom_up_eligible =
-        score_wild_span != 0 &&
-        score_effective_states / score_wild_span <= UINT32_MAX;
-    if (bottom_up_eligible) {
-      float* values = static_cast<float*>(
-          dfs_allocate_aligned(float_bytes));
-      if (values == NULL) return;
-      bound_plain_float_values.reset(values);
-    } else {
-      AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
-          dfs_allocate_aligned(float_bytes));
-      if (values == NULL) return;
-      for (size_t i = 0; i < size_t(score_effective_states); ++i) {
-        new (&values[i]) AtomicFloatWord;
-        values[i].value.store(
-            FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
-      }
-      bound_float_values.reset(values);
-    }
-    bound_capacity = size_t(score_effective_states);
-    bound_value_bytes = sizeof(float);
-    bound_complete = true;
-    bound_mode = SCORE_BOUND_PROJECTED;
-    bound_charged_bytes = float_bytes;
+  if (!projected_actions_ready) return;
+  size_t float_bytes = 0;
+  if (score_effective_states == 0 ||
+      score_effective_states > SIZE_MAX ||
+      !dense_bound_requirements(
+          score_effective_states, sizeof(float), &float_bytes) ||
+      float_bytes > score_cache_budget)
     return;
-  }
-
-  // The root's forced rarest symbol is consumed by every first class. Put that
-  // symbol in the most-significant score digit and omit the unreachable root
-  // plane. Every phase-2-prunable descendant then has a key below this count.
-  if (bag_mask == 0) return;
-  int const root_rank = __builtin_ctzll(bag_mask);
-  uint64_t const root_radix = uint64_t(bag[size_t(root_rank)]) + 1;
-  uint64_t const effective_states =
-      (state_count / root_radix) * (root_radix - 1);
-  if (effective_states == 0) return;
-
-  size_t double_bytes = 0;
-  bool const double_size_ok = dense_bound_requirements(
-      effective_states, sizeof(double), &double_bytes);
-  if (double_size_ok && double_bytes <= score_cache_budget) {
-    AtomicWord* values = static_cast<AtomicWord*>(
-        dfs_allocate_aligned(double_bytes));
+  bool const bottom_up_eligible =
+      score_wild_span != 0 &&
+      score_effective_states / score_wild_span <= UINT32_MAX;
+  if (bottom_up_eligible) {
+    float* values = static_cast<float*>(dfs_allocate_aligned(float_bytes));
     if (values == NULL) return;
-    for (size_t i = 0; i < size_t(effective_states); ++i) {
-      new (&values[i]) AtomicWord;
-      values[i].value.store(BOUND_UNSEEN, std::memory_order_relaxed);
-    }
-    bound_values.reset(values);
-    bound_capacity = size_t(effective_states);
-    bound_value_bytes = sizeof(double);
-    bound_complete = true;
-    bound_mode = SCORE_BOUND_DENSE;
-    bound_charged_bytes = double_bytes;
+    bound_plain_float_values.reset(values);
   } else {
-    size_t float_bytes = 0;
-    bool const float_size_ok = dense_bound_requirements(
-        effective_states, sizeof(float), &float_bytes);
-    bool const complete_float =
-        float_size_ok && float_bytes <= score_cache_budget;
-    uint64_t const available_entries =
-        score_cache_budget / sizeof(float);
-    uint64_t const selected_entries = complete_float
-        ? effective_states
-        : std::min(effective_states, available_entries);
-    if (selected_entries == 0 || selected_entries > SIZE_MAX) return;
-    size_t const selected_bytes =
-        complete_float
-            ? float_bytes
-            : size_t(selected_entries) * sizeof(float);
     AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
-        complete_float
-            ? dfs_allocate_aligned(selected_bytes)
-            : dfs_allocate_aligned_exact(selected_bytes));
+        dfs_allocate_aligned(float_bytes));
     if (values == NULL) return;
-    for (size_t i = 0; i < size_t(selected_entries); ++i) {
+    for (size_t i = 0; i < size_t(score_effective_states); ++i) {
       new (&values[i]) AtomicFloatWord;
-      values[i].value.store(
-          FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
+      values[i].value.store(FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
     }
     bound_float_values.reset(values);
-    bound_capacity = size_t(selected_entries);
-    bound_value_bytes = sizeof(float);
-    bound_complete = complete_float;
-    bound_mode = complete_float
-        ? SCORE_BOUND_DENSE
-        : SCORE_BOUND_PREFIX;
-    bound_charged_bytes = selected_bytes;
   }
+  bound_capacity = size_t(score_effective_states);
+  bound_value_bytes = sizeof(float);
+  bound_complete = true;
+  bound_mode = SCORE_BOUND_PROJECTED;
+  bound_charged_bytes = float_bytes;
 }
 
 bool DfsAnagramSearch::load_score_bound(
     uint64_t key, double* value) const {
   if (bound_mode == SCORE_BOUND_OFF || key >= bound_capacity)
     return false;
-  if (bound_value_bytes == sizeof(double)) {
-    uint64_t const stored = bound_values.get()[size_t(key)].value.load(
-        std::memory_order_relaxed);
-    if (stored == BOUND_UNSEEN || stored == BOUND_COMPUTING) return false;
-    *value = bits_to_double(stored);
-    return true;
-  }
   assert(bound_value_bytes == sizeof(float));
   if (bound_plain_float_values.get() != NULL) {
     *value = double(bound_plain_float_values.get()[size_t(key)]);
@@ -1060,58 +964,19 @@ DfsAnagramSearch::Reachability DfsAnagramSearch::cached_reachability(
   return REACHABILITY_UNKNOWN;
 }
 
-bool DfsAnagramSearch::store_score_bound(uint64_t key, double value) {
-  if (bound_mode == SCORE_BOUND_OFF || key >= bound_capacity)
-    return false;
-  if (bound_value_bytes == sizeof(double)) {
-    AtomicWord& stored = bound_values.get()[size_t(key)];
-    uint64_t const previous =
-        stored.value.load(std::memory_order_relaxed);
-    if (previous == BOUND_UNSEEN) {
-      ++bound_entries;
-      ++bound_states_computed;
-    }
-    stored.value.store(double_to_bits(value), std::memory_order_relaxed);
-    return true;
-  }
-  assert(bound_value_bytes == sizeof(float));
-  if (bound_plain_float_values.get() != NULL) {
-    bound_plain_float_values.get()[size_t(key)] =
-        round_float_score_bound_up(value);
-    return true;
-  }
-  AtomicFloatWord& stored =
-      bound_float_values.get()[size_t(key)];
-  uint32_t const previous =
-      stored.value.load(std::memory_order_relaxed);
-  if (previous == FLOAT_BOUND_UNSEEN) {
-    ++bound_entries;
-    ++bound_states_computed;
-  }
-  stored.value.store(
-      float_to_bits(round_float_score_bound_up(value)),
-      std::memory_order_relaxed);
-  return true;
-}
-
 void DfsAnagramSearch::publish_parallel_score_bound(
     uint64_t key, double value) {
   assert(key < bound_capacity);
-  if (bound_value_bytes == sizeof(double)) {
-    bound_values.get()[size_t(key)].value.store(
-        double_to_bits(value), std::memory_order_release);
-  } else {
-    assert(bound_value_bytes == sizeof(float));
-    assert(bound_plain_float_values.get() == NULL);
-    bound_float_values.get()[size_t(key)].value.store(
-        float_to_bits(round_float_score_bound_up(value)),
-        std::memory_order_release);
-  }
+  assert(bound_value_bytes == sizeof(float));
+  assert(bound_plain_float_values.get() == NULL);
+  bound_float_values.get()[size_t(key)].value.store(
+      float_to_bits(round_float_score_bound_up(value)),
+      std::memory_order_release);
 }
 
 bool DfsAnagramSearch::prepare_phase_two(
-    int64_t progress_factor, bool allow_cache_fallback, bool dense_cache,
-    int exact_letters, bool score_bounds_requested) {
+    int64_t progress_factor, bool allow_cache_fallback, int exact_letters,
+    bool score_bounds_requested) {
   FILE* const progress = dfs_diagnostic_stream();
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const setup_start = PhaseClock::now();
@@ -1176,7 +1041,6 @@ bool DfsAnagramSearch::prepare_phase_two(
     forced_exact_letters = size_t(exact_letters);
     has_forced_exact_letters = true;
   }
-  score_projection_requested = !dense_cache;
   projected_actions_ready = false;
   projected_actions.clear();
   projected_repeated_requirements.clear();
@@ -1188,7 +1052,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   score_state_count = state_count;
   score_effective_states = 0;
 
-  if (encodable && score_projection_requested) {
+  if (encodable) {
     std::vector<int> present_ranks;
     present_ranks.reserve(score_exact_letters);
     for (int rank = 0; rank < DFS_SYMBOL_COUNT; ++rank)
@@ -1273,26 +1137,6 @@ bool DfsAnagramSearch::prepare_phase_two(
             (score_state_count / root_radix) * (root_radix - 1);
       }
     }
-  } else if (encodable) {
-    score_multipliers.fill(0);
-    uint64_t exact_score_states = 1;
-    for (int rank = DFS_SYMBOL_COUNT - 1; rank >= 0; --rank) {
-      score_multipliers[size_t(rank)] = exact_score_states;
-      uint64_t const radix = uint64_t(bag[size_t(rank)]) + 1;
-      if (!dfs_checked_multiply_u64(
-              exact_score_states, radix, &exact_score_states)) {
-        encodable = false;
-        break;
-      }
-    }
-    assert(!encodable || exact_score_states == state_count);
-    if (encodable && bag_mask != 0) {
-      int const root_rank = __builtin_ctzll(bag_mask);
-      uint64_t const root_radix =
-          uint64_t(bag[size_t(root_rank)]) + 1;
-      score_effective_states =
-          (state_count / root_radix) * (root_radix - 1);
-    }
   }
 
   current_score_key = encodable ? score_state_count - 1 : 0;
@@ -1301,57 +1145,10 @@ bool DfsAnagramSearch::prepare_phase_two(
   empty_class_list = class_list->classes().empty();
   hot_classes_ready =
       encodable && !empty_class_list && prepare_hot_classes();
-  if (hot_classes_ready && score_projection_requested)
+  if (hot_classes_ready)
     prepare_projected_actions();
-  uint64_t effective_states = 0;
-  size_t double_bytes = 0;
-  size_t float_bytes = 0;
-  bool dense_sizes_available = false;
-  if (encodable && bag_mask != 0) {
-    int const root_rank = __builtin_ctzll(bag_mask);
-    uint64_t const root_radix =
-        uint64_t(bag[size_t(root_rank)]) + 1;
-    effective_states =
-        (state_count / root_radix) * (root_radix - 1);
-    bool const double_ok = dense_bound_requirements(
-        effective_states, sizeof(double), &double_bytes);
-    bool const float_ok = dense_bound_requirements(
-        effective_states, sizeof(float), &float_bytes);
-    dense_sizes_available = double_ok && float_ok;
-  }
   if (progress != NULL) {
-    if (!encodable) {
-      dfs_diagnostic(
-          "phase 2 preflight: theoretical state count exceeds the "
-          "supported range; dense score-table size and minimum -C "
-          "unavailable\n");
-    } else if (bag_mask != 0 && dense_sizes_available) {
-      size_t const minimum_mib =
-          float_bytes / MIB + size_t(float_bytes % MIB != 0);
-      dfs_diagnostic(
-          "phase 2 preflight: %llu theoretical states, "
-          "%llu effective non-root states\n",
-          (unsigned long long) state_count,
-          (unsigned long long) effective_states);
-      dfs_diagnostic(
-          "phase 2 preflight: "
-          "%zu double/%zu float dense score-table bytes, "
-          "minimum -C %zu MiB (%zu bytes)\n",
-          double_bytes, float_bytes, minimum_mib, float_bytes);
-    } else if (bag_mask != 0) {
-      dfs_diagnostic(
-          "phase 2 preflight: %llu theoretical states, "
-          "%llu effective non-root states\n",
-          (unsigned long long) state_count,
-          (unsigned long long) effective_states);
-      dfs_diagnostic(
-          "phase 2 preflight: dense score-table size and minimum -C "
-          "exceed the supported range\n");
-    } else {
-      dfs_diagnostic(
-          "phase 2 preflight: empty bag; no score table needed\n");
-    }
-    if (score_projection_requested && encodable) {
+    if (encodable) {
       size_t projected_bytes = 0;
       bool const projected_size_ok = dense_bound_requirements(
           score_effective_states, sizeof(float), &projected_bytes);
@@ -1387,14 +1184,10 @@ bool DfsAnagramSearch::prepare_phase_two(
       length_certificate_ready = false;
   }
   if (!allow_cache_fallback && score_bounds_applicable) {
-    size_t required_bytes = float_bytes;
-    bool size_available = dense_sizes_available;
-    char const* mode_name = "dense";
-    if (score_projection_requested) {
-      mode_name = "projected dense";
-      size_available = dense_bound_requirements(
-          score_effective_states, sizeof(float), &required_bytes);
-    }
+    size_t required_bytes = 0;
+    char const* mode_name = "projected dense";
+    bool const size_available = dense_bound_requirements(
+        score_effective_states, sizeof(float), &required_bytes);
     if (!size_available) {
       if (progress != NULL) {
         fprintf(progress,
@@ -1421,7 +1214,7 @@ bool DfsAnagramSearch::prepare_phase_two(
       return false;
     }
   }
-  prepare_score_bounds(state_count, score_bounds_applicable);
+  prepare_score_bounds(score_bounds_applicable);
   if (progress != NULL) {
     dfs_diagnostic("phase 2 preflight: score-bound mode %s",
                    score_bound_mode_name(bound_mode));
@@ -1448,12 +1241,6 @@ bool DfsAnagramSearch::prepare_phase_two(
                     requested_preprocess_threads);
       if (!computed)
         clear_score_bounds();
-    } else {
-      bool const ran_parallel =
-          compute_score_bound_parallel(requested_preprocess_threads);
-      if (!ran_parallel)
-        root_score_bound = compute_score_bound();
-      if (!ran_parallel) root_score_bound_ready = true;
     }
   }
 
@@ -1478,12 +1265,6 @@ bool DfsAnagramSearch::prepare_phase_two(
     dfs_diagnostic(
         "phase 2: precomputed %zu bounded states in %.1fs\n",
         bound_states_computed, setup_seconds);
-    if (bound_mode == SCORE_BOUND_PREFIX)
-      dfs_diagnostic(
-          "phase 2: dense-prefix bounds will be constructed lazily "
-          "during search for score keys below %zu once a score floor "
-          "is available\n",
-          bound_capacity);
   }
   return true;
 }
@@ -1491,14 +1272,13 @@ bool DfsAnagramSearch::prepare_phase_two(
 bool DfsAnagramSearch::run(DfsSolutionSink* sink,
                            int64_t progress_factor,
                            bool allow_cache_fallback,
-                           bool dense_cache,
                            int exact_letters,
                            bool verbose) {
   bool const score_bounds_requested =
       sink != NULL && sink->supports_score_pruning();
   if (!prepare_phase_two(
-          progress_factor, allow_cache_fallback, dense_cache,
-          exact_letters, score_bounds_requested))
+          progress_factor, allow_cache_fallback, exact_letters,
+          score_bounds_requested))
     return false;
 
   typedef std::chrono::steady_clock PhaseClock;
@@ -1511,8 +1291,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
   {
     bool const parallel_eligible =
         requested_search_threads > 1 &&
-        (sink == NULL || sink->supports_parallel_search()) &&
-        bound_mode != SCORE_BOUND_PREFIX;
+        (sink == NULL || sink->supports_parallel_search());
     if (parallel_eligible) {
       run_parallel_search(
           sink, requested_search_threads,
@@ -1873,11 +1652,10 @@ bool DfsAnagramSearch::exact_expand_node(
 
 bool DfsAnagramSearch::find_completable_classes(
     std::vector<bool>* completable, int64_t progress_factor,
-    bool allow_cache_fallback, bool dense_cache, int exact_letters) {
+    bool allow_cache_fallback, int exact_letters) {
   assert(completable != NULL);
   if (!prepare_phase_two(
-          progress_factor, allow_cache_fallback, dense_cache,
-          exact_letters, true))
+          progress_factor, allow_cache_fallback, exact_letters, true))
     return false;
 
   DfsClassSpan const classes = class_list->classes();
@@ -2114,29 +1892,6 @@ bool DfsAnagramSearch::hot_class_multiplicity_fits(
   return true;
 }
 
-bool DfsAnagramSearch::hot_class_fits(
-    uint32_t class_index, BoundWorker const& worker) const {
-  FitClass const& candidate = fit_classes.get()[class_index];
-  if ((candidate.support_mask & ~worker.bag_mask) != 0) return false;
-  return hot_class_multiplicity_fits(class_index, worker);
-}
-
-bool DfsAnagramSearch::hot_class_multiplicity_fits(
-    uint32_t class_index, BoundWorker const& worker) const {
-  FitClass const& candidate = fit_classes.get()[class_index];
-  uint32_t const* requirements =
-      packed_letters.get() + candidate.metadata.letters_offset;
-  uint32_t const repeated =
-      hot_repeated_count(candidate.metadata.packed_length_and_count);
-  for (uint32_t i = 0; i < repeated; ++i) {
-    uint32_t const requirement = requirements[i];
-    if (worker.bag[packed_rank(requirement)] <
-        packed_count(requirement))
-      return false;
-  }
-  return true;
-}
-
 bool DfsAnagramSearch::projected_action_fits(
     size_t action_index, BoundWorker const& worker) const {
   ProjectedAction const& action = projected_actions[action_index];
@@ -2183,220 +1938,6 @@ size_t DfsAnagramSearch::first_projected_length_candidate(
       end = middle;
   }
   return begin;
-}
-
-void DfsAnagramSearch::consider_bound_candidate(
-    uint32_t class_index, double* best, double* max_rounding_error) {
-  FitClass const& fit = fit_classes.get()[class_index];
-  double const class_score = best_member_log_scores[class_index];
-  uint32_t const* requirements =
-      packed_letters.get() + fit.metadata.letters_offset;
-  uint32_t const requirement_count =
-      hot_requirement_count(fit.metadata.packed_length_and_count);
-  size_t const candidate_length =
-      hot_letter_length(fit.metadata.packed_length_and_count);
-  uint64_t const parent_bag_mask = bag_mask;
-  for (uint32_t i = 0; i < requirement_count; ++i) {
-    uint32_t const requirement = requirements[i];
-    uint32_t const requirement_rank = packed_rank(requirement);
-    uint32_t& remaining = bag[requirement_rank];
-    remaining -= packed_count(requirement);
-    bag_mask &= ~(uint64_t(remaining == 0) << requirement_rank);
-  }
-  current_score_key -= score_key_deltas.get()[class_index];
-  current_letters_left -= candidate_length;
-  double const child = compute_score_bound();
-  current_letters_left += candidate_length;
-  current_score_key += score_key_deltas.get()[class_index];
-  for (uint32_t i = 0; i < requirement_count; ++i) {
-    uint32_t const requirement = requirements[i];
-    bag[packed_rank(requirement)] += packed_count(requirement);
-  }
-  bag_mask = parent_bag_mask;
-
-  if (child == -HUGE_VAL) return;
-  ++bound_transitions;
-  double const partial = class_score + segment_boundary_log_score;
-  double const candidate_bound = partial + child;
-  *best = std::max(*best, candidate_bound);
-  *max_rounding_error = std::max(
-      *max_rounding_error,
-      score_candidate_rounding_error(
-          class_score, segment_boundary_log_score, child));
-}
-
-double DfsAnagramSearch::compute_score_bound() {
-  double cached;
-  if (load_score_bound(current_score_key, &cached)) return cached;
-  if (bag_mask == 0) {
-    if (!store_score_bound(current_score_key, 0.0))
-      return HUGE_VAL;
-    return 0.0;
-  }
-
-  int const rank = __builtin_ctzll(bag_mask);
-  int const forced_symbol =
-      class_list->rank_to_symbol()[size_t(rank)];
-  size_t const begin = first_length_candidate(
-      class_list->candidate_begin(forced_symbol),
-      class_list->candidate_end(forced_symbol),
-      current_letters_left);
-  size_t const end = class_list->candidate_end(forced_symbol);
-
-  double best = -HUGE_VAL;
-  double max_rounding_error = 0.0;
-  for (size_t class_index = begin;
-       class_index < end; ++class_index) {
-    uint32_t const id = uint32_t(class_index);
-    if (!hot_class_fits(id)) continue;
-    consider_bound_candidate(id, &best, &max_rounding_error);
-  }
-
-  // For every edge i, exact_i <= computed_i + error_i. Therefore
-  // max(computed_i) + max(error_i) bounds even an unselected edge whose
-  // computed value rounded down. Do this inflation and the long-double work
-  // once per state, after selecting the computed maximum.
-  double const stored_best =
-      best == -HUGE_VAL
-          ? -HUGE_VAL
-          : round_score_bound_up(
-                static_cast<long double>(best) +
-                static_cast<long double>(max_rounding_error),
-                &bound_nextafter_calls);
-  if (current_score_key < bound_capacity) {
-    if (!store_score_bound(current_score_key, stored_best))
-      return HUGE_VAL;
-  } else {
-    // Complete-effective preprocessing starts at the sole omitted state: the
-    // root. Every recursive child consumes its most-significant rarest digit
-    // and is inside the table.
-    assert(bound_complete &&
-           current_score_key == score_state_count - 1);
-  }
-  return stored_best;
-}
-
-void DfsAnagramSearch::consider_parallel_bound_candidate(
-    uint32_t class_index, BoundWorker* worker, double* best,
-    double* max_rounding_error) {
-  FitClass const& fit = fit_classes.get()[class_index];
-  double const class_score = best_member_log_scores[class_index];
-  uint32_t const* requirements =
-      packed_letters.get() + fit.metadata.letters_offset;
-  uint32_t const requirement_count =
-      hot_requirement_count(fit.metadata.packed_length_and_count);
-  size_t const candidate_length =
-      hot_letter_length(fit.metadata.packed_length_and_count);
-  uint64_t const parent_bag_mask = worker->bag_mask;
-  for (uint32_t i = 0; i < requirement_count; ++i) {
-    uint32_t const requirement = requirements[i];
-    uint32_t const requirement_rank = packed_rank(requirement);
-    uint32_t& remaining = worker->bag[requirement_rank];
-    remaining -= packed_count(requirement);
-    worker->bag_mask &=
-        ~(uint64_t(remaining == 0) << requirement_rank);
-  }
-  worker->score_key -= score_key_deltas.get()[class_index];
-  worker->letters_left -= candidate_length;
-  double const child = compute_parallel_score_bound(worker);
-  worker->letters_left += candidate_length;
-  worker->score_key += score_key_deltas.get()[class_index];
-  for (uint32_t i = 0; i < requirement_count; ++i) {
-    uint32_t const requirement = requirements[i];
-    worker->bag[packed_rank(requirement)] += packed_count(requirement);
-  }
-  worker->bag_mask = parent_bag_mask;
-
-  if (child == -HUGE_VAL) return;
-  ++worker->transitions;
-  double const partial = class_score + segment_boundary_log_score;
-  double const candidate_bound = partial + child;
-  *best = std::max(*best, candidate_bound);
-  *max_rounding_error = std::max(
-      *max_rounding_error,
-      score_candidate_rounding_error(
-          class_score, segment_boundary_log_score, child));
-}
-
-double DfsAnagramSearch::compute_parallel_score_bound(
-    BoundWorker* worker) {
-  assert(bound_mode == SCORE_BOUND_DENSE);
-  assert(worker->score_key < bound_capacity);
-  unsigned int wait_spins = 0;
-  if (bound_value_bytes == sizeof(double)) {
-    AtomicWord& slot =
-        bound_values.get()[size_t(worker->score_key)];
-    uint64_t stored = slot.value.load(std::memory_order_acquire);
-    for (;;) {
-      if (stored != BOUND_UNSEEN && stored != BOUND_COMPUTING)
-        return bits_to_double(stored);
-      if (stored == BOUND_UNSEEN &&
-          slot.value.compare_exchange_weak(
-              stored, BOUND_COMPUTING,
-              std::memory_order_acq_rel,
-              std::memory_order_acquire))
-        break;
-      if (stored == BOUND_COMPUTING) {
-        bound_wait_backoff(&wait_spins);
-        stored = slot.value.load(std::memory_order_acquire);
-      }
-    }
-  } else {
-    assert(bound_value_bytes == sizeof(float));
-    AtomicFloatWord& slot =
-        bound_float_values.get()[size_t(worker->score_key)];
-    uint32_t stored = slot.value.load(std::memory_order_acquire);
-    for (;;) {
-      if (stored != FLOAT_BOUND_UNSEEN &&
-          stored != FLOAT_BOUND_COMPUTING)
-        return double(bits_to_float(stored));
-      if (stored == FLOAT_BOUND_UNSEEN &&
-          slot.value.compare_exchange_weak(
-              stored, FLOAT_BOUND_COMPUTING,
-              std::memory_order_acq_rel,
-              std::memory_order_acquire))
-        break;
-      if (stored == FLOAT_BOUND_COMPUTING) {
-        bound_wait_backoff(&wait_spins);
-        stored = slot.value.load(std::memory_order_acquire);
-      }
-    }
-  }
-
-  if (worker->bag_mask == 0) {
-    publish_parallel_score_bound(worker->score_key, 0.0);
-    ++worker->states_computed;
-    return 0.0;
-  }
-
-  int const rank = __builtin_ctzll(worker->bag_mask);
-  int const forced_symbol =
-      class_list->rank_to_symbol()[size_t(rank)];
-  size_t const begin = first_length_candidate(
-      class_list->candidate_begin(forced_symbol),
-      class_list->candidate_end(forced_symbol),
-      worker->letters_left);
-  size_t const end = class_list->candidate_end(forced_symbol);
-
-  double best = -HUGE_VAL;
-  double max_rounding_error = 0.0;
-  for (size_t class_index = begin; class_index < end; ++class_index) {
-    uint32_t const id = uint32_t(class_index);
-    if (!hot_class_fits(id, *worker)) continue;
-    consider_parallel_bound_candidate(
-        id, worker, &best, &max_rounding_error);
-  }
-
-  double const result =
-      best == -HUGE_VAL
-          ? -HUGE_VAL
-          : round_score_bound_up(
-                static_cast<long double>(best) +
-                static_cast<long double>(max_rounding_error),
-                &worker->nextafter_calls);
-  publish_parallel_score_bound(worker->score_key, result);
-  ++worker->states_computed;
-  return result;
 }
 
 void DfsAnagramSearch::consider_projected_bound_candidate(
@@ -3016,119 +2557,6 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   return true;
 }
 
-bool DfsAnagramSearch::compute_score_bound_parallel(
-    size_t requested_threads) {
-  FILE* const progress = dfs_diagnostic_stream();
-  if (bound_mode != SCORE_BOUND_DENSE || requested_threads < 2 ||
-      !bound_complete || bound_capacity == 0)
-    return false;
-  if (bound_value_bytes == sizeof(double)) {
-    if (!bound_values.get()[0].value.is_lock_free()) return false;
-  } else if (!bound_float_values.get()[0].value.is_lock_free()) {
-    return false;
-  }
-
-  BoundWorker root;
-  root.bag = bag;
-  root.bag_mask = bag_mask;
-  root.score_key = current_score_key;
-  root.letters_left = current_letters_left;
-  root.wild_left = 0;
-  root.states_computed = 0;
-  root.candidate_tests = 0;
-  root.fitting_transitions = 0;
-  root.transitions = 0;
-  root.nextafter_calls = 0;
-  root.best = -HUGE_VAL;
-  root.max_rounding_error = 0.0;
-
-  int const rank = __builtin_ctzll(root.bag_mask);
-  int const forced_symbol =
-      class_list->rank_to_symbol()[size_t(rank)];
-  size_t const begin = first_length_candidate(
-      class_list->candidate_begin(forced_symbol),
-      class_list->candidate_end(forced_symbol),
-      root.letters_left);
-  size_t const end = class_list->candidate_end(forced_symbol);
-  std::vector<uint32_t> root_candidates;
-  for (size_t class_index = begin; class_index < end; ++class_index) {
-    uint32_t const id = uint32_t(class_index);
-    if (hot_class_fits(id, root))
-      root_candidates.push_back(id);
-  }
-  if (root_candidates.size() < 2) return false;
-
-  size_t const worker_count = std::min(
-      requested_threads, root_candidates.size());
-  std::vector<BoundWorker> workers(worker_count, root);
-  std::vector<std::thread> background;
-  try {
-    background.reserve(worker_count - 1);
-  } catch (...) {
-    return false;
-  }
-  if (progress != NULL && worker_count > 1) {
-    dfs_diagnostic(
-        "phase 2: using %zu threads to calculate dense score bounds\n",
-        worker_count);
-  }
-
-  std::atomic<size_t> next_candidate(0);
-  auto work = [&](size_t worker_index) {
-    BoundWorker* worker = &workers[worker_index];
-    for (;;) {
-      size_t const index =
-          next_candidate.fetch_add(1, std::memory_order_relaxed);
-      if (index >= root_candidates.size()) break;
-      consider_parallel_bound_candidate(
-          root_candidates[index], worker, &worker->best,
-          &worker->max_rounding_error);
-    }
-  };
-
-  for (size_t i = 1; i < worker_count; ++i) {
-    try {
-      background.emplace_back(work, i);
-    } catch (...) {
-      break;
-    }
-  }
-  work(0);
-  for (size_t i = 0; i < background.size(); ++i)
-    background[i].join();
-
-  size_t states = 0;
-  uint64_t transitions = 0;
-  uint64_t nextafter_calls = 0;
-  double best = -HUGE_VAL;
-  double max_rounding_error = 0.0;
-  size_t const active_workers = background.size() + 1;
-  for (size_t i = 0; i < active_workers; ++i) {
-    states += workers[i].states_computed;
-    transitions += workers[i].transitions;
-    nextafter_calls += workers[i].nextafter_calls;
-    best = std::max(best, workers[i].best);
-    max_rounding_error = std::max(
-        max_rounding_error, workers[i].max_rounding_error);
-  }
-
-  double const result =
-      best == -HUGE_VAL
-          ? -HUGE_VAL
-          : round_score_bound_up(
-                static_cast<long double>(best) +
-                static_cast<long double>(max_rounding_error),
-                &nextafter_calls);
-  root_score_bound = result;
-  root_score_bound_ready = true;
-  bound_entries = states;
-  bound_states_computed = states;
-  bound_transitions = transitions;
-  bound_nextafter_calls = nextafter_calls;
-  actual_preprocess_threads = active_workers;
-  return true;
-}
-
 bool DfsAnagramSearch::should_prune(
     SearchWorker* worker, double representative_log_score,
     DfsSolutionSink* sink, size_t letters_left) {
@@ -3145,20 +2573,7 @@ bool DfsAnagramSearch::should_prune(
   if (query_key >= bound_capacity) return false;
 
   double remaining_bound;
-  if (!load_score_bound(query_key, &remaining_bound)) {
-    if (bound_mode != SCORE_BOUND_PREFIX) return false;
-    // A rarest-most-significant prefix is dependency-closed: every fitting
-    // subtraction decreases the key. Build its complete bound only after
-    // phase 2 both enters the prefix and has a useful score floor. This
-    // legacy builder borrows the shared scratch state; prefix mode is serial.
-    bag = worker->bag;
-    bag_mask = worker->bag_mask;
-    current_score_key = query_key;
-    current_letters_left = letters_left;
-    compute_score_bound();
-    if (!load_score_bound(query_key, &remaining_bound))
-      return false;
-  }
+  if (!load_score_bound(query_key, &remaining_bound)) return false;
   if (remaining_bound == -HUGE_VAL) return true;
   long double const upper =
       static_cast<long double>(representative_log_score) +

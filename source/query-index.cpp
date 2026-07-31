@@ -343,8 +343,7 @@ int main(int argc, char* argv[]) {
         /*word_bonus=*/0.0);
     if (!search.find_completable_classes(
             &completable, /*progress_factor=*/1,
-            /*allow_cache_fallback=*/true, /*dense_cache=*/true,
-            /*exact_letters=*/-1))
+            /*allow_cache_fallback=*/true, /*exact_letters=*/-1))
       return 2;
     if (search.search_threads_used() > 1)
       dfs_diagnostic(
