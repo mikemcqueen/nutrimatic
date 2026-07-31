@@ -987,14 +987,8 @@ forces the shared-helper boundary to become explicit.
 
 ### 3. Extract exact completion mechanically
 
-Move the exact memo, recurrence, batch scheduling, support SIMD scan, and
+Move the exact memo, recurrence, batch scheduling, and
 related environment parsing.
-
-Verify:
-
-- memo-lookahead zero and default;
-- bounds off, and projected modes;
-- deterministic memo and DFS counters.
 
 ### 4. Extract generic bounds
 
@@ -1017,7 +1011,6 @@ Verify:
 - serial counter-only search;
 - serial and parallel sinks;
 - stop behavior;
-- certificate off, shadow, and active;
 - task generation and deterministic retained spellings.
 
 ### 6. Introduce value types and grouped statistics

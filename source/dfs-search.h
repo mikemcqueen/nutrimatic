@@ -12,6 +12,7 @@
 
 #include "dfs-alloc.h"
 #include "dfs-class-list.h"
+#include "dfs-search-internal.h"
 #include "dfs-score.h"
 
 // Receives each phase-2 solution as a canonical list of indexes into
