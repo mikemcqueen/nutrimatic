@@ -17,8 +17,8 @@ problem: `DfsAnagramSearch` currently owns all of these responsibilities:
 5. building those bounds serially or in parallel;
 6. running the ordinary solution-enumerating DFS;
 7. splitting that DFS into parallel tasks;
-8. running the separate exact-completability DFS used by `query-index`;
-9. owning both score-bound and exact-completability memo tables;
+8. running the separate exact-completion DFS used by `query-index`;
+9. owning both score-bound and exact-completion memo tables;
 10. selecting two unrelated SIMD kernels;
 11. collecting every subsystem's counters and exposing them as individual
     getters.
@@ -86,20 +86,20 @@ selected.
 The eventual orchestration function should read more like:
 
 ```cpp
-PreparationResult prepare_phase_two(PreparationOptions const& options) {
-  PreparedProblem problem = PreparedProblem::build(...);
+PreparationResult prepare_phase_two(DfsSearchOptions const& options) {
+  DfsSearchData search_data = DfsSearchData::build(...);
   LengthCertificate certificate =
-      LengthCertificate::build_if_requested(problem, ...);
-  ScoreBounds bounds = ScoreBounds::build(problem, ...);
+      LengthCertificate::build_if_requested(search_data, ...);
+  ScoreBounds bounds = ScoreBounds::build(search_data, ...);
   return PreparationResult(
-      std::move(problem), std::move(certificate), std::move(bounds));
+      std::move(search_data), std::move(certificate), std::move(bounds));
 }
 ```
 
 The real interfaces need failure reasons and statistics, described below, but
 the top-level control flow should remain this short.
 
-### Ordinary DFS and exact completability share an oversized worker
+### Ordinary DFS and exact completion share an oversized worker
 
 `SearchWorker` carries fields for:
 
@@ -118,12 +118,18 @@ but coupled two distinct algorithms.
 A cleaner design has:
 
 ```cpp
-struct DfsWorker;
-struct ExactWorker;
+class DfsSearchRunner {
+ private:
+  struct Worker;
+};
+class DfsCompletionRunner {
+ private:
+  struct Worker;
+};
 ```
 
-Both may contain a small `BagState`, but they should otherwise contain only
-their algorithm's state and counters.
+Both may contain a small `MutableLetterBagState`, but they should otherwise
+contain only their algorithm's state and counters.
 
 ### Score-bound storage and score-bound evaluation are conflated
 
@@ -159,8 +165,14 @@ Statistics naturally form four groups:
 ```cpp
 struct ScoreBoundStats;
 struct LengthCertificateStats;
-struct SearchExecutionStats;
-struct ExactCompletenessStats;
+class DfsSearchRunner {
+ public:
+  struct Stats;
+};
+class DfsCompletionRunner {
+ public:
+  struct Stats;
+};
 ```
 
 The facade can retain existing getters as compatibility wrappers while new
@@ -266,7 +278,7 @@ Expected size: 900-1,050 lines.
 This is the best first extraction because nearly all of its helpers are
 projected-specific and it has a clear correctness contract.
 
-#### `dfs-search-completable.cpp`
+#### `dfs-search-completion.cpp`
 
 Own:
 
@@ -277,7 +289,7 @@ Own:
 - recursive exact remainder validation;
 - batch worker scheduling;
 - `find_completable_classes()`;
-- exact-completability diagnostics and counters;
+- exact-completion diagnostics and counters;
 - scalar/AVX2 support-mask scans;
 - `NUTRIMATIC_SUPPORT_SIMD`;
 - `NUTRIMATIC_EXACT_MEMO_LOOKAHEAD`.
@@ -285,8 +297,8 @@ Own:
 Expected size: 550-650 lines.
 
 Moving the support SIMD kernel here makes its scope explicit: it accelerates
-the exact-completability candidate scan, not ordinary DFS and not projected
-score preprocessing.
+the exact-completion candidate scan, not ordinary DFS and not projected score
+preprocessing.
 
 #### `dfs-search-walk.cpp`
 
@@ -368,7 +380,7 @@ The intended dependency direction is:
                          DfsAnagramSearch facade
                                   |
                                   v
-                           PreparedProblem
+                            DfsSearchData
                           /       |       \
                          v        v        v
                  HotClassIndex  ScoreKeyLayout  score model/data
@@ -379,26 +391,27 @@ The intended dependency direction is:
                   +-----------+-----------+
                   |                       |
                   v                       v
-          DfsSearchRunner         ExactCompletenessSearch
+          DfsSearchRunner          DfsCompletionRunner
                   |
                   v
           LengthCertificate
 ```
 
-`DfsSearchRunner` and `ExactCompletenessSearch` consume the same immutable
-prepared problem and bound-query interface. They do not call each other and
-do not share worker types.
+`DfsSearchRunner` and `DfsCompletionRunner` consume the same immutable search
+data and bound-query interface. They do not call each other and do not share
+worker types.
 
-### `PreparedProblem`
+### `DfsSearchData`
 
-This object represents one prepared input bag under one score-key projection.
-Projection choice belongs here because `score_key_deltas` and wildcard
-lengths depend on it.
+This object owns the immutable, precomputed data for one DFS search: the input
+letter bag, hot-class representation, score-key projection, and scoring data.
+Projection choice belongs here because `score_key_deltas` and wildcard lengths
+depend on it.
 
 Suggested shape:
 
 ```cpp
-struct PreparationOptions {
+struct DfsSearchOptions {
   bool score_bounds_requested;
   bool allow_cache_fallback;
   bool request_dense;
@@ -408,7 +421,7 @@ struct PreparationOptions {
   int progress_factor;
 };
 
-struct BagEncoding {
+struct LetterBagEncoding {
   std::array<uint32_t, DFS_SYMBOL_COUNT> counts;
   uint64_t support_mask;
   uint64_t exact_root_key;
@@ -427,16 +440,16 @@ struct ScoreKeyLayout {
   bool projected;
 };
 
-class PreparedProblem {
+class DfsSearchData {
  public:
   static PreparationResult build(
       DfsClassList const& classes,
       std::string const& letters,
       DfsScoreModel const& score_model,
-      PreparationOptions const& options);
+      DfsSearchOptions const& options);
 
   DfsClassList const& source_classes() const;
-  BagEncoding const& root_bag() const;
+  LetterBagEncoding const& root_letter_bag() const;
   ScoreKeyLayout const& score_keys() const;
   HotClassIndex const& hot_classes() const;
   double best_member_score(uint32_t class_id) const;
@@ -445,13 +458,13 @@ class PreparedProblem {
 };
 ```
 
-`PreparationResult` should contain either a `PreparedProblem` or a precise
+`PreparationResult` should contain either `DfsSearchData` or a precise
 failure reason. The facade remains responsible for translating failure into
 the current diagnostics and return value, so error wording need not change
 during the refactor.
 
-`PreparedProblem` is immutable after construction. That is important because
-both normal and exact worker pools read it concurrently.
+`DfsSearchData` is immutable after construction. That is important because
+both ordinary-search and completion worker pools read it concurrently.
 
 ### `HotClassIndex`
 
@@ -468,7 +481,7 @@ Suggested hot-path API:
 ```cpp
 using ClassId = uint32_t;
 
-struct BagView {
+struct LetterBagView {
   uint32_t const* counts;
   uint64_t support_mask;
 };
@@ -491,14 +504,14 @@ class HotClassIndex {
  public:
   static HotClassBuildResult build(
       DfsClassList const& classes,
-      BagEncoding const& bag,
+      LetterBagEncoding const& letter_bag,
       ScoreKeyLayout const& score_keys);
 
   size_t size() const;
   HotClassView get(ClassId id) const;
   uint64_t const* contiguous_supports() const;
 
-  bool fits(ClassId id, BagView bag) const;
+  bool fits(ClassId id, LetterBagView letter_bag) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
 };
@@ -506,16 +519,17 @@ class HotClassIndex {
 
 `get()` and `fits()` must be inline views over the existing flat arrays, not
 virtual calls and not allocations. A view eliminates the current overload set
-for the root bag, `SearchWorker`, and `BoundWorker`: all three can provide the
-same `BagView`.
+for the root letter bag, `SearchWorker`, and `BoundWorker`: all three can
+provide the same `LetterBagView`.
 
 It may still be faster for the exact support scan to read
 `contiguous_supports()` directly. The clean API should preserve that explicit
 escape hatch rather than hide the scan behind a per-candidate abstraction.
 
-Bag subtraction and restoration can be handled in either of two ways:
+Letter-bag subtraction and restoration can be handled in either of two ways:
 
-1. inline methods on `HotClassIndex` operating on a small `MutableBagState`;
+1. inline methods on `HotClassIndex` operating on a small
+   `MutableLetterBagState`;
 2. algorithm-local loops over `HotClassView::requirements`.
 
 The first avoids duplicating delicate mask maintenance. It should not use an
@@ -538,7 +552,7 @@ enum class Reachability {
 };
 
 struct BoundStateView {
-  BagView bag;
+  LetterBagView letter_bag;
   uint64_t score_key;
   size_t letters_left;
   size_t wild_left;
@@ -554,13 +568,13 @@ struct ScoreBoundOptions {
 class ScoreBounds {
  public:
   static ScoreBoundBuildResult build(
-      PreparedProblem const& problem,
+      DfsSearchData const& search_data,
       ScoreBoundOptions const& options);
 
   ScoreBoundMode mode() const;
   bool complete() const;
 
-  // Read-only and safe for concurrent exact-completability workers.
+  // Read-only and safe for concurrent completion workers.
   Reachability reachability(uint64_t score_key, bool root) const;
 
   // Returns false when no upper bound is available. May populate a lazy
@@ -575,7 +589,7 @@ class ScoreBounds {
 This separates two meanings currently combined in
 `cached_reachability()`:
 
-- exact completability asks whether the table proves impossible or, for an
+- completion search asks whether the table proves impossible or, for an
   exact table, reachable;
 - score pruning asks for a numeric upper bound.
 
@@ -626,7 +640,7 @@ Suggested narrow internal types:
 class ProjectedActionTable {
  public:
   static ProjectedActionBuildResult build(
-      PreparedProblem const& problem);
+      DfsSearchData const& search_data);
 
   ProjectedAction const& action(size_t index) const;
   uint64_t support(size_t index) const;
@@ -642,7 +656,7 @@ struct ProjectedComputeOptions {
 };
 
 ProjectedComputeResult compute_projected_bounds(
-    PreparedProblem const& problem,
+    DfsSearchData const& search_data,
     ProjectedActionTable const& actions,
     ProjectedComputeOptions const& options,
     ScoreBoundStorage* destination);
@@ -675,7 +689,7 @@ Suggested API:
 class LengthCertificate {
  public:
   static LengthCertificateBuildResult build(
-      PreparedProblem const& problem,
+      DfsSearchData const& search_data,
       LengthCertificateMode mode);
 
   bool enabled() const;
@@ -704,39 +718,50 @@ This component owns ordinary enumeration and parallel task scheduling.
 Suggested API:
 
 ```cpp
-struct SearchOptions {
-  size_t threads;
-  size_t task_target;
-  size_t task_progress_factor;
-  int64_t progress_interval;
-  bool verbose;
-};
-
-struct SearchExecutionStats {
-  int64_t nodes;
-  int64_t solutions;
-  int64_t bound_prunes;
-  size_t threads_used;
-  uint64_t tasks_created;
-  double elapsed_seconds;
-  LengthCertificateStats certificate;
-};
-
 class DfsSearchRunner {
  public:
-  static SearchExecutionStats run(
-      PreparedProblem const& problem,
+  struct Options {
+    size_t threads;
+    size_t task_target;
+    size_t task_progress_factor;
+    int64_t progress_interval;
+    bool verbose;
+  };
+
+  struct Stats {
+    int64_t nodes;
+    int64_t solutions;
+    int64_t bound_prunes;
+    size_t threads_used;
+    uint64_t tasks_created;
+    double elapsed_seconds;
+    LengthCertificateStats certificate;
+  };
+
+  struct Results {
+    Stats stats;
+  };
+
+  static Results run(
+      DfsSearchData const& search_data,
       ScoreBounds* bounds,
       LengthCertificate const* certificate,
-      SearchOptions const& options,
+      Options const& options,
       DfsSolutionSink* sink);
+
+ private:
+  struct Worker;
 };
 ```
+
+`Results` initially contains only `Stats`. Keeping the return envelope distinct
+from the retained statistics leaves room for a later execution outcome without
+putting transient result state into `DfsSearchStats`.
 
 `ScoreBounds*` is non-const only because dense-prefix mode may lazily fill
 entries. Complete dense and projected modes perform read-only lookups.
 
-The private `DfsWorker` then needs only:
+The private `DfsSearchRunner::Worker` then needs only:
 
 - mutable bag counts and mask;
 - score key;
@@ -748,7 +773,7 @@ The private `DfsWorker` then needs only:
 
 It no longer carries exact keys, exact memo counters, or lookahead counters.
 
-### `ExactCompletenessSearch`
+### `DfsCompletionRunner`
 
 This component owns the separate exact boolean search used by
 `query-index --require-completable`.
@@ -756,39 +781,46 @@ This component owns the separate exact boolean search used by
 Suggested API:
 
 ```cpp
-struct ExactCompletenessOptions {
-  size_t threads;
-  size_t memo_lookahead;
-  int64_t progress_interval;
-};
-
-struct ExactCompletenessStats {
-  size_t classes_checked;
-  size_t bound_rejects;
-  size_t exact_bound_accepts;
-  size_t exact_validations;
-  size_t memo_states;
-  size_t memo_hits;
-  uint64_t lookahead_full_windows;
-  uint64_t lookahead_known_true_wins;
-  uint64_t lookahead_reprobes_decided;
-  uint64_t lookahead_recursive_expansions;
-  int64_t nodes;
-  size_t threads_used;
-  double elapsed_seconds;
-};
-
-class ExactCompletenessSearch {
+class DfsCompletionRunner {
  public:
-  static ExactCompletenessResult run(
-      PreparedProblem const& problem,
+  struct Options {
+    size_t threads;
+    size_t memo_lookahead;
+    int64_t progress_interval;
+  };
+
+  struct Stats {
+    size_t classes_checked;
+    size_t bound_rejects;
+    size_t exact_bound_accepts;
+    size_t exact_validations;
+    size_t memo_states;
+    size_t memo_hits;
+    uint64_t lookahead_full_windows;
+    uint64_t lookahead_known_true_wins;
+    uint64_t lookahead_reprobes_decided;
+    uint64_t lookahead_recursive_expansions;
+    int64_t nodes;
+    size_t threads_used;
+    double elapsed_seconds;
+  };
+
+  struct Results {
+    std::vector<bool> completable;
+    Stats stats;
+  };
+
+  static Results run(
+      DfsSearchData const& search_data,
       ScoreBounds const& bounds,
-      ExactCompletenessOptions const& options,
-      std::vector<bool>* result);
+      Options const& options);
+
+ private:
+  struct Worker;
 };
 ```
 
-Its private `ExactWorker` needs:
+Its private `DfsCompletionRunner::Worker` needs:
 
 - mutable bag counts and mask;
 - projected score key when bounds are active;
@@ -801,7 +833,7 @@ or representative score.
 
 The exact memo table should be owned by this component rather than retained
 on `DfsAnagramSearch` after validation. Its memory can be released when
-`run()` returns; only `ExactCompletenessStats` needs to survive for
+`run()` returns; only `DfsCompletionRunner::Stats` needs to survive for
 diagnostics and getters.
 
 ### Facade and public API
@@ -843,8 +875,8 @@ Suggested top-level grouped result:
 ```cpp
 struct DfsSearchStats {
   ScoreBoundStats score_bounds;
-  SearchExecutionStats search;
-  ExactCompletenessStats completability;
+  DfsSearchRunner::Stats search;
+  DfsCompletionRunner::Stats completion;
   double setup_seconds;
   size_t preprocess_threads_used;
 };
@@ -859,13 +891,13 @@ The intended ownership rules are:
 
 - `DfsAnagramSearch` retains the constructor inputs and the most recent
   grouped statistics.
-- `PreparedProblem` owns all query-specific immutable hot data for one call.
+- `DfsSearchData` owns all query-specific immutable hot data for one call.
 - `ScoreBounds` owns its table and construction statistics.
 - `ProjectedActionTable` is temporary construction state unless the recursive
   atomic evaluator still needs it while filling the table.
 - `LengthCertificate` is immutable and lives for one ordinary search.
 - `DfsSearchRunner` owns normal workers and tasks for the duration of `run()`.
-- `ExactCompletenessSearch` owns its exact memo and workers for the duration
+- `DfsCompletionRunner` owns its exact memo and workers for the duration
   of `find_completable_classes()`.
 - No worker points at mutable state owned by another worker.
 - The only deliberately shared mutable structures are atomic bound tables,
@@ -922,8 +954,8 @@ worker code:
 | `NUTRIMATIC_PROJECTED_ACTION_QUOTIENT` | projected action builder |
 | `NUTRIMATIC_PROJECTED_BOTTOM_UP` | projected bound builder |
 | `NUTRIMATIC_PROJECTED_SIMD` | projected wildcard kernel |
-| `NUTRIMATIC_SUPPORT_SIMD` | exact completability support scan |
-| `NUTRIMATIC_EXACT_MEMO_LOOKAHEAD` | exact completability |
+| `NUTRIMATIC_SUPPORT_SIMD` | exact-completion support scan |
+| `NUTRIMATIC_EXACT_MEMO_LOOKAHEAD` | exact-completion search |
 | `NUTRIMATIC_LENGTH_CERTIFICATE` | length certificate |
 | `NUTRIMATIC_SEARCH_TASKS` | ordinary search runner |
 
@@ -933,17 +965,17 @@ This table also clarifies that the two SIMD switches have unrelated owners.
 
 To prevent the new files from recreating the monolith through includes:
 
-1. `PreparedProblem` may depend on `DfsClassList`, `DfsScoreModel`, and
+1. `DfsSearchData` may depend on `DfsClassList`, `DfsScoreModel`, and
    `HotClassIndex`.
-2. `ScoreBounds` may depend on `PreparedProblem`; `PreparedProblem` must not
+2. `ScoreBounds` may depend on `DfsSearchData`; `DfsSearchData` must not
    depend on `ScoreBounds`.
 3. Projected-bound internals may depend on the bound-storage interface, but
    generic bound code must not depend on projected worker types.
-4. The two search runners may depend on `PreparedProblem` and the narrow
+4. The two search runners may depend on `DfsSearchData` and the narrow
    `ScoreBounds` query API.
 5. `ScoreBounds` must not depend on `DfsSolutionSink`.
 6. `LengthCertificate` must not depend on a search worker or sink.
-7. Ordinary and exact worker types must not be shared.
+7. Ordinary-search and completion worker types must not be shared.
 8. SIMD kernels operate on flat spans and primitive values, not on owning
    search objects.
 9. Diagnostics and statistics cross component boundaries as value types, not
@@ -957,7 +989,7 @@ Record:
 
 - current `dfs-search` and `dfs-cli` smoke-test results;
 - deterministic DFS and bound counters for scalar and default SIMD modes;
-- one exact-completability workload;
+- one exact-completion workload;
 - one projected bottom-up workload;
 - binary size and compilation time if build-time improvement is a goal.
 
@@ -977,7 +1009,7 @@ Verify:
 - quotient on and off;
 - deterministic transition and result equality.
 
-### 3. Extract exact completability mechanically
+### 3. Extract exact completion mechanically
 
 Move the exact memo, recurrence, batch scheduling, support SIMD scan, and
 related environment parsing.
@@ -1016,15 +1048,15 @@ Verify:
 
 ### 6. Introduce value types and grouped statistics
 
-Add `BagView`, `BoundStateView`, and grouped statistics while retaining the
-existing public getters. Convert one subsystem at a time.
+Add `LetterBagView`, `BoundStateView`, and grouped statistics while retaining
+the existing public getters. Convert one subsystem at a time.
 
-### 7. Separate normal and exact workers
+### 7. Separate ordinary-search and completion workers
 
 This is the first meaningful state redesign. Do it after physical ownership
 is clear so changes stay local to the two search files.
 
-### 8. Introduce `PreparedProblem` and component ownership
+### 8. Introduce `DfsSearchData` and component ownership
 
 Replace direct access to facade fields with explicit immutable inputs.
 Convert bounds before the runners so both runners can consume the same narrow
@@ -1083,7 +1115,7 @@ class and header remain.
 
 ### Maintainable internal architecture
 
-Continue through separate worker types, `PreparedProblem`, `HotClassIndex`,
+Continue through separate worker types, `DfsSearchData`, `HotClassIndex`,
 `ScoreBounds`, and the two runner APIs. This removes most cross-subsystem
 private-state access and is the best long-term balance.
 
@@ -1096,7 +1128,7 @@ required merely to make implementation work tractable.
 ## Recommendation
 
 Start with `dfs-search-projected.cpp`, followed by
-`dfs-search-completable.cpp`. They are the two largest clean boundaries and
+`dfs-search-completion.cpp`. They are the two largest clean boundaries and
 each has its own entry behavior, configuration knobs, counters, and SIMD
 implementation.
 

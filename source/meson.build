@@ -117,6 +117,19 @@ dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
   dependencies: thread_dep,
   install: true)
 
+# Keep the class-visitor logic in the hot caller rather than leaving it as a
+# separate call in the final binary.  This runs as part of the normal build so
+# a regression is caught even when the test suite is not run.
+bash = find_program('bash')
+nm = find_program('nm', native: true)
+custom_target(
+  'dfs-anagrams-no-visit-fitting-class',
+  input: dfs_anagrams,
+  output: 'dfs-anagrams-no-visit-fitting-class.stamp',
+  command: [bash, files('check-no-symbol.sh'), nm, '@INPUT@', '@OUTPUT@'],
+  build_by_default: true,
+)
+
 query_index = executable('query-index', 'query-index.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
   dependencies: thread_dep,
@@ -161,7 +174,6 @@ make_dfs_test_index = executable(
   link_with: index_lib,
   install: false,
 )
-bash = find_program('bash')
 test(
   'dfs-cli',
   bash,

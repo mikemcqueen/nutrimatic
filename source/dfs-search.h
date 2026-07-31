@@ -191,10 +191,14 @@ class DfsAnagramSearch {
     std::atomic<uint32_t> value;
   };
 
-  struct alignas(16) FitClass {
-    uint64_t support_mask;
+  struct FitClassMetadata {
     uint32_t letters_offset;
     uint32_t packed_length_and_count;
+  };
+
+  struct alignas(16) FitClass {
+    FitClassMetadata metadata;
+    uint64_t support_mask;
   };
 
   struct alignas(16) ProjectedAction {
@@ -257,6 +261,11 @@ class DfsAnagramSearch {
     uint64_t exact_lookahead_known_true_wins;
     uint64_t exact_lookahead_reprobes_decided;
     uint64_t exact_lookahead_recursive_expansions;
+#if 1
+    // dummy padding somehow significantly decreases runtime of:
+    // build/dfs-anagrams $IDX "${S1:0:50}" -m 4 -n 1000 -S 20  -d 15
+    std::array<uint64_t, 46> dummy1;
+#endif
   };
 
   enum Reachability {
@@ -329,6 +338,10 @@ class DfsAnagramSearch {
                       size_t end, size_t letters_left,
                       double representative_log_score, double floor,
                       DfsSolutionSink* sink);
+  bool visit_fitting_range(SearchWorker* worker, size_t begin, size_t end,
+                           size_t letters_left,
+                           double representative_log_score,
+                           DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
@@ -345,6 +358,8 @@ class DfsAnagramSearch {
                       SearchWorker const& worker) const;
   bool hot_class_multiplicity_fits(
       uint32_t class_index, SearchWorker const& worker) const;
+  bool hot_class_multiplicity_fits(
+      FitClassMetadata metadata, SearchWorker const& worker) const;
   bool hot_class_fits(uint32_t class_index,
                       BoundWorker const& worker) const;
   bool hot_class_multiplicity_fits(
@@ -377,7 +392,7 @@ class DfsAnagramSearch {
                     DfsSolutionSink* sink, size_t letters_left);
 
   void visit_fitting_class(SearchWorker* worker, uint32_t class_index,
-                           size_t letters_left,
+                           FitClassMetadata metadata, size_t letters_left,
                            double representative_log_score,
                            DfsSolutionSink* sink);
   void visit_unoptimized_class(size_t class_index, size_t letters_left,
