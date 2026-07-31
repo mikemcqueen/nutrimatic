@@ -1223,7 +1223,7 @@ void DfsAnagramSearch::publish_parallel_score_bound(
 }
 
 bool DfsAnagramSearch::prepare_phase_two(
-    int progress_factor, bool allow_cache_fallback, bool dense_cache,
+    int64_t progress_factor, bool allow_cache_fallback, bool dense_cache,
     int exact_letters, bool score_bounds_requested) {
   FILE* const progress = dfs_diagnostic_stream();
   typedef std::chrono::steady_clock PhaseClock;
@@ -1576,8 +1576,12 @@ bool DfsAnagramSearch::prepare_phase_two(
   path.clear();
   path.reserve(letters.size());
   progress_enabled = progress != NULL;
+  int64_t const normalized_progress_factor =
+      std::max<int64_t>(progress_factor, 1);
   progress_interval =
-      int64_t(100000) * int64_t(std::max(progress_factor, 1));
+      normalized_progress_factor <= INT64_MAX / INT64_C(100000)
+          ? INT64_C(100000) * normalized_progress_factor
+          : INT64_MAX;
   next_progress = progress_interval;
   nodes = 0;
   solutions = 0;
@@ -1601,7 +1605,7 @@ bool DfsAnagramSearch::prepare_phase_two(
 }
 
 bool DfsAnagramSearch::run(DfsSolutionSink* sink,
-                           int progress_factor,
+                           int64_t progress_factor,
                            bool allow_cache_fallback,
                            bool dense_cache,
                            int exact_letters,
@@ -1629,7 +1633,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink,
       run_parallel_search(
           sink, requested_search_threads,
           search_task_target(requested_search_threads),
-          size_t(std::max(progress_factor, 1)), verbose);
+          uint64_t(std::max<int64_t>(progress_factor, 1)), verbose);
     } else {
       SearchWorker worker;
       start_search_worker(&worker);
@@ -1984,7 +1988,7 @@ bool DfsAnagramSearch::exact_expand_node(
 }
 
 bool DfsAnagramSearch::find_completable_classes(
-    std::vector<bool>* completable, int progress_factor,
+    std::vector<bool>* completable, int64_t progress_factor,
     bool allow_cache_fallback, bool dense_cache, int exact_letters) {
   assert(completable != NULL);
   if (!prepare_phase_two(
@@ -3553,7 +3557,7 @@ void DfsAnagramSearch::merge_search_worker(
 
 bool DfsAnagramSearch::run_parallel_search(
     DfsSolutionSink* sink, size_t threads, size_t target_tasks,
-    size_t task_progress_factor, bool verbose) {
+    uint64_t task_progress_factor, bool verbose) {
   assert(threads > 1);
   assert(target_tasks > 0);
 
@@ -3625,7 +3629,7 @@ bool DfsAnagramSearch::run_parallel_search(
               "info: worker %zu claimed first task\n", index);
       }
       size_t const tasks_left = tasks.size() - slot - 1;
-      if (verbose && tasks_left % task_progress_factor == 0)
+      if (verbose && uint64_t(tasks_left) % task_progress_factor == 0)
         dfs_diagnostic(
             "info: worker %zu popped task (%zu total)\n",
             index, tasks_left);

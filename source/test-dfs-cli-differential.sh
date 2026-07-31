@@ -53,7 +53,7 @@ normalize() {
   > "$test_dir/dfs-uncached.stdout" 2> "$test_dir/dfs-uncached.stderr"
 cmp "$test_dir/dfs.stdout" "$test_dir/dfs-uncached.stdout" ||
   fail "cached and uncached dfs-anagrams output differs"
-"$find_anagrams" "$IDX" penbuilt -m 3 -c \
+"$find_anagrams" "$IDX" penbuilt -m 3 -p 2147483648 -c \
   > "$test_dir/find.stdout" 2> "$test_dir/find.stderr"
 
 normalize "$test_dir/dfs.stdout" > "$test_dir/dfs.normalized"

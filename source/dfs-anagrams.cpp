@@ -24,7 +24,7 @@ struct Args {
   int min_word_len;
   int max_words;
   int top;
-  int progress_factor;
+  int64_t progress_factor;
   size_t score_cache_bytes;
   int preprocess_threads;
   int search_threads;
@@ -130,8 +130,8 @@ static bool parse_args(char* argv[], Args* out) {
           return false;
         break;
       case 'p':
-        if (!parse_count(options.optarg, "--progress-factor",
-                         &out->progress_factor))
+        if (!parse_count64(options.optarg, "--progress-factor",
+                           &out->progress_factor))
           return false;
         if (out->progress_factor < 1) {
           fputs("error: --progress-factor must be at least 1\n", stderr);

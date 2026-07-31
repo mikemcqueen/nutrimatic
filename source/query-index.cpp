@@ -20,7 +20,6 @@
 
 static int const DEFAULT_TOP = 100;
 static double const DEFAULT_WORD_BONUS = 0.0;
-static size_t const LONG_COMPLETABILITY_INPUT = 50;
 
 struct Args {
   char const* index_file;
@@ -33,13 +32,7 @@ struct Args {
   double segment_penalty;
   double word_bonus;
   bool require_completable;
-  size_t score_cache_bytes;
-  bool cache_size_given;
-  int preprocess_threads;
   int search_threads;
-  int exact_letters;
-  bool allow_cache_fallback;
-  bool dense_cache;
   bool score;
   char const* score_incompatible_option;
 };
@@ -50,10 +43,7 @@ static void usage(char const* program) {
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-w|--words-only] [--require-completable]"
-      " [-C|--cache-size MiB] [-T|--preprocess-threads N]"
-      " [-S|--search-threads N]"
-      " [-d|--projection-depth N]"
-      " [-D|--dense-cache] [-F|--allow-cache-fallback]\n"
+      " [-S|--search-threads N]\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
       "    entries and prints its DFS-model score\n"
       "  -P, --segment-penalty P divides the score by P for each selected"
@@ -68,20 +58,10 @@ static void usage(char const* program) {
       "    defaults to %g (no boost)\n"
       "  --require-completable drops classes whose removal leaves a\n"
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
-      "    -m), using shared exact validation and optional projected bounds\n"
-      "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
-      "    automatic projected caching is skipped for %zu+ letters unless\n"
-      "    -C, -d, or -D explicitly requests it\n"
-      "  -T, --preprocess-threads defaults to 0: automatic for 26+ letters;"
-      " 1 disables it\n"
-      "  -S, --search-threads defaults to 1\n"
-      "  -d, --projection-depth keeps this many rarest letter types exact;\n"
-      "    the default is the largest depth that fits -C\n"
-      "  -D, --dense-cache requests an exact dense score cache\n"
-      "  -F, --allow-cache-fallback allows score-cache fallback\n",
+      "    -m), using shared exact validation without a score cache\n"
+      "  -S, --search-threads defaults to 1\n",
       program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_DEFAULT_MIN_WORD_LEN,
-      DEFAULT_TOP, DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS,
-      DFS_DEFAULT_SCORE_CACHE_MIB, LONG_COMPLETABILITY_INPUT);
+      DEFAULT_TOP, DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS);
 }
 
 static int const OPT_DICT = 256;
@@ -99,12 +79,7 @@ static struct optparse_long const long_options[] = {
   { "word-bonus", OPT_WORD_BONUS, OPTPARSE_REQUIRED },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
-  { "cache-size", 'C', OPTPARSE_REQUIRED },
-  { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { "search-threads", 'S', OPTPARSE_REQUIRED },
-  { "projection-depth", 'd', OPTPARSE_REQUIRED },
-  { "dense-cache", 'D', OPTPARSE_NONE },
-  { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -121,13 +96,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   out->word_bonus = DEFAULT_WORD_BONUS;
   out->require_completable = false;
-  out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
-  out->cache_size_given = false;
-  out->preprocess_threads = 0;
   out->search_threads = 1;
-  out->exact_letters = -1;
-  out->allow_cache_fallback = false;
-  out->dense_cache = false;
   out->score = false;
   out->score_incompatible_option = NULL;
 
@@ -179,19 +148,6 @@ static bool parse_args(char* argv[], Args* out) {
         out->require_completable = true;
         mark_score_incompatible(out, "--require-completable");
         break;
-      case 'C':
-        if (!parse_mib(options.optarg, "--cache-size",
-                       &out->score_cache_bytes))
-          return false;
-        out->cache_size_given = true;
-        mark_score_incompatible(out, "--cache-size");
-        break;
-      case 'T':
-        if (!parse_count(options.optarg, "--preprocess-threads",
-                         &out->preprocess_threads))
-          return false;
-        mark_score_incompatible(out, "--preprocess-threads");
-        break;
       case 'S':
         if (!parse_count(options.optarg, "--search-threads",
                          &out->search_threads))
@@ -201,20 +157,6 @@ static bool parse_args(char* argv[], Args* out) {
           return false;
         }
         mark_score_incompatible(out, "--search-threads");
-        break;
-      case 'd':
-        if (!parse_count(options.optarg, "--projection-depth",
-                         &out->exact_letters))
-          return false;
-        mark_score_incompatible(out, "--projection-depth");
-        break;
-      case 'D':
-        out->dense_cache = true;
-        mark_score_incompatible(out, "--dense-cache");
-        break;
-      case 'F':
-        out->allow_cache_fallback = true;
-        mark_score_incompatible(out, "--allow-cache-fallback");
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
@@ -240,12 +182,6 @@ static bool parse_args(char* argv[], Args* out) {
     }
     out->score_sequence = letters;
     return true;
-  }
-
-  if (out->dense_cache && out->exact_letters >= 0) {
-    fputs("error: --projection-depth cannot be used with --dense-cache\n",
-          stderr);
-    return false;
   }
 
   std::string bag;
@@ -397,35 +333,18 @@ int main(int argc, char* argv[]) {
 
   std::vector<bool> completable(classes.classes().size(), true);
   if (args.require_completable) {
-    bool const skip_automatic_projected_cache =
-        args.letters.size() >= LONG_COMPLETABILITY_INPUT &&
-        !args.cache_size_given && args.exact_letters < 0 &&
-        !args.dense_cache;
-    if (skip_automatic_projected_cache)
-      dfs_diagnostic(
-          "phase 2: skipping automatic projected score cache for "
-          "%zu-letter completability query\n",
-          args.letters.size());
-    size_t const preprocess_threads = resolve_preprocess_threads(
-        args.preprocess_threads, args.letters.size());
     dfs_diagnostic(
-        "depth %d preprocess threads %zu search threads %d cache %zu "
-        "segment penalty %.17g\n",
-        args.exact_letters, preprocess_threads, args.search_threads,
-        (skip_automatic_projected_cache ? 0 : args.score_cache_bytes) /
-            DFS_MIB,
-        args.segment_penalty);
+        "search threads %d cache 0 segment penalty %.17g\n",
+        args.search_threads, args.segment_penalty);
     DfsAnagramSearch search(
         &classes, args.letters, args.segment_penalty, reader.count(),
-        skip_automatic_projected_cache ? 0 : args.score_cache_bytes,
-        preprocess_threads,
+        /*score_cache_bytes=*/0, /*preprocess_threads=*/1,
         size_t(args.search_threads),
         /*word_bonus=*/0.0);
     if (!search.find_completable_classes(
             &completable, /*progress_factor=*/1,
-            args.allow_cache_fallback || skip_automatic_projected_cache,
-            args.dense_cache,
-            args.exact_letters))
+            /*allow_cache_fallback=*/true, /*dense_cache=*/true,
+            /*exact_letters=*/-1))
       return 2;
     if (search.search_threads_used() > 1)
       dfs_diagnostic(

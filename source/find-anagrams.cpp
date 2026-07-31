@@ -3,6 +3,7 @@
 #include "search.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,6 +177,18 @@ static bool parse_count(char const* in, char const* what, int* out) {
   return true;
 }
 
+static bool parse_count64(char const* in, char const* what, int64_t* out) {
+  errno = 0;
+  char* end;
+  long long const value = strtoll(in, &end, 10);
+  if (*in == '\0' || *end != '\0' || errno == ERANGE || value < 0) {
+    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    return false;
+  }
+  *out = int64_t(value);
+  return true;
+}
+
 // Words shorter than this are what makes a long bag hopeless: they multiply the
 // arrangements without using up letters, and "fifteen two-letter words" paths
 // sit at the head of the queue forever (findings/anagram-perf.md).  Four is the
@@ -187,7 +200,7 @@ struct Args {
   std::string letters;  // the bag, with any used letters already removed
   int min_word_len;
   int max_words;        // implied by min_word_len; 0 = unlimited
-  int progress_factor;  // multiplies the 100k-step progress interval
+  int64_t progress_factor;  // multiplies the 100k-step progress interval
   bool canonical_order;
 };
 
@@ -231,8 +244,8 @@ static bool parse_args(char *argv[], Args* out) {
         min_word_len_given = true;
         break;
       case 'p':
-        if (!parse_count(options.optarg, "--progress-factor",
-                         &out->progress_factor))
+        if (!parse_count64(options.optarg, "--progress-factor",
+                           &out->progress_factor))
           return false;
         if (out->progress_factor < 1) {
           fputs("error: --progress-factor must be at least 1", stderr);

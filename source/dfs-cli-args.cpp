@@ -69,6 +69,18 @@ bool parse_count(char const* in, char const* what, int* out) {
   return true;
 }
 
+bool parse_count64(char const* in, char const* what, int64_t* out) {
+  errno = 0;
+  char* end;
+  long long const value = strtoll(in, &end, 10);
+  if (*in == '\0' || *end != '\0' || errno == ERANGE || value < 0) {
+    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    return false;
+  }
+  *out = int64_t(value);
+  return true;
+}
+
 bool parse_mib(char const* in, char const* what, size_t* out) {
   if (*in == '\0' || *in == '-') {
     fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);

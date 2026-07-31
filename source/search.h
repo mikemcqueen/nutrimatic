@@ -291,4 +291,4 @@ class SearchDriver {
 // updating for the fields after <steps>.  Tools meant to be used in a shell
 // pipeline can pass stderr instead to keep stdout clean, and can space the
 // lines out with progress_factor.
-void PrintAll(SearchDriver*, FILE* progress, int progress_factor = 1);
+void PrintAll(SearchDriver*, FILE* progress, int64_t progress_factor = 1);

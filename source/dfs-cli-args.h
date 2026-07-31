@@ -2,6 +2,7 @@
 #define NUTRIMATIC_DFS_CLI_ARGS_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <string>
 
@@ -35,6 +36,9 @@ bool check_bag_length(std::string const& bag);
 // Parses a non-negative base-10 integer from `in`. Prints an error naming
 // `what` and returns false on any parse failure or out-of-range value.
 bool parse_count(char const* in, char const* what, int* out);
+
+// Parses a non-negative base-10 64-bit integer from `in`.
+bool parse_count64(char const* in, char const* what, int64_t* out);
 
 // Parses a non-negative MiB count into bytes, rejecting overflow.
 bool parse_mib(char const* in, char const* what, size_t* out);

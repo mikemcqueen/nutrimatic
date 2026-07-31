@@ -129,7 +129,7 @@ cmp "$test_dir/completable-off.stdout" \
   fail "segment penalty changed ordinary one-entry ranking"
 
 "$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
-  --require-completable -d 0 -S 2 \
+  --require-completable -S 2 \
   > "$test_dir/completable-on.stdout" 2> "$test_dir/completable-on.stderr"
 [[ $(wc -l < "$test_dir/completable-on.stdout") -eq 3 ]] ||
   fail "--require-completable should drop the one dead-end class"
@@ -151,6 +151,9 @@ grep -q 'phase 2 exact validation parallelism: 2 requested, 2 used' \
 grep -Eq 'segment penalty 1000000$' \
   "$test_dir/completable-on.stderr" ||
   fail "phase-2 diagnostic omitted the segment penalty"
+grep -q 'phase 2 preflight: score-bound mode off$' \
+  "$test_dir/completable-on.stderr" ||
+  fail "query-index completability unexpectedly created a score cache"
 
 # A 2^62-state bag needs 63 bits and still fits the flat memo encoding.
 wide_exact_bag=
@@ -158,7 +161,7 @@ for symbol in {a..z} {0..4}; do
   wide_exact_bag+="${symbol}${symbol}${symbol}"
 done
 "$query_index" "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
-  --require-completable -C 0 -F \
+  --require-completable \
   > "$test_dir/exact-key-63-bit.stdout" \
   2> "$test_dir/exact-key-63-bit.stderr" ||
   fail "a 63-bit exact state count should fit the flat memo"
@@ -167,7 +170,7 @@ done
 wide_exact_bag+="55"
 set +e
 "$query_index" "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
-  --require-completable -C 0 -F \
+  --require-completable \
   > "$test_dir/exact-key-overflow.stdout" \
   2> "$test_dir/exact-key-overflow.stderr"
 status=$?
@@ -179,7 +182,7 @@ grep -q 'error: phase 2 exact memo key arithmetic overflowed 64 bits$' \
   fail "exact-key overflow diagnostic is missing"
 
 "$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
-  --require-completable -d 0 -S 2 -P 1 \
+  --require-completable -S 2 -P 1 \
   > "$test_dir/completable-penalty-one.stdout" \
   2> "$test_dir/completable-penalty-one.stderr"
 cmp "$test_dir/completable-on.stdout" \
@@ -194,21 +197,6 @@ cmp "$test_dir/completable-on.stdout" \
   2> "$test_dir/underflow-bonus.stderr"
 grep -q ' f$' "$test_dir/underflow-bonus.stdout" ||
   fail "--word-bonus underflow changed exact completability"
-
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
-  --require-completable -D \
-  > "$test_dir/completable-dense.stdout" \
-  2> "$test_dir/completable-dense.stderr"
-cmp "$test_dir/completable-on.stdout" "$test_dir/completable-dense.stdout" ||
-  fail "projected and dense completability filtering disagree"
-
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
-  --require-completable -d 0 -C 0 -F \
-  > "$test_dir/completable-fallback.stdout" \
-  2> "$test_dir/completable-fallback.stderr"
-cmp "$test_dir/completable-on.stdout" \
-    "$test_dir/completable-fallback.stdout" ||
-  fail "cache fallback changed exact completability filtering"
 
 "$query_index" "$synthetic_index" wxyz -m 2 -n 1 \
   --require-completable --word-bonus 1 \

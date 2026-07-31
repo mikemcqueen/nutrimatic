@@ -69,7 +69,7 @@ class DfsAnagramSearch {
   // requested table does not fit. verbose reports serial task splitting to
   // the diagnostic stream when parallel search is selected.
   bool run(DfsSolutionSink* sink,
-           int progress_factor = 1, bool allow_cache_fallback = true,
+           int64_t progress_factor = 1, bool allow_cache_fallback = true,
            bool dense_cache = true, int exact_letters = -1,
            bool verbose = false);
 
@@ -78,7 +78,7 @@ class DfsAnagramSearch {
   // a projected score bound merges letter identities. Candidate classes are
   // validated using the constructor's requested search-thread count.
   bool find_completable_classes(
-      std::vector<bool>* completable, int progress_factor = 1,
+      std::vector<bool>* completable, int64_t progress_factor = 1,
       bool allow_cache_fallback = false, bool dense_cache = false,
       int exact_letters = -1);
 
@@ -280,7 +280,7 @@ class DfsAnagramSearch {
   };
 
   bool prepare_phase_two(
-      int progress_factor, bool allow_cache_fallback, bool dense_cache,
+      int64_t progress_factor, bool allow_cache_fallback, bool dense_cache,
       int exact_letters, bool score_bounds_requested);
   void require_hot_classes() const;
   bool prepare_hot_classes();
@@ -337,7 +337,7 @@ class DfsAnagramSearch {
   void merge_search_worker(SearchWorker const& worker);
   bool run_parallel_search(
       DfsSolutionSink* sink, size_t threads, size_t target_tasks,
-      size_t task_progress_factor, bool verbose);
+      uint64_t task_progress_factor, bool verbose);
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;

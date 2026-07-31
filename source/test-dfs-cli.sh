@@ -71,6 +71,10 @@ assert_close() {
   -S 1 \
   > "$test_dir/search-thread-one.stdout" \
   2> "$test_dir/search-thread-one.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  -p 2147483648 \
+  > "$test_dir/wide-progress-factor.stdout" \
+  2> "$test_dir/wide-progress-factor.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 0 \
   > "$test_dir/unlimited.stdout" 2> "$test_dir/unlimited.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/explicit-default.stdout" ||
@@ -87,6 +91,8 @@ cmp "$test_dir/all.stdout" "$test_dir/depth-zero.stdout" ||
   fail "--projection-depth changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/search-thread-one.stdout" ||
   fail "-S 1 changed stdout"
+cmp "$test_dir/all.stdout" "$test_dir/wide-progress-factor.stdout" ||
+  fail "64-bit --progress-factor changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/unlimited.stdout" ||
   fail "-n 0 did not return all results"
 grep -Eq \
