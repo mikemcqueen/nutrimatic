@@ -14,6 +14,9 @@
 
 constexpr uint32_t FLOAT_BOUND_UNSEEN = UINT32_C(0x7fc00001);
 constexpr uint32_t FLOAT_BOUND_COMPUTING = UINT32_C(0x7fc00002);
+constexpr size_t EXACT_MEMO_LOOKAHEAD_DEFAULT = 16;
+
+bool support_scan_avx2_enabled();
 
 uint32_t float_to_bits(float value);
 float bits_to_float(uint32_t bits);

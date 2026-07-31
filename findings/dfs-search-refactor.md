@@ -48,10 +48,9 @@ subsystem that uses them. Some shared helpers are counted separately.
 | Construction and common preparation | 496-749, 1225-1643 | 675 | constructor, hot layout, phase-two configuration, public `run()` |
 | Length certificate | 750-861, 3459-3493 | 147 | certificate tables, rejection calculation, grouped scan |
 | Projected action preparation | 862-1011 | 150 | quotienting, bucketing, sorting, repeated requirements |
-| Bound storage | 1013-1224 | 212 | table choice, allocation, load/store/publish, reachability |
+| Projected-bound storage | 1013-1224 | 212 | projected-table allocation, load/store/publish, reachability |
 | Exact completability | 1644-2178 | 535 | exact memo, lookahead, exact recurrence, batch validation |
 | Shared fit operations | 2180-2293 | 114 | fit tests and first-length binary searches |
-| Dense/prefix bound evaluation | 2295-2508, 3183-3339 | 484 | serial/parallel recurrence, worker launch, pruning |
 | Projected bound evaluation | 2509-3182 | 674 | recursive and bottom-up projected evaluators |
 | Ordinary DFS and scheduling | 3340-3658 | 319 | recursion, solution emission, task splitting, worker pool |
 | Unoptimized fallback | 3659-3744 | 86 | decoded-class fallback currently described as unreachable |
@@ -79,8 +78,8 @@ The function currently:
 - initializes the subsequent search.
 
 This makes preparation policy hard to test or change independently. It also
-means projected layout details occupy the main path even when dense bounds are
-selected.
+means projected layout details occupy the main path even when score bounds are
+not selected.
 
 The eventual orchestration function should read more like:
 
@@ -132,22 +131,18 @@ contain only their algorithm's state and counters.
 
 ### Score-bound storage and score-bound evaluation are conflated
 
-The current class owns:
+The current class owns the projected-bound implementation's:
 
-- double atomic tables;
 - float atomic tables;
 - plain bottom-up float tables;
 - unseen/computing sentinels;
 - allocation policy;
-- serial recurrence state borrowed from the main object's bag;
-- parallel recurrence workers;
 - projected action data;
-- search-time lookup and lazy prefix construction.
+- projected recurrence workers;
+- search-time lookup.
 
 This makes a bound lookup appear to be a property of the search object rather
-than an operation on an explicit bound table. It also causes prefix-mode
-pruning to copy a worker's bag into the object's shared scratch state before
-calling the legacy serial builder.
+than an operation on an explicit projected-bound table.
 
 The storage object should own representation and synchronization. Evaluators
 should receive explicit state instead of borrowing `DfsAnagramSearch::bag`,
@@ -185,7 +180,7 @@ The following helpers are used by multiple proposed translation units:
 - packed hot-class length/count accessors;
 - float and double bit conversions;
 - score-bound upward rounding;
-- checked dense-table sizing;
+- checked projected-table sizing;
 - branch prediction annotations.
 
 Simply copying these helpers into multiple `.cpp` files would create drift
@@ -237,25 +232,6 @@ together. It also provides a natural eventual home for `HotClassIndex`.
 
 Expected size: 300-450 lines.
 
-#### `dfs-search-bounds.cpp`
-
-Own the non-projected bound subsystem:
-
-- score arithmetic support checks and rounding helpers;
-- table allocation and mode selection;
-- load, store, and parallel publish;
-- cached reachability;
-- serial dense/prefix recurrence;
-- parallel dense recurrence and worker scheduling;
-- search-time upper-bound lookup and pruning.
-
-Expected size: 650-800 lines.
-
-`should_prune()` belongs here during the mechanical split because it contains
-the lazy prefix-bound bridge. In the component design, the sink-independent
-upper-bound calculation moves into `ScoreBounds` and the final comparison can
-live in the ordinary search runner.
-
 #### `dfs-search-projected.cpp`
 
 Own all projected-bound behavior:
@@ -263,6 +239,8 @@ Own all projected-bound behavior:
 - projected configuration parsing;
 - `ProjectedAction` construction and quotienting;
 - projected fit tests and length selection;
+- projected-table allocation and mode selection;
+- table load/store, parallel publish, and cached reachability;
 - recursive atomic projected evaluator;
 - bottom-up layered projected evaluator;
 - projected parallel setup;
@@ -270,7 +248,7 @@ Own all projected-bound behavior:
 - projected diagnostics and counters;
 - the projected wildcard test hook.
 
-Expected size: 900-1,050 lines.
+Expected size: 1,000-1,150 lines.
 
 This is the best first extraction because nearly all of its helpers are
 projected-specific and it has a clear correctness contract.
@@ -990,15 +968,31 @@ forces the shared-helper boundary to become explicit.
 Move the exact memo, recurrence, batch scheduling, and
 related environment parsing.
 
-### 4. Extract generic bounds
+### 4. Consolidate projected-bound dependencies
 
-Move allocation, storage, dense/prefix recurrence, and pruning. Keep
-`prepare_phase_two()` as the facade until this move is stable.
+Dense and prefix modes have been removed, so there is no longer a generic
+bound subsystem worth extracting into `dfs-search-bounds.cpp`. Move the
+remaining projected-only table policy and access operations into
+`dfs-search-projected.cpp`:
+
+- `prepare_score_bounds()` and `clear_score_bounds()`;
+- projected-table allocation and bottom-up versus atomic storage selection;
+- `load_score_bound()` and `publish_parallel_score_bound()`;
+- `cached_reachability()`, whose current semantics are determined by the
+  projected wildcard abstraction;
+- projected-only mode diagnostics and preflight helpers where they do not
+  belong to facade orchestration.
+
+Keep `prepare_phase_two()` as the facade and keep `should_prune()` with the
+ordinary traversal for now: it applies the sink's score-floor policy and is
+therefore a consumer of the bound, not part of projected-bound construction.
+The common float conversion, upward-rounding, and sizing primitives stay in
+the small private header or the facade only when also used by the length
+certificate.
 
 Verify:
 
-- float prefix mode only
-- serial and parallel preprocessing;
+- bottom-up and atomic projected-table preprocessing;
 - exact upward-rounded results and `nextafter` counts;
 
 ### 5. Extract ordinary traversal and certificate

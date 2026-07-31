@@ -77,6 +77,7 @@ dfs_class_list_lib = library(
     'dfs-diagnostic.cpp',
     'dfs-score.cpp',
     'dfs-search.cpp',
+    'dfs-search-completion.cpp',
     'dfs-search-projected.cpp',
     'dfs-output.cpp',
   ],
