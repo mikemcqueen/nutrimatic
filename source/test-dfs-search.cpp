@@ -205,7 +205,7 @@ static int smoke_test() {
     std::vector<DfsSpelling> const bounded_spellings =
         bounded_output.take_sorted_results();
     check(bounded.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_PROJECTED,
+              ScoreBounds::PROJECTED,
           "small score memo did not use projected storage");
     check(bounded.score_bound_entries() > 0,
           "dense score memo stored no states");
@@ -285,7 +285,7 @@ static int smoke_test() {
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
     certificate_only.run(&certificate_only_output);
     check(certificate_only.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_OFF &&
+              ScoreBounds::OFF &&
               certificate_only.length_certificate_enabled(),
           "zero score cache disabled the length certificate");
     check_same_spellings(
@@ -302,7 +302,7 @@ static int smoke_test() {
     check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
           "could not restore unbounded parallel task target");
     check(parallel_unbounded.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_OFF &&
+              ScoreBounds::OFF &&
               parallel_unbounded.search_threads_used() > 1,
           "score-bound-off search did not run in parallel");
     check_same_spellings(
@@ -317,7 +317,7 @@ static int smoke_test() {
         score_only_budget);
     isolated.run(&isolated_output);
     check(isolated.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_PROJECTED,
+              ScoreBounds::PROJECTED,
           "small budget disabled projected score memo");
     check(isolated.score_bound_complete(),
           "small projected score memo did not retain complete coverage");
@@ -381,7 +381,7 @@ static int smoke_test() {
     dfs_set_diagnostic_stream(previous_diagnostic_stream);
     fclose(projected_diagnostics);
     check(projected.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+              ScoreBounds::PROJECTED &&
               projected.score_bound_complete(),
           "projected score memo did not retain complete coverage");
     check(projected.score_bound_exact_letters() == 0 &&
@@ -416,7 +416,7 @@ static int smoke_test() {
                 /*progress_factor=*/1, /*allow_cache_fallback=*/true,
                 /*exact_letters=*/int(exact));
       check(depth.score_bound_mode() ==
-                DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+                ScoreBounds::PROJECTED &&
                 depth.score_bound_complete(),
             "intermediate projected depth did not retain complete bounds");
       check(depth.score_bound_exact_letters() == exact,
@@ -473,7 +473,7 @@ static int smoke_test() {
           reader.count(), 128);
       boundary.run(&boundary_output);
       check(boundary.score_bound_mode() ==
-                DfsAnagramSearch::SCORE_BOUND_PROJECTED &&
+                ScoreBounds::PROJECTED &&
                 boundary.score_bound_value_bytes() == sizeof(float) &&
                 boundary.score_bound_complete(),
             "rounding-boundary test did not use complete float bounds");
@@ -498,7 +498,7 @@ static int smoke_test() {
           reader.count(), 768);
       downward.run(&downward_output);
       check(downward.score_bound_mode() ==
-                DfsAnagramSearch::SCORE_BOUND_OFF,
+                ScoreBounds::OFF,
             "score memo ignored a non-nearest rounding mode");
       check(!downward.length_certificate_enabled(),
             "length certificate ignored a non-nearest rounding mode");
@@ -540,7 +540,7 @@ static void float_score_bound_test() {
         &classes, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), budget);
     search.run(&output);
     check(search.score_bound_mode() ==
-              DfsAnagramSearch::SCORE_BOUND_PROJECTED,
+              ScoreBounds::PROJECTED,
           "complete float score memo was not selected");
     check(search.score_bound_value_bytes() == sizeof(float) &&
               search.score_bound_capacity() == 128 &&

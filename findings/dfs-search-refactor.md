@@ -116,11 +116,11 @@ but coupled two distinct algorithms.
 A cleaner design has:
 
 ```cpp
-class DfsSearchRunner {
+class DfsAllSolutionsRunner {
  private:
   struct Worker;
 };
-class DfsCompletionRunner {
+class DfsAnySolutionRunner {
  private:
   struct Worker;
 };
@@ -157,13 +157,13 @@ central class even when the counter belongs entirely to one subsystem.
 Statistics naturally form four groups:
 
 ```cpp
-struct ScoreBoundStats;
+class ScoreBounds;
 struct LengthCertificateStats;
-class DfsSearchRunner {
+class DfsAllSolutionsRunner {
  public:
   struct Stats;
 };
-class DfsCompletionRunner {
+class DfsAnySolutionRunner {
  public:
   struct Stats;
 };
@@ -275,7 +275,11 @@ Moving the support SIMD kernel here makes its scope explicit: it accelerates
 the exact-completion candidate scan, not ordinary DFS and not projected score
 preprocessing.
 
-#### `dfs-search-walk.cpp`
+This is the current mechanical-extraction filename. When the worker redesign
+introduces `DfsAnySolutionRunner`, rename this file to `dfs-any-runner.cpp` so
+the filename follows the component that owns its implementation.
+
+#### `dfs-all-runner.cpp`
 
 Own:
 
@@ -288,6 +292,10 @@ Own:
 - `NUTRIMATIC_SEARCH_TASKS`.
 
 Expected size: 300-400 lines.
+
+During the mechanical extraction these may still be `DfsAnagramSearch` member
+definitions. At the worker-redesign step this file becomes the implementation
+of `DfsAllSolutionsRunner`.
 
 The unoptimized fallback could remain in `dfs-search-hot.cpp`, live here, or
 be removed in a later behavior change. It should not get a dedicated file.
@@ -306,7 +314,7 @@ Own:
 Expected size: 140-180 lines.
 
 This file is optional. If the certificate is stable and unlikely to grow,
-keeping it in `dfs-search-walk.cpp` is reasonable. It is a clean conceptual
+keeping it in `dfs-all-runner.cpp` is reasonable. It is a clean conceptual
 boundary, but not necessary merely to reduce file size.
 
 #### `dfs-search-internal.h`
@@ -366,15 +374,15 @@ The intended dependency direction is:
                   +-----------+-----------+
                   |                       |
                   v                       v
-          DfsSearchRunner          DfsCompletionRunner
+       DfsAllSolutionsRunner       DfsAnySolutionRunner
                   |
                   v
           LengthCertificate
 ```
 
-`DfsSearchRunner` and `DfsCompletionRunner` consume the same immutable search
-data and bound-query interface. They do not call each other and do not share
-worker types.
+`DfsAllSolutionsRunner` and `DfsAnySolutionRunner` consume the same immutable
+search data and bound-query interface. They do not call each other and do not
+share worker types.
 
 ### `DfsSearchData`
 
@@ -494,8 +502,8 @@ class HotClassIndex {
 
 `get()` and `fits()` must be inline views over the existing flat arrays, not
 virtual calls and not allocations. A view eliminates the current overload set
-for the root letter bag, `SearchWorker`, and `BoundWorker`: all three can
-provide the same `LetterBagView`.
+for the root letter bag, `SearchWorker`, and the projected top-down worker:
+all three can provide the same `LetterBagView`.
 
 It may still be faster for the exact support scan to read
 `contiguous_supports()` directly. The clean API should preserve that explicit
@@ -542,11 +550,38 @@ struct ScoreBoundOptions {
 
 class ScoreBounds {
  public:
+  enum Mode {
+    OFF,
+    PROJECTED,
+  };
+
+  struct ProjectedStats {
+    size_t states_computed;
+    uint64_t candidate_tests;
+    uint64_t fitting_transitions;
+    uint64_t transitions;
+    uint64_t nextafter_calls;
+  };
+
+  struct Stats {
+    Mode mode;
+    size_t entries;
+    size_t capacity;
+    size_t value_bytes;
+    size_t bytes_charged;
+    size_t exact_letters;
+    size_t wildcard_letters;
+    size_t projected_actions;
+    bool projected_quotient;
+    bool complete;
+    ProjectedStats projected;
+  };
+
   static ScoreBoundBuildResult build(
       DfsSearchData const& search_data,
       ScoreBoundOptions const& options);
 
-  ScoreBoundMode mode() const;
+  Mode mode() const;
   bool complete() const;
 
   // Read-only and safe for concurrent completion workers.
@@ -556,7 +591,10 @@ class ScoreBounds {
   bool upper_bound(
       BoundStateView state, bool root, double* value);
 
-  ScoreBoundStats const& stats() const;
+  Stats const& stats() const;
+
+ private:
+  struct ProjectedWorker;
 };
 ```
 
@@ -572,27 +610,38 @@ but does not prove exact reachability. Keeping `reachability()` separate from
 `upper_bound()` makes that distinction part of the API instead of a caller
 convention.
 
-Suggested grouped statistics:
+#### Current type-extraction checkpoint
+
+The in-progress change deliberately introduces only the score-bound types;
+table storage and construction still live on `DfsAnagramSearch`. The current
+private worker hierarchy is:
 
 ```cpp
-struct ScoreBoundStats {
-  ScoreBoundMode mode;
-  size_t entries;
-  size_t states_computed;
-  size_t capacity;
-  size_t value_bytes;
-  size_t bytes_charged;
-  size_t exact_letters;
-  size_t wildcard_letters;
-  size_t projected_actions;
-  bool projected_quotient;
-  bool complete;
-  uint64_t candidate_tests;
-  uint64_t fitting_transitions;
-  uint64_t successful_transitions;
-  uint64_t nextafter_calls;
+struct ScoreBounds::ProjectedWorker {
+  ProjectedStats stats;
+};
+struct ScoreBounds::BottomUpWorker : ProjectedWorker { /* bag, vectors */ };
+struct ScoreBounds::TopDownWorker : ProjectedWorker {
+  /* bag, mask, score key, remaining lengths, recurrence scratch */
 };
 ```
+
+`TopDownWorker` replaces `DfsAnagramSearch::BoundWorker`; it is the worker
+used by the atomic recursive evaluator. `BottomUpWorker` similarly replaces
+the local `VectorWorker` used by the layered evaluator. A
+`bound_state_view(TopDownWorker const&)` adapter supplies the new
+`BoundStateView` to `projected_action_fits()`, so that routine no longer
+borrows a worker-specific type.
+
+The counters are now nested as `ScoreBounds::ProjectedStats`, with `clear()`
+and `add()` used for worker-local aggregation. `ScoreBounds::Stats` currently
+contains mode, allocation/completeness fields, and that nested projected
+group; projection-layout fields remain on the facade for now. The facade has
+also gained the intermediate grouped result
+`DfsAnagramSearch::DfsSearchStats { ScoreBounds::Stats score_bounds; }`.
+Existing individual getters are compatibility wrappers over it. The larger
+`ScoreBounds` and `DfsSearchStats` APIs above remain the intended end state,
+not a claim that component ownership has already moved.
 
 Search-time prune count does not belong here; it is an execution statistic,
 because it counts how the DFS consumed the bounds rather than how the bound
@@ -637,7 +686,7 @@ The mandatory AVX2 kernel can remain a free function in
 After a complete projected table has been constructed, the full action table
 is no longer required during ordinary search. A later memory cleanup could
 release it and retain only `projected_actions` and quotient status in
-`ScoreBoundStats`. That is a behavior-neutral memory improvement, but it
+`ScoreBounds::Stats`. That is a behavior-neutral memory improvement, but it
 should not be mixed into the file split.
 
 The projected wildcard test hook currently appears on the public
@@ -679,14 +728,15 @@ incrementing its worker-local counters, honoring shadow mode, and visiting
 fitting classes. This avoids making the certificate depend on the sink or on
 callbacks into the DFS.
 
-### `DfsSearchRunner`
+### `DfsAllSolutionsRunner`
 
-This component owns ordinary enumeration and parallel task scheduling.
+This component exhaustively enumerates solutions and owns its parallel task
+scheduling.
 
 Suggested API:
 
 ```cpp
-class DfsSearchRunner {
+class DfsAllSolutionsRunner {
  public:
   struct Options {
     size_t threads;
@@ -726,7 +776,7 @@ class DfsSearchRunner {
 from the retained statistics leaves room for a later execution outcome without
 putting transient result state into `DfsSearchStats`.
 
-The private `DfsSearchRunner::Worker` then needs only:
+The private `DfsAllSolutionsRunner::Worker` then needs only:
 
 - mutable bag counts and mask;
 - score key;
@@ -738,7 +788,7 @@ The private `DfsSearchRunner::Worker` then needs only:
 
 It no longer carries exact keys, exact memo counters, or lookahead counters.
 
-### `DfsCompletionRunner`
+### `DfsAnySolutionRunner`
 
 This component owns the separate exact boolean search used by
 `query-index --require-completable`.
@@ -746,7 +796,7 @@ This component owns the separate exact boolean search used by
 Suggested API:
 
 ```cpp
-class DfsCompletionRunner {
+class DfsAnySolutionRunner {
  public:
   struct Options {
     size_t threads;
@@ -785,7 +835,7 @@ class DfsCompletionRunner {
 };
 ```
 
-Its private `DfsCompletionRunner::Worker` needs:
+Its private `DfsAnySolutionRunner::Worker` needs:
 
 - mutable bag counts and mask;
 - projected score key when bounds are active;
@@ -798,7 +848,7 @@ or representative score.
 
 The exact memo table should be owned by this component rather than retained
 on `DfsAnagramSearch` after validation. Its memory can be released when
-`run()` returns; only `DfsCompletionRunner::Stats` needs to survive for
+`run()` returns; only `DfsAnySolutionRunner::Stats` needs to survive for
 diagnostics and getters.
 
 ### Facade and public API
@@ -839,9 +889,9 @@ Suggested top-level grouped result:
 
 ```cpp
 struct DfsSearchStats {
-  ScoreBoundStats score_bounds;
-  DfsSearchRunner::Stats search;
-  DfsCompletionRunner::Stats completion;
+  ScoreBounds::Stats score_bounds;
+  DfsAllSolutionsRunner::Stats all_solutions;
+  DfsAnySolutionRunner::Stats any_solution;
   double setup_seconds;
   size_t preprocess_threads_used;
 };
@@ -860,9 +910,10 @@ The intended ownership rules are:
 - `ScoreBounds` owns its table and construction statistics.
 - `ProjectedActionTable` is temporary construction state unless the recursive
   atomic evaluator still needs it while filling the table.
-- `LengthCertificate` is immutable and lives for one ordinary search.
-- `DfsSearchRunner` owns normal workers and tasks for the duration of `run()`.
-- `DfsCompletionRunner` owns its exact memo and workers for the duration
+- `LengthCertificate` is immutable and lives for one all-solutions search.
+- `DfsAllSolutionsRunner` owns normal workers and tasks for the duration of
+  `run()`.
+- `DfsAnySolutionRunner` owns its exact memo and workers for the duration
   of `find_completable_classes()`.
 - No worker points at mutable state owned by another worker.
 - The only deliberately shared mutable structures are atomic bound tables,
@@ -918,7 +969,7 @@ worker code:
 | `NUTRIMATIC_SUPPORT_SIMD` | exact-completion support scan |
 | `NUTRIMATIC_EXACT_MEMO_LOOKAHEAD` | exact-completion search |
 | `NUTRIMATIC_LENGTH_CERTIFICATE` | length certificate |
-| `NUTRIMATIC_SEARCH_TASKS` | ordinary search runner |
+| `NUTRIMATIC_SEARCH_TASKS` | all-solutions runner |
 
 This table clarifies that the support-scan SIMD switch has its own owner.
 
@@ -977,7 +1028,7 @@ remaining projected-only table policy and access operations into
 
 - `prepare_score_bounds()` and `clear_score_bounds()`;
 - projected-table allocation and bottom-up versus atomic storage selection;
-- `load_score_bound()` and `publish_parallel_score_bound()`;
+- `load_score_bound()` and `publish_top_down_score_bound()`;
 - `cached_reachability()`, whose current semantics are determined by the
   projected wildcard abstraction;
 - projected-only mode diagnostics and preflight helpers where they do not
@@ -995,7 +1046,7 @@ Verify:
 - bottom-up and atomic projected-table preprocessing;
 - exact upward-rounded results and `nextafter` counts;
 
-### 5. Extract ordinary traversal and certificate
+### 5. Extract all-solutions traversal and certificate
 
 Move normal DFS and task scheduling. Split the certificate only if the
 resulting walk file remains large or certificate development is active.
@@ -1012,10 +1063,13 @@ Verify:
 Add `LetterBagView`, `BoundStateView`, and grouped statistics while retaining
 the existing public getters. Convert one subsystem at a time.
 
-### 7. Separate ordinary-search and completion workers
+### 7. Separate all-solutions and any-solution workers
 
 This is the first meaningful state redesign. Do it after physical ownership
-is clear so changes stay local to the two search files.
+is clear so changes stay local to the two search files. Introduce
+`DfsAllSolutionsRunner` and `DfsAnySolutionRunner`; rename the already
+extracted `dfs-search-completion.cpp` to `dfs-any-runner.cpp`, and make the
+all-solutions traversal live in `dfs-all-runner.cpp`.
 
 ### 8. Introduce `DfsSearchData` and component ownership
 

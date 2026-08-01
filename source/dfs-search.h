@@ -15,6 +15,90 @@
 #include "dfs-search-internal.h"
 #include "dfs-score.h"
 
+// A non-owning view of a letter bag in rarest-rank order.  Both bound
+// construction and search workers use the same representation.
+struct LetterBagView {
+  uint32_t const* counts;
+  uint64_t support_mask;
+};
+
+// The portion of a DFS state needed to query a score bound.  This remains a
+// value type so bound consumers need not borrow a worker object.
+struct BoundStateView {
+  LetterBagView letter_bag;
+  uint64_t score_key;
+  size_t letters_left;
+  size_t wild_left;
+};
+
+// Owns the vocabulary and statistics for score-bound construction.  Storage
+// and construction remain on DfsAnagramSearch until the component-ownership
+// extraction, but consumers can already use these stable value types.
+class ScoreBounds {
+ public:
+  enum Mode {
+    OFF,
+    PROJECTED,
+  };
+
+  struct ProjectedStats {
+    size_t states_computed = 0;
+    uint64_t candidate_tests = 0;
+    uint64_t fitting_transitions = 0;
+    uint64_t transitions = 0;
+    uint64_t nextafter_calls = 0;
+
+    void clear() { *this = {}; }
+
+    void add(ProjectedStats const& other) {
+      states_computed += other.states_computed;
+      candidate_tests += other.candidate_tests;
+      fitting_transitions += other.fitting_transitions;
+      transitions += other.transitions;
+      nextafter_calls += other.nextafter_calls;
+    }
+  };
+
+  struct Stats {
+    Mode mode;
+    size_t entries;
+    size_t capacity;
+    size_t value_bytes;
+    size_t bytes_charged;
+    bool complete;
+    ProjectedStats projected;
+  };
+
+ private:
+  struct ProjectedWorker {
+    ProjectedStats stats;
+  };
+
+  struct BottomUpWorker : ProjectedWorker {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    std::vector<double> best;
+    std::vector<double> max_rounding_error;
+
+    explicit BottomUpWorker(size_t wild_span):
+        best(wild_span),
+        max_rounding_error(wild_span) {
+      bag.fill(0);
+    }
+  };
+
+  struct TopDownWorker : ProjectedWorker {
+    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+    uint64_t bag_mask;
+    uint64_t score_key;
+    size_t letters_left;
+    size_t wild_left;
+    double best;
+    double max_rounding_error;
+  };
+
+  friend class DfsAnagramSearch;
+};
+
 // Receives each phase-2 solution as a canonical list of indexes into
 // DfsClassList::classes(). The path storage is owned by the search and is only
 // valid for the duration of emit().
@@ -46,9 +130,8 @@ class DfsSolutionSink {
 // than once.
 class DfsAnagramSearch {
  public:
-  enum ScoreBoundMode {
-    SCORE_BOUND_OFF,
-    SCORE_BOUND_PROJECTED,
+  struct DfsSearchStats {
+    ScoreBounds::Stats score_bounds;
   };
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
@@ -80,29 +163,43 @@ class DfsAnagramSearch {
       bool allow_cache_fallback = false,
       int exact_letters = -1);
 
+  DfsSearchStats const& stats() const { return search_stats; }
+
   int64_t nodes_visited() const { return nodes; }
   int64_t solutions_found() const { return solutions; }
-  ScoreBoundMode score_bound_mode() const { return bound_mode; }
-  size_t score_bound_entries() const { return bound_entries; }
+  ScoreBounds::Mode score_bound_mode() const {
+    return search_stats.score_bounds.mode;
+  }
+  size_t score_bound_entries() const {
+    return search_stats.score_bounds.entries;
+  }
   size_t score_bound_states_computed() const {
-    return bound_states_computed;
+    return search_stats.score_bounds.projected.states_computed;
   }
   uint64_t score_bound_transitions() const {
-    return bound_transitions;
+    return search_stats.score_bounds.projected.transitions;
   }
   uint64_t score_bound_candidate_tests() const {
-    return bound_candidate_tests;
+    return search_stats.score_bounds.projected.candidate_tests;
   }
   uint64_t score_bound_fitting_transitions() const {
-    return bound_fitting_transitions;
+    return search_stats.score_bounds.projected.fitting_transitions;
   }
   uint64_t score_bound_nextafter_calls() const {
-    return bound_nextafter_calls;
+    return search_stats.score_bounds.projected.nextafter_calls;
   }
-  size_t score_bound_bytes_charged() const { return bound_charged_bytes; }
-  size_t score_bound_capacity() const { return bound_capacity; }
-  size_t score_bound_value_bytes() const { return bound_value_bytes; }
-  bool score_bound_complete() const { return bound_complete; }
+  size_t score_bound_bytes_charged() const {
+    return search_stats.score_bounds.bytes_charged;
+  }
+  size_t score_bound_capacity() const {
+    return search_stats.score_bounds.capacity;
+  }
+  size_t score_bound_value_bytes() const {
+    return search_stats.score_bounds.value_bytes;
+  }
+  bool score_bound_complete() const {
+    return search_stats.score_bounds.complete;
+  }
   size_t score_bound_exact_letters() const {
     return score_exact_letters;
   }
@@ -202,20 +299,11 @@ class DfsAnagramSearch {
     uint32_t repeated_count;
   };
 
-  struct BoundWorker {
-    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
-    uint64_t bag_mask;
-    uint64_t score_key;
-    size_t letters_left;
-    size_t wild_left;
-    size_t states_computed;
-    uint64_t candidate_tests;
-    uint64_t fitting_transitions;
-    uint64_t transitions;
-    uint64_t nextafter_calls;
-    double best;
-    double max_rounding_error;
-  };
+  static BoundStateView bound_state_view(
+      ScoreBounds::TopDownWorker const& worker) {
+    return {{worker.bag.data(), worker.bag_mask}, worker.score_key,
+            worker.letters_left, worker.wild_left};
+  }
 
   struct SearchTask {
     std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
@@ -353,19 +441,20 @@ class DfsAnagramSearch {
   bool hot_class_multiplicity_fits(
       FitClassMetadata metadata, SearchWorker const& worker) const;
   bool projected_action_fits(
-      size_t action_index, BoundWorker const& worker) const;
+      size_t action_index, BoundStateView state) const;
   size_t first_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
   size_t first_projected_length_candidate(
       size_t begin, size_t end, size_t letters_left) const;
-  double compute_projected_score_bound(BoundWorker* worker);
-  void consider_projected_bound_candidate(
-      size_t action_index, BoundWorker* worker, double* best,
+  double compute_projected_score_bound_top_down(
+      ScoreBounds::TopDownWorker* worker);
+  void consider_projected_top_down_candidate(
+      size_t action_index, ScoreBounds::TopDownWorker* worker, double* best,
       double* max_rounding_error);
-  bool compute_projected_score_bound_parallel(size_t requested_threads);
-  bool compute_projected_score_bound_bottom_up(size_t requested_threads);
+  bool compute_projected_score_bounds_top_down(size_t requested_threads);
+  bool compute_projected_score_bounds_bottom_up(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
-  void publish_parallel_score_bound(uint64_t key, double value);
+  void publish_top_down_score_bound(uint64_t key, double value);
   bool should_prune(SearchWorker* worker,
                     double representative_log_score,
                     DfsSolutionSink* sink, size_t letters_left);
@@ -441,24 +530,16 @@ class DfsAnagramSearch {
   uint64_t certificate_scans_skipped;
   uint64_t certificate_scans_kept;
 
-  ScoreBoundMode bound_mode;
+  DfsSearchStats search_stats;
   // With bounds off cached_reachability answers UNKNOWN for every key, so the
   // exact recurrence can skip maintaining and probing score keys entirely.
-  bool score_bounds_active() const { return bound_mode != SCORE_BOUND_OFF; }
+  bool score_bounds_active() const {
+    return search_stats.score_bounds.mode != ScoreBounds::OFF;
+  }
   std::unique_ptr<AtomicFloatWord, DfsAlignedFree> bound_float_values;
   std::unique_ptr<float, DfsAlignedFree> bound_plain_float_values;
-  size_t bound_capacity;
-  size_t bound_value_bytes;
-  bool bound_complete;
   double root_score_bound;
   bool root_score_bound_ready;
-  size_t bound_entries;
-  size_t bound_states_computed;
-  uint64_t bound_candidate_tests;
-  uint64_t bound_fitting_transitions;
-  uint64_t bound_transitions;
-  uint64_t bound_nextafter_calls;
-  size_t bound_charged_bytes;
   int64_t bound_prunes;
 
   // Packs the exact key and boolean into one atomic open-addressed slot.

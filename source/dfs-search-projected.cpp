@@ -160,6 +160,15 @@ float round_float_score_bound_up(double value) {
   return rounded;
 }
 
+double get_score_bound(
+    double best, double max_rounding_error, uint64_t* nextafter_calls) {
+  if (best == -HUGE_VAL) return -HUGE_VAL;
+  return round_score_bound_up(
+      static_cast<long double>(best) +
+          static_cast<long double>(max_rounding_error),
+      nextafter_calls);
+}
+
 void bound_wait_backoff(unsigned int* spins) {
 #if defined(__i386__) || defined(__x86_64__)
   _mm_pause();
@@ -174,16 +183,16 @@ void bound_wait_backoff(unsigned int* spins) {
 }  // namespace
 
 void DfsAnagramSearch::clear_score_bounds() {
-  bound_mode = SCORE_BOUND_OFF;
+  search_stats.score_bounds.mode = ScoreBounds::OFF;
   bound_float_values.reset();
   bound_plain_float_values.reset();
-  bound_capacity = 0;
-  bound_value_bytes = 0;
-  bound_complete = false;
+  search_stats.score_bounds.capacity = 0;
+  search_stats.score_bounds.value_bytes = 0;
+  search_stats.score_bounds.complete = false;
   root_score_bound = HUGE_VAL;
   root_score_bound_ready = false;
-  bound_entries = 0;
-  bound_charged_bytes = 0;
+  search_stats.score_bounds.entries = 0;
+  search_stats.score_bounds.bytes_charged = 0;
 }
 
 void DfsAnagramSearch::prepare_score_bounds(bool requested) {
@@ -216,18 +225,19 @@ void DfsAnagramSearch::prepare_score_bounds(bool requested) {
     }
     bound_float_values.reset(values);
   }
-  bound_capacity = size_t(score_effective_states);
-  bound_value_bytes = sizeof(float);
-  bound_complete = true;
-  bound_mode = SCORE_BOUND_PROJECTED;
-  bound_charged_bytes = float_bytes;
+  search_stats.score_bounds.capacity = size_t(score_effective_states);
+  search_stats.score_bounds.value_bytes = sizeof(float);
+  search_stats.score_bounds.complete = true;
+  search_stats.score_bounds.mode = ScoreBounds::PROJECTED;
+  search_stats.score_bounds.bytes_charged = float_bytes;
 }
 
 bool DfsAnagramSearch::load_score_bound(
     uint64_t key, double* value) const {
-  if (bound_mode == SCORE_BOUND_OFF || key >= bound_capacity)
+  if (search_stats.score_bounds.mode == ScoreBounds::OFF ||
+      key >= search_stats.score_bounds.capacity)
     return false;
-  assert(bound_value_bytes == sizeof(float));
+  assert(search_stats.score_bounds.value_bytes == sizeof(float));
   if (bound_plain_float_values.get() != NULL) {
     *value = double(bound_plain_float_values.get()[size_t(key)]);
     return true;
@@ -255,10 +265,10 @@ DfsAnagramSearch::Reachability DfsAnagramSearch::cached_reachability(
   return REACHABILITY_UNKNOWN;
 }
 
-void DfsAnagramSearch::publish_parallel_score_bound(
+void DfsAnagramSearch::publish_top_down_score_bound(
     uint64_t key, double value) {
-  assert(key < bound_capacity);
-  assert(bound_value_bytes == sizeof(float));
+  assert(key < search_stats.score_bounds.capacity);
+  assert(search_stats.score_bounds.value_bytes == sizeof(float));
   assert(bound_plain_float_values.get() == NULL);
   bound_float_values.get()[size_t(key)].value.store(
       float_to_bits(round_float_score_bound_up(value)),
@@ -410,19 +420,20 @@ bool DfsAnagramSearch::prepare_projected_actions() {
 }
 
 bool DfsAnagramSearch::projected_action_fits(
-    size_t action_index, BoundWorker const& worker) const {
+    size_t action_index, BoundStateView state) const {
   ProjectedAction const& action = projected_actions[action_index];
   if (projected_wild_length(action.packed_lengths) >
-      worker.wild_left)
+      state.wild_left)
     return false;
-  if ((projected_action_support[action_index] & ~worker.bag_mask) != 0)
+  if ((projected_action_support[action_index] &
+       ~state.letter_bag.support_mask) != 0)
     return false;
   uint32_t const* repeated = action.repeated_count == 0
       ? NULL
       : &projected_repeated_requirements[action.repeated_offset];
   for (uint32_t i = 0; i < action.repeated_count; ++i) {
     uint32_t const requirement = repeated[i];
-    if (worker.bag[packed_rank(requirement)] <
+    if (state.letter_bag.counts[packed_rank(requirement)] <
         packed_count(requirement))
       return false;
   }
@@ -443,13 +454,13 @@ size_t DfsAnagramSearch::first_projected_length_candidate(
   return begin;
 }
 
-void DfsAnagramSearch::consider_projected_bound_candidate(
-    size_t action_index, BoundWorker* worker, double* best,
+void DfsAnagramSearch::consider_projected_top_down_candidate(
+    size_t action_index, ScoreBounds::TopDownWorker* worker, double* best,
     double* max_rounding_error) {
   ProjectedAction const& action = projected_actions[action_index];
   uint64_t const exact_support =
       projected_action_support[action_index];
-  ++worker->fitting_transitions;
+  ++worker->stats.fitting_transitions;
   size_t const candidate_length =
       projected_total_length(action.packed_lengths);
   size_t const wild_length =
@@ -479,7 +490,7 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   worker->score_key -= action.score_key_delta;
   worker->letters_left -= candidate_length;
   worker->wild_left -= wild_length;
-  double const child = compute_projected_score_bound(worker);
+  double const child = compute_projected_score_bound_top_down(worker);
   worker->wild_left += wild_length;
   worker->letters_left += candidate_length;
   worker->score_key += action.score_key_delta;
@@ -498,7 +509,7 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
   worker->bag_mask = parent_bag_mask;
 
   if (child == -HUGE_VAL) return;
-  ++worker->transitions;
+  ++worker->stats.transitions;
   double const candidate_bound = action.partial_score + child;
   *best = std::max(*best, candidate_bound);
   double rounding_error = action.rounding_error_base;
@@ -509,10 +520,10 @@ void DfsAnagramSearch::consider_projected_bound_candidate(
       *max_rounding_error, rounding_error);
 }
 
-double DfsAnagramSearch::compute_projected_score_bound(
-    BoundWorker* worker) {
-  assert(bound_mode == SCORE_BOUND_PROJECTED);
-  assert(worker->score_key < bound_capacity);
+double DfsAnagramSearch::compute_projected_score_bound_top_down(
+    ScoreBounds::TopDownWorker* worker) {
+  assert(search_stats.score_bounds.mode == ScoreBounds::PROJECTED);
+  assert(worker->score_key < search_stats.score_bounds.capacity);
   unsigned int wait_spins = 0;
   AtomicFloatWord& slot =
       bound_float_values.get()[size_t(worker->score_key)];
@@ -534,8 +545,8 @@ double DfsAnagramSearch::compute_projected_score_bound(
   }
 
   if (worker->bag_mask == 0 && worker->wild_left == 0) {
-    publish_parallel_score_bound(worker->score_key, 0.0);
-    ++worker->states_computed;
+    publish_top_down_score_bound(worker->score_key, 0.0);
+    ++worker->stats.states_computed;
     return 0.0;
   }
 
@@ -548,21 +559,16 @@ double DfsAnagramSearch::compute_projected_score_bound(
   size_t const begin = first_projected_length_candidate(
       projected_bucket_starts[bucket], end, worker->letters_left);
   for (size_t action = begin; action < end; ++action) {
-    ++worker->candidate_tests;
-    if (!projected_action_fits(action, *worker)) continue;
-    consider_projected_bound_candidate(
+    ++worker->stats.candidate_tests;
+    if (!projected_action_fits(action, bound_state_view(*worker))) continue;
+    consider_projected_top_down_candidate(
         action, worker, &best, &max_rounding_error);
   }
 
-  double const result =
-      best == -HUGE_VAL
-          ? -HUGE_VAL
-          : round_score_bound_up(
-                static_cast<long double>(best) +
-                static_cast<long double>(max_rounding_error),
-                &worker->nextafter_calls);
-  publish_parallel_score_bound(worker->score_key, result);
-  ++worker->states_computed;
+  double const result = get_score_bound(
+      best, max_rounding_error, &worker->stats.nextafter_calls);
+  publish_top_down_score_bound(worker->score_key, result);
+  ++worker->stats.states_computed;
   return result;
 }
 
@@ -575,39 +581,21 @@ uint64_t DfsAnagramSearch::test_projected_wild_update(
       max_rounding_error, count);
 }
 
-bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
+bool DfsAnagramSearch::compute_projected_score_bounds_bottom_up(
     size_t requested_threads) {
   FILE* const progress = dfs_diagnostic_stream();
-  if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
-      bound_capacity == 0 ||
+  if (search_stats.score_bounds.mode != ScoreBounds::PROJECTED ||
+      !search_stats.score_bounds.complete ||
+      search_stats.score_bounds.capacity == 0 ||
       bound_plain_float_values.get() == NULL ||
       score_wild_span == 0 ||
-      bound_capacity % score_wild_span != 0)
+      search_stats.score_bounds.capacity % score_wild_span != 0)
     return false;
 
-  size_t const exact_bag_count = bound_capacity / score_wild_span;
+  size_t const exact_bag_count =
+      search_stats.score_bounds.capacity / score_wild_span;
   if (exact_bag_count == 0 || exact_bag_count > UINT32_MAX)
     return false;
-
-  struct VectorWorker {
-    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
-    std::vector<double> best;
-    std::vector<double> max_rounding_error;
-    uint64_t candidate_tests;
-    uint64_t fitting_transitions;
-    uint64_t transitions;
-    uint64_t nextafter_calls;
-
-    explicit VectorWorker(size_t wild_span):
-        best(wild_span),
-        max_rounding_error(wild_span),
-        candidate_tests(0),
-        fitting_transitions(0),
-        transitions(0),
-        nextafter_calls(0) {
-      bag.fill(0);
-    }
-  };
 
   if (progress != NULL) {
     dfs_diagnostic(
@@ -621,10 +609,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   size_t const wildcard_end =
       projected_bucket_starts[wildcard_bucket + 1];
 
-  uint64_t candidate_tests = 0;
-  uint64_t fitting_transitions = 0;
-  uint64_t transitions = 0;
-  uint64_t nextafter_calls = 0;
+  ScoreBounds::ProjectedStats total_stats;
 
   // The exact-empty vector is its own base layer. Wildcard-only actions point
   // to smaller indexes in the same vector.
@@ -636,15 +621,15 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
          action_index < wildcard_end; ++action_index) {
       ProjectedAction const& action =
           projected_actions[action_index];
-      ++candidate_tests;
+      ++total_stats.candidate_tests;
       size_t const wild_length =
           projected_wild_length(action.packed_lengths);
       assert(wild_length != 0);
       if (wild_length > wild) continue;
-      ++fitting_transitions;
+      ++total_stats.fitting_transitions;
       double const child = double(values[wild - wild_length]);
       if (child == -HUGE_VAL) continue;
-      ++transitions;
+      ++total_stats.transitions;
       best = std::max(best, action.partial_score + child);
       double rounding_error = action.rounding_error_base;
       rounding_error += fabs(child);
@@ -653,13 +638,8 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
       max_rounding_error =
           std::max(max_rounding_error, rounding_error);
     }
-    double const result =
-        best == -HUGE_VAL
-            ? -HUGE_VAL
-            : round_score_bound_up(
-                  static_cast<long double>(best) +
-                  static_cast<long double>(max_rounding_error),
-                  &nextafter_calls);
+    double const result = get_score_bound(
+        best, max_rounding_error, &total_stats.nextafter_calls);
     values[wild] = round_float_score_bound_up(result);
   }
 
@@ -674,7 +654,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   }
 
   std::vector<std::vector<uint32_t> > exact_layers;
-  std::vector<VectorWorker> workers;
+  std::vector<ScoreBounds::BottomUpWorker> workers;
   size_t worker_count = 1;
   try {
     exact_layers.resize(max_exact_total + 1);
@@ -718,22 +698,20 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
     std::atomic<size_t> next_bag(0);
 
     auto work = [&](size_t worker_index) {
-      VectorWorker* worker = &workers[worker_index];
+      ScoreBounds::BottomUpWorker* worker = &workers[worker_index];
       // One set of accumulators for every bag this worker drains from this
       // layer, folded into the worker fields once before returning. The worker
-      // fields stay cumulative across layers because the same VectorWorker is
+      // stats stay cumulative across layers because the same BottomUpWorker
       // reused, so the final aggregation is unchanged.
-      uint64_t local_candidate_tests = 0;
-      uint64_t local_fitting_transitions = 0;
-      uint64_t local_transitions = 0;
-      uint64_t local_nextafter_calls = 0;
+      ScoreBounds::ProjectedStats local_stats;
 
-      auto scan = [&](VectorWorker* worker, uint64_t exact_mask,
+      auto scan = [&](ScoreBounds::BottomUpWorker* worker,
+                      uint64_t exact_mask,
                       uint64_t base_key,
                       size_t begin, size_t end) {
         for (size_t action_index = begin;
              action_index < end; ++action_index) {
-          ++local_candidate_tests;
+          ++local_stats.candidate_tests;
           // Support filtering rejects most scanned actions at depth, and the
           // sidecar rejection reads eight contiguous bytes without touching
           // the cold record.
@@ -776,14 +754,15 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
           DFS_CHECK(action.score_key_delta <= first_parent_key);
           size_t const children_offset =
               size_t(first_parent_key - action.score_key_delta);
-          DFS_CHECK(children_offset + count <= bound_capacity);
+          DFS_CHECK(children_offset + count <=
+                    search_stats.score_bounds.capacity);
           float const* const children = values + children_offset;
 
           double* const best = &worker->best[wild_length];
           double* const error =
               &worker->max_rounding_error[wild_length];
-          local_fitting_transitions += count;
-          local_transitions += projected_wild_update_avx2(
+          local_stats.fitting_transitions += count;
+          local_stats.transitions += projected_wild_update_avx2(
               action.partial_score, action.rounding_error_base,
               children, best, error, count);
         }
@@ -824,23 +803,15 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
 
         for (size_t wild = 0; wild < score_wild_span; ++wild) {
           double const best = worker->best[wild];
-          double const result =
-              best == -HUGE_VAL
-                  ? -HUGE_VAL
-                  : round_score_bound_up(
-                        static_cast<long double>(best) +
-                        static_cast<long double>(
-                            worker->max_rounding_error[wild]),
-                        &local_nextafter_calls);
+          double const result = get_score_bound(
+              best, worker->max_rounding_error[wild],
+              &local_stats.nextafter_calls);
           values[size_t(base_key + wild)] =
               round_float_score_bound_up(result);
         }
       }
 
-      worker->candidate_tests += local_candidate_tests;
-      worker->fitting_transitions += local_fitting_transitions;
-      worker->transitions += local_transitions;
-      worker->nextafter_calls += local_nextafter_calls;
+      worker->stats.add(local_stats);
     };
 
     std::vector<std::thread> background;
@@ -868,23 +839,16 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   }
 
   for (size_t i = 0; i < workers.size(); ++i) {
-    candidate_tests += workers[i].candidate_tests;
-    fitting_transitions += workers[i].fitting_transitions;
-    transitions += workers[i].transitions;
-    nextafter_calls += workers[i].nextafter_calls;
+    total_stats.add(workers[i].stats);
   }
 
-  BoundWorker root;
+  ScoreBounds::TopDownWorker root;
   root.bag = bag;
   root.bag_mask = bag_mask & score_exact_mask;
   root.score_key = current_score_key;
   root.letters_left = current_letters_left;
   root.wild_left = score_wild_letters;
-  root.states_computed = 0;
-  root.candidate_tests = 0;
-  root.fitting_transitions = 0;
-  root.transitions = 0;
-  root.nextafter_calls = 0;
+  root.stats.clear();
   root.best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
 
@@ -895,22 +859,22 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
   size_t const root_begin = first_projected_length_candidate(
       projected_bucket_starts[root_bucket],
       root_end, root.letters_left);
-  candidate_tests += root_end - root_begin;
+  total_stats.candidate_tests += root_end - root_begin;
   double root_best = -HUGE_VAL;
   double root_max_rounding_error = 0.0;
   for (size_t action_index = root_begin;
        action_index < root_end; ++action_index) {
-    if (!projected_action_fits(action_index, root)) continue;
+    if (!projected_action_fits(action_index, bound_state_view(root))) continue;
     ProjectedAction const& action =
         projected_actions[action_index];
-    ++fitting_transitions;
+    ++total_stats.fitting_transitions;
     assert(action.score_key_delta <= root.score_key);
     uint64_t const child_key =
         root.score_key - action.score_key_delta;
-    assert(child_key < bound_capacity);
+    assert(child_key < search_stats.score_bounds.capacity);
     double const child = double(values[size_t(child_key)]);
     if (child == -HUGE_VAL) continue;
-    ++transitions;
+    ++total_stats.transitions;
     root_best = std::max(
         root_best, action.partial_score + child);
     double rounding_error = action.rounding_error_base;
@@ -921,42 +885,31 @@ bool DfsAnagramSearch::compute_projected_score_bound_bottom_up(
         root_max_rounding_error, rounding_error);
   }
 
-  root_score_bound =
-      root_best == -HUGE_VAL
-          ? -HUGE_VAL
-          : round_score_bound_up(
-                static_cast<long double>(root_best) +
-                static_cast<long double>(root_max_rounding_error),
-                &nextafter_calls);
+  root_score_bound = get_score_bound(
+      root_best, root_max_rounding_error, &total_stats.nextafter_calls);
   root_score_bound_ready = true;
-  bound_entries = bound_capacity;
-  bound_states_computed = bound_capacity;
-  bound_candidate_tests = candidate_tests;
-  bound_fitting_transitions = fitting_transitions;
-  bound_transitions = transitions;
-  bound_nextafter_calls = nextafter_calls;
+  search_stats.score_bounds.entries = search_stats.score_bounds.capacity;
+  total_stats.states_computed = search_stats.score_bounds.capacity;
+  search_stats.score_bounds.projected = total_stats;
   actual_preprocess_threads = actual_workers;
   return true;
 }
 
-bool DfsAnagramSearch::compute_projected_score_bound_parallel(
+bool DfsAnagramSearch::compute_projected_score_bounds_top_down(
     size_t requested_threads) {
   FILE* const progress = dfs_diagnostic_stream();
-  if (bound_mode != SCORE_BOUND_PROJECTED || !bound_complete ||
-      bound_capacity == 0)
+  if (search_stats.score_bounds.mode != ScoreBounds::PROJECTED ||
+      !search_stats.score_bounds.complete ||
+      search_stats.score_bounds.capacity == 0)
     return false;
 
-  BoundWorker root;
+  ScoreBounds::TopDownWorker root;
   root.bag = bag;
   root.bag_mask = bag_mask & score_exact_mask;
   root.score_key = current_score_key;
   root.letters_left = current_letters_left;
   root.wild_left = score_wild_letters;
-  root.states_computed = 0;
-  root.candidate_tests = 0;
-  root.fitting_transitions = 0;
-  root.transitions = 0;
-  root.nextafter_calls = 0;
+  root.stats.clear();
   root.best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
 
@@ -970,15 +923,15 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
       root_end, root.letters_left);
   uint64_t const root_candidate_tests = root_end - root_begin;
   for (size_t action = root_begin; action < root_end; ++action) {
-    if (projected_action_fits(action, root))
+    if (projected_action_fits(action, bound_state_view(root)))
       root_candidates.push_back(uint32_t(action));
   }
 
   if (root_candidates.empty()) {
     root_score_bound = -HUGE_VAL;
     root_score_bound_ready = true;
-    bound_candidate_tests = root_candidate_tests;
-    bound_fitting_transitions = 0;
+    root.stats.candidate_tests = root_candidate_tests;
+    search_stats.score_bounds.projected = root.stats;
     actual_preprocess_threads = 1;
     return true;
   }
@@ -986,7 +939,7 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   size_t const worker_count = std::min(
       std::max(size_t(1), requested_threads),
       root_candidates.size());
-  std::vector<BoundWorker> workers(worker_count, root);
+  std::vector<ScoreBounds::TopDownWorker> workers(worker_count, root);
   std::vector<std::thread> background;
   try {
     background.reserve(worker_count - 1);
@@ -1001,12 +954,12 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
 
   std::atomic<size_t> next_candidate(0);
   auto work = [&](size_t worker_index) {
-    BoundWorker* worker = &workers[worker_index];
+    ScoreBounds::TopDownWorker* worker = &workers[worker_index];
     for (;;) {
       size_t const index =
           next_candidate.fetch_add(1, std::memory_order_relaxed);
       if (index >= root_candidates.size()) break;
-      consider_projected_bound_candidate(
+      consider_projected_top_down_candidate(
           root_candidates[index], worker, &worker->best,
           &worker->max_rounding_error);
     }
@@ -1023,39 +976,22 @@ bool DfsAnagramSearch::compute_projected_score_bound_parallel(
   for (size_t i = 0; i < background.size(); ++i)
     background[i].join();
 
-  size_t states = 0;
-  uint64_t candidate_tests = root_candidate_tests;
-  uint64_t fitting_transitions = 0;
-  uint64_t transitions = 0;
-  uint64_t nextafter_calls = 0;
+  root.stats.candidate_tests = root_candidate_tests;
   double best = -HUGE_VAL;
   double max_rounding_error = 0.0;
   size_t const active_workers = background.size() + 1;
   for (size_t i = 0; i < active_workers; ++i) {
-    states += workers[i].states_computed;
-    candidate_tests += workers[i].candidate_tests;
-    fitting_transitions += workers[i].fitting_transitions;
-    transitions += workers[i].transitions;
-    nextafter_calls += workers[i].nextafter_calls;
+    root.stats.add(workers[i].stats);
     best = std::max(best, workers[i].best);
     max_rounding_error = std::max(
         max_rounding_error, workers[i].max_rounding_error);
   }
 
-  root_score_bound =
-      best == -HUGE_VAL
-          ? -HUGE_VAL
-          : round_score_bound_up(
-                static_cast<long double>(best) +
-                static_cast<long double>(max_rounding_error),
-                &nextafter_calls);
+  root_score_bound = get_score_bound(
+      best, max_rounding_error, &root.stats.nextafter_calls);
   root_score_bound_ready = true;
-  bound_entries = states;
-  bound_states_computed = states;
-  bound_candidate_tests = candidate_tests;
-  bound_fitting_transitions = fitting_transitions;
-  bound_transitions = transitions;
-  bound_nextafter_calls = nextafter_calls;
+  search_stats.score_bounds.entries = root.stats.states_computed;
+  search_stats.score_bounds.projected = root.stats;
   actual_preprocess_threads = active_workers;
   return true;
 }

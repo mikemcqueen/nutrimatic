@@ -111,11 +111,11 @@ static size_t search_task_target(size_t threads) {
 }
 
 static char const* score_bound_mode_name(
-    DfsAnagramSearch::ScoreBoundMode mode) {
+    ScoreBounds::Mode mode) {
   switch (mode) {
-    case DfsAnagramSearch::SCORE_BOUND_PROJECTED:
+    case ScoreBounds::PROJECTED:
       return "projected dense";
-    case DfsAnagramSearch::SCORE_BOUND_OFF:
+    case ScoreBounds::OFF:
       return "off";
   }
   return "unknown";
@@ -163,19 +163,10 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     certificate_group_rejects(0),
     certificate_scans_skipped(0),
     certificate_scans_kept(0),
-    bound_mode(SCORE_BOUND_OFF),
-    bound_capacity(0),
-    bound_value_bytes(0),
-    bound_complete(false),
+    search_stats{{ScoreBounds::OFF, 0, 0, 0, 0, false,
+                  {0, 0, 0, 0, 0}}},
     root_score_bound(HUGE_VAL),
     root_score_bound_ready(false),
-    bound_entries(0),
-    bound_states_computed(0),
-    bound_candidate_tests(0),
-    bound_fitting_transitions(0),
-    bound_transitions(0),
-    bound_nextafter_calls(0),
-    bound_charged_bytes(0),
     bound_prunes(0),
     exact_flat_capacity(0),
     exact_flat_entry_limit(0),
@@ -497,11 +488,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   FILE* const progress = dfs_diagnostic_stream();
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const setup_start = PhaseClock::now();
-  bound_states_computed = 0;
-  bound_candidate_tests = 0;
-  bound_fitting_transitions = 0;
-  bound_transitions = 0;
-  bound_nextafter_calls = 0;
+  search_stats.score_bounds.projected.clear();
   setup_seconds = 0.0;
   search_seconds = 0.0;
   actual_preprocess_threads = 1;
@@ -734,27 +721,30 @@ bool DfsAnagramSearch::prepare_phase_two(
   prepare_score_bounds(score_bounds_applicable);
   if (progress != NULL) {
     dfs_diagnostic("phase 2 preflight: score-bound mode %s",
-                   score_bound_mode_name(bound_mode));
-    if (bound_mode != SCORE_BOUND_OFF)
+                   score_bound_mode_name(search_stats.score_bounds.mode));
+    if (search_stats.score_bounds.mode != ScoreBounds::OFF)
       fprintf(progress, " (%zu-byte values, capacity %zu, %s coverage)",
-              bound_value_bytes, bound_capacity,
-              bound_complete ? "complete effective" : "partial");
+              search_stats.score_bounds.value_bytes,
+              search_stats.score_bounds.capacity,
+              search_stats.score_bounds.complete
+                  ? "complete effective" : "partial");
     fputc('\n', progress);
-    if (bound_mode == SCORE_BOUND_PROJECTED)
+    if (search_stats.score_bounds.mode == ScoreBounds::PROJECTED)
       dfs_diagnostic(
           "phase 2 preflight: projected evaluator %s\n",
           bound_plain_float_values.get() != NULL
               ? "bottom-up plain"
-              : "recursive atomic");
+              : "top-down atomic");
     fflush(progress);
   }
-  if (bound_mode != SCORE_BOUND_OFF && bound_complete) {
-    if (bound_mode == SCORE_BOUND_PROJECTED) {
+  if (search_stats.score_bounds.mode != ScoreBounds::OFF &&
+      search_stats.score_bounds.complete) {
+    if (search_stats.score_bounds.mode == ScoreBounds::PROJECTED) {
       bool const computed =
           bound_plain_float_values.get() != NULL
-              ? compute_projected_score_bound_bottom_up(
+              ? compute_projected_score_bounds_bottom_up(
                     requested_preprocess_threads)
-              : compute_projected_score_bound_parallel(
+              : compute_projected_score_bounds_top_down(
                     requested_preprocess_threads);
       if (!computed)
         clear_score_bounds();
@@ -781,7 +771,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   if (progress_enabled) {
     dfs_diagnostic(
         "phase 2: precomputed %zu bounded states in %.1fs\n",
-        bound_states_computed, setup_seconds);
+        search_stats.score_bounds.projected.states_computed, setup_seconds);
   }
   return true;
 }
@@ -902,7 +892,7 @@ bool DfsAnagramSearch::should_prune(
   double floor;
   if (sink == NULL || !sink->score_floor(&floor)) return false;
   uint64_t const query_key = worker->score_key;
-  if (query_key >= bound_capacity) return false;
+  if (query_key >= search_stats.score_bounds.capacity) return false;
 
   double remaining_bound;
   if (!load_score_bound(query_key, &remaining_bound)) return false;

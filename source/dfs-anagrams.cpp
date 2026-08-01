@@ -270,7 +270,7 @@ int main(int argc, char* argv[]) {
       (unsigned long long) search.score_bound_transitions(),
       (unsigned long long) search.score_bound_nextafter_calls());
   if (search.score_bound_mode() ==
-      DfsAnagramSearch::SCORE_BOUND_PROJECTED)
+      ScoreBounds::PROJECTED)
     dfs_diagnostic(
         "phase 2 projected work: %llu candidate tests, "
         "%llu fitting transitions\n",
