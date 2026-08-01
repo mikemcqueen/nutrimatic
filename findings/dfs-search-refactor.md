@@ -278,8 +278,7 @@ Own all projected-bound behavior:
 - bottom-up layered projected evaluator;
 - projected parallel setup;
 - mandatory AVX2 wildcard kernel;
-- projected diagnostics and counters;
-- the projected wildcard test hook.
+- projected diagnostics and counters.
 
 Expected size: 1,000-1,150 lines.
 
@@ -675,18 +674,58 @@ so their counters aggregate into this one result rather than being split by
 evaluator. The selected evaluator is not currently retained as a statistic.
 
 `DfsSearchStats` now also retains all-solutions, any-solution, and run groups.
-This is still a value-type staging step, not a claim that component ownership
-has already moved.
-
-The next checkpoint introduces `DfsAllSolutionsRunner` alongside the existing
-`DfsAnySolutionRunner`. The all-solutions runner now owns its worker records,
-progress aggregation, task queue, and scheduling for one `run()` call; it
-still borrows prepared class data, certificate data, and score-bound lookup
-from `DfsAnagramSearch` until `DfsSearchData` is introduced.
 
 Search-time prune count does not belong here; it is an execution statistic,
 because it counts how the DFS consumed the bounds rather than how the bound
 table was built.
+
+#### Current runner-ownership checkpoint
+
+`DfsSearchData` now exists as a nested aggregate of the prepared query: the
+class list, score model, root bag and keys, hot arrays, certificate tables,
+and the resolved progress and thread settings. It also carries the three
+queries whose inputs are entirely prepared data — `first_length_candidate()`,
+`length_certificate_rejects()`, and `cached_reachability()` — so the runners
+no longer call back into the facade at all. Neither runner holds a
+`DfsAnagramSearch&` any more.
+
+Two consequences worth recording, because both were measured:
+
+- The runners store `DfsSearchData` **by value**, not by reference. A
+  reference member costs one extra dependent load on every prepared-data
+  access, and the exact recurrence touches `score_key_deltas`,
+  `packed_letters`, and `fit_classes` on every node; holding a reference cost
+  roughly 2% on the 42-letter single-threaded `--require-completable`
+  benchmark. Copying the aggregate restores the one-load form the facade
+  members had.
+- `DfsSearchData::score_bounds_active` is a plain `bool` rather than a call
+  through the `ScoreBounds` reference, for the same reason: it is read on
+  every exact subtract and restore and is fixed for the whole run.
+
+The packed-field accessors and the shared multiplicity check are now `inline`
+definitions in `dfs-search-internal.h`. Out-of-lining them and relying on LTO
+measured slightly slower.
+
+Each runner now returns its own `Results` (statistics plus the thread and task
+counts it actually used) and the facade folds that into `DfsSearchStats`. No
+runner writes to `search_stats`.
+
+The unreachable decoded-class fallbacks are gone: `walk_unoptimized()`,
+`visit_unoptimized_class()`, and the non-hot branches of the exact
+subtract/restore/fit helpers. `require_hot_classes()` aborts before any of
+them could run, so they were dead source that kept `path` and `next_progress`
+alive as facade members. `score_state_count`, `score_effective_states`, and
+`current_letters_left` are now locals or derived from `letters.size()`.
+
+The exact memo, its lookahead, and the `AtomicWord` slot type belong to
+`DfsAnySolutionRunner`; `AtomicFloatWord` and its size assertions belong to
+`ScoreBounds`. The facade constructor no longer asserts about either.
+
+What remains on the facade is preparation: the projection layout
+(`score_exact_mask`, `score_multipliers`, `score_wild_*`), the hot and
+projected-action builders, and the certificate builder. Those are the inputs
+`DfsSearchData` is assembled from, and moving them is the `HotClassIndex` and
+`ScoreBounds::build()` step, not this one.
 
 ### Projected-bound internals
 
@@ -730,11 +769,10 @@ release it and retain only `projected_actions` and quotient status in
 `ScoreBounds::Stats`. That is a behavior-neutral memory improvement, but it
 should not be mixed into the file split.
 
-The projected wildcard test hook currently appears on the public
-`DfsAnagramSearch` class. Longer term it can move to a private
-`dfs-search-test-hooks.h` interface linked only by the test executable. That
-keeps kernel testing direct without making a low-level span update part of
-the production facade.
+The mandatory AVX2 kernel remains private to `dfs-search-projected.cpp`.
+Bottom-up evaluator smoke tests exercise it through the owning `ScoreBounds`
+component and verify successful-transition counters and retained results; the
+former direct kernel test and public `DfsAnagramSearch` test hook were removed.
 
 ### `LengthCertificate`
 
@@ -1113,6 +1151,13 @@ all-solutions traversal live in `dfs-all-runner.cpp`.
 Replace direct access to facade fields with explicit immutable inputs.
 Convert bounds before the runners so both runners can consume the same narrow
 query interface.
+
+Done for the runners; see the runner-ownership checkpoint above. `ScoreBounds`
+owns its storage, lookup, and statistics, but the projected evaluators and the
+action table it builds from are still `DfsAnagramSearch` members, so
+`ScoreBounds::build()` is not yet a thing. `DfsSearchData` is an aggregate of
+prepared members rather than an owner; `HotClassIndex` is what turns it into
+one.
 
 ### 9. Add Pimpl last
 

@@ -29,8 +29,8 @@ class DfsScoreModel {
   double displayed_score(double log_score) const;
 
  private:
-  double const segment_boundary_log_score_;
-  double const multi_word_log_bonus_;
+  double segment_boundary_log_score_;
+  double multi_word_log_bonus_;
 };
 
 #endif

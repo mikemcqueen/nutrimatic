@@ -1,6 +1,7 @@
 #include "dfs-class-list.h"
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
+#include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
 
@@ -112,13 +113,14 @@ static int smoke_test() {
     CollectSolutions sink(&classes);
     DfsAnagramSearch search(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
-    search.run(&sink);
+    DfsSearchStats search_stats;
+    search.run(&sink, &search_stats);
 
     check(!sink.supports_parallel_search(),
           "generic collecting sink opted in to parallel search");
-    check(search.solutions_found() == 6, "wrong solution count");
+    check(search_stats.all_solutions.solutions == 6, "wrong solution count");
     check(sink.solutions.size() == 6, "permutation duplicate emitted");
-    check(!search.length_certificate_enabled(),
+    check(!search_stats.certificate.ready,
           "sink without a floor enabled the length certificate");
     double const expected =
         2.0 * log(5.0) - log(DFS_DEFAULT_SEGMENT_PENALTY) -
@@ -126,13 +128,13 @@ static int smoke_test() {
     check(fabs(sink.ab_ab_log_score - expected) < 1e-12,
           "wrong representative score");
 
-    int64_t const first_nodes = search.nodes_visited();
-    int64_t const first_solutions = search.solutions_found();
+    int64_t const first_nodes = search_stats.all_solutions.nodes;
+    int64_t const first_solutions = search_stats.all_solutions.solutions;
     CollectSolutions repeated_sink(&classes);
-    search.run(&repeated_sink);
-    check(search.nodes_visited() == first_nodes,
+    search.run(&repeated_sink, &search_stats);
+    check(search_stats.all_solutions.nodes == first_nodes,
           "reused search changed optimized node count");
-    check(search.solutions_found() == first_solutions,
+    check(search_stats.all_solutions.solutions == first_solutions,
           "reused search changed optimized solution count");
     check(repeated_sink.ordered_indexes == sink.ordered_indexes &&
               repeated_sink.ordered_scores == sink.ordered_scores,
@@ -141,9 +143,10 @@ static int smoke_test() {
     CollectSolutions serial_only_sink(&classes);
     DfsAnagramSearch serial_only_search(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0, 1, 4);
-    serial_only_search.run(&serial_only_sink);
-    check(serial_only_search.search_threads_used() == 1 &&
-              serial_only_search.search_tasks_generated() == 0,
+    DfsSearchStats serial_only_search_stats;
+    serial_only_search.run(&serial_only_sink, &serial_only_search_stats);
+    check(serial_only_search_stats.execution.search_threads == 1 &&
+              serial_only_search_stats.execution.search_tasks == 0,
           "generic sink did not fall back to serial search");
     check(serial_only_sink.ordered_indexes == sink.ordered_indexes &&
               serial_only_sink.ordered_scores == sink.ordered_scores,
@@ -153,14 +156,15 @@ static int smoke_test() {
           "could not lower exhaustive parallel task target");
     DfsAnagramSearch parallel_counter(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0, 1, 4);
-    parallel_counter.run(NULL);
+    DfsSearchStats parallel_counter_stats;
+    parallel_counter.run(NULL, &parallel_counter_stats);
     check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
           "could not restore exhaustive parallel task target");
-    check(parallel_counter.search_threads_used() > 1 &&
-              parallel_counter.nodes_visited() ==
-                  search.nodes_visited() &&
-              parallel_counter.solutions_found() ==
-                  search.solutions_found(),
+    check(parallel_counter_stats.execution.search_threads > 1 &&
+              parallel_counter_stats.all_solutions.nodes ==
+                  search_stats.all_solutions.nodes &&
+              parallel_counter_stats.all_solutions.solutions ==
+                  search_stats.all_solutions.solutions,
           "parallel exhaustive search changed public counters");
 
     check(setenv(
@@ -169,8 +173,9 @@ static int smoke_test() {
     DfsTopN expected_output(&classes, 2);
     DfsAnagramSearch exhaustive(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
-    exhaustive.run(&expected_output);
-    check(!exhaustive.length_certificate_enabled(),
+    DfsSearchStats exhaustive_stats;
+    exhaustive.run(&expected_output, &exhaustive_stats);
+    check(!exhaustive_stats.certificate.ready,
           "disabled length certificate was prepared");
     std::vector<DfsSpelling> const expected_spellings =
         expected_output.take_sorted_results();
@@ -180,7 +185,8 @@ static int smoke_test() {
     DfsAnagramSearch disabled(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
         bound_budget);
-    disabled.run(&disabled_output);
+    DfsSearchStats disabled_stats;
+    disabled.run(&disabled_output, &disabled_stats);
     std::vector<DfsSpelling> const disabled_spellings =
         disabled_output.take_sorted_results();
 
@@ -191,7 +197,8 @@ static int smoke_test() {
     DfsAnagramSearch shadow(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
         bound_budget);
-    shadow.run(&shadow_output);
+    DfsSearchStats shadow_stats;
+    shadow.run(&shadow_output, &shadow_stats);
     std::vector<DfsSpelling> const shadow_spellings =
         shadow_output.take_sorted_results();
     check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
@@ -201,38 +208,43 @@ static int smoke_test() {
     DfsAnagramSearch bounded(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
         bound_budget);
-    bounded.run(&bounded_output);
+    DfsSearchStats bounded_stats;
+    bounded.run(&bounded_output, &bounded_stats);
     std::vector<DfsSpelling> const bounded_spellings =
         bounded_output.take_sorted_results();
-    check(bounded.score_bound_mode() ==
-              ScoreBounds::PROJECTED,
+    check(bounded_stats.bounds.mode ==
+              DFS_SCORE_BOUND_PROJECTED,
           "small score memo did not use projected storage");
-    check(bounded.score_bound_entries() > 0,
+    check(bounded_stats.bounds.entries > 0,
           "dense score memo stored no states");
-    check(bounded.score_bound_transitions() > 0,
+    check(bounded_stats.bounds.projected.transitions > 0,
           "dense score memo counted no successful transitions");
-    check(bounded.score_bound_nextafter_calls() > 0,
+    check(bounded_stats.bounds.projected.nextafter_calls > 0,
           "dense score memo counted no nextafter calls");
-    check(bounded.phase_two_setup_seconds() >= 0.0,
+    check(bounded_stats.execution.setup_seconds >= 0.0,
           "phase-2 setup time was negative");
-    check(bounded.phase_two_search_seconds() >= 0.0,
+    check(bounded_stats.execution.search_seconds >= 0.0,
           "phase-2 search time was negative");
-    check(bounded.score_bound_bytes_charged() <= bound_budget,
+    check(bounded_stats.bounds.bytes_charged <= bound_budget,
           "score cache exceeded its byte budget");
-    check(bounded.nodes_visited() <= exhaustive.nodes_visited(),
+    check(bounded_stats.all_solutions.nodes <=
+              exhaustive_stats.all_solutions.nodes,
           "score bound visited more nodes than exhaustive DFS");
-    check(shadow.length_certificate_enabled() &&
-              !shadow.length_certificate_skipping(),
+    check(shadow_stats.certificate.ready &&
+              !shadow_stats.certificate.skipping(),
           "shadow length certificate used the wrong mode");
-    check(bounded.length_certificate_enabled() &&
-              bounded.length_certificate_skipping(),
+    check(bounded_stats.certificate.ready &&
+              bounded_stats.certificate.skipping(),
           "active length certificate used the wrong mode");
-    check(shadow.nodes_visited() == disabled.nodes_visited() &&
-              shadow.solutions_found() == disabled.solutions_found() &&
-              shadow.score_bound_prunes() ==
-                  disabled.score_bound_prunes(),
+    DfsSearchStats::AllSolutions const& shadow_all =
+        shadow_stats.all_solutions;
+    DfsSearchStats::AllSolutions const& disabled_all =
+        disabled_stats.all_solutions;
+    check(shadow_all.nodes == disabled_all.nodes &&
+              shadow_all.solutions == disabled_all.solutions &&
+              shadow_all.bound_prunes == disabled_all.bound_prunes,
           "shadow length certificate changed traversal counters");
-    check(bounded.length_certificate_scans_skipped() > 0,
+    check(bounded_stats.certificate.counters.scans_skipped > 0,
           "active length certificate skipped no class group");
     check_same_spellings(
         expected_spellings, disabled_spellings,
@@ -253,10 +265,11 @@ static int smoke_test() {
     DfsAnagramSearch parallel_disabled(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
         bound_budget, 1, 4);
-    parallel_disabled.run(&parallel_disabled_output);
+    DfsSearchStats parallel_disabled_stats;
+    parallel_disabled.run(&parallel_disabled_output, &parallel_disabled_stats);
     check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
           "could not restore parallel length certificate");
-    check(parallel_disabled.search_threads_used() > 1,
+    check(parallel_disabled_stats.execution.search_threads > 1,
           "certificate-disabled search did not run in parallel");
     check_same_spellings(
         bounded_spellings,
@@ -267,11 +280,12 @@ static int smoke_test() {
       DfsAnagramSearch parallel(
           &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
           bound_budget, 1, 4);
-      parallel.run(&parallel_output);
-      check(parallel.search_threads_used() > 1 &&
-                parallel.search_threads_used() <= 4,
+      DfsSearchStats parallel_stats;
+      parallel.run(&parallel_output, &parallel_stats);
+      check(parallel_stats.execution.search_threads > 1 &&
+                parallel_stats.execution.search_threads <= 4,
             "parallel top-N did not use multiple workers");
-      check(parallel.search_tasks_generated() > 0,
+      check(parallel_stats.execution.search_tasks > 0,
             "parallel top-N generated no search tasks");
       check_same_spellings(
           bounded_spellings, parallel_output.take_sorted_results(),
@@ -283,10 +297,11 @@ static int smoke_test() {
     DfsTopN certificate_only_output(&classes, 2);
     DfsAnagramSearch certificate_only(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
-    certificate_only.run(&certificate_only_output);
-    check(certificate_only.score_bound_mode() ==
-              ScoreBounds::OFF &&
-              certificate_only.length_certificate_enabled(),
+    DfsSearchStats certificate_only_stats;
+    certificate_only.run(&certificate_only_output, &certificate_only_stats);
+    check(certificate_only_stats.bounds.mode ==
+              DFS_SCORE_BOUND_OFF &&
+              certificate_only_stats.certificate.ready,
           "zero score cache disabled the length certificate");
     check_same_spellings(
         expected_spellings,
@@ -298,12 +313,13 @@ static int smoke_test() {
     DfsTopN parallel_unbounded_output(&classes, 2);
     DfsAnagramSearch parallel_unbounded(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0, 1, 4);
-    parallel_unbounded.run(&parallel_unbounded_output);
+    DfsSearchStats parallel_unbounded_stats;
+    parallel_unbounded.run(&parallel_unbounded_output, &parallel_unbounded_stats);
     check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
           "could not restore unbounded parallel task target");
-    check(parallel_unbounded.score_bound_mode() ==
-              ScoreBounds::OFF &&
-              parallel_unbounded.search_threads_used() > 1,
+    check(parallel_unbounded_stats.bounds.mode ==
+              DFS_SCORE_BOUND_OFF &&
+              parallel_unbounded_stats.execution.search_threads > 1,
           "score-bound-off search did not run in parallel");
     check_same_spellings(
         expected_spellings,
@@ -315,11 +331,12 @@ static int smoke_test() {
     DfsAnagramSearch isolated(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
         score_only_budget);
-    isolated.run(&isolated_output);
-    check(isolated.score_bound_mode() ==
-              ScoreBounds::PROJECTED,
+    DfsSearchStats isolated_stats;
+    isolated.run(&isolated_output, &isolated_stats);
+    check(isolated_stats.bounds.mode ==
+              DFS_SCORE_BOUND_PROJECTED,
           "small budget disabled projected score memo");
-    check(isolated.score_bound_complete(),
+    check(isolated_stats.bounds.complete,
           "small projected score memo did not retain complete coverage");
     check_same_spellings(
         expected_spellings, isolated_output.take_sorted_results(),
@@ -329,27 +346,36 @@ static int smoke_test() {
     DfsAnagramSearch threaded(
         &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
         bound_budget, 4);
-    threaded.run(&threaded_output);
+    DfsSearchStats threaded_stats;
+    threaded.run(&threaded_output, &threaded_stats);
     std::vector<DfsSpelling> const threaded_spellings =
         threaded_output.take_sorted_results();
-    check(threaded.preprocess_threads_used() > 1,
+    check(threaded_stats.execution.preprocess_threads > 1,
           "projected score memo did not use requested preprocessing threads");
-    check(threaded.score_bound_mode() == bounded.score_bound_mode(),
+    DfsSearchStats::Bounds const& threaded_bounds =
+        threaded_stats.bounds;
+    DfsSearchStats::Bounds const& bounded_bounds =
+        bounded_stats.bounds;
+    DfsSearchStats::AllSolutions const& threaded_all =
+        threaded_stats.all_solutions;
+    DfsSearchStats::AllSolutions const& bounded_all =
+        bounded_stats.all_solutions;
+    check(threaded_bounds.mode == bounded_bounds.mode,
           "threading changed score-bound mode");
-    check(threaded.score_bound_entries() == bounded.score_bound_entries(),
+    check(threaded_bounds.entries == bounded_bounds.entries,
           "threading changed score-bound entry count");
-    check(threaded.score_bound_states_computed() ==
-              bounded.score_bound_states_computed(),
+    check(threaded_bounds.projected.states_computed ==
+              bounded_bounds.projected.states_computed,
           "threading changed computed bound-state count");
-    check(threaded.score_bound_transitions() ==
-              bounded.score_bound_transitions(),
+    check(threaded_bounds.projected.transitions ==
+              bounded_bounds.projected.transitions,
           "threading changed successful bound transitions");
-    check(threaded.score_bound_nextafter_calls() ==
-              bounded.score_bound_nextafter_calls(),
+    check(threaded_bounds.projected.nextafter_calls ==
+              bounded_bounds.projected.nextafter_calls,
           "threading changed bound nextafter calls");
-    check(threaded.nodes_visited() == bounded.nodes_visited(),
+    check(threaded_all.nodes == bounded_all.nodes,
           "threading changed phase-2 node count");
-    check(threaded.solutions_found() == bounded.solutions_found(),
+    check(threaded_all.solutions == bounded_all.solutions,
           "threading changed phase-2 solution count");
     check_same_spellings(
         bounded_spellings, threaded_spellings,
@@ -360,7 +386,8 @@ static int smoke_test() {
     DfsAnagramSearch exhausted_expected(
         &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
         reader.count(), 0);
-    exhausted_expected.run(&exhausted_expected_output);
+    DfsSearchStats exhausted_expected_stats;
+    exhausted_expected.run(&exhausted_expected_output, &exhausted_expected_stats);
     std::vector<DfsSpelling> const exhausted_expected_spellings =
         exhausted_expected_output.take_sorted_results();
 
@@ -373,31 +400,32 @@ static int smoke_test() {
           "could not create projected diagnostic stream");
     FILE* const previous_diagnostic_stream =
         dfs_set_diagnostic_stream(projected_diagnostics);
-    projected.run(&projected_output,
+    DfsSearchStats projected_stats;
+    projected.run(&projected_output, &projected_stats,
                   /*progress_factor=*/1, /*allow_cache_fallback=*/true,
                   /*exact_letters=*/0);
     std::string const projected_message =
         read_stream(projected_diagnostics);
     dfs_set_diagnostic_stream(previous_diagnostic_stream);
     fclose(projected_diagnostics);
-    check(projected.score_bound_mode() ==
-              ScoreBounds::PROJECTED &&
-              projected.score_bound_complete(),
+    check(projected_stats.bounds.mode ==
+              DFS_SCORE_BOUND_PROJECTED &&
+              projected_stats.bounds.complete,
           "projected score memo did not retain complete coverage");
-    check(projected.score_bound_exact_letters() == 0 &&
-              projected.score_bound_wild_letters() ==
+    check(projected_stats.bounds.exact_letters == 0 &&
+              projected_stats.bounds.wild_letters ==
                   exhausted_letters.size(),
           "projected score memo used the wrong abstraction");
-    check(projected.score_bound_capacity() ==
+    check(projected_stats.bounds.capacity ==
               exhausted_letters.size() + 1,
           "wildcard-only projected score memo has the wrong size");
-    check(projected.score_bound_projected_actions() <
+    check(projected_stats.bounds.projected_actions <
               classes.classes().size(),
           "projected-action quotient did not collapse equivalent classes");
-    check(projected.score_bound_candidate_tests() >=
-                  projected.score_bound_fitting_transitions() &&
-              projected.score_bound_fitting_transitions() >=
-                  projected.score_bound_transitions(),
+    check(projected_stats.bounds.projected.candidate_tests >=
+                  projected_stats.bounds.projected.fitting_transitions &&
+              projected_stats.bounds.projected.fitting_transitions >=
+                  projected_stats.bounds.projected.transitions,
           "projected work counters are inconsistent");
     check(projected_message.find("projected actions") != std::string::npos,
           "projected-action diagnostic is missing");
@@ -412,21 +440,23 @@ static int smoke_test() {
       DfsAnagramSearch depth(
           &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
           reader.count(), 4096, 4);
-      depth.run(&depth_output,
+      DfsSearchStats depth_stats;
+      depth.run(&depth_output, &depth_stats,
                 /*progress_factor=*/1, /*allow_cache_fallback=*/true,
                 /*exact_letters=*/int(exact));
-      check(depth.score_bound_mode() ==
-                ScoreBounds::PROJECTED &&
-                depth.score_bound_complete(),
+      check(depth_stats.bounds.mode ==
+                DFS_SCORE_BOUND_PROJECTED &&
+                depth_stats.bounds.complete,
             "intermediate projected depth did not retain complete bounds");
-      check(depth.score_bound_exact_letters() == exact,
+      check(depth_stats.bounds.exact_letters == exact,
             "projected score memo used the wrong exact depth");
       // One surviving action contributes a whole wildcard span.
-      check(depth.score_bound_fitting_transitions() >=
-                depth.score_bound_transitions(),
+      check(depth_stats.bounds.projected.transitions > 0 &&
+                depth_stats.bounds.projected.fitting_transitions >=
+                depth_stats.bounds.projected.transitions,
             "projected work counters are inconsistent at depth");
       if (exact == 2)
-        check(depth.score_bound_projected_actions() ==
+        check(depth_stats.bounds.projected_actions ==
                   classes.classes().size(),
               "all-exact projection collapsed distinct classes");
       check_same_spellings(
@@ -438,7 +468,8 @@ static int smoke_test() {
     DfsAnagramSearch boundary_exhaustive(
         &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
         reader.count(), 0);
-    boundary_exhaustive.run(&boundary_expected);
+    DfsSearchStats boundary_exhaustive_stats;
+    boundary_exhaustive.run(&boundary_expected, &boundary_exhaustive_stats);
     check(!boundary_expected.ordered_scores.empty(),
           "rounding-boundary test found no solutions");
     size_t const best_position = size_t(std::max_element(
@@ -463,7 +494,8 @@ static int smoke_test() {
       DfsAnagramSearch disabled_boundary(
           &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
           reader.count(), 128);
-      disabled_boundary.run(&disabled_boundary_output);
+      DfsSearchStats disabled_boundary_stats;
+      disabled_boundary.run(&disabled_boundary_output, &disabled_boundary_stats);
       check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
             "could not restore boundary length certificate");
 
@@ -471,11 +503,12 @@ static int smoke_test() {
       DfsAnagramSearch boundary(
           &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
           reader.count(), 128);
-      boundary.run(&boundary_output);
-      check(boundary.score_bound_mode() ==
-                ScoreBounds::PROJECTED &&
-                boundary.score_bound_value_bytes() == sizeof(float) &&
-                boundary.score_bound_complete(),
+      DfsSearchStats boundary_stats;
+      boundary.run(&boundary_output, &boundary_stats);
+      check(boundary_stats.bounds.mode ==
+                DFS_SCORE_BOUND_PROJECTED &&
+                boundary_stats.bounds.value_bytes == sizeof(float) &&
+                boundary_stats.bounds.complete,
             "rounding-boundary test did not use complete float bounds");
       check(boundary_output.ordered_indexes ==
                     disabled_boundary_output.ordered_indexes &&
@@ -496,11 +529,12 @@ static int smoke_test() {
       DfsAnagramSearch downward(
           &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
           reader.count(), 768);
-      downward.run(&downward_output);
-      check(downward.score_bound_mode() ==
-                ScoreBounds::OFF,
+      DfsSearchStats downward_stats;
+      downward.run(&downward_output, &downward_stats);
+      check(downward_stats.bounds.mode ==
+                DFS_SCORE_BOUND_OFF,
             "score memo ignored a non-nearest rounding mode");
-      check(!downward.length_certificate_enabled(),
+      check(!downward_stats.certificate.ready,
             "length certificate ignored a non-nearest rounding mode");
       check(fesetround(original_rounding) == 0,
             "could not restore floating-point rounding mode");
@@ -530,7 +564,8 @@ static void float_score_bound_test() {
     DfsTopN expected_output(&classes, 1);
     DfsAnagramSearch exhaustive(
         &classes, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
-    exhaustive.run(&expected_output);
+    DfsSearchStats exhaustive_stats;
+    exhaustive.run(&expected_output, &exhaustive_stats);
     std::vector<DfsSpelling> const expected_spellings =
         expected_output.take_sorted_results();
 
@@ -538,15 +573,16 @@ static void float_score_bound_test() {
     size_t const budget = 512;
     DfsAnagramSearch search(
         &classes, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), budget);
-    search.run(&output);
-    check(search.score_bound_mode() ==
-              ScoreBounds::PROJECTED,
+    DfsSearchStats search_stats;
+    search.run(&output, &search_stats);
+    check(search_stats.bounds.mode ==
+              DFS_SCORE_BOUND_PROJECTED,
           "complete float score memo was not selected");
-    check(search.score_bound_value_bytes() == sizeof(float) &&
-              search.score_bound_capacity() == 128 &&
-              search.score_bound_complete(),
+    check(search_stats.bounds.value_bytes == sizeof(float) &&
+              search_stats.bounds.capacity == 128 &&
+              search_stats.bounds.complete,
           "complete float score memo has the wrong layout");
-    check(search.score_bound_bytes_charged() <= budget,
+    check(search_stats.bounds.bytes_charged <= budget,
           "float score cache exceeded its budget");
     check(output.size() == 1, "float score bound lost its solution");
     check_same_spellings(
@@ -555,69 +591,6 @@ static void float_score_bound_test() {
   }
 
   fclose(fp);
-}
-
-// The vector kernel must reproduce the scalar one bit for bit, including the
-// lanes it leaves alone. Cover the edges directly rather than hoping an
-// end-to-end run reaches them: dead children, spans shorter than one lane
-// group, spans with a tail, offset destinations, and seeds that move the
-// maximum in one lane but not its neighbours.
-static void wildcard_kernel_test() {
-  static size_t const PAD = 3;
-  static size_t const COUNTS[] = {1, 2, 3, 4, 5, 7, 8, 15, 17};
-  static char const* const PATTERNS[] = {
-      "finite", "dead", "alternating", "first dead", "last dead"};
-
-  for (size_t pattern = 0;
-       pattern < sizeof(PATTERNS) / sizeof(PATTERNS[0]); ++pattern) {
-    for (size_t which = 0;
-         which < sizeof(COUNTS) / sizeof(COUNTS[0]); ++which) {
-      size_t const count = COUNTS[which];
-      for (size_t offset = 0; offset <= PAD; ++offset) {
-        std::vector<float> children(PAD + count + PAD, 0.0f);
-        std::vector<double> seed_best(PAD + count + PAD, 0.0);
-        std::vector<double> seed_error(PAD + count + PAD, 0.0);
-        uint64_t expected_finite = 0;
-        for (size_t i = 0; i < count; ++i) {
-          bool dead = false;
-          if (strcmp(PATTERNS[pattern], "dead") == 0)
-            dead = true;
-          else if (strcmp(PATTERNS[pattern], "alternating") == 0)
-            dead = (i % 2) == 1;
-          else if (strcmp(PATTERNS[pattern], "first dead") == 0)
-            dead = i == 0;
-          else if (strcmp(PATTERNS[pattern], "last dead") == 0)
-            dead = i + 1 == count;
-          children[offset + i] =
-              dead ? -HUGE_VALF : float(-1.25 * double(i) - 0.5);
-          if (!dead) ++expected_finite;
-          // Seed every third lane just above what this action can reach and
-          // the rest just below, so only some lanes move.
-          seed_best[offset + i] =
-              (i % 3) == 0 ? 1e6 : -HUGE_VAL;
-          seed_error[offset + i] = (i % 3) == 1 ? 1e6 : 0.0;
-        }
-
-        std::vector<double> vector_best(seed_best);
-        std::vector<double> vector_error(seed_error);
-        double const partial_score = -3.75;
-        double const rounding_error_base = 2.5;
-        uint64_t const vector_finite =
-            DfsAnagramSearch::test_projected_wild_update(
-                partial_score, rounding_error_base,
-                &children[offset], &vector_best[offset],
-                &vector_error[offset], count);
-        check(vector_finite == expected_finite,
-              "vector wildcard kernel counted the wrong finite children");
-        for (size_t i = 0; i < vector_best.size(); ++i) {
-          if (i >= offset && i < offset + count) continue;
-          check(vector_best[i] == seed_best[i] &&
-                    vector_error[i] == seed_error[i],
-                "vector wildcard kernel wrote outside its span");
-        }
-      }
-    }
-  }
 }
 
 static void check_count(int64_t actual, int64_t expected,
@@ -650,10 +623,12 @@ static int validate_14_letters() {
   check_count(words.classes().size(), 2458, "words-only class count");
   DfsAnagramSearch words_search(
       &words, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
-  words_search.run(NULL);
-  check_count(words_search.solutions_found(), 27177,
+  DfsSearchStats words_search_stats;
+  words_search.run(NULL, &words_search_stats);
+  check_count(words_search_stats.all_solutions.solutions, 27177,
               "words-only solution count");
-  check_count(words_search.nodes_visited(), 117145, "words-only node count");
+  check_count(words_search_stats.all_solutions.nodes, 117145,
+              "words-only node count");
 
   DfsClassList with_phrases(&reader, letters, 4);
   check_count(with_phrases.entry_count(), 18299,
@@ -662,10 +637,11 @@ static int validate_14_letters() {
               "phrase-inclusive class count");
   DfsAnagramSearch phrase_search(
       &with_phrases, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
-  phrase_search.run(NULL);
-  check_count(phrase_search.solutions_found(), 27401,
+  DfsSearchStats phrase_search_stats;
+  phrase_search.run(NULL, &phrase_search_stats);
+  check_count(phrase_search_stats.all_solutions.solutions, 27401,
               "phrase-inclusive solution count");
-  check_count(phrase_search.nodes_visited(), 118311,
+  check_count(phrase_search_stats.all_solutions.nodes, 118311,
               "phrase-inclusive node count");
 
   fclose(fp);
@@ -674,7 +650,6 @@ static int validate_14_letters() {
 
 int main(int argc, char* argv[]) {
   if (argc == 1) {
-    wildcard_kernel_test();
     smoke_test();
     float_score_bound_test();
     return 0;

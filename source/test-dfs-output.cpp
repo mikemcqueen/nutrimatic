@@ -1,5 +1,6 @@
 #include "dfs-class-list.h"
 #include "dfs-output.h"
+#include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
 
@@ -550,10 +551,11 @@ static void search_output_integration_test() {
     DfsAnagramSearch search(
         &classes, letters, segment_penalty, reader.count());
     DfsTopN output(&classes, 14);
-    search.run(&output);
+    DfsSearchStats search_stats;
+    search.run(&output, &search_stats);
 
     std::vector<DfsSpelling> const results = output.take_sorted_results();
-    check(search.solutions_found() == 2,
+    check(search_stats.all_solutions.solutions == 2,
           "integration search emitted the wrong solution count");
     check(results.size() == 4,
           "integration output emitted the wrong spelling count");

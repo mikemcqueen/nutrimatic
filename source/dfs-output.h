@@ -7,7 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "dfs-search.h"
+#include "dfs-class-list.h"
+#include "dfs-solution-sink.h"
 
 struct DfsSpelling {
   double log_score;

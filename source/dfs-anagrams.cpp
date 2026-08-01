@@ -3,6 +3,7 @@
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
 #include "dfs-score.h"
+#include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
 #include "optparse.h"
@@ -258,51 +259,51 @@ int main(int argc, char* argv[]) {
       args.score_cache_bytes, preprocess_threads,
       size_t(args.search_threads), args.word_bonus);
   DfsTopN output(&classes, size_t(args.top));
-  if (!search.run(&output,
+  DfsSearchStats stats;
+  if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,
                   args.exact_letters, args.verbose))
     return 2;
   dfs_diagnostic(
       "phase 2 timing: %.1fs setup, %.1fs search, "
       "%llu successful bound transitions, %llu nextafter calls\n",
-      search.phase_two_setup_seconds(),
-      search.phase_two_search_seconds(),
-      (unsigned long long) search.score_bound_transitions(),
-      (unsigned long long) search.score_bound_nextafter_calls());
-  if (search.score_bound_mode() ==
-      ScoreBounds::PROJECTED)
+      stats.execution.setup_seconds,
+      stats.execution.search_seconds,
+      (unsigned long long) stats.bounds.projected.transitions,
+      (unsigned long long) stats.bounds.projected.nextafter_calls);
+  if (stats.bounds.mode == DFS_SCORE_BOUND_PROJECTED)
     dfs_diagnostic(
         "phase 2 projected work: %llu candidate tests, "
         "%llu fitting transitions\n",
-        (unsigned long long) search.score_bound_candidate_tests(),
-        (unsigned long long) search.score_bound_fitting_transitions());
-  if (search.length_certificate_enabled()) {
+        (unsigned long long) stats.bounds.projected.candidate_tests,
+        (unsigned long long) stats.bounds.projected.fitting_transitions);
+  if (stats.certificate.ready) {
     dfs_diagnostic(
         "phase 2 length certificate: %s, %zu table bytes\n",
-        search.length_certificate_skipping() ? "active" : "shadow",
-        search.length_certificate_table_bytes());
+        stats.certificate.skipping() ? "active" : "shadow",
+        stats.certificate.table_bytes);
     dfs_diagnostic(
         "phase 2   %llu group tests, %llu rejected, "
         "%llu class scans kept, %llu skipped\n",
-        (unsigned long long) search.length_certificate_group_tests(),
-        (unsigned long long) search.length_certificate_group_rejects(),
-        (unsigned long long) search.length_certificate_scans_kept(),
-        (unsigned long long) search.length_certificate_scans_skipped());
+        (unsigned long long) stats.certificate.counters.group_tests,
+        (unsigned long long) stats.certificate.counters.group_rejects,
+        (unsigned long long) stats.certificate.counters.scans_kept,
+        (unsigned long long) stats.certificate.counters.scans_skipped);
   }
-  if (search.search_threads_used() > 1)
+  if (stats.execution.search_threads > 1)
     dfs_diagnostic(
         "phase 2 search parallelism: %d requested, %zu used, "
         "%llu tasks\n",
-        args.search_threads, search.search_threads_used(),
-        (unsigned long long) search.search_tasks_generated());
+        args.search_threads, stats.execution.search_threads,
+        (unsigned long long) stats.execution.search_tasks);
   dfs_diagnostic(
       "phase 2 score cache: %zu bound entries, %zu bound bytes\n",
-      search.score_bound_entries(), search.score_bound_bytes_charged());
+      stats.bounds.entries, stats.bounds.bytes_charged);
   dfs_diagnostic(
       "phase 2 complete: %lld nodes, %lld solutions, "
       "%zu spellings expanded, %zu retained\n",
-      (long long) search.nodes_visited(),
-      (long long) search.solutions_found(),
+      (long long) stats.all_solutions.nodes,
+      (long long) stats.all_solutions.solutions,
       output.spellings_expanded(), output.size());
   fflush(stderr);
 

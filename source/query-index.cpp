@@ -7,6 +7,7 @@
 #include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
 #include "dfs-score.h"
+#include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
 #include "optparse.h"
@@ -341,22 +342,24 @@ int main(int argc, char* argv[]) {
         /*score_cache_bytes=*/0, /*preprocess_threads=*/1,
         size_t(args.search_threads),
         /*word_bonus=*/0.0);
+    DfsSearchStats stats;
     if (!search.find_completable_classes(
-            &completable, /*progress_factor=*/1,
+            &completable, &stats, /*progress_factor=*/1,
             /*allow_cache_fallback=*/true, /*exact_letters=*/-1))
       return 2;
-    if (search.search_threads_used() > 1)
+    DfsSearchStats::Execution const& run = stats.execution;
+    DfsSearchStats::Bounds const& bounds = stats.bounds;
+    if (run.search_threads > 1)
       dfs_diagnostic(
           "phase 2 exact validation parallelism: "
           "%d requested, %zu used\n",
-          args.search_threads, search.search_threads_used());
+          args.search_threads, run.search_threads);
     dfs_diagnostic(
         "phase 2 timing: %.1fs setup, %.1fs exact validation\n",
-        search.phase_two_setup_seconds(),
-        search.phase_two_search_seconds());
+        run.setup_seconds, run.search_seconds);
     dfs_diagnostic(
         "phase 2 score cache: %zu bound entries, %zu bound bytes\n",
-        search.score_bound_entries(), search.score_bound_bytes_charged());
+        bounds.entries, bounds.bytes_charged);
   }
 
   DfsScoreModel const model(
