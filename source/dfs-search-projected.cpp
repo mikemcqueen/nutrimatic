@@ -891,7 +891,7 @@ bool DfsAnagramSearch::compute_projected_score_bounds_bottom_up(
   search_stats.score_bounds.entries = search_stats.score_bounds.capacity;
   total_stats.states_computed = search_stats.score_bounds.capacity;
   search_stats.score_bounds.projected = total_stats;
-  actual_preprocess_threads = actual_workers;
+  search_stats.run.preprocess_threads = actual_workers;
   return true;
 }
 
@@ -932,7 +932,7 @@ bool DfsAnagramSearch::compute_projected_score_bounds_top_down(
     root_score_bound_ready = true;
     root.stats.candidate_tests = root_candidate_tests;
     search_stats.score_bounds.projected = root.stats;
-    actual_preprocess_threads = 1;
+    search_stats.run.preprocess_threads = 1;
     return true;
   }
 
@@ -992,6 +992,6 @@ bool DfsAnagramSearch::compute_projected_score_bounds_top_down(
   root_score_bound_ready = true;
   search_stats.score_bounds.entries = root.stats.states_computed;
   search_stats.score_bounds.projected = root.stats;
-  actual_preprocess_threads = active_workers;
+  search_stats.run.preprocess_threads = active_workers;
   return true;
 }

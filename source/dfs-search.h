@@ -130,8 +130,85 @@ class DfsSolutionSink {
 // than once.
 class DfsAnagramSearch {
  public:
+  struct CertificateStats {
+    uint64_t group_tests = 0;
+    uint64_t group_rejects = 0;
+    uint64_t scans_skipped = 0;
+    uint64_t scans_kept = 0;
+
+    void clear() { *this = {}; }
+    void add(CertificateStats const& other) {
+      group_tests += other.group_tests;
+      group_rejects += other.group_rejects;
+      scans_skipped += other.scans_skipped;
+      scans_kept += other.scans_kept;
+    }
+  };
+
+  struct AllSolutionsStats {
+    int64_t nodes = 0;
+    int64_t solutions = 0;
+    int64_t bound_prunes = 0;
+    CertificateStats certificate;
+
+    void clear() { *this = {}; }
+    void add(AllSolutionsStats const& other) {
+      nodes += other.nodes;
+      solutions += other.solutions;
+      bound_prunes += other.bound_prunes;
+      certificate.add(other.certificate);
+    }
+  };
+
+  struct ExactMemoStats {
+    size_t states = 0;
+    size_t hits = 0;
+
+    void clear() { *this = {}; }
+    void add(ExactMemoStats const& other) {
+      states += other.states;
+      hits += other.hits;
+    }
+  };
+
+  struct LookaheadStats {
+    uint64_t full_windows = 0;
+    uint64_t known_true_wins = 0;
+    uint64_t reprobes_decided = 0;
+    uint64_t recursive_expansions = 0;
+
+    void clear() { *this = {}; }
+    void add(LookaheadStats const& other) {
+      full_windows += other.full_windows;
+      known_true_wins += other.known_true_wins;
+      reprobes_decided += other.reprobes_decided;
+      recursive_expansions += other.recursive_expansions;
+    }
+  };
+
+  struct AnySolutionStats {
+    size_t classes_checked = 0;
+    size_t bound_rejects = 0;
+    size_t exact_bound_accepts = 0;
+    size_t exact_validations = 0;
+    ExactMemoStats memo;
+    LookaheadStats lookahead;
+    int64_t nodes = 0;
+  };
+
+  struct RunStats {
+    double setup_seconds = 0.0;
+    double search_seconds = 0.0;
+    size_t preprocess_threads = 1;
+    size_t search_threads = 1;
+    uint64_t search_tasks = 0;
+  };
+
   struct DfsSearchStats {
     ScoreBounds::Stats score_bounds;
+    AllSolutionsStats all_solutions;
+    AnySolutionStats any_solution;
+    RunStats run;
   };
 
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
@@ -165,8 +242,10 @@ class DfsAnagramSearch {
 
   DfsSearchStats const& stats() const { return search_stats; }
 
-  int64_t nodes_visited() const { return nodes; }
-  int64_t solutions_found() const { return solutions; }
+  int64_t nodes_visited() const { return search_stats.all_solutions.nodes; }
+  int64_t solutions_found() const {
+    return search_stats.all_solutions.solutions;
+  }
   ScoreBounds::Mode score_bound_mode() const {
     return search_stats.score_bounds.mode;
   }
@@ -209,23 +288,27 @@ class DfsAnagramSearch {
   size_t score_bound_projected_actions() const {
     return projected_actions.size();
   }
-  int64_t score_bound_prunes() const { return bound_prunes; }
+  int64_t score_bound_prunes() const {
+    return search_stats.all_solutions.bound_prunes;
+  }
   size_t completable_classes_checked() const {
-    return completable_checked;
+    return search_stats.any_solution.classes_checked;
   }
   size_t completable_bound_rejects() const {
-    return completable_bound_reject_count;
+    return search_stats.any_solution.bound_rejects;
   }
   size_t completable_exact_bound_accepts() const {
-    return completable_exact_bound_accept_count;
+    return search_stats.any_solution.exact_bound_accepts;
   }
   size_t completable_exact_validations() const {
-    return completable_exact_validation_count;
+    return search_stats.any_solution.exact_validations;
   }
   size_t exact_memo_states_computed() const {
-    return exact_memo_states;
+    return search_stats.any_solution.memo.states;
   }
-  size_t exact_memo_hits() const { return exact_memo_hit_count; }
+  size_t exact_memo_hits() const {
+    return search_stats.any_solution.memo.hits;
+  }
 
   // Test hook: one projected AVX2 wildcard update over `count` contiguous
   // wildcard counts, exactly as the bottom-up evaluator performs it.
@@ -234,16 +317,20 @@ class DfsAnagramSearch {
       float const* children, double* best, double* max_rounding_error,
       size_t count);
 
-  double phase_two_setup_seconds() const { return setup_seconds; }
-  double phase_two_search_seconds() const { return search_seconds; }
+  double phase_two_setup_seconds() const {
+    return search_stats.run.setup_seconds;
+  }
+  double phase_two_search_seconds() const {
+    return search_stats.run.search_seconds;
+  }
   size_t preprocess_threads_used() const {
-    return actual_preprocess_threads;
+    return search_stats.run.preprocess_threads;
   }
   size_t search_threads_used() const {
-    return actual_search_threads;
+    return search_stats.run.search_threads;
   }
   uint64_t search_tasks_generated() const {
-    return search_tasks_created;
+    return search_stats.run.search_tasks;
   }
   bool length_certificate_enabled() const {
     return length_certificate_ready;
@@ -252,16 +339,16 @@ class DfsAnagramSearch {
     return length_certificate_ready && !length_certificate_shadow;
   }
   uint64_t length_certificate_group_tests() const {
-    return certificate_group_tests;
+    return search_stats.all_solutions.certificate.group_tests;
   }
   uint64_t length_certificate_group_rejects() const {
-    return certificate_group_rejects;
+    return search_stats.all_solutions.certificate.group_rejects;
   }
   uint64_t length_certificate_scans_skipped() const {
-    return certificate_scans_skipped;
+    return search_stats.all_solutions.certificate.scans_skipped;
   }
   uint64_t length_certificate_scans_kept() const {
-    return certificate_scans_kept;
+    return search_stats.all_solutions.certificate.scans_kept;
   }
   size_t length_certificate_table_bytes() const {
     return certificate_max_score.size() * sizeof(double) +
@@ -305,49 +392,6 @@ class DfsAnagramSearch {
             worker.letters_left, worker.wild_left};
   }
 
-  struct SearchTask {
-    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
-    uint64_t bag_mask;
-    uint64_t score_key;
-    std::array<uint32_t, MAX_SPLIT_DEPTH> path;
-    uint32_t path_size;
-    uint32_t entry_point;
-    uint32_t letters_left;
-    double representative_log_score;
-  };
-
-  struct SearchWorker {
-    std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
-    uint64_t bag_mask;
-    uint64_t score_key;
-    // Phase-1's exact mixed-radix signature, maintained incrementally for
-    // completability memoization. Unlike score_key, it never projects letters.
-    uint64_t exact_key;
-    std::vector<size_t> path;
-    int64_t nodes;
-    int64_t solutions;
-    int64_t bound_prunes;
-    uint64_t certificate_group_tests;
-    uint64_t certificate_group_rejects;
-    uint64_t certificate_scans_skipped;
-    uint64_t certificate_scans_kept;
-    size_t split_depth;
-    std::vector<SearchTask>* produced;
-    int64_t next_progress;
-    int64_t reported_solutions;
-    size_t exact_memo_states;
-    size_t exact_memo_hits;
-    uint64_t exact_lookahead_full_windows;
-    uint64_t exact_lookahead_known_true_wins;
-    uint64_t exact_lookahead_reprobes_decided;
-    uint64_t exact_lookahead_recursive_expansions;
-#if 1
-    // dummy padding somehow significantly decreases runtime of:
-    // build/dfs-anagrams $IDX "${S1:0:50}" -m 4 -n 1000 -S 20  -d 15
-    std::array<uint64_t, 46> dummy1;
-#endif
-  };
-
   enum Reachability {
     REACHABILITY_UNKNOWN,
     REACHABILITY_NO,
@@ -368,6 +412,102 @@ class DfsAnagramSearch {
     EXACT_CHILD_UNKNOWN,
   };
 
+  // The exhaustive traversal owns its workers and short-lived task queue.
+  // Prepared query data and bound lookup remain on the facade until the
+  // DfsSearchData extraction.
+  class DfsAllSolutionsRunner {
+   public:
+    explicit DfsAllSolutionsRunner(DfsAnagramSearch& search);
+    void run(DfsSolutionSink* sink, int64_t progress_factor, bool verbose);
+
+   private:
+    struct SearchTask {
+      std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+      uint64_t bag_mask;
+      uint64_t score_key;
+      std::array<uint32_t, MAX_SPLIT_DEPTH> path;
+      uint32_t path_size;
+      uint32_t entry_point;
+      uint32_t letters_left;
+      double representative_log_score;
+    };
+
+    struct alignas(4096) Worker {
+      AllSolutionsStats stats;
+      std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+      uint64_t bag_mask;
+      uint64_t score_key;
+      std::vector<size_t> path;
+      size_t split_depth;
+      std::vector<SearchTask>* produced;
+      int64_t next_progress;
+      int64_t reported_solutions;
+    };
+
+    bool should_prune(Worker* worker, double representative_log_score,
+                      DfsSolutionSink* sink, size_t letters_left);
+    void visit_fitting_class(Worker* worker, uint32_t class_index,
+                             FitClassMetadata metadata, size_t letters_left,
+                             double representative_log_score,
+                             DfsSolutionSink* sink);
+    bool visit_fitting_range(Worker* worker, size_t begin, size_t end,
+                             size_t letters_left,
+                             double representative_log_score,
+                             DfsSolutionSink* sink);
+    void walk(Worker* worker, size_t letters_left, size_t entry_point,
+              double representative_log_score, DfsSolutionSink* sink);
+    void walk_certified(Worker* worker, int rank, size_t start, size_t end,
+                        size_t letters_left,
+                        double representative_log_score, double floor,
+                        DfsSolutionSink* sink);
+    void start_worker(Worker* worker);
+    void report_progress(Worker* worker);
+    void merge_worker(Worker const& worker);
+    void run_parallel(DfsSolutionSink* sink, size_t threads,
+                      size_t target_tasks, uint64_t task_progress_factor,
+                      bool verbose);
+    bool multiplicity_fits(FitClassMetadata metadata,
+                           Worker const& worker) const;
+
+    DfsAnagramSearch& search;
+    std::atomic<int64_t> progress_nodes{0};
+    std::atomic<int64_t> progress_solutions{0};
+  };
+
+  // The boolean completion traversal has a separate worker and owns its
+  // short-lived shared memo table.  The facade still supplies the prepared
+  // query data and projected-bound lookup during this transition.
+  class DfsAnySolutionRunner {
+   public:
+   explicit DfsAnySolutionRunner(DfsAnagramSearch& search);
+    bool run(std::vector<bool>* completable);
+
+    struct Memo {
+      std::unique_ptr<AtomicWord, DfsAlignedFree> slots;
+      size_t capacity = 0;
+      size_t entry_limit = 0;
+      std::atomic<size_t> entries{0};
+    };
+
+    struct Worker {
+      AnySolutionStats stats;
+      Memo* memo = NULL;
+      std::array<uint32_t, DFS_SYMBOL_COUNT> bag;
+      uint64_t bag_mask = 0;
+      uint64_t score_key = 0;
+      uint64_t exact_key = 0;
+      size_t lookahead = EXACT_MEMO_LOOKAHEAD_DEFAULT;
+      int64_t next_progress = INT64_MAX;
+    };
+
+   private:
+
+    bool prepare_memo(DfsClassSpan classes);
+    DfsAnagramSearch& search;
+    Memo memo;
+    size_t lookahead;
+  };
+
   bool prepare_phase_two(
       int64_t progress_factor, bool allow_cache_fallback, int exact_letters,
       bool score_bounds_requested);
@@ -383,63 +523,48 @@ class DfsAnagramSearch {
   Reachability cached_reachability(
       uint64_t score_key, bool original_root) const;
   bool exact_remainder_completable(
-      SearchWorker* worker, size_t letters_left,
+      DfsAnySolutionRunner::Worker* worker, size_t letters_left,
       ExactResultSource* source = NULL);
   ExactChildResult classify_exact_child(
-      SearchWorker* worker, uint32_t class_index,
+      DfsAnySolutionRunner::Worker* worker, uint32_t class_index,
       size_t candidate_length, size_t letters_left);
   // The tail of exact_remainder_completable, entered directly when the caller
   // has already probed the memo and the score bound for this exact key.
-  bool exact_expand_node(SearchWorker* worker, size_t letters_left);
+  bool exact_expand_node(
+      DfsAnySolutionRunner::Worker* worker, size_t letters_left);
   bool exact_candidates_immediate(
-      SearchWorker* worker, size_t letters_left);
+      DfsAnySolutionRunner::Worker* worker, size_t letters_left);
   bool exact_candidates_lookahead(
-      SearchWorker* worker, size_t letters_left);
+      DfsAnySolutionRunner::Worker* worker, size_t letters_left);
   bool exact_buffered_candidates(
-      SearchWorker* worker, size_t letters_left,
+      DfsAnySolutionRunner::Worker* worker, size_t letters_left,
       uint32_t const* class_ids, size_t count);
   bool exact_memo_lookup(
-      SearchWorker* worker, uint64_t exact_key, bool* value);
+      DfsAnySolutionRunner::Worker* worker, uint64_t exact_key, bool* value);
   void exact_memo_store(
-      SearchWorker* worker, uint64_t exact_key, bool value);
-  bool exact_class_fits(
-      size_t class_index, SearchWorker const& worker) const;
+      DfsAnySolutionRunner::Worker* worker, uint64_t exact_key, bool value);
+  bool exact_class_fits(size_t class_index,
+                        DfsAnySolutionRunner::Worker const& worker) const;
   void subtract_exact_class(
-      size_t class_index, SearchWorker* worker,
+      size_t class_index, DfsAnySolutionRunner::Worker* worker,
       uint64_t* parent_bag_mask);
   void restore_exact_class(
-      size_t class_index, SearchWorker* worker,
+      size_t class_index, DfsAnySolutionRunner::Worker* worker,
       uint64_t parent_bag_mask);
 
-  void walk(SearchWorker* worker, size_t letters_left,
-            size_t entry_point, double representative_log_score,
-            DfsSolutionSink* sink);
-  void walk_certified(SearchWorker* worker, int rank, size_t start,
-                      size_t end, size_t letters_left,
-                      double representative_log_score, double floor,
-                      DfsSolutionSink* sink);
-  bool visit_fitting_range(SearchWorker* worker, size_t begin, size_t end,
-                           size_t letters_left,
-                           double representative_log_score,
-                           DfsSolutionSink* sink);
   void walk_unoptimized(size_t letters_left, int old_rarest_rank,
                         size_t entry_point, double representative_log_score,
                         DfsSolutionSink* sink);
-  void start_search_worker(SearchWorker* worker);
-  void report_search_progress(SearchWorker* worker);
-  void merge_search_worker(SearchWorker const& worker);
-  bool run_parallel_search(
-      DfsSolutionSink* sink, size_t threads, size_t target_tasks,
-      uint64_t task_progress_factor, bool verbose);
 
   bool hot_class_fits(uint32_t class_index) const;
   bool hot_class_multiplicity_fits(uint32_t class_index) const;
   bool hot_class_fits(uint32_t class_index,
-                      SearchWorker const& worker) const;
+                      DfsAnySolutionRunner::Worker const& worker) const;
   bool hot_class_multiplicity_fits(
-      uint32_t class_index, SearchWorker const& worker) const;
+      uint32_t class_index, DfsAnySolutionRunner::Worker const& worker) const;
   bool hot_class_multiplicity_fits(
-      FitClassMetadata metadata, SearchWorker const& worker) const;
+      FitClassMetadata metadata,
+      DfsAnySolutionRunner::Worker const& worker) const;
   bool projected_action_fits(
       size_t action_index, BoundStateView state) const;
   size_t first_length_candidate(
@@ -455,14 +580,6 @@ class DfsAnagramSearch {
   bool compute_projected_score_bounds_bottom_up(size_t requested_threads);
   bool load_score_bound(uint64_t key, double* value) const;
   void publish_top_down_score_bound(uint64_t key, double value);
-  bool should_prune(SearchWorker* worker,
-                    double representative_log_score,
-                    DfsSolutionSink* sink, size_t letters_left);
-
-  void visit_fitting_class(SearchWorker* worker, uint32_t class_index,
-                           FitClassMetadata metadata, size_t letters_left,
-                           double representative_log_score,
-                           DfsSolutionSink* sink);
   void visit_unoptimized_class(size_t class_index, size_t letters_left,
                                int rank, double representative_log_score,
                                DfsSolutionSink* sink);
@@ -525,11 +642,6 @@ class DfsAnagramSearch {
   std::vector<double> certificate_max_score;
   std::vector<uint32_t> certificate_group_end;
   std::vector<double> length_tail_bounds;
-  uint64_t certificate_group_tests;
-  uint64_t certificate_group_rejects;
-  uint64_t certificate_scans_skipped;
-  uint64_t certificate_scans_kept;
-
   DfsSearchStats search_stats;
   // With bounds off cached_reachability answers UNKNOWN for every key, so the
   // exact recurrence can skip maintaining and probing score keys entirely.
@@ -540,40 +652,11 @@ class DfsAnagramSearch {
   std::unique_ptr<float, DfsAlignedFree> bound_plain_float_values;
   double root_score_bound;
   bool root_score_bound_ready;
-  int64_t bound_prunes;
-
-  // Packs the exact key and boolean into one atomic open-addressed slot.
-  // Completability setup fails rather than falling back to an unbounded map
-  // when the packed key, table size, or allocation does not fit.
-  std::unique_ptr<AtomicWord, DfsAlignedFree> exact_flat_memo;
-  size_t exact_flat_capacity;
-  size_t exact_flat_entry_limit;
-  std::atomic<size_t> exact_flat_entries;
-  size_t completable_checked;
-  size_t completable_bound_reject_count;
-  size_t completable_exact_bound_accept_count;
-  size_t completable_exact_validation_count;
-  size_t exact_memo_states;
-  size_t exact_memo_hit_count;
-  size_t exact_memo_lookahead;
-  uint64_t exact_lookahead_full_windows;
-  uint64_t exact_lookahead_known_true_wins;
-  uint64_t exact_lookahead_reprobes_decided;
-  uint64_t exact_lookahead_recursive_expansions;
 
   std::vector<size_t> path;
   bool progress_enabled;
   int64_t progress_interval;
   int64_t next_progress;
-  int64_t nodes;
-  int64_t solutions;
-  double setup_seconds;
-  double search_seconds;
-  size_t actual_preprocess_threads;
-  size_t actual_search_threads;
-  uint64_t search_tasks_created;
-  std::atomic<int64_t> progress_nodes;
-  std::atomic<int64_t> progress_solutions;
 };
 
 #endif

@@ -172,6 +172,39 @@ class DfsAnySolutionRunner {
 The facade can retain existing getters as compatibility wrappers while new
 code reads grouped result structures.
 
+#### Current staged result
+
+Stage 6 now has shared value types, before the runners exist:
+
+```cpp
+struct CertificateStats;
+struct AllSolutionsStats { CertificateStats certificate; };
+struct ExactMemoStats;
+struct LookaheadStats;
+struct AnySolutionStats {
+  ExactMemoStats memo;
+  LookaheadStats lookahead;
+};
+struct RunStats;  // elapsed time, worker counts, task count
+struct DfsSearchStats {
+  ScoreBounds::Stats score_bounds;
+  AllSolutionsStats all_solutions;
+  AnySolutionStats any_solution;
+  RunStats run;
+};
+```
+
+`SearchWorker` uses the same `AllSolutionsStats`, `ExactMemoStats`, and
+`LookaheadStats` types, rather than maintaining a second set of scalar
+counter members. Each value type supplies `clear()` and/or `add()` so worker
+initialization and aggregation do not repeat its member list. The public
+scalar getters remain compatibility wrappers.
+
+`CertificateStats` belongs to all-solutions execution: it describes how the
+length certificate affects a normal DFS walk. `ExactMemoStats` and
+`LookaheadStats` belong to the boolean any-solution traversal used for
+`--require-completable`; “completion” is too broad a name for that group.
+
 ### Anonymous-namespace helpers prevent a naive file split
 
 The following helpers are used by multiple proposed translation units:
@@ -633,15 +666,23 @@ the local `VectorWorker` used by the layered evaluator. A
 `BoundStateView` to `projected_action_fits()`, so that routine no longer
 borrows a worker-specific type.
 
-The counters are now nested as `ScoreBounds::ProjectedStats`, with `clear()`
-and `add()` used for worker-local aggregation. `ScoreBounds::Stats` currently
-contains mode, allocation/completeness fields, and that nested projected
-group; projection-layout fields remain on the facade for now. The facade has
-also gained the intermediate grouped result
-`DfsAnagramSearch::DfsSearchStats { ScoreBounds::Stats score_bounds; }`.
-Existing individual getters are compatibility wrappers over it. The larger
-`ScoreBounds` and `DfsSearchStats` APIs above remain the intended end state,
-not a claim that component ownership has already moved.
+The counters are nested as `ScoreBounds::ProjectedStats`, with `clear()` and
+`add()` used for worker-local aggregation. `ScoreBounds::Stats` contains mode,
+allocation/completeness fields, and that nested projected group;
+projection-layout fields remain on the facade for now. Both `TopDownWorker`
+and `BottomUpWorker` are alternate evaluators for the same projected table,
+so their counters aggregate into this one result rather than being split by
+evaluator. The selected evaluator is not currently retained as a statistic.
+
+`DfsSearchStats` now also retains all-solutions, any-solution, and run groups.
+This is still a value-type staging step, not a claim that component ownership
+has already moved.
+
+The next checkpoint introduces `DfsAllSolutionsRunner` alongside the existing
+`DfsAnySolutionRunner`. The all-solutions runner now owns its worker records,
+progress aggregation, task queue, and scheduling for one `run()` call; it
+still borrows prepared class data, certificate data, and score-bound lookup
+from `DfsAnagramSearch` until `DfsSearchData` is introduced.
 
 Search-time prune count does not belong here; it is an execution statistic,
 because it counts how the DFS consumed the bounds rather than how the bound
@@ -753,7 +794,7 @@ class DfsAllSolutionsRunner {
     size_t threads_used;
     uint64_t tasks_created;
     double elapsed_seconds;
-    LengthCertificateStats certificate;
+    CertificateStats certificate;
   };
 
   struct Results {
@@ -809,12 +850,8 @@ class DfsAnySolutionRunner {
     size_t bound_rejects;
     size_t exact_bound_accepts;
     size_t exact_validations;
-    size_t memo_states;
-    size_t memo_hits;
-    uint64_t lookahead_full_windows;
-    uint64_t lookahead_known_true_wins;
-    uint64_t lookahead_reprobes_decided;
-    uint64_t lookahead_recursive_expansions;
+    ExactMemoStats memo;
+    LookaheadStats lookahead;
     int64_t nodes;
     size_t threads_used;
     double elapsed_seconds;
