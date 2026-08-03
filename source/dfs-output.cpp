@@ -133,11 +133,13 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 
     DfsSpelling spelling;
     spelling.log_score = current.log_score;
+    spelling.segment_lengths.reserve(class_indexes.size());
     for (size_t i = 0; i < class_indexes.size(); ++i) {
       DfsMemberView const view = class_list->member(
           class_indexes[i], current.member_indexes[i]);
       if (!spelling.text.empty()) spelling.text.push_back(' ');
       spelling.text.append(view.text, view.text_length);
+      spelling.segment_lengths.push_back(uint8_t(view.text_length));
     }
     spelling.word_set_key = make_word_set_key(spelling.text);
     {
@@ -203,6 +205,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
   if (found != retained.end()) {
     if (found->second.log_score >= spelling.log_score) return false;
     found->second.text = std::move(spelling.text);
+    found->second.segment_lengths = std::move(spelling.segment_lengths);
     found->second.log_score = spelling.log_score;
     if (result_limit != 0) {
       size_t const position = found->second.heap_pos;
@@ -216,6 +219,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     size_t const position = heap.size();
     RetainedSpelling value;
     value.text = std::move(spelling.text);
+    value.segment_lengths = std::move(spelling.segment_lengths);
     value.log_score = spelling.log_score;
     value.heap_pos = position;
     std::pair<RetainedMap::iterator, bool> const inserted =
@@ -238,6 +242,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
   RetainedMap::node_type node = retained.extract(evicted->first);
   node.key() = std::move(spelling.word_set_key);
   node.mapped().text = std::move(spelling.text);
+  node.mapped().segment_lengths = std::move(spelling.segment_lengths);
   node.mapped().log_score = spelling.log_score;
   node.mapped().heap_pos = 0;
   RetainedMap::insert_return_type const reinserted =
@@ -293,6 +298,7 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
       DfsSpelling spelling;
       spelling.log_score = entry->second.log_score;
       spelling.text = std::move(entry->second.text);
+      spelling.segment_lengths = std::move(entry->second.segment_lengths);
       spelling.word_set_key = entry->first;
       results.push_back(std::move(spelling));
     }

@@ -1,6 +1,8 @@
 #ifndef NUTRIMATIC_DFS_OUTPUT_H
 #define NUTRIMATIC_DFS_OUTPUT_H
 
+#include <stdint.h>
+
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -14,6 +16,11 @@ struct DfsSpelling {
   double log_score;
   std::string text;
   std::string word_set_key;
+  // Byte length of each index entry making up text, in text order. The
+  // separating spaces are not counted, so the segments start at successive
+  // offsets of length + 1. An entry's own text may contain spaces, so this is
+  // the only way back to the segmentation.
+  std::vector<uint8_t> segment_lengths;
 };
 
 // The dedup table's payload. The map key (not duplicated here) is the
@@ -22,6 +29,7 @@ struct DfsSpelling {
 // it is not meaningful in unlimited mode.
 struct RetainedSpelling {
   std::string text;
+  std::vector<uint8_t> segment_lengths;
   double log_score;
   size_t heap_pos;
 };

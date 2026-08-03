@@ -7,6 +7,7 @@
 #include "dfs-search.h"
 #include "index.h"
 #include "optparse.h"
+#include "segment-report.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -33,8 +34,27 @@ struct Args {
   double segment_penalty;
   double word_bonus;
   bool allow_cache_fallback;
+  bool segments;
+  bool weighted;
   bool verbose;
 };
+
+static void report_segments(std::vector<DfsSpelling> const& results,
+                            bool weighted) {
+  SegmentReport report;
+  for (size_t i = 0; i < results.size(); ++i) {
+    DfsSpelling const& result = results[i];
+    size_t offset = 0;
+    for (size_t s = 0; s < result.segment_lengths.size(); ++s) {
+      size_t const length = result.segment_lengths[s];
+      segment_report_add(&report, result.text.substr(offset, length),
+                         result.log_score);
+      offset += length + 1;
+    }
+  }
+  segment_report_print(
+      stdout, weighted ? segment_report_weighted(report) : report);
+}
 
 static void usage(char const* program) {
   fprintf(stderr,
@@ -43,7 +63,7 @@ static void usage(char const* program) {
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth] [-w word-bonus]"
-      " [-P segment-penalty]"
+      " [-P segment-penalty] [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
@@ -60,6 +80,11 @@ static void usage(char const* program) {
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  -w, --word-bonus N boosts classes whose best member spans more than"
       " one corpus word by %.0f^N; defaults to %g (no boost)\n"
+      "  --segments prints the index entries used by the results instead of"
+      " the results, as best-score, result-count and text, by descending"
+      " best score\n"
+      "  --weighted sorts and reports each segment by best-score times"
+      " result-count instead of best score alone; requires --segments\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
@@ -69,6 +94,8 @@ static void usage(char const* program) {
 }
 
 static int const OPT_DICT = 256;
+static int const OPT_SEGMENTS = 257;
+static int const OPT_WEIGHTED = 258;
 
 static struct optparse_long const long_options[] = {
   { "used-letters", 'u', OPTPARSE_REQUIRED },
@@ -82,6 +109,8 @@ static struct optparse_long const long_options[] = {
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
   { "word-bonus", 'w', OPTPARSE_REQUIRED },
   { "segment-penalty", 'P', OPTPARSE_REQUIRED },
+  { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
+  { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -99,6 +128,8 @@ static bool parse_args(char* argv[], Args* out) {
   out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   out->word_bonus = DEFAULT_WORD_BONUS;
   out->allow_cache_fallback = false;
+  out->segments = false;
+  out->weighted = false;
   out->verbose = false;
 
   struct optparse options;
@@ -167,6 +198,12 @@ static bool parse_args(char* argv[], Args* out) {
                 options.optarg, &out->segment_penalty))
           return false;
         break;
+      case OPT_SEGMENTS:
+        out->segments = true;
+        break;
+      case OPT_WEIGHTED:
+        out->weighted = true;
+        break;
       case 'F':
         out->allow_cache_fallback = true;
         break;
@@ -178,6 +215,11 @@ static bool parse_args(char* argv[], Args* out) {
         usage(argv[0]);
         return false;
     }
+  }
+
+  if (out->weighted && !out->segments) {
+    fputs("error: --weighted requires --segments\n", stderr);
+    return false;
   }
 
   char const* index_file = optparse_arg(&options);
@@ -308,8 +350,12 @@ int main(int argc, char* argv[]) {
   fflush(stderr);
 
   std::vector<DfsSpelling> const results = output.take_sorted_results();
-  for (size_t i = 0; i < results.size(); ++i)
-    printf("%#.4g %s\n", exp(results[i].log_score),
-           results[i].text.c_str());
+  if (args.segments) {
+    report_segments(results, args.weighted);
+  } else {
+    for (size_t i = 0; i < results.size(); ++i)
+      printf("%#.4g %s\n", exp(results[i].log_score),
+             results[i].text.c_str());
+  }
   return 0;
 }

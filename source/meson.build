@@ -79,6 +79,11 @@ coherence_measure_lib = static_library(
   install: false,
 )
 
+segment_report_lib = static_library(
+  'segment-report', 'segment-report.cpp',
+  install: false,
+)
+
 dfs_class_list_lib = library(
   'dfs-class-list',
   [
@@ -126,8 +131,13 @@ find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
 
 dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
-  link_with: [optparse_lib, dfs_class_list_lib, index_lib],
+  link_with: [optparse_lib, dfs_class_list_lib, index_lib,
+              segment_report_lib],
   dependencies: thread_dep,
+  install: true)
+
+weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
+  link_with: segment_report_lib,
   install: true)
 
 # Keep the class-visitor logic in the hot caller rather than leaving it as a
@@ -242,6 +252,11 @@ test(
     find_anagrams,
   ],
   timeout: 30,
+)
+test(
+  'weighted-segments',
+  bash,
+  args: [files('test-weighted-segments.sh'), weighted_segments],
 )
 test(
   'query-index-cli',

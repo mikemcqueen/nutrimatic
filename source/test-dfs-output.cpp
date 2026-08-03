@@ -158,6 +158,14 @@ static void exhaustive_product_test() {
             "Cartesian-product spelling order is wrong");
       check_close(actual[i].log_score, expected[i].log_score,
                   "Cartesian-product score is wrong");
+
+      check(actual[i].segment_lengths.size() == path.size(),
+            "spelling has the wrong segment count");
+      size_t offset = 0;
+      for (size_t s = 0; s < actual[i].segment_lengths.size(); ++s)
+        offset += actual[i].segment_lengths[s] + 1;
+      check(offset == actual[i].text.size() + 1,
+            "segment lengths do not cover the spelling text");
     }
   }
 
