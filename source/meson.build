@@ -69,6 +69,16 @@ index_lib = library(
   ['index-reader.cpp', 'index-walker.cpp', 'index-writer.cpp'],
 )
 
+coherence_score_lib = static_library(
+  'coherence-score', 'coherence-score.cpp',
+  install: false,
+)
+
+coherence_measure_lib = static_library(
+  'coherence-measure', 'coherence-measure.cpp',
+  install: false,
+)
+
 dfs_class_list_lib = library(
   'dfs-class-list',
   [
@@ -141,6 +151,43 @@ query_index = executable('query-index', 'query-index.cpp',
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
 executable('measure-f', 'measure-f.cpp',
   link_with: [optparse_lib, index_lib], install: false)
+
+measure_coherence = executable(
+  'measure-coherence', 'measure-coherence.cpp',
+  link_with: [
+    optparse_lib,
+    index_lib,
+    coherence_score_lib,
+    coherence_measure_lib,
+  ],
+  install: false,
+)
+
+test_index_counts = executable(
+  'test-index-counts', 'test-index-counts.cpp',
+  link_with: index_lib,
+  install: false,
+)
+test('index-counts', test_index_counts)
+
+test_coherence_score = executable(
+  'test-coherence-score', 'test-coherence-score.cpp',
+  link_with: coherence_score_lib,
+  install: false,
+)
+test('coherence-score', test_coherence_score)
+
+test_measure_coherence = executable(
+  'test-measure-coherence', 'test-measure-coherence.cpp',
+  link_with: [
+    optparse_lib,
+    index_lib,
+    coherence_score_lib,
+    coherence_measure_lib,
+  ],
+  install: false,
+)
+test('measure-coherence', test_measure_coherence)
 
 test_dfs_class_list = executable(
   'test-dfs-class-list', 'test-dfs-class-list.cpp',

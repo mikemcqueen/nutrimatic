@@ -5,6 +5,7 @@
 
 #include <queue>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /*
@@ -70,6 +71,11 @@ class IndexReader {
 
   struct Choice { char ch; int64_t count; Node next; };
 
+  struct EntryPosition {
+    Node continuation;
+    int64_t aggregate_count;
+  };
+
   // A set of the byte values a caller is willing to receive.  children() tests
   // a child's character against this before decoding anything else about it,
   // and a child's character is a single byte at a known offset while its count
@@ -99,10 +105,27 @@ class IndexReader {
   // space, which is consumed here so a mere trie prefix is never accepted.
   bool exact_entry_count(std::string const& entry, int64_t* count) const;
 
+  // Looks up an entry including its implicit trailing space. The returned
+  // position is immediately after that space.
+  bool aggregate_entry_position(
+      std::string_view entry, EntryPosition* result) const;
+
+  // Looks up an entry below a previously resolved trailing-space position.
+  bool continuation_entry_position(
+      EntryPosition const& prefix, std::string_view entry,
+      EntryPosition* result) const;
+
+  bool aggregate_entry_count(
+      std::string_view entry, int64_t* count) const;
+
  private:
   const unsigned char* data;
   ssize_t length;
   int64_t total;
+  bool find_child(Node parent, int64_t parent_count,
+                  unsigned char ch, Choice* result) const;
+  bool traverse_entry(EntryPosition start, std::string_view entry,
+                      EntryPosition* result) const;
   void fail(off_t n, const char* message) const;
 };
 

@@ -83,9 +83,7 @@ boundaries. For a rendered word $w$ consuming $l$ letters, define a
 length-conditioned quality:
 
 $$
-q(w) =
-  \operatorname{percentile}
-  \left(\log c(w)\mid\text{letter length}=l\right).
+q(w) = \operatorname{percentile}(\log c(w)\mid\text{letter length}=l).
 $$
 
 The percentile can remain in $[0,1]$, be centered in $[-1,1]$, or be
@@ -97,8 +95,7 @@ For a candidate containing rendered words $w_1,\ldots,w_m$, use a
 character-weighted average:
 
 $$
-Q_{\text{lexical}} =
-  \frac{\sum_i l_i q(w_i)}{\sum_i l_i}.
+Q_{\text{lexical}} = \frac{\sum_i l_i q(w_i)}{\sum_i l_i}.
 $$
 
 This gives every consumed letter equal influence rather than giving every
@@ -128,16 +125,13 @@ length- or frequency-conditioned percentile of bigram frequency, pointwise
 mutual information, or another phrase statistic:
 
 $$
-Q_{\text{coherence}} =
-  \operatorname{average}_i q_{\text{pair}}(w_i,w_{i+1}).
+Q_{\text{coherence}} = \operatorname{average}_i q_{\text{pair}}(w_i,w_{i+1})
 $$
 
 Combine lexical and coherence quality with an explicit weight:
 
 $$
-Q =
-  \alpha Q_{\text{lexical}}
-  +(1-\alpha)Q_{\text{coherence}}.
+Q = \alpha Q_{\text{lexical}}+(1-\alpha)Q_{\text{coherence}}
 $$
 
 Both components are averages rather than products. More rendered words
@@ -160,8 +154,7 @@ A stronger statistical definition converts the raw quality into a percentile
 conditional on the candidate's shape:
 
 $$
-S =
-  F_{\text{shape}}(Q),
+S = F_{\text{shape}}(Q)
 $$
 
 where $F_{\text{shape}}$ is the baseline cumulative distribution of $Q$
@@ -181,8 +174,7 @@ estimate each conditional distribution.
 ### Geometric mean of entry probabilities
 
 $$
-G =
-  \exp\left(\frac{1}{k}\sum_i \log p(w_i)\right).
+G = exp(\frac{1}{k}\sum_i \log p(w_i))
 $$
 
 This removes exponential decay with the number of selected entries, but it
@@ -193,7 +185,7 @@ equal influence regardless of how many letters it consumes.
 ### Per-character joint log probability
 
 $$
-\frac{1}{L}\sum_i \log p(w_i).
+\frac{1}{L}\sum_i \log p(w_i)
 $$
 
 This looks length-normalized, but all complete anagrams have the same total
@@ -203,7 +195,7 @@ joint-probability ranking and does not remove its segmentation tendency.
 ### Products of raw counts
 
 $$
-\prod_i c(w_i).
+\prod_i c(w_i)
 $$
 
 This removes the corpus-total factor but strongly favors candidates with many

@@ -129,33 +129,129 @@ int IndexReader::children(off_t n, int64_t count,
 
 bool IndexReader::exact_entry_count(
     std::string const& entry, int64_t* result) const {
-  Node node = root();
-  int64_t parent_count = count();
-  CharSet allowed;
-  std::vector<Choice> choices;
-
-  for (size_t i = 0; i <= entry.size(); ++i) {
-    unsigned char const ch =
-        i == entry.size() ? (unsigned char) ' '
-                          : (unsigned char) entry[i];
-    allowed.clear();
-    allowed.set(ch);
-    choices.clear();
-    children(node, parent_count, allowed, &choices);
-    if (choices.empty()) return false;
-    assert(choices.size() == 1);
-    node = choices[0].next;
-    parent_count = choices[0].count;
-  }
+  EntryPosition position;
+  if (!aggregate_entry_position(entry, &position)) return false;
 
   // A choice's count includes entries below it. The count belonging exactly
   // to the selected trailing-space node is the residual returned after its
   // children are removed.
+  CharSet allowed;
   allowed.fill();
-  choices.clear();
-  int64_t const exact = children(node, parent_count, allowed, &choices);
+  std::vector<Choice> choices;
+  int64_t const exact = children(
+      position.continuation, position.aggregate_count, allowed, &choices);
   if (exact <= 0) return false;
   *result = exact;
+  return true;
+}
+
+bool IndexReader::find_child(
+    Node n, int64_t count, unsigned char ch, Choice* result) const {
+  if (n == (off_t) -1) return false;
+
+  assert(n >= 1 && n <= length);
+  int num = data[--n];
+  assert(num >= 0 && num < 0x100);
+
+  if (num >= 0x20 && num < 0x80) {
+    if (n < 1) fail(n, "need immediate next");
+    if ((unsigned char) num != ch) return false;
+    result->ch = char(num);
+    result->count = count;
+    result->next = n;
+    return true;
+  }
+
+  int const count_size =
+      (num < 0xC0) ? 1 : (num < 0xE0) ? 2 : 8;
+  int const offset_size =
+      (num < 0x20) ? 0 : (num < 0xA0) ? 1 : (num < 0xE0) ? 2 : 8;
+
+  num &= 0x1F;
+  if (num == 0) {
+    if (n < 1) fail(n, "need count");
+    num = data[--n];
+  }
+
+  ssize_t const size = count_size + offset_size + 1;
+  if (num == 0 || n < num * size) fail(n, "bad size");
+  off_t const start = n - num * size;
+
+  for (off_t p = start; p < n; p += size) {
+    if (data[p] != ch) continue;
+
+    result->ch = char(ch);
+    if (count_size == 1) {
+      result->count = data[p + 1];
+    } else if (count_size == 2) {
+      result->count = data[p + 1] | (data[p + 2] << 8);
+    } else {
+      result->count = 0;
+      for (int j = 0; j < count_size; ++j)
+        result->count |=
+            (uint64_t)(data[p + 1 + j]) << (j * 8);
+    }
+    if (result->count <= 0) fail(p + 1, "bad count");
+
+    if (offset_size == 0) {
+      result->next = (off_t) -1;
+    } else if (offset_size == 1) {
+      off_t const offset = data[p + 1 + count_size];
+      result->next = offset == 255 ? (off_t) -1 : start - offset;
+    } else if (offset_size == 2) {
+      off_t const offset =
+          data[p + count_size + 1] |
+          (data[p + count_size + 2] << 8);
+      result->next = offset == 65535 ? (off_t) -1 : start - offset;
+    } else {
+      off_t offset = 0;
+      for (int j = 0; j < offset_size; ++j)
+        offset |= (uint64_t)(data[p + 1 + count_size + j]) << (j * 8);
+      assert(offset_size == sizeof(off_t));
+      result->next = offset == (off_t) -1 ? (off_t) -1 : start - offset;
+    }
+
+    if (result->next != (off_t) -1 &&
+        (result->next < 0 || result->next > start))
+      fail(p + 1 + count_size, "bad offset");
+    return true;
+  }
+  return false;
+}
+
+bool IndexReader::traverse_entry(
+    EntryPosition start, std::string_view entry,
+    EntryPosition* result) const {
+  Choice choice;
+  for (size_t i = 0; i <= entry.size(); ++i) {
+    unsigned char const ch = i == entry.size()
+        ? (unsigned char) ' ' : (unsigned char) entry[i];
+    if (!find_child(start.continuation, start.aggregate_count, ch, &choice))
+      return false;
+    start.continuation = choice.next;
+    start.aggregate_count = choice.count;
+  }
+  *result = start;
+  return true;
+}
+
+bool IndexReader::aggregate_entry_position(
+    std::string_view entry, EntryPosition* result) const {
+  EntryPosition const start = {root(), count()};
+  return traverse_entry(start, entry, result);
+}
+
+bool IndexReader::continuation_entry_position(
+    EntryPosition const& prefix, std::string_view entry,
+    EntryPosition* result) const {
+  return traverse_entry(prefix, entry, result);
+}
+
+bool IndexReader::aggregate_entry_count(
+    std::string_view entry, int64_t* result) const {
+  EntryPosition position;
+  if (!aggregate_entry_position(entry, &position)) return false;
+  *result = position.aggregate_count;
   return true;
 }
 
