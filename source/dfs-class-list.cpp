@@ -180,6 +180,13 @@ class SignatureTable {
   size_t classes;
 };
 
+// A zero request means "no cap", and a request can only tighten the bound the
+// bag and the minimum word length already impose.
+int capped_extract_words(int derived, int requested) {
+  if (requested <= 0) return derived;
+  return std::min(derived, requested);
+}
+
 // Production form of measure-f's Extractor. It follows only trie edges allowed
 // by the remaining bag and emits at every terminating space, continuing beyond
 // it when enough letters remain for another word.
@@ -187,13 +194,15 @@ class DfsExtractor {
  public:
   DfsExtractor(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases,
-               DfsDictionary const* dictionary):
+               DfsDictionary const* dictionary, int requested_max_words):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
       reader(reader),
       min_len(std::max(min_word_len, 1)),
-      max_words(include_phrases ? int(letters.size()) / min_len : 1),
+      max_extract_words(capped_extract_words(
+          include_phrases ? int(letters.size()) / min_len : 1,
+          requested_max_words)),
       dictionary(dictionary),
       letters_left(int(letters.size())),
       nodes(0),
@@ -204,7 +213,7 @@ class DfsExtractor {
       assert(dfs_symbol_index(ch) >= 0);
       ++bag[ch];
     }
-    choices.resize(letters.size() + size_t(max_words) + 2);
+    choices.resize(letters.size() + size_t(max_extract_words) + 2);
 
     multiplier_by_char.fill(0);
     uint64_t place = 1;
@@ -300,7 +309,7 @@ class DfsExtractor {
           continue;
         text.push_back(' ');
         emit(choice.count, words + 1);
-        if (words + 1 < max_words && letters_left >= min_len &&
+        if (words + 1 < max_extract_words && letters_left >= min_len &&
             choice.next != IndexReader::Node(-1))
           walk(choice.next, choice.count, 0, words + 1, depth + 1);
         text.pop_back();
@@ -322,7 +331,7 @@ class DfsExtractor {
 
   IndexReader const* const reader;
   int const min_len;
-  int const max_words;
+  int const max_extract_words;
   DfsDictionary const* const dictionary;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
@@ -360,7 +369,8 @@ std::string letters_key(uint16_t const* letters, size_t count) {
 DfsClassList::DfsClassList(IndexReader const* reader,
                            std::string const& letters,
                            int min_word_len, bool include_phrases,
-                           DfsDictionary const* dictionary):
+                           DfsDictionary const* dictionary,
+                           int max_extract_words):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
@@ -387,7 +397,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
   }
 
   DfsExtractor extractor(
-      reader, letters, minimum_word_len, include_phrases, dictionary);
+      reader, letters, minimum_word_len, include_phrases, dictionary,
+      max_extract_words);
   extractor.run();
   nodes = extractor.nodes_visited();
   signature_digits = std::move(extractor.digits);

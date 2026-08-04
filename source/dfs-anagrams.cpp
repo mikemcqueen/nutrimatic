@@ -17,6 +17,7 @@
 #include <vector>
 
 static int const DEFAULT_TOP = 10000;
+static int const PAIRS_LIMIT = 2;
 static double const DEFAULT_WORD_BONUS = 0.0;
 
 struct Args {
@@ -24,7 +25,8 @@ struct Args {
   char const* dictionary_file;
   std::string letters;
   int min_word_len;
-  int max_words;
+  int max_extract_words;
+  int max_combine_words;
   int top;
   int64_t progress_factor;
   size_t score_cache_bytes;
@@ -60,6 +62,7 @@ static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
+      " [-x max-extract-words] [--pairs]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth] [-w word-bonus]"
@@ -68,6 +71,9 @@ static void usage(char const* program) {
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
       "  --dict PATH filters entries to words in the dictionary\n"
+      "  -x, --max-extract-words N explores at most N words inside one index"
+      " entry; defaults to 0 (no limit)\n"
+      "  --pairs is shorthand for --max-extract-words 2\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
@@ -96,12 +102,15 @@ static void usage(char const* program) {
 static int const OPT_DICT = 256;
 static int const OPT_SEGMENTS = 257;
 static int const OPT_WEIGHTED = 258;
+static int const OPT_PAIRS = 259;
 
 static struct optparse_long const long_options[] = {
   { "used-letters", 'u', OPTPARSE_REQUIRED },
   { "dict", OPT_DICT, OPTPARSE_REQUIRED },
   { "min-word-length", 'm', OPTPARSE_REQUIRED },
   { "top", 'n', OPTPARSE_REQUIRED },
+  { "max-extract-words", 'x', OPTPARSE_REQUIRED },
+  { "pairs", OPT_PAIRS, OPTPARSE_NONE },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "cache-size", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
@@ -119,6 +128,7 @@ static struct optparse_long const long_options[] = {
 static bool parse_args(char* argv[], Args* out) {
   out->dictionary_file = NULL;
   out->min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
+  out->max_extract_words = 0;
   out->top = DEFAULT_TOP;
   out->progress_factor = 1;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
@@ -137,6 +147,8 @@ static bool parse_args(char* argv[], Args* out) {
 
   std::string used;
   bool min_word_len_given = false;
+  bool max_extract_words_given = false;
+  bool pairs_given = false;
   int opt;
   while ((opt = optparse_long(&options, long_options, NULL)) != -1) {
     switch (opt) {
@@ -155,6 +167,15 @@ static bool parse_args(char* argv[], Args* out) {
       case 'n':
         if (!parse_count(options.optarg, "--top", &out->top))
           return false;
+        break;
+      case 'x':
+        if (!parse_count(options.optarg, "--max-extract-words",
+                         &out->max_extract_words))
+          return false;
+        max_extract_words_given = true;
+        break;
+      case OPT_PAIRS:
+        pairs_given = true;
         break;
       case 'p':
         if (!parse_count64(options.optarg, "--progress-factor",
@@ -222,6 +243,16 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
+  if (pairs_given) {
+    if (max_extract_words_given && out->max_extract_words != PAIRS_LIMIT) {
+      fprintf(stderr,
+          "error: --pairs is --max-extract-words %d, not %d\n",
+          PAIRS_LIMIT, out->max_extract_words);
+      return false;
+    }
+    out->max_extract_words = PAIRS_LIMIT;
+  }
+
   char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
   if (index_file == NULL || letters == NULL ||
@@ -243,7 +274,10 @@ static bool parse_args(char* argv[], Args* out) {
           out->letters, min_word_len_given, &out->min_word_len))
     return false;
 
-  out->max_words = out->min_word_len > 1
+  // Words across the whole answer, which is also what phase 2 derives its
+  // maximum depth from; --max-extract-words bounds words within one entry
+  // instead and leaves this alone. 0 means there is no minimum to divide by.
+  out->max_combine_words = out->min_word_len > 1
       ? int(out->letters.size()) / out->min_word_len
       : 0;
   return true;
@@ -277,19 +311,24 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  if (args.max_words > 0) {
+  if (args.max_combine_words > 0) {
     dfs_diagnostic(
         "%zu letters \"%s\", words of %d+, at most %d word%s\n",
         args.letters.size(), args.letters.c_str(), args.min_word_len,
-        args.max_words, args.max_words == 1 ? "" : "s");
+        args.max_combine_words, args.max_combine_words == 1 ? "" : "s");
   } else {
     dfs_diagnostic("%zu letters \"%s\", no minimum word length\n",
                    args.letters.size(), args.letters.c_str());
   }
 
+  if (args.max_extract_words > 0)
+    dfs_diagnostic("at most %d word%s per index entry\n",
+                   args.max_extract_words,
+                   args.max_extract_words == 1 ? "" : "s");
+
   IndexReader reader(fp);
   DfsClassList classes(&reader, args.letters, args.min_word_len, true,
-                       dictionary_filter);
+                       dictionary_filter, args.max_extract_words);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),

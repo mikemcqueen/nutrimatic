@@ -179,6 +179,22 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
     "$test_dir/penalty-one.stdout")" 70 \
   "one-segment phrase should be invariant"
 
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs \
+  > "$test_dir/pairs.stdout" 2> "$test_dir/pairs.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --max-extract-words 2 \
+  > "$test_dir/extract-two.stdout" 2> "$test_dir/extract-two.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -x 1 \
+  > "$test_dir/extract-one.stdout" 2> "$test_dir/extract-one.stderr"
+cmp "$test_dir/pairs.stdout" "$test_dir/extract-two.stdout" ||
+  fail "--pairs differs from --max-extract-words 2"
+cmp "$test_dir/all.stdout" "$test_dir/pairs.stdout" ||
+  fail "--pairs changed stdout where no entry holds three words"
+[[ $(grep -c '^70.00 ab cd$' "$test_dir/extract-one.stdout") -eq 0 ]] ||
+  fail "-x 1 kept the two-word index entry"
+grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
+  "$test_dir/extract-one.stderr" ||
+  fail "--max-extract-words diagnostic is missing from stderr"
+
 "$dfs_anagrams" "$index_file" abcd -u ab -m 2 -n 10 \
   > "$test_dir/used.stdout" 2> "$test_dir/used.stderr"
 "$dfs_anagrams" "$index_file" cd -m 2 -n 10 \
@@ -198,6 +214,12 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --search-threads nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --projection-depth nope
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --max-extract-words nope
+expect_status 2 "$dfs_anagrams" "$index_file" abc --pairs -x 3
+grep -q '^error: --pairs is --max-extract-words 2, not 3$' \
+  "$test_dir/status.stderr" ||
+  fail "conflicting --pairs diagnostic is unclear"
 expect_status 2 "$dfs_anagrams" "$index_file" abc -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
   "$test_dir/status.stderr" ||

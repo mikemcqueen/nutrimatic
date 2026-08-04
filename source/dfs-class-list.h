@@ -120,10 +120,13 @@ class DfsClassList {
   // implied by min_word_len and the bag length. include_phrases=false exists
   // for words-only validation against the phase-0 reference counts;
   // dfs-anagrams leaves it at its production default. The optional dictionary
-  // is borrowed and restricts every emitted phrase word.
+  // is borrowed and restricts every emitted phrase word. max_extract_words
+  // caps the words in one extracted entry; 0 means no cap beyond the one the
+  // bag and min_word_len already imply.
   DfsClassList(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases = true,
-               DfsDictionary const* dictionary = NULL);
+               DfsDictionary const* dictionary = NULL,
+               int max_extract_words = 0);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };
