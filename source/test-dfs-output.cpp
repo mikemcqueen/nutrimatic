@@ -593,7 +593,25 @@ static void search_output_integration_test() {
   fclose(fp);
 }
 
+static void entry_list_test() {
+  DfsSpelling spelling;
+  spelling.text = "ab cd ef gh";
+  // One two-word entry, then two single-word entries.
+  spelling.segment_lengths.push_back(5);
+  spelling.segment_lengths.push_back(2);
+  spelling.segment_lengths.push_back(2);
+  check(dfs_spelling_entry_list(spelling) == "ab cd,ef,gh",
+        "entry list did not comma-separate entries only");
+
+  DfsSpelling single;
+  single.text = "ab cd";
+  single.segment_lengths.push_back(5);
+  check(dfs_spelling_entry_list(single) == "ab cd",
+        "a single entry should be unchanged");
+}
+
 int main() {
+  entry_list_test();
   exhaustive_product_test();
   heap_churn_test();
   concurrent_top_n_test();

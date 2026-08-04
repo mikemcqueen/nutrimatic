@@ -394,7 +394,7 @@ int main(int argc, char* argv[]) {
   } else {
     for (size_t i = 0; i < results.size(); ++i)
       printf("%#.4g %s\n", exp(results[i].log_score),
-             results[i].text.c_str());
+             dfs_spelling_entry_list(results[i]).c_str());
   }
   return 0;
 }

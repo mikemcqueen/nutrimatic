@@ -22,7 +22,9 @@ fail() {
 }
 
 normalize() {
-  awk '
+  # dfs-anagrams separates index entries with commas and find-anagrams with
+  # spaces; both are compared as bags of words.
+  tr ',' ' ' < "$1" | awk '
     {
       score = $1
       count = 0
@@ -43,7 +45,7 @@ normalize() {
       print key "\t" score
       delete words
     }
-  ' "$1" | sort
+  ' | sort
 }
 
 "$dfs_anagrams" "$IDX" penbuilt -m 3 -n 100000 \

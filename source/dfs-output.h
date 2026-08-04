@@ -23,6 +23,12 @@ struct DfsSpelling {
   std::vector<uint8_t> segment_lengths;
 };
 
+// Rewrites a spelling's text with a comma between index entries, leaving the
+// spaces inside an entry alone. The result is exactly the sequence syntax that
+// "query-index --score" parses, so a printed result line can be pasted back to
+// reproduce its own score.
+std::string dfs_spelling_entry_list(DfsSpelling const& spelling);
+
 // The dedup table's payload. The map key (not duplicated here) is the
 // word-set key. When the result limit is nonzero, heap_pos is this entry's
 // current slot in DfsTopN::heap so a heap swap can fix up both sides in O(1);

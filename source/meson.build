@@ -241,6 +241,7 @@ test(
     files('test-dfs-cli.sh'),
     dfs_anagrams,
     make_dfs_test_index,
+    query_index,
   ],
 )
 test(

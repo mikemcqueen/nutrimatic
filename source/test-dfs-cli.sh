@@ -3,6 +3,7 @@ set -euo pipefail
 
 dfs_anagrams=$1
 make_index=$2
+query_index=$3
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/nutrimatic-dfs-cli.XXXXXX")
 index_file=$test_dir/test.index
 diagnostic_prefix='^\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '
@@ -165,9 +166,9 @@ cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
 cmp "$test_dir/penalty-one.stdout" \
     "$test_dir/penalty-one-uncached.stdout" ||
   fail "cache mode changed stdout at a non-default segment penalty"
-default_split_score=$(awk '$2 == "ab" && $3 == "dc" { print $1 }' \
+default_split_score=$(awk '$2 == "ab,dc" { print $1 }' \
   "$test_dir/all.stdout")
-penalty_one_split_score=$(awk '$2 == "ab" && $3 == "dc" { print $1 }' \
+penalty_one_split_score=$(awk '$2 == "ab,dc" { print $1 }' \
   "$test_dir/penalty-one.stdout")
 [[ -n $default_split_score && -n $penalty_one_split_score ]] ||
   fail "known two-segment spelling was not retained"
@@ -194,6 +195,15 @@ cmp "$test_dir/all.stdout" "$test_dir/pairs.stdout" ||
 grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
   fail "--max-extract-words diagnostic is missing from stderr"
+
+# Every result line's entry list must be pasteable into "query-index --score"
+# and reproduce that line's own score.
+while read -r result_score result_entries; do
+  round_trip=$("$query_index" "$index_file" "$result_entries" --score |
+    awk '{ print $1 }')
+  assert_close "$round_trip" "$result_score" \
+    "query-index --score disagrees on \"$result_entries\""
+done < "$test_dir/all.stdout"
 
 "$dfs_anagrams" "$index_file" abcd -u ab -m 2 -n 10 \
   > "$test_dir/used.stdout" 2> "$test_dir/used.stderr"

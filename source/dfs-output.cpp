@@ -19,6 +19,20 @@ static bool weaker(HeapSlot const& a, HeapSlot const& b) {
   return ea.second.text > eb.second.text;
 }
 
+std::string dfs_spelling_entry_list(DfsSpelling const& spelling) {
+  std::string list = spelling.text;
+  // The separators sit at the offsets the segment lengths walk to; every one
+  // of them is a space that joins two entries, so overwriting is enough.
+  size_t offset = 0;
+  for (size_t s = 0; s + 1 < spelling.segment_lengths.size(); ++s) {
+    offset += spelling.segment_lengths[s];
+    assert(offset < list.size() && list[offset] == ' ');
+    list[offset] = ',';
+    ++offset;
+  }
+  return list;
+}
+
 static std::string make_word_set_key(std::string const& text) {
   std::vector<std::string> words;
   for (size_t i = 0; i < text.size(); ) {

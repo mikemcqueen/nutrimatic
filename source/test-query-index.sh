@@ -56,32 +56,34 @@ expect_score_failure() {
 }
 
 # The synthetic corpus total is 136. Each comma after the first divides by
-# corpus_total * P; spaces inside an exact entry do not add a segment.
+# corpus_total * P; spaces inside an exact entry do not add a segment. An
+# entry counts what phase 1 counts, which is its whole trailing-space subtree:
+# "ab" is 80, its own 10 plus the 70 of "ab cd".
 default_two_entry_score=$(score_value 'ab,cd')
 assert_close "$default_two_entry_score" \
-  "$(awk 'BEGIN { print 10 * 7 / (136 * 1000000) }')" \
+  "$(awk 'BEGIN { print 80 * 7 / (136 * 1000000) }')" \
   "the default should preserve the production segment penalty"
 assert_close "$(score_value 'ab,cd' -P 1000000)" \
   "$default_two_entry_score" \
   "explicit default segment penalty should match the omitted option"
 
 for penalty in 1 100 1000000; do
-  assert_close "$(score_value ab -P "$penalty")" 10 \
+  assert_close "$(score_value ab -P "$penalty")" 80 \
     "one exact entry should be invariant at P=$penalty"
 done
 
 assert_close "$(score_value 'ab,cd' -P 100)" \
-  "$(awk 'BEGIN { print 10 * 7 / (136 * 100) }')" \
+  "$(awk 'BEGIN { print 80 * 7 / (136 * 100) }')" \
   "two entries should pay one segment penalty"
 assert_close "$(score_value 'ab,cd,ab' --segment-penalty 100)" \
-  "$(awk 'BEGIN { print 10 * 7 * 10 / (136 * 100)^2 }')" \
+  "$(awk 'BEGIN { print 80 * 7 * 80 / (136 * 100)^2 }')" \
   "three entries should pay two segment penalties"
 for penalty in 1 100 1000000; do
   assert_close "$(score_value 'ab cd' -P "$penalty")" 70 \
     "a multi-word entry should remain one segment at P=$penalty"
 done
 assert_close "$(score_value 'ab,ab')" \
-  "$(awk 'BEGIN { print 10 * 10 / (136 * 1000000) }')" \
+  "$(awk 'BEGIN { print 80 * 80 / (136 * 1000000) }')" \
   "repeated entries should contribute repeatedly"
 
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
@@ -96,10 +98,10 @@ expect_score_failure 'ab  cd' malformed-spacing
 
 assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
   "--word-bonus should retain its million-fold boost at P=1"
-assert_close "$(score_value ab --word-bonus 1)" 10 \
+assert_close "$(score_value ab --word-bonus 1)" 80 \
   "--word-bonus should not apply to a single-word segment"
 assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
-  "$(awk 'BEGIN { print 70 * 10 / 136 * 1e6 }')" \
+  "$(awk 'BEGIN { print 70 * 80 / 136 * 1e6 }')" \
   "a mixed sequence should bonus only its multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0

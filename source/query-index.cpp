@@ -267,7 +267,11 @@ static bool print_sequence_score(
   counts.reserve(entries.size());
   for (size_t i = 0; i < entries.size(); ++i) {
     int64_t count;
-    if (!reader.exact_entry_count(entries[i], &count)) {
+    // Aggregate, not exact: phase 1 scores an entry by the count on its
+    // trailing-space node, which includes every longer phrase continuing it.
+    // Using the exact residual here would silently disagree with the score
+    // dfs-anagrams prints for the same sequence.
+    if (!reader.aggregate_entry_count(entries[i], &count)) {
       fprintf(stderr, "error: index has no entry \"%s\"\n",
               entries[i].c_str());
       return false;
