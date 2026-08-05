@@ -20,20 +20,14 @@
 #include <vector>
 
 static int const DEFAULT_TOP = 100;
-static double const DEFAULT_WORD_BONUS = 0.0;
 
 struct Args {
   char const* index_file;
-  char const* dictionary_file;
   std::string letters;
   std::string score_sequence;
-  int min_word_len;
-  int top;
+  DfsCommonArgs common;
   bool words_only;
-  double segment_penalty;
-  double word_bonus;
   bool require_completable;
-  int search_threads;
   bool score;
   char const* score_incompatible_option;
 };
@@ -41,8 +35,9 @@ struct Args {
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [--score] [-P|--segment-penalty P] [--word-bonus N]"
+      " [--score] [-P|--segment-penalty P]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
+      " [-x max-extract-words] [--pairs]"
       " [-w|--words-only] [--require-completable]"
       " [-S|--search-threads N]\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
@@ -54,33 +49,26 @@ static void usage(char const* program) {
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 for no limit\n"
       "  --dict PATH filters entries to words in the dictionary\n"
+      "  -x, --max-extract-words N explores at most N words inside one index"
+      " entry; defaults to 0 (no limit)\n"
+      "  --pairs is shorthand for --max-extract-words 2\n"
       "  -w, --words-only excludes multi-word phrases\n"
-      "  --word-bonus N boosts multi-word members by %.0f^N;\n"
-      "    defaults to %g (no boost)\n"
       "  --require-completable drops classes whose removal leaves a\n"
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
       "    -m), using shared exact validation without a score cache\n"
       "  -S, --search-threads defaults to 1\n",
       program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_DEFAULT_MIN_WORD_LEN,
-      DEFAULT_TOP, DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS);
+      DEFAULT_TOP);
 }
 
-static int const OPT_DICT = 256;
-static int const OPT_WORD_BONUS = 257;
-static int const OPT_REQUIRE_COMPLETABLE = 258;
-static int const OPT_SCORE = 259;
+static int const OPT_REQUIRE_COMPLETABLE = 256;
+static int const OPT_SCORE = 257;
 
 static struct optparse_long const long_options[] = {
-  { "used-letters", 'u', OPTPARSE_REQUIRED },
-  { "dict", OPT_DICT, OPTPARSE_REQUIRED },
-  { "min-word-length", 'm', OPTPARSE_REQUIRED },
-  { "top", 'n', OPTPARSE_REQUIRED },
+  DFS_COMMON_LONG_OPTIONS,
   { "words-only", 'w', OPTPARSE_NONE },
-  { "segment-penalty", 'P', OPTPARSE_REQUIRED },
-  { "word-bonus", OPT_WORD_BONUS, OPTPARSE_REQUIRED },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
-  { "search-threads", 'S', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -90,57 +78,33 @@ static void mark_score_incompatible(Args* args, char const* option) {
 }
 
 static bool parse_args(char* argv[], Args* out) {
-  out->dictionary_file = NULL;
-  out->min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
-  out->top = DEFAULT_TOP;
+  out->common = DfsCommonArgs();
+  out->common.top = DEFAULT_TOP;
   out->words_only = false;
-  out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
-  out->word_bonus = DEFAULT_WORD_BONUS;
   out->require_completable = false;
-  out->search_threads = 1;
   out->score = false;
   out->score_incompatible_option = NULL;
 
   struct optparse options;
   optparse_init(&options, argv);
 
-  std::string used;
-  bool min_word_len_given = false;
   int opt;
   while ((opt = optparse_long(&options, long_options, NULL)) != -1) {
+    DfsCommonOption which;
+    switch (dfs_parse_common_option(opt, &options, &out->common, &which)) {
+      case DFS_OPTION_ERROR:
+        return false;
+      case DFS_OPTION_HANDLED:
+        if (which.score_incompatible)
+          mark_score_incompatible(out, which.name);
+        continue;
+      case DFS_OPTION_OTHER:
+        break;
+    }
     switch (opt) {
-      case 'u':
-        used += options.optarg;
-        mark_score_incompatible(out, "--used-letters");
-        break;
-      case OPT_DICT:
-        out->dictionary_file = options.optarg;
-        mark_score_incompatible(out, "--dict");
-        break;
-      case 'm':
-        if (!parse_count(options.optarg, "--min-word-length",
-                         &out->min_word_len))
-          return false;
-        min_word_len_given = true;
-        mark_score_incompatible(out, "--min-word-length");
-        break;
-      case 'n':
-        if (!parse_count(options.optarg, "--top", &out->top))
-          return false;
-        mark_score_incompatible(out, "--top");
-        break;
       case 'w':
         out->words_only = true;
         mark_score_incompatible(out, "--words-only");
-        break;
-      case 'P':
-        if (!parse_segment_penalty(
-                options.optarg, &out->segment_penalty))
-          return false;
-        break;
-      case OPT_WORD_BONUS:
-        if (!parse_double(options.optarg, "--word-bonus", &out->word_bonus))
-          return false;
         break;
       case OPT_SCORE:
         out->score = true;
@@ -149,22 +113,13 @@ static bool parse_args(char* argv[], Args* out) {
         out->require_completable = true;
         mark_score_incompatible(out, "--require-completable");
         break;
-      case 'S':
-        if (!parse_count(options.optarg, "--search-threads",
-                         &out->search_threads))
-          return false;
-        if (out->search_threads < 1) {
-          fputs("error: --search-threads must be at least 1\n", stderr);
-          return false;
-        }
-        mark_score_incompatible(out, "--search-threads");
-        break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
         usage(argv[0]);
         return false;
     }
   }
+  if (!dfs_finalize_common_args(&out->common)) return false;
 
   char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
@@ -188,43 +143,22 @@ static bool parse_args(char* argv[], Args* out) {
   std::string bag;
   std::string remove;
   if (!clean_letters(letters, "letters", &bag)) return false;
-  if (!clean_letters(used.c_str(), "used letters", &remove)) return false;
+  if (!clean_letters(out->common.used_letters.c_str(), "used letters", &remove))
+    return false;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
   if (!check_bag_length(out->letters)) return false;
   return finalize_min_word_length(
-      out->letters, min_word_len_given, &out->min_word_len);
+      out->letters, out->common.min_word_len_given, &out->common.min_word_len);
 }
 
-// With the default --word-bonus 0 the two multi_word groups collapse and
-// log(count) descending is integer count descending: over this corpus's count
-// range log is injective in double, so an integer compare reproduces the
-// score order exactly, ties included, and the text tie-break still decides
-// them.
+// Entry score is log(count), so log(count) descending is integer count
+// descending: over this corpus's count range log is injective in double, so an
+// integer compare reproduces the score order exactly, ties included, and the
+// text tie-break still decides them.
 static bool count_order(DfsPackedMember const& a, DfsPackedMember const& b) {
   if (a.count != b.count) return a.count > b.count;
   return dfs_member_text_compare(a, b) < 0;
 }
-
-static bool is_phrase(DfsPackedMember const& member) {
-  return member.word_count > 1;
-}
-
-// Rewriting this as count * exp(bonus) versus count would round differently
-// from log(count) + bonus, breaking exact ties differently and so changing the
-// text tie-break. It stays the identical expression, applied O(E) times in the
-// merge instead of O(E log E) times in a sort.
-struct ScoreOrder {
-  DfsScoreModel const* model;
-
-  bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
-    double const a_score =
-        model->first_segment_log_score(a.count, is_phrase(a));
-    double const b_score =
-        model->first_segment_log_score(b.count, is_phrase(b));
-    if (a_score != b_score) return a_score > b_score;
-    return dfs_member_text_compare(a, b) < 0;
-  }
-};
 
 static bool parse_score_sequence(
     std::string const& sequence, std::vector<std::string>* entries) {
@@ -279,14 +213,10 @@ static bool print_sequence_score(
     counts.push_back(count);
   }
 
-  DfsScoreModel const model(
-      args.segment_penalty, reader.count(), args.word_bonus);
-  double log_score = model.first_segment_log_score(
-      counts[0], entries[0].find(' ') != std::string::npos);
+  DfsScoreModel const model(args.common.segment_penalty, reader.count());
+  double log_score = model.first_segment_log_score(counts[0]);
   for (size_t i = 1; i < entries.size(); ++i)
-    log_score = model.append_segment_log_score(
-        log_score, counts[i],
-        entries[i].find(' ') != std::string::npos);
+    log_score = model.append_segment_log_score(log_score, counts[i]);
 
   printf("%#.4g %s\n", model.displayed_score(log_score),
          args.score_sequence.c_str());
@@ -315,8 +245,8 @@ int main(int argc, char* argv[]) {
 
   DfsDictionary dictionary;
   DfsDictionary const* dictionary_filter = NULL;
-  if (args.dictionary_file != NULL) {
-    if (!load_dictionary(args.dictionary_file, &dictionary)) return 1;
+  if (args.common.dictionary_file != NULL) {
+    if (!load_dictionary(args.common.dictionary_file, &dictionary)) return 1;
     dictionary_filter = &dictionary;
   }
 
@@ -329,8 +259,9 @@ int main(int argc, char* argv[]) {
   IndexReader reader(fp);
   bool const include_phrases =
       args.require_completable || !args.words_only;
-  DfsClassList classes(&reader, args.letters, args.min_word_len,
-                       include_phrases, dictionary_filter);
+  DfsClassList classes(&reader, args.letters, args.common.min_word_len,
+                       include_phrases, dictionary_filter,
+                       args.common.max_extract_words);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -340,12 +271,11 @@ int main(int argc, char* argv[]) {
   if (args.require_completable) {
     dfs_diagnostic(
         "search threads %d cache 0 segment penalty %.17g\n",
-        args.search_threads, args.segment_penalty);
+        args.common.search_threads, args.common.segment_penalty);
     DfsAnagramSearch search(
-        &classes, args.letters, args.segment_penalty, reader.count(),
+        &classes, args.letters, args.common.segment_penalty, reader.count(),
         /*score_cache_bytes=*/0, /*preprocess_threads=*/1,
-        size_t(args.search_threads),
-        /*word_bonus=*/0.0);
+        size_t(args.common.search_threads));
     DfsSearchStats stats;
     if (!search.find_completable_classes(
             &completable, &stats, /*progress_factor=*/1,
@@ -357,7 +287,7 @@ int main(int argc, char* argv[]) {
       dfs_diagnostic(
           "phase 2 exact validation parallelism: "
           "%d requested, %zu used\n",
-          args.search_threads, run.search_threads);
+          args.common.search_threads, run.search_threads);
     dfs_diagnostic(
         "phase 2 timing: %.1fs setup, %.1fs exact validation\n",
         run.setup_seconds, run.search_seconds);
@@ -366,53 +296,22 @@ int main(int argc, char* argv[]) {
         bounds.entries, bounds.bytes_charged);
   }
 
-  DfsScoreModel const model(
-      args.segment_penalty, reader.count(), args.word_bonus);
   // The class -> member grouping has no reader left: phase 2 touched it once at
   // setup and its search is already destroyed, and printing needs only each
   // member's count and text.
   DfsMemberSpan const survivors =
       classes.retain_members(completable, args.words_only);
-  size_t const top = args.top == 0
+  size_t const top = args.common.top == 0
       ? survivors.count
-      : std::min(survivors.count, size_t(args.top));
+      : std::min(survivors.count, size_t(args.common.top));
 
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = first + survivors.count;
-  auto const print_row = [&](DfsPackedMember const& row) {
-    if (args.word_bonus == 0.0)
-      printf("%lld %.*s\n", (long long) row.count,
-             int(row.text_length), row.text);
-    else
-      printf("%#.4g %.*s\n",
-             model.displayed_score(model.first_segment_log_score(
-                 row.count, is_phrase(row))),
-             int(row.text_length), row.text);
-  };
-
-  if (args.word_bonus == 0.0) {
-    std::partial_sort(first, first + top, last, count_order);
-    for (size_t i = 0; i < top; ++i) print_row(first[i]);
-  } else {
-    DfsPackedMember* const mid = std::partition(first, last, is_phrase);
-    size_t const phrase_top = std::min(top, size_t(mid - first));
-    size_t const word_top = std::min(top, size_t(last - mid));
-    std::partial_sort(first, first + phrase_top, mid, count_order);
-    std::partial_sort(mid, mid + word_top, last, count_order);
-
-    ScoreOrder const order = { &model };
-    size_t phrase = 0;
-    size_t word = 0;
-    for (size_t printed = 0; printed < top; ++printed) {
-      bool take_phrase;
-      if (phrase == phrase_top)
-        take_phrase = false;
-      else if (word == word_top)
-        take_phrase = true;
-      else
-        take_phrase = order(first[phrase], mid[word]);
-      print_row(take_phrase ? first[phrase++] : mid[word++]);
-    }
+  std::partial_sort(first, first + top, last, count_order);
+  for (size_t i = 0; i < top; ++i) {
+    DfsPackedMember const& row = first[i];
+    printf("%lld %.*s\n", (long long) row.count,
+           int(row.text_length), row.text);
   }
   return 0;
 }

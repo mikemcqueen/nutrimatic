@@ -2,6 +2,7 @@
 tmp/
 /build*/
 /.env/
+/.venv/
 /setup.sh
 /results/
 /idx/

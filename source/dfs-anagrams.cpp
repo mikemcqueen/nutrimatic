@@ -17,24 +17,17 @@
 #include <vector>
 
 static int const DEFAULT_TOP = 10000;
-static int const PAIRS_LIMIT = 2;
-static double const DEFAULT_WORD_BONUS = 0.0;
 
 struct Args {
   char const* index_file;
-  char const* dictionary_file;
   std::string letters;
-  int min_word_len;
-  int max_extract_words;
+  DfsCommonArgs common;
   int max_combine_words;
-  int top;
+  int num_segments;
   int64_t progress_factor;
   size_t score_cache_bytes;
   int preprocess_threads;
-  int search_threads;
   int exact_letters;
-  double segment_penalty;
-  double word_bonus;
   bool allow_cache_fallback;
   bool segments;
   bool weighted;
@@ -61,16 +54,22 @@ static void report_segments(std::vector<DfsSpelling> const& results,
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
+      " [-u used-letters] [--dict PATH] [-m min-word-length]"
+      " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
-      " [-d projection-depth] [-w word-bonus]"
+      " [-d projection-depth]"
       " [-P segment-penalty] [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
       "  --dict PATH filters entries to words in the dictionary\n"
+      "  -g, --num-segments N returns only results using exactly N index"
+      " entries; defaults to 0 (any number)\n"
+      "    every result then carries the same (corpus-total * P)^(N-1)"
+      " divisor, so -P cannot change their order and scores are comparable"
+      " only within one -g run\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
       "  --pairs is shorthand for --max-extract-words 2\n"
@@ -84,8 +83,6 @@ static void usage(char const* program) {
       " index entry after the first; P must be at least 1 and defaults to"
       " %.0f\n"
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
-      "  -w, --word-bonus N boosts classes whose best member spans more than"
-      " one corpus word by %.0f^N; defaults to %g (no boost)\n"
       "  --segments prints the index entries used by the results instead of"
       " the results, as best-score, result-count and text, by descending"
       " best score\n"
@@ -95,29 +92,19 @@ static void usage(char const* program) {
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
       program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY,
-      DFS_WORD_BONUS_BASE, DEFAULT_WORD_BONUS);
+      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY);
 }
 
-static int const OPT_DICT = 256;
-static int const OPT_SEGMENTS = 257;
-static int const OPT_WEIGHTED = 258;
-static int const OPT_PAIRS = 259;
+static int const OPT_SEGMENTS = 256;
+static int const OPT_WEIGHTED = 257;
 
 static struct optparse_long const long_options[] = {
-  { "used-letters", 'u', OPTPARSE_REQUIRED },
-  { "dict", OPT_DICT, OPTPARSE_REQUIRED },
-  { "min-word-length", 'm', OPTPARSE_REQUIRED },
-  { "top", 'n', OPTPARSE_REQUIRED },
-  { "max-extract-words", 'x', OPTPARSE_REQUIRED },
-  { "pairs", OPT_PAIRS, OPTPARSE_NONE },
+  DFS_COMMON_LONG_OPTIONS,
+  { "num-segments", 'g', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "cache-size", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
-  { "search-threads", 'S', OPTPARSE_REQUIRED },
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
-  { "word-bonus", 'w', OPTPARSE_REQUIRED },
-  { "segment-penalty", 'P', OPTPARSE_REQUIRED },
   { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
@@ -126,17 +113,13 @@ static struct optparse_long const long_options[] = {
 };
 
 static bool parse_args(char* argv[], Args* out) {
-  out->dictionary_file = NULL;
-  out->min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
-  out->max_extract_words = 0;
-  out->top = DEFAULT_TOP;
+  out->common = DfsCommonArgs();
+  out->common.top = DEFAULT_TOP;
+  out->num_segments = 0;
   out->progress_factor = 1;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
   out->preprocess_threads = 0;
-  out->search_threads = 1;
   out->exact_letters = -1;
-  out->segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
-  out->word_bonus = DEFAULT_WORD_BONUS;
   out->allow_cache_fallback = false;
   out->segments = false;
   out->weighted = false;
@@ -145,37 +128,21 @@ static bool parse_args(char* argv[], Args* out) {
   struct optparse options;
   optparse_init(&options, argv);
 
-  std::string used;
-  bool min_word_len_given = false;
-  bool max_extract_words_given = false;
-  bool pairs_given = false;
   int opt;
   while ((opt = optparse_long(&options, long_options, NULL)) != -1) {
+    switch (dfs_parse_common_option(opt, &options, &out->common, NULL)) {
+      case DFS_OPTION_ERROR:
+        return false;
+      case DFS_OPTION_HANDLED:
+        continue;
+      case DFS_OPTION_OTHER:
+        break;
+    }
     switch (opt) {
-      case 'u':
-        used += options.optarg;
-        break;
-      case OPT_DICT:
-        out->dictionary_file = options.optarg;
-        break;
-      case 'm':
-        if (!parse_count(options.optarg, "--min-word-length",
-                         &out->min_word_len))
+      case 'g':
+        if (!parse_count(options.optarg, "--num-segments",
+                         &out->num_segments))
           return false;
-        min_word_len_given = true;
-        break;
-      case 'n':
-        if (!parse_count(options.optarg, "--top", &out->top))
-          return false;
-        break;
-      case 'x':
-        if (!parse_count(options.optarg, "--max-extract-words",
-                         &out->max_extract_words))
-          return false;
-        max_extract_words_given = true;
-        break;
-      case OPT_PAIRS:
-        pairs_given = true;
         break;
       case 'p':
         if (!parse_count64(options.optarg, "--progress-factor",
@@ -196,27 +163,9 @@ static bool parse_args(char* argv[], Args* out) {
                          &out->preprocess_threads))
           return false;
         break;
-      case 'S':
-        if (!parse_count(options.optarg, "--search-threads",
-                         &out->search_threads))
-          return false;
-        if (out->search_threads < 1) {
-          fputs("error: --search-threads must be at least 1\n", stderr);
-          return false;
-        }
-        break;
       case 'd':
         if (!parse_count(options.optarg, "--projection-depth",
                          &out->exact_letters))
-          return false;
-        break;
-      case 'w':
-        if (!parse_double(options.optarg, "--word-bonus", &out->word_bonus))
-          return false;
-        break;
-      case 'P':
-        if (!parse_segment_penalty(
-                options.optarg, &out->segment_penalty))
           return false;
         break;
       case OPT_SEGMENTS:
@@ -243,15 +192,7 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
-  if (pairs_given) {
-    if (max_extract_words_given && out->max_extract_words != PAIRS_LIMIT) {
-      fprintf(stderr,
-          "error: --pairs is --max-extract-words %d, not %d\n",
-          PAIRS_LIMIT, out->max_extract_words);
-      return false;
-    }
-    out->max_extract_words = PAIRS_LIMIT;
-  }
+  if (!dfs_finalize_common_args(&out->common)) return false;
 
   char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
@@ -264,21 +205,23 @@ static bool parse_args(char* argv[], Args* out) {
   std::string bag;
   std::string remove;
   if (!clean_letters(letters, "letters", &bag)) return false;
-  if (!clean_letters(used.c_str(), "used letters", &remove)) return false;
+  if (!clean_letters(out->common.used_letters.c_str(), "used letters",
+                     &remove))
+    return false;
 
   out->index_file = index_file;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
   if (!check_bag_length(out->letters)) return false;
 
   if (!finalize_min_word_length(
-          out->letters, min_word_len_given, &out->min_word_len))
+          out->letters, out->common.min_word_len_given, &out->common.min_word_len))
     return false;
 
   // Words across the whole answer, which is also what phase 2 derives its
   // maximum depth from; --max-extract-words bounds words within one entry
   // instead and leaves this alone. 0 means there is no minimum to divide by.
-  out->max_combine_words = out->min_word_len > 1
-      ? int(out->letters.size()) / out->min_word_len
+  out->max_combine_words = out->common.min_word_len > 1
+      ? int(out->letters.size()) / out->common.min_word_len
       : 0;
   return true;
 }
@@ -295,13 +238,13 @@ int main(int argc, char* argv[]) {
   dfs_diagnostic(
       "depth %d top %d threads %zu search threads %d cache %zu "
       "segment penalty %.17g\n",
-      args.exact_letters, args.top, preprocess_threads, args.search_threads,
-      args.score_cache_bytes / DFS_MIB, args.segment_penalty);
+      args.exact_letters, args.common.top, preprocess_threads, args.common.search_threads,
+      args.score_cache_bytes / DFS_MIB, args.common.segment_penalty);
 
   DfsDictionary dictionary;
   DfsDictionary const* dictionary_filter = NULL;
-  if (args.dictionary_file != NULL) {
-    if (!load_dictionary(args.dictionary_file, &dictionary)) return 1;
+  if (args.common.dictionary_file != NULL) {
+    if (!load_dictionary(args.common.dictionary_file, &dictionary)) return 1;
     dictionary_filter = &dictionary;
   }
 
@@ -311,24 +254,33 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  // Both headers carry the segment constraint, since -g is independent of
+  // whether a minimum word length narrowed the search.
+  char segments_note[64];
+  segments_note[0] = '\0';
+  if (args.num_segments > 0) {
+    snprintf(segments_note, sizeof segments_note, ", exactly %d segment%s",
+             args.num_segments, args.num_segments == 1 ? "" : "s");
+  }
   if (args.max_combine_words > 0) {
     dfs_diagnostic(
-        "%zu letters \"%s\", words of %d+, at most %d word%s\n",
-        args.letters.size(), args.letters.c_str(), args.min_word_len,
-        args.max_combine_words, args.max_combine_words == 1 ? "" : "s");
+        "%zu letters \"%s\", words of %d+, at most %d word%s%s\n",
+        args.letters.size(), args.letters.c_str(), args.common.min_word_len,
+        args.max_combine_words, args.max_combine_words == 1 ? "" : "s",
+        segments_note);
   } else {
-    dfs_diagnostic("%zu letters \"%s\", no minimum word length\n",
-                   args.letters.size(), args.letters.c_str());
+    dfs_diagnostic("%zu letters \"%s\", no minimum word length%s\n",
+                   args.letters.size(), args.letters.c_str(), segments_note);
   }
 
-  if (args.max_extract_words > 0)
+  if (args.common.max_extract_words > 0)
     dfs_diagnostic("at most %d word%s per index entry\n",
-                   args.max_extract_words,
-                   args.max_extract_words == 1 ? "" : "s");
+                   args.common.max_extract_words,
+                   args.common.max_extract_words == 1 ? "" : "s");
 
   IndexReader reader(fp);
-  DfsClassList classes(&reader, args.letters, args.min_word_len, true,
-                       dictionary_filter, args.max_extract_words);
+  DfsClassList classes(&reader, args.letters, args.common.min_word_len, true,
+                       dictionary_filter, args.common.max_extract_words);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -336,10 +288,10 @@ int main(int argc, char* argv[]) {
   fflush(stderr);
 
   DfsAnagramSearch search(
-      &classes, args.letters, args.segment_penalty, reader.count(),
+      &classes, args.letters, args.common.segment_penalty, reader.count(),
       args.score_cache_bytes, preprocess_threads,
-      size_t(args.search_threads), args.word_bonus);
-  DfsTopN output(&classes, size_t(args.top));
+      size_t(args.common.search_threads), size_t(args.num_segments));
+  DfsTopN output(&classes, size_t(args.common.top));
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,
@@ -375,7 +327,7 @@ int main(int argc, char* argv[]) {
     dfs_diagnostic(
         "phase 2 search parallelism: %d requested, %zu used, "
         "%llu tasks\n",
-        args.search_threads, stats.execution.search_threads,
+        args.common.search_threads, stats.execution.search_threads,
         (unsigned long long) stats.execution.search_tasks);
   dfs_diagnostic(
       "phase 2 score cache: %zu bound entries, %zu bound bytes\n",

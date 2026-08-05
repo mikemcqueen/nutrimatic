@@ -75,10 +75,24 @@ void DfsAllSolutionsRunner::visit_fitting_class(
                   : data.score_model.append_log_score(
                         representative_log_score, class_score);
   if (DFS_UNLIKELY(next_letters_left == 0)) {
-    ++worker->stats.solutions;
-    if (sink != NULL) sink->emit(worker->path, next_log_score);
+    if (DFS_LIKELY(data.exact_depth == 0
+                   || worker->path.size() == data.exact_depth)) {
+      ++worker->stats.solutions;
+      if (sink != NULL) sink->emit(worker->path, next_log_score);
+    }
     worker->path.pop_back();
     return;
+  }
+  // Every remaining segment costs at least min_word_length letters, so a
+  // remainder too short to be cut into the segments still owed can be
+  // abandoned here rather than walked to a depth that will never emit.
+  if (DFS_UNLIKELY(data.exact_depth != 0)) {
+    size_t const segments_owed = data.exact_depth - worker->path.size();
+    if (segments_owed == 0
+        || next_letters_left / data.min_word_length < segments_owed) {
+      worker->path.pop_back();
+      return;
+    }
   }
 
   uint32_t const* requirements =

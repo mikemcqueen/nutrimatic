@@ -40,11 +40,18 @@ enum Reachability {
 struct DfsSearchData {
   DfsClassList const* class_list = NULL;
   ScoreBounds score_bounds;
-  DfsScoreModel score_model{1.0, 1, 0.0};
+  DfsScoreModel score_model{1.0, 1};
   std::vector<double> best_member_log_scores;
   double segment_boundary_log_score = 0.0;
   size_t letter_count = 0;
   size_t max_depth = 0;
+  // Nonzero restricts results to exactly this many selected index entries.
+  // max_depth already stops the walk from going deeper, so this additionally
+  // suppresses shallower solutions and prunes paths that can no longer reach
+  // the target. min_word_length is what bounds the segments a remainder still
+  // affords; DfsClassList clamps it to at least 1.
+  size_t exact_depth = 0;
+  size_t min_word_length = 1;
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag{};
   uint64_t bag_mask = 0;
   uint64_t score_key = 0;

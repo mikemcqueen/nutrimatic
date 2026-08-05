@@ -171,3 +171,79 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   }
   return true;
 }
+
+DfsOptionResult dfs_parse_common_option(
+    int option, struct optparse* options, DfsCommonArgs* out,
+    DfsCommonOption* which) {
+  DfsCommonOption info;
+  info.name = NULL;
+  info.score_incompatible = true;
+
+  switch (option) {
+    case 'u':
+      out->used_letters += options->optarg;
+      info.name = "--used-letters";
+      break;
+    case DFS_OPT_DICT:
+      out->dictionary_file = options->optarg;
+      info.name = "--dict";
+      break;
+    case 'm':
+      if (!parse_count(options->optarg, "--min-word-length",
+                       &out->min_word_len))
+        return DFS_OPTION_ERROR;
+      out->min_word_len_given = true;
+      info.name = "--min-word-length";
+      break;
+    case 'x':
+      if (!parse_count(options->optarg, "--max-extract-words",
+                       &out->max_extract_words))
+        return DFS_OPTION_ERROR;
+      out->max_extract_words_given = true;
+      info.name = "--max-extract-words";
+      break;
+    case DFS_OPT_PAIRS:
+      out->pairs_given = true;
+      info.name = "--pairs";
+      break;
+    case 'n':
+      if (!parse_count(options->optarg, "--top", &out->top))
+        return DFS_OPTION_ERROR;
+      info.name = "--top";
+      break;
+    case 'S':
+      if (!parse_count(options->optarg, "--search-threads",
+                       &out->search_threads))
+        return DFS_OPTION_ERROR;
+      if (out->search_threads < 1) {
+        fputs("error: --search-threads must be at least 1\n", stderr);
+        return DFS_OPTION_ERROR;
+      }
+      info.name = "--search-threads";
+      break;
+    case 'P':
+      if (!parse_segment_penalty(options->optarg, &out->segment_penalty))
+        return DFS_OPTION_ERROR;
+      // The penalty scales a score, which --score still computes.
+      info.name = "--segment-penalty";
+      info.score_incompatible = false;
+      break;
+    default:
+      return DFS_OPTION_OTHER;
+  }
+
+  if (which != NULL) *which = info;
+  return DFS_OPTION_HANDLED;
+}
+
+bool dfs_finalize_common_args(DfsCommonArgs* args) {
+  if (!args->pairs_given) return true;
+  if (args->max_extract_words_given &&
+      args->max_extract_words != DFS_PAIRS_LIMIT) {
+    fprintf(stderr, "error: --pairs is --max-extract-words %d, not %d\n",
+            DFS_PAIRS_LIMIT, args->max_extract_words);
+    return false;
+  }
+  args->max_extract_words = DFS_PAIRS_LIMIT;
+  return true;
+}

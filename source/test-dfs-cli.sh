@@ -205,6 +205,34 @@ while read -r result_score result_entries; do
     "query-index --score disagrees on \"$result_entries\""
 done < "$test_dir/all.stdout"
 
+# -g N keeps only N-entry results. "ab cd" wins the unconstrained search as one
+# contiguous phrase and absorbs its split form, so -g 2 is what exposes "ab,cd".
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -g 1 \
+  > "$test_dir/one-segment.stdout" 2> "$test_dir/one-segment.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -g 2 \
+  > "$test_dir/two-segment.stdout" 2> "$test_dir/two-segment.stderr"
+if grep -q ',' "$test_dir/one-segment.stdout"; then
+  fail "-g 1 returned a multi-entry result"
+fi
+[[ $(grep -c '^[^ ]* [^,]*,[^,]*$' "$test_dir/two-segment.stdout") \
+   -eq $(wc -l < "$test_dir/two-segment.stdout") ]] ||
+  fail "-g 2 returned a result that does not use exactly two entries"
+[[ $(grep -c '^70.00 ab cd$' "$test_dir/one-segment.stdout") -eq 1 ]] ||
+  fail "-g 1 lost the contiguous phrase"
+grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words, exactly 1 segment$' \
+  "$test_dir/one-segment.stderr" ||
+  fail "the search header did not report the segment constraint"
+grep -Eq "${diagnostic_prefix}"'.*, exactly 2 segments$' \
+  "$test_dir/two-segment.stderr" ||
+  fail "the search header did not pluralize the segment constraint"
+grep -q ' ab,cd$' "$test_dir/two-segment.stdout" ||
+  fail "-g 2 did not expose the split form of the contiguous phrase"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -g 9 \
+  > "$test_dir/unreachable-segment.stdout" \
+  2> "$test_dir/unreachable-segment.stderr"
+[[ ! -s $test_dir/unreachable-segment.stdout ]] ||
+  fail "-g beyond the letters' segment limit returned results"
+
 "$dfs_anagrams" "$index_file" abcd -u ab -m 2 -n 10 \
   > "$test_dir/used.stdout" 2> "$test_dir/used.stderr"
 "$dfs_anagrams" "$index_file" cd -m 2 -n 10 \

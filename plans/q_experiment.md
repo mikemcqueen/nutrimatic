@@ -5,6 +5,10 @@
 > inspection of real results. It is retained as experiment history. The
 > replacement implementation uses signed square-root likelihood-ratio
 > evidence without those options.
+>
+> **Update (2026-08-04):** That replacement is also not an ordering term. It
+> ranks `they were` above every content phrase measured. See
+> [association-is-not-interestingness.md](../findings/association-is-not-interestingness.md).
 
 ## Goal
 

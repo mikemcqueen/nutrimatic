@@ -1,5 +1,11 @@
 # Semantic plausibility signal
 
+> **No longer current (2026-08-04):** The $G^2$ replacement described below
+> fixes the rare-word end but fails at the common end, where it ranks
+> function-word bigrams above every content phrase. It is a usable floor on
+> pair quality, not the ordering term this document treats it as. See
+> [association-is-not-interestingness.md](association-is-not-interestingness.md).
+
 The initial frequency-conditioned shrunken-PMI experiment was rejected. It
 turned lack of evidence against unattested continuations of rare words into a
 high input-local percentile. That is not affirmative pair evidence.

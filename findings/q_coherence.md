@@ -7,6 +7,15 @@
 > retained here as design history, not as the current recommendation.
 > `measure-coherence` now uses signed square-root likelihood-ratio evidence
 > from the ordered-pair count and both word marginals.
+>
+> **Update (2026-08-04):** A second, independent failure was measured at the
+> opposite end of the frequency range, and the likelihood-ratio replacement
+> does not fix it. Function-word bigrams are strong collocations: PMI ranks
+> `they were` above `movie star`, and $G^2$ ranks it above every content
+> phrase tested. See
+> [association-is-not-interestingness.md](association-is-not-interestingness.md)
+> for the falsifying table. Association statistics remain usable as a floor on
+> pair quality; they do not order good candidates.
 
 There is a sound mathematical foundation for a coherence score, but no
 uniquely correct definition of "coherence." The principled part is estimating
@@ -111,6 +120,11 @@ ordered adjacency is evidence for a bigram. A phrase that merely contains two
 words in non-adjacent positions is not evidence for that pair either.
 
 ## Raw PMI needs smoothing
+
+Smoothing addresses only the rare end. The high-frequency failure measured in
+[association-is-not-interestingness.md](association-is-not-interestingness.md)
+survives it, because a pair with 692,889 observations is not under-evidenced
+and shrinkage leaves it where it is.
 
 Plain PMI behaves badly for rare observations. A pair seen once, whose
 individual words are also rare, can receive a spectacular PMI score despite

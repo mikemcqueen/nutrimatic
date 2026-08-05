@@ -122,7 +122,11 @@ boundaries.
 
 For adjacent rendered words, define an association quality such as a
 length- or frequency-conditioned percentile of bigram frequency, pointwise
-mutual information, or another phrase statistic:
+mutual information, or another phrase statistic (but see
+[association-is-not-interestingness.md](association-is-not-interestingness.md):
+co-occurrence statistics rank function-word bigrams like `they were` above
+content phrases, so they serve as a floor on pair quality rather than as the
+ordering term):
 
 $$
 Q_{\text{coherence}} = \operatorname{average}_i q_{\text{pair}}(w_i,w_{i+1})

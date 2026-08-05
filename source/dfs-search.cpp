@@ -178,13 +178,17 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    size_t score_cache_bytes,
                                    size_t preprocess_threads,
                                    size_t search_threads,
-                                   double word_bonus):
+                                   size_t exact_segments):
     class_list(classes),
     letters(letters),
-    score_model(segment_penalty, corpus_total, word_bonus),
+    score_model(segment_penalty, corpus_total),
     segment_boundary_log_score(
         score_model.segment_boundary_log_score()),
-    max_depth(derived_max_depth(classes, letters.size())),
+    exact_segments(exact_segments),
+    // A target below the letters' natural depth limit is itself the limit;
+    // a target above it leaves the walk unchanged and simply finds nothing.
+    max_depth(std::min(derived_max_depth(classes, letters.size()),
+                       exact_segments != 0 ? exact_segments : SIZE_MAX)),
     score_cache_budget(score_cache_bytes),
     requested_preprocess_threads(std::max(size_t(1), preprocess_threads)),
     requested_search_threads(std::max(size_t(1), search_threads)),
@@ -199,8 +203,8 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     assert(class_list->member_count(i) > 0);
     DfsMemberView const best = class_list->member(i, 0);
     assert(best.count > 0);
-    best_member_log_scores.push_back(score_model.first_segment_log_score(
-        best.count, best.word_count > 1));
+    best_member_log_scores.push_back(
+        score_model.first_segment_log_score(best.count));
   }
 }
 
@@ -485,6 +489,8 @@ bool DfsAnagramSearch::prepare_phase_two(
   data->segment_boundary_log_score = segment_boundary_log_score;
   data->letter_count = letters.size();
   data->max_depth = max_depth;
+  data->exact_depth = exact_segments;
+  data->min_word_length = size_t(class_list->min_word_length());
   data->support_scan_vector = support_scan_vector;
   data->requested_search_threads = requested_search_threads;
   bool certificate_requested = false;

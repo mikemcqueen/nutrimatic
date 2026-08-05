@@ -35,6 +35,10 @@ experiments.
 
 ## The rare-event defect
 
+This section covers the low-frequency end only. A separate high-frequency
+defect, which the likelihood-ratio replacement does not fix, is measured in
+[association-is-not-interestingness.md](association-is-not-interestingness.md).
+
 The more serious problem is that the current smoothed association retains the
 classic rare-PMI pathology. It scores an ordered pair as:
 

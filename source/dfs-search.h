@@ -29,7 +29,7 @@ class DfsAnagramSearch {
                    size_t score_cache_bytes = 0,
                    size_t preprocess_threads = 1,
                    size_t search_threads = 1,
-                   double word_bonus = 0.0);
+                   size_t exact_segments = 0);
 
   // A null sink runs the search as a counter. `stats` receives everything this
   // call measured and may be NULL. When the ambient diagnostic stream
@@ -72,6 +72,9 @@ class DfsAnagramSearch {
   DfsScoreModel const score_model;
   double const segment_boundary_log_score;
   std::vector<double> best_member_log_scores;
+  // Declared before max_depth: a nonzero exact_segments clamps it, so the
+  // member initializer for max_depth reads this one.
+  size_t const exact_segments;
   size_t const max_depth;
   size_t const score_cache_budget;
   size_t const requested_preprocess_threads;

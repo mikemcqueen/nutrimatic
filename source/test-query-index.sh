@@ -96,13 +96,11 @@ expect_score_failure 'ab,,cd' empty-entry
 expect_score_failure a prefix-only
 expect_score_failure 'ab  cd' malformed-spacing
 
-assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
-  "--word-bonus should retain its million-fold boost at P=1"
-assert_close "$(score_value ab --word-bonus 1)" 80 \
-  "--word-bonus should not apply to a single-word segment"
-assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 136 * 1e6 }')" \
-  "a mixed sequence should bonus only its multi-word segment"
+assert_close "$(score_value 'ab cd' -P 1)" 70 \
+  "a multi-word entry should score as its own count"
+assert_close "$(score_value 'ab cd,ab' -P 1)" \
+  "$(awk 'BEGIN { print 70 * 80 / 136 }')" \
+  "word count should not affect any segment's score"
 
 expect_score_failure ab penalty-zero -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
@@ -191,20 +189,14 @@ cmp "$test_dir/completable-on.stdout" \
     "$test_dir/completable-penalty-one.stdout" ||
   fail "segment penalty changed exact completability filtering"
 
-# Filtering is score-independent. In particular, an extreme negative bonus
-# must not make the phrase-only completion of "f" look unreachable.
+# Filtering is score-independent: the phrase-only completion of "f" stays
+# reachable regardless of how the surviving members are ranked for display.
 "$query_index" "$synthetic_index" fghij -m 1 -n 10 \
-  --words-only --require-completable --word-bonus -100 \
-  > "$test_dir/underflow-bonus.stdout" \
-  2> "$test_dir/underflow-bonus.stderr"
-grep -q ' f$' "$test_dir/underflow-bonus.stdout" ||
-  fail "--word-bonus underflow changed exact completability"
-
-"$query_index" "$synthetic_index" wxyz -m 2 -n 1 \
-  --require-completable --word-bonus 1 \
-  > "$test_dir/bonus.stdout" 2> "$test_dir/bonus.stderr"
-grep -q ' wx yz$' "$test_dir/bonus.stdout" ||
-  fail "--word-bonus did not rank a low-frequency phrase above the -n floor"
+  --words-only --require-completable \
+  > "$test_dir/phrase-completion.stdout" \
+  2> "$test_dir/phrase-completion.stderr"
+grep -q ' f$' "$test_dir/phrase-completion.stdout" ||
+  fail "phrase-only completion of f was filtered out"
 
 # Phrases remain available as completion classes under --words-only, but are
 # filtered from the displayed members.
@@ -216,6 +208,27 @@ grep -q ' wx yz$' "$test_dir/bonus.stdout" ||
   fail "--words-only should print only the word completed by a phrase"
 grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
   fail "a phrase was not retained as a completion path under --words-only"
+
+# -x caps the words in one extracted entry, so it can only remove entries a
+# capless run already found. --pairs is the same cap at 2.
+"$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
+  > "$test_dir/extract-uncapped.stdout" \
+  2> "$test_dir/extract-uncapped.stderr"
+"$query_index" "$synthetic_index" abcdef -m 1 -n 0 --pairs \
+  > "$test_dir/extract-pairs.stdout" 2> "$test_dir/extract-pairs.stderr"
+"$query_index" "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
+  > "$test_dir/extract-x2.stdout" 2> "$test_dir/extract-x2.stderr"
+cmp "$test_dir/extract-pairs.stdout" "$test_dir/extract-x2.stdout" ||
+  fail "--pairs and -x 2 disagree"
+awk '{ print }' "$test_dir/extract-uncapped.stdout" |
+  awk 'gsub(/ /, " ") <= 2' > "$test_dir/extract-filtered.stdout"
+cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-pairs.stdout" ||
+  fail "-x 2 does not match the uncapped run filtered to two words"
+
+expect_score_failure ab extract-with-score -x 2
+grep -q -- '--max-extract-words cannot be used with --score' \
+  "$test_dir/extract-with-score.stderr" ||
+  fail "-x should be rejected with --score"
 
 printf 'qr\nst\nuv\n' > "$test_dir/dictionary-all"
 "$query_index" "$synthetic_index" qrstuv -m 2 -n 10 \
