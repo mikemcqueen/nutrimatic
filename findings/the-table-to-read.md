@@ -1,8 +1,30 @@
 # The table to read
 
-> **Status (2026-08-05):** Open question awaiting a judgment call. The
-> length-conditioned percentile proposed earlier is withdrawn; the reasons are
-> below. What replaces it is a decision only inspection can settle.
+> **Status (2026-08-05):** Demoted. Sections below stand as a record of why the
+> length-conditioned percentile was withdrawn, which is still the useful part.
+> The framing -- "read the table and decide" -- does not, and this document is
+> not the arbiter of the scoring model. Two reasons, both recorded the same day
+> the table was written:
+>
+> **1. The headline question is the wrong one.** Asking whether `reality
+> television` is "as good as" `with` treats per-entry quality as something to be
+> discovered from the index. It is not. The tool exists to find meaningful
+> pairs, so pairs outrank non-pairs, two pairs outrank one, and three outrank
+> two -- by stipulation, as the objective. That ordering is asserted by
+> `--word-bonus`, not derived from counts, and no table of counts can confirm or
+> refute it.
+>
+> **2. The numbers are not a stable basis anyway.** Every count here is read
+> against the current index traversal. Filtering connector words out of that
+> traversal -- an open option -- changes which entries exist and what the top of
+> each length class is, so the measured gap between the best pair and the best
+> non-pair moves with a decision that has not been made yet. Calibrating on it
+> now would calibrate on a moving target.
+>
+> What remains live from this document is only the withdrawal argument in "Why
+> the percentile proposal was withdrawn" and the double-counting observation.
+> The "How to settle it" section is superseded: the answer is to set
+> `--word-bonus` and inspect results.
 
 ## The question
 
@@ -128,17 +150,26 @@ the millions-count ones.
 Length is therefore already priced in by the partition constraint. Conditioning
 per-entry quality on length may double-count it.
 
-## How to settle it
+## How to settle it (superseded)
 
-Read the table.
+The original text said: read the table, and if `reality television` and `with`
+feel like peers, pursue length conditioning with a tail-aware statistic;
+otherwise close the per-entry question.
 
-- If `reality television` and `with` feel like peers, length conditioning is
-  worth pursuing -- but with a tail-aware statistic (within-class rank, or
-  $\ln c$ measured against the class maximum), not a percentile over the bulk.
-- If `with` is obviously the stronger entry, raw count is already correct
-  per-entry, and the per-entry question closes. The only live thread is then
-  min-aggregation over pair-count buckets
-  (see [association-is-not-interestingness.md](association-is-not-interestingness.md)).
+That is not how this gets settled. The preference for phrases is an objective,
+so it is asserted and then tuned:
+
+```bash
+build/dfs-anagrams $IDX "$S6" -u toyfastmusketsalvo -m 4 --pairs -g 3 -n 6 \
+    --word-bonus 1
+```
+
+At `--word-bonus 0` the top three-segment answers are one pair plus two
+singles (`traditionally,however some,eight`); at `1` they are three pairs
+(`that they,original movie,were sold`). The knob does what it is supposed to
+do, and where it should sit is a question for inspection, not for this table.
+
+Length conditioning is separate and still dead for the reasons above.
 
 ## Reproducing
 

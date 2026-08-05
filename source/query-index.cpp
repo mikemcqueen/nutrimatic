@@ -35,7 +35,7 @@ struct Args {
 static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
-      " [--score] [-P|--segment-penalty P]"
+      " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-x max-extract-words] [--pairs]"
       " [-w|--words-only] [--require-completable]"
@@ -46,6 +46,8 @@ static void usage(char const* program) {
       " index entry after the first; P must be at least 1 and defaults to"
       " %.0f\n"
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
+      "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
+      " defaults to %.1f (no bonus)\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 for no limit\n"
       "  --dict PATH filters entries to words in the dictionary\n"
@@ -57,8 +59,8 @@ static void usage(char const* program) {
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
       "    -m), using shared exact validation without a score cache\n"
       "  -S, --search-threads defaults to 1\n",
-      program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_DEFAULT_MIN_WORD_LEN,
-      DEFAULT_TOP);
+      program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_WORD_BONUS_BASE, 0.0,
+      DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP);
 }
 
 static int const OPT_REQUIRE_COMPLETABLE = 256;
@@ -151,14 +153,36 @@ static bool parse_args(char* argv[], Args* out) {
       out->letters, out->common.min_word_len_given, &out->common.min_word_len);
 }
 
-// Entry score is log(count), so log(count) descending is integer count
-// descending: over this corpus's count range log is injective in double, so an
-// integer compare reproduces the score order exactly, ties included, and the
-// text tie-break still decides them.
+// With the default --word-bonus 0 the two multi_word groups collapse and
+// log(count) descending is integer count descending: over this corpus's count
+// range log is injective in double, so an integer compare reproduces the
+// score order exactly, ties included, and the text tie-break still decides
+// them.
 static bool count_order(DfsPackedMember const& a, DfsPackedMember const& b) {
   if (a.count != b.count) return a.count > b.count;
   return dfs_member_text_compare(a, b) < 0;
 }
+
+static bool is_phrase(DfsPackedMember const& member) {
+  return member.word_count > 1;
+}
+
+// Rewriting this as count * exp(bonus) versus count would round differently
+// from log(count) + bonus, breaking exact ties differently and so changing the
+// text tie-break. It stays the identical expression, applied O(E) times in the
+// merge instead of O(E log E) times in a sort.
+struct ScoreOrder {
+  DfsScoreModel const* model;
+
+  bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
+    double const a_score =
+        model->first_segment_log_score(a.count, is_phrase(a));
+    double const b_score =
+        model->first_segment_log_score(b.count, is_phrase(b));
+    if (a_score != b_score) return a_score > b_score;
+    return dfs_member_text_compare(a, b) < 0;
+  }
+};
 
 static bool parse_score_sequence(
     std::string const& sequence, std::vector<std::string>* entries) {
@@ -213,10 +237,19 @@ static bool print_sequence_score(
     counts.push_back(count);
   }
 
-  DfsScoreModel const model(args.common.segment_penalty, reader.count());
-  double log_score = model.first_segment_log_score(counts[0]);
+  // An interior space is exactly what makes an entry multi-word; entries here
+  // are the user's own text, already validated against the index above.
+  std::vector<bool> multi_word;
+  multi_word.reserve(entries.size());
+  for (size_t i = 0; i < entries.size(); ++i)
+    multi_word.push_back(entries[i].find(' ') != std::string::npos);
+
+  DfsScoreModel const model(
+      args.common.segment_penalty, reader.count(), args.common.word_bonus);
+  double log_score = model.first_segment_log_score(counts[0], multi_word[0]);
   for (size_t i = 1; i < entries.size(); ++i)
-    log_score = model.append_segment_log_score(log_score, counts[i]);
+    log_score = model.append_segment_log_score(
+        log_score, counts[i], multi_word[i]);
 
   printf("%#.4g %s\n", model.displayed_score(log_score),
          args.score_sequence.c_str());
@@ -305,13 +338,47 @@ int main(int argc, char* argv[]) {
       ? survivors.count
       : std::min(survivors.count, size_t(args.common.top));
 
+  DfsScoreModel const model(
+      args.common.segment_penalty, reader.count(), args.common.word_bonus);
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = first + survivors.count;
-  std::partial_sort(first, first + top, last, count_order);
-  for (size_t i = 0; i < top; ++i) {
-    DfsPackedMember const& row = first[i];
-    printf("%lld %.*s\n", (long long) row.count,
-           int(row.text_length), row.text);
+  auto const print_row = [&](DfsPackedMember const& row) {
+    if (args.common.word_bonus == 0.0)
+      printf("%lld %.*s\n", (long long) row.count,
+             int(row.text_length), row.text);
+    else
+      printf("%#.4g %.*s\n",
+             model.displayed_score(model.first_segment_log_score(
+                 row.count, is_phrase(row))),
+             int(row.text_length), row.text);
+  };
+
+  if (args.common.word_bonus == 0.0) {
+    std::partial_sort(first, first + top, last, count_order);
+    for (size_t i = 0; i < top; ++i) print_row(first[i]);
+  } else {
+    // A constant bonus is order-preserving within each group, so sorting the
+    // two groups by count and merging them by score costs one partition
+    // instead of scoring every entry in a comparator.
+    DfsPackedMember* const mid = std::partition(first, last, is_phrase);
+    size_t const phrase_top = std::min(top, size_t(mid - first));
+    size_t const word_top = std::min(top, size_t(last - mid));
+    std::partial_sort(first, first + phrase_top, mid, count_order);
+    std::partial_sort(mid, mid + word_top, last, count_order);
+
+    ScoreOrder const order = { &model };
+    size_t phrase = 0;
+    size_t word = 0;
+    for (size_t printed = 0; printed < top; ++printed) {
+      bool take_phrase;
+      if (phrase == phrase_top)
+        take_phrase = false;
+      else if (word == word_top)
+        take_phrase = true;
+      else
+        take_phrase = order(first[phrase], mid[word]);
+      print_row(take_phrase ? first[phrase++] : mid[word++]);
+    }
   }
   return 0;
 }

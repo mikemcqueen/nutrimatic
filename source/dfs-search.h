@@ -29,7 +29,8 @@ class DfsAnagramSearch {
                    size_t score_cache_bytes = 0,
                    size_t preprocess_threads = 1,
                    size_t search_threads = 1,
-                   size_t exact_segments = 0);
+                   size_t exact_segments = 0,
+                   double word_bonus = 0.0);
 
   // A null sink runs the search as a counter. `stats` receives everything this
   // call measured and may be NULL. When the ambient diagnostic stream

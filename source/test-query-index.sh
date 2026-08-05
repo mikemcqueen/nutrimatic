@@ -97,10 +97,18 @@ expect_score_failure a prefix-only
 expect_score_failure 'ab  cd' malformed-spacing
 
 assert_close "$(score_value 'ab cd' -P 1)" 70 \
-  "a multi-word entry should score as its own count"
+  "a multi-word entry should score as its own count without a bonus"
 assert_close "$(score_value 'ab cd,ab' -P 1)" \
   "$(awk 'BEGIN { print 70 * 80 / 136 }')" \
-  "word count should not affect any segment's score"
+  "word count should not affect any segment's score without a bonus"
+
+assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
+  "--word-bonus should retain its million-fold boost at P=1"
+assert_close "$(score_value ab --word-bonus 1)" 80 \
+  "--word-bonus should not apply to a single-word segment"
+assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
+  "$(awk 'BEGIN { print 70 * 80 / 136 * 1e6 }')" \
+  "a mixed sequence should bonus only its multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \

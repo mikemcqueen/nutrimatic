@@ -60,7 +60,7 @@ static void usage(char const* program) {
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
-      " [-P segment-penalty] [--segments] [--weighted]"
+      " [-P segment-penalty] [--word-bonus N] [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
@@ -83,6 +83,10 @@ static void usage(char const* program) {
       " index entry after the first; P must be at least 1 and defaults to"
       " %.0f\n"
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
+      "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
+      " defaults to %.1f (no bonus)\n"
+      "    at N=1 a multi-word entry earns back the default -P it costs, so"
+      " adding one as a further entry is free\n"
       "  --segments prints the index entries used by the results instead of"
       " the results, as best-score, result-count and text, by descending"
       " best score\n"
@@ -92,7 +96,8 @@ static void usage(char const* program) {
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
       program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY);
+      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY,
+      DFS_WORD_BONUS_BASE, 0.0);
 }
 
 static int const OPT_SEGMENTS = 256;
@@ -290,7 +295,8 @@ int main(int argc, char* argv[]) {
   DfsAnagramSearch search(
       &classes, args.letters, args.common.segment_penalty, reader.count(),
       args.score_cache_bytes, preprocess_threads,
-      size_t(args.common.search_threads), size_t(args.num_segments));
+      size_t(args.common.search_threads), size_t(args.num_segments),
+      args.common.word_bonus);
   DfsTopN output(&classes, size_t(args.common.top));
   DfsSearchStats stats;
   if (!search.run(&output, &stats,

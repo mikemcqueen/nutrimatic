@@ -228,6 +228,13 @@ DfsOptionResult dfs_parse_common_option(
       info.name = "--segment-penalty";
       info.score_incompatible = false;
       break;
+    case DFS_OPT_WORD_BONUS:
+      if (!parse_double(options->optarg, "--word-bonus", &out->word_bonus))
+        return DFS_OPTION_ERROR;
+      // Like the penalty, it is a term of the score --score computes.
+      info.name = "--word-bonus";
+      info.score_incompatible = false;
+      break;
     default:
       return DFS_OPTION_OTHER;
   }

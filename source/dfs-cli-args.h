@@ -23,6 +23,7 @@ inline constexpr int DFS_PAIRS_LIMIT = 2;
 // silently collide with a shared one.
 inline constexpr int DFS_OPT_DICT = 300;
 inline constexpr int DFS_OPT_PAIRS = 301;
+inline constexpr int DFS_OPT_WORD_BONUS = 302;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -35,7 +36,8 @@ inline constexpr int DFS_OPT_PAIRS = 301;
   { "pairs", DFS_OPT_PAIRS, OPTPARSE_NONE }, \
   { "top", 'n', OPTPARSE_REQUIRED }, \
   { "search-threads", 'S', OPTPARSE_REQUIRED }, \
-  { "segment-penalty", 'P', OPTPARSE_REQUIRED }
+  { "segment-penalty", 'P', OPTPARSE_REQUIRED }, \
+  { "word-bonus", DFS_OPT_WORD_BONUS, OPTPARSE_REQUIRED }
 
 // What the shared options parsed into. `top` has no shared default because the
 // two CLIs disagree on it; each sets its own before the option loop.
@@ -47,6 +49,7 @@ struct DfsCommonArgs {
   int top = 0;
   int search_threads = 1;
   double segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
+  double word_bonus = 0.0;
   bool min_word_len_given = false;
   bool max_extract_words_given = false;
   bool pairs_given = false;

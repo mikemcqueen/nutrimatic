@@ -139,6 +139,21 @@ bigram statistic can recover it. A stopword or content-word test over an
 entry's constituents is unglamorous but matches the distinction actually being
 drawn, and belongs in $Q_{\text{lexical}}$ rather than $Q_{\text{coherence}}$.
 
+## What this does not license
+
+This document was briefly used to justify deleting `--word-bonus`, on the
+reasoning that multi-word entries are not rarer than single-word entries of the
+same letter count, so a bonus compensates for nothing. That reasoning is a
+category error and the deletion was reverted.
+
+The bonus was never a correction for a measured bias. It is a statement of what
+the tool is for: pairs are the objective, so pairs outscore non-pairs and $k$
+pairs outscore $k-1$. What is scoped here is the narrower claim that no
+*index-derived statistic* recovers a preference for interesting phrases -- and
+that claim holds, twice over. The correct conclusion is that the preference
+must be asserted as a tunable term rather than inferred, which is exactly what
+`--word-bonus` is. See `dfs-score.h`.
+
 ## Reproducing
 
 Ratios and counts come from `build/explore-index $IDX "<entry> " N`, reading
