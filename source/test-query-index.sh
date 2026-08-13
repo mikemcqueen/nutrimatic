@@ -233,6 +233,29 @@ awk '{ print }' "$test_dir/extract-uncapped.stdout" |
 cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-pairs.stdout" ||
   fail "-x 2 does not match the uncapped run filtered to two words"
 
+# --csv keeps exactly the multi-word entries of an ordinary run, printed as
+# their words with the count column dropped.
+"$query_index" "$synthetic_index" abcdef -m 1 -n 0 --csv \
+  > "$test_dir/csv.stdout" 2> "$test_dir/csv.stderr"
+[[ -s "$test_dir/csv.stdout" ]] || fail "--csv printed nothing"
+grep -Ev '^[a-z0-9]+(,[a-z0-9]+)+$' "$test_dir/csv.stdout" &&
+  fail "--csv emitted a single-word entry or a non-CSV line"
+awk 'NF > 2 { $1 = ""; sub(/^ /, ""); gsub(/ /, ","); print }' \
+  "$test_dir/extract-uncapped.stdout" > "$test_dir/csv-expected.stdout"
+cmp "$test_dir/csv-expected.stdout" "$test_dir/csv.stdout" ||
+  fail "--csv does not match the ordinary run's multi-word entries"
+
+set +e
+"$query_index" "$synthetic_index" abcdef --csv -w \
+  > "$test_dir/csv-words-only.stdout" 2> "$test_dir/csv-words-only.stderr"
+status=$?
+set -e
+[[ $status -eq 2 ]] || fail "--csv -w should exit 2, got $status"
+expect_score_failure ab csv-with-score --csv
+grep -q -- '--csv cannot be used with --score' \
+  "$test_dir/csv-with-score.stderr" ||
+  fail "--csv should be rejected with --score"
+
 expect_score_failure ab extract-with-score -x 2
 grep -q -- '--max-extract-words cannot be used with --score' \
   "$test_dir/extract-with-score.stderr" ||

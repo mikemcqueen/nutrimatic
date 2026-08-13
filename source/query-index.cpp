@@ -27,6 +27,7 @@ struct Args {
   std::string score_sequence;
   DfsCommonArgs common;
   bool words_only;
+  bool csv;
   bool require_completable;
   bool score;
   char const* score_incompatible_option;
@@ -38,7 +39,7 @@ static void usage(char const* program) {
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-x max-extract-words] [--pairs]"
-      " [-w|--words-only] [--require-completable]"
+      " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
       "    entries and prints its DFS-model score\n"
@@ -55,6 +56,8 @@ static void usage(char const* program) {
       " entry; defaults to 0 (no limit)\n"
       "  --pairs is shorthand for --max-extract-words 2\n"
       "  -w, --words-only excludes multi-word phrases\n"
+      "  --csv prints only multi-word entries, as their comma-separated"
+      " words, with no count or score column\n"
       "  --require-completable drops classes whose removal leaves a\n"
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
       "    -m), using shared exact validation without a score cache\n"
@@ -65,10 +68,12 @@ static void usage(char const* program) {
 
 static int const OPT_REQUIRE_COMPLETABLE = 256;
 static int const OPT_SCORE = 257;
+static int const OPT_CSV = 258;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
   { "words-only", 'w', OPTPARSE_NONE },
+  { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -83,6 +88,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
   out->words_only = false;
+  out->csv = false;
   out->require_completable = false;
   out->score = false;
   out->score_incompatible_option = NULL;
@@ -107,6 +113,10 @@ static bool parse_args(char* argv[], Args* out) {
       case 'w':
         out->words_only = true;
         mark_score_incompatible(out, "--words-only");
+        break;
+      case OPT_CSV:
+        out->csv = true;
+        mark_score_incompatible(out, "--csv");
         break;
       case OPT_SCORE:
         out->score = true;
@@ -140,6 +150,11 @@ static bool parse_args(char* argv[], Args* out) {
     }
     out->score_sequence = letters;
     return true;
+  }
+
+  if (out->csv && out->words_only) {
+    fputs("error: --csv cannot be used with --words-only\n", stderr);
+    return false;
   }
 
   std::string bag;
@@ -332,8 +347,11 @@ int main(int argc, char* argv[]) {
   // The class -> member grouping has no reader left: phase 2 touched it once at
   // setup and its search is already destroyed, and printing needs only each
   // member's count and text.
+  DfsMemberFilter const filter = args.words_only
+      ? DFS_RETAIN_WORDS
+      : (args.csv ? DFS_RETAIN_PHRASES : DFS_RETAIN_ALL);
   DfsMemberSpan const survivors =
-      classes.retain_members(completable, args.words_only);
+      classes.retain_members(completable, filter);
   size_t const top = args.common.top == 0
       ? survivors.count
       : std::min(survivors.count, size_t(args.common.top));
@@ -343,7 +361,11 @@ int main(int argc, char* argv[]) {
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = first + survivors.count;
   auto const print_row = [&](DfsPackedMember const& row) {
-    if (args.common.word_bonus == 0.0)
+    if (args.csv) {
+      for (size_t i = 0; i < row.text_length; ++i)
+        putchar(row.text[i] == ' ' ? ',' : row.text[i]);
+      putchar('\n');
+    } else if (args.common.word_bonus == 0.0)
       printf("%lld %.*s\n", (long long) row.count,
              int(row.text_length), row.text);
     else

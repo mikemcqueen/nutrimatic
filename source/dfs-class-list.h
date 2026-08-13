@@ -68,6 +68,14 @@ struct DfsClassSpan {
   DfsClassRecord const& operator[](size_t index) const { return data[index]; }
 };
 
+// Which extracted spellings retain_members() keeps: everything, single words
+// only, or multi-word phrases only.
+enum DfsMemberFilter {
+  DFS_RETAIN_ALL,
+  DFS_RETAIN_WORDS,
+  DFS_RETAIN_PHRASES,
+};
+
 struct DfsMemberSpan {
   DfsPackedMember* data;
   size_t count;
@@ -169,12 +177,12 @@ class DfsClassList {
   size_t candidate_end(int symbol) const;
 
   // Moves to the front of the member arena every member of every class whose
-  // keep_class entry is true, dropping multi-word members when words_only, and
+  // keep_class entry is true, dropping members the filter excludes, and
   // returns a mutable span of the survivors. This reorders members across class
   // boundaries, so it drops the class -> member grouping; the survivors stay
   // valid until release_members().
   DfsMemberSpan retain_members(
-      std::vector<bool> const& keep_class, bool words_only);
+      std::vector<bool> const& keep_class, DfsMemberFilter filter);
 
   // Drops the class -> member grouping: zeroes every record's members pointer
   // and member_count, and latches the flag. The member records and their text

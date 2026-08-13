@@ -594,7 +594,7 @@ size_t DfsClassList::candidate_end(int symbol) const {
 }
 
 DfsMemberSpan DfsClassList::retain_members(
-    std::vector<bool> const& keep_class, bool words_only) {
+    std::vector<bool> const& keep_class, DfsMemberFilter filter) {
   assert(keep_class.size() == class_count);
   assert(!grouping_dropped);
   DfsPackedMember* const members = members_arena.get();
@@ -608,9 +608,12 @@ DfsMemberSpan DfsClassList::retain_members(
     if (!keep_class[ci]) continue;
     DfsClassRecord const& record = records[ci];
     size_t const start = size_t(record.members - members);
-    for (size_t mi = 0; mi < record.member_count; ++mi)
-      if (!words_only || record.members[mi].word_count == 1)
-        keep_member[start + mi] = true;
+    for (size_t mi = 0; mi < record.member_count; ++mi) {
+      int const words = record.members[mi].word_count;
+      bool const keep = filter == DFS_RETAIN_ALL ||
+          (filter == DFS_RETAIN_WORDS ? words == 1 : words > 1);
+      if (keep) keep_member[start + mi] = true;
+    }
   }
 
   size_t write = 0;
