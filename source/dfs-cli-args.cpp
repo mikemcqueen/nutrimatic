@@ -1,5 +1,7 @@
 #include "dfs-cli-args.h"
 
+#include "dfs-diagnostic.h"
+
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -185,7 +187,7 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   return true;
 }
 
-bool load_pair_file(char const* path, DfsPairSet* pairs, size_t* pair_count) {
+bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open pair list \"%s\"\n", path);
@@ -229,7 +231,9 @@ bool load_pair_file(char const* path, DfsPairSet* pairs, size_t* pair_count) {
     pairs->insert(loaded[i].first + " " + loaded[i].second);
     pairs->insert(loaded[i].second + " " + loaded[i].first);
   }
-  *pair_count = loaded.size();
+  if (!quiet)
+    dfs_diagnostic("pair list: %zu pairs, %zu keys\n",
+                   loaded.size(), pairs->size());
   return true;
 }
 
@@ -296,6 +300,12 @@ DfsOptionResult dfs_parse_common_option(
         return DFS_OPTION_ERROR;
       // Like the penalty, it is a term of the score --score computes.
       info.name = "--word-bonus";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_PAIR_BONUS:
+      if (!parse_double(options->optarg, "--pair-bonus", &out->pair_bonus))
+        return DFS_OPTION_ERROR;
+      info.name = "--pair-bonus";
       info.score_incompatible = false;
       break;
     default:

@@ -60,7 +60,8 @@ static void usage(char const* program) {
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
-      " [-P segment-penalty] [--word-bonus N] [--segments] [--weighted]"
+      " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
+      " [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
@@ -73,7 +74,7 @@ static void usage(char const* program) {
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
       "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
-      " in either order; it has no effect until --pair-bonus\n"
+      " in either order\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
@@ -88,6 +89,8 @@ static void usage(char const* program) {
       " defaults to %.1f (no bonus)\n"
       "    at N=1 a multi-word entry earns back the default -P it costs, so"
       " adding one as a further entry is free\n"
+      "  --pair-bonus N multiplies each index entry found in --pairs by"
+      " %.0f^N; defaults to %.1f\n"
       "  --segments prints the index entries used by the results instead of"
       " the results, as best-score, result-count and text, by descending"
       " best score\n"
@@ -98,7 +101,8 @@ static void usage(char const* program) {
       "  -v, --verbose reports search task splitting\n",
       program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
       DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY,
-      DFS_WORD_BONUS_BASE, 0.0);
+      DFS_WORD_BONUS_BASE, 0.0, DFS_PAIR_BONUS_BASE,
+      DFS_DEFAULT_PAIR_BONUS);
 }
 
 static int const OPT_SEGMENTS = 256;
@@ -254,11 +258,9 @@ int main(int argc, char* argv[]) {
 
   DfsPairSet pairs;
   if (args.common.pair_file != NULL) {
-    size_t pair_count = 0;
-    if (!load_pair_file(args.common.pair_file, &pairs, &pair_count)) return 1;
-    dfs_diagnostic("pair list: %zu pairs, %zu keys\n",
-                   pair_count, pairs.size());
-  }
+    if (!load_pair_file(args.common.pair_file, &pairs, false)) return 1;
+  } else
+    args.common.pair_bonus = 0.0;
 
   FILE* fp = fopen(args.index_file, "rb");
   if (fp == NULL) {
@@ -292,10 +294,12 @@ int main(int argc, char* argv[]) {
 
   IndexReader reader(fp);
   DfsScoreModel const model(
-      args.common.segment_penalty, reader.count(), args.common.word_bonus);
+      args.common.segment_penalty, reader.count(), args.common.word_bonus,
+      args.common.pair_bonus);
   DfsClassList classes(&reader, args.letters, args.common.min_word_len, true,
                        dictionary_filter, args.common.max_extract_words,
-                       model.multi_word_log_bonus());
+                       &model,
+                       args.common.pair_file != NULL ? &pairs : NULL);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -306,7 +310,7 @@ int main(int argc, char* argv[]) {
       &classes, args.letters, args.common.segment_penalty, reader.count(),
       args.score_cache_bytes, preprocess_threads,
       size_t(args.common.search_threads), size_t(args.num_segments),
-      args.common.word_bonus);
+      args.common.word_bonus, args.common.pair_bonus);
   DfsTopN output(&classes, &model, size_t(args.common.top));
   DfsSearchStats stats;
   if (!search.run(&output, &stats,

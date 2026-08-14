@@ -194,15 +194,17 @@ grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
 
 # The second line is the first one reversed, so its two insertions are the two
 # the first line already made: four insertions, two keys. Both reversal and
-# dedup show up in the reported key count.
+# dedup show up in the reported key count. An explicit zero pair bonus makes
+# loading the scoring input alone leave output unchanged.
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs "$test_dir/pairs.txt" \
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
 grep -Eq "${diagnostic_prefix}pair list: 2 pairs, 2 keys$" \
   "$test_dir/pair-list.stderr" ||
   fail "the pair-list diagnostic did not report reversal and dedup"
 cmp "$test_dir/all.stdout" "$test_dir/pair-list.stdout" ||
-  fail "a loaded pair list changed stdout before --pair-bonus exists"
+  fail "a loaded pair list changed stdout at --pair-bonus 0"
 
 # A '-' line is skipped rather than counted, but still advances the line
 # number the next error reports.
@@ -239,6 +241,23 @@ assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/bonus-one.stdout")" \
   fail "--word-bonus 1 dropped the single word from the class"
 assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/bonus-one.stdout")" \
   1000 "--word-bonus 1 should leave the single word's score alone"
+
+# The same within-class promotion must work when only the selected pair earns
+# the bonus. This exercises pair lookup, score ordering, phase-2 bounds, and
+# phase-3 spelling deltas together.
+printf 'kl,mn\n' > "$test_dir/klmn-pairs.txt"
+"$dfs_anagrams" "$index_file" klmn -m 2 -n 5 \
+  --pairs "$test_dir/klmn-pairs.txt" \
+  > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"
+[[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/pair-bonus.stdout") \
+   == "kl mn" ]] ||
+  fail "the default pair bonus did not promote the listed pair within its class"
+assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
+  5000000 "the default pair bonus should multiply the listed pair by one million"
+[[ $(awk 'NR == 2 { print $2 }' "$test_dir/pair-bonus.stdout") == klmn ]] ||
+  fail "--pair-bonus dropped the unlisted single word from the class"
+assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/pair-bonus.stdout")" \
+  1000 "--pair-bonus should leave the unlisted single word's score alone"
 
 # Every result line's entry list must be pasteable into "query-index --score"
 # and reproduce that line's own score.

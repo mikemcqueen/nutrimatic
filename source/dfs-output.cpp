@@ -77,8 +77,10 @@ static double spelling_log_score(
     DfsMemberView const chosen =
         classes.member(class_index, member_indexes[i]);
     DfsMemberView const best = classes.member(class_index, 0);
-    score += model.segment_log_score(chosen.count, chosen.word_count > 1) -
-        model.segment_log_score(best.count, best.word_count > 1);
+    score += model.segment_log_score(
+                 chosen.count, chosen.word_count > 1, chosen.known_pair) -
+        model.segment_log_score(
+                 best.count, best.word_count > 1, best.known_pair);
   }
   return score;
 }

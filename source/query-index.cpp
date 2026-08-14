@@ -12,6 +12,7 @@
 #include "index.h"
 #include "optparse.h"
 
+#include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
 
@@ -37,6 +38,7 @@ static void usage(char const* program) {
   fprintf(stderr,
       "usage: %s input.index letters"
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
+      " [--pair-bonus N]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
       " [-w|--words-only] [--csv] [--require-completable]"
@@ -49,13 +51,15 @@ static void usage(char const* program) {
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
       " defaults to %.1f (no bonus)\n"
+      "  --pair-bonus N multiplies each index entry found in --pairs by"
+      " %.0f^N; defaults to %.1f\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 for no limit\n"
       "  --dict PATH filters entries to words in the dictionary\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
       "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
-      " in either order; it has no effect until --pair-bonus\n"
+      " in either order\n"
       "  -w, --words-only excludes multi-word phrases\n"
       "  --csv prints only multi-word entries, as their comma-separated"
       " words, with no count or score column\n"
@@ -64,6 +68,7 @@ static void usage(char const* program) {
       "    -m), using shared exact validation without a score cache\n"
       "  -S, --search-threads defaults to 1\n",
       program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_WORD_BONUS_BASE, 0.0,
+      DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS,
       DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP);
 }
 
@@ -167,11 +172,10 @@ static bool parse_args(char* argv[], Args* out) {
       out->letters, out->common.min_word_len_given, &out->common.min_word_len);
 }
 
-// With the default --word-bonus 0 the two multi_word groups collapse and
-// log(count) descending is integer count descending: over this corpus's count
-// range log is injective in double, so an integer compare reproduces the
-// score order exactly, ties included, and the text tie-break still decides
-// them.
+// With both bonuses at zero every group collapses to log(count) descending,
+// which is integer count descending: over this corpus's count range log is
+// injective in double, so an integer compare reproduces the score order
+// exactly, ties included, and the text tie-break still decides them.
 static bool count_order(DfsPackedMember const& a, DfsPackedMember const& b) {
   if (a.count != b.count) return a.count > b.count;
   return dfs_member_text_compare(a, b) < 0;
@@ -179,6 +183,10 @@ static bool count_order(DfsPackedMember const& a, DfsPackedMember const& b) {
 
 static bool is_phrase(DfsPackedMember const& member) {
   return member.word_count > 1;
+}
+
+static bool is_pair(DfsPackedMember const& member) {
+  return member.known_pair != 0;
 }
 
 // Rewriting this as count * exp(bonus) versus count would round differently
@@ -190,9 +198,9 @@ struct ScoreOrder {
 
   bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
     double const a_score =
-        model->first_segment_log_score(a.count, is_phrase(a));
+        model->first_segment_log_score(a.count, is_phrase(a), is_pair(a));
     double const b_score =
-        model->first_segment_log_score(b.count, is_phrase(b));
+        model->first_segment_log_score(b.count, is_phrase(b), is_pair(b));
     if (a_score != b_score) return a_score > b_score;
     return dfs_member_text_compare(a, b) < 0;
   }
@@ -234,7 +242,7 @@ static bool parse_score_sequence(
 
 static bool print_sequence_score(
     IndexReader const& reader, Args const& args,
-    std::vector<std::string> const& entries) {
+    std::vector<std::string> const& entries, DfsPairSet const& pairs) {
   std::vector<int64_t> counts;
   counts.reserve(entries.size());
   for (size_t i = 0; i < entries.size(); ++i) {
@@ -254,31 +262,33 @@ static bool print_sequence_score(
   // An interior space is exactly what makes an entry multi-word; entries here
   // are the user's own text, already validated against the index above.
   std::vector<bool> multi_word;
+  std::vector<bool> known_pair;
   multi_word.reserve(entries.size());
-  for (size_t i = 0; i < entries.size(); ++i)
+  known_pair.reserve(entries.size());
+  for (size_t i = 0; i < entries.size(); ++i) {
     multi_word.push_back(entries[i].find(' ') != std::string::npos);
+    known_pair.push_back(pairs.count(entries[i]) != 0);
+  }
 
   DfsScoreModel const model(
-      args.common.segment_penalty, reader.count(), args.common.word_bonus);
-  double log_score = model.first_segment_log_score(counts[0], multi_word[0]);
+      args.common.segment_penalty, reader.count(), args.common.word_bonus,
+      args.common.pair_bonus);
+  double log_score = model.first_segment_log_score(
+      counts[0], multi_word[0], known_pair[0]);
   for (size_t i = 1; i < entries.size(); ++i)
     log_score = model.append_segment_log_score(
-        log_score, counts[i], multi_word[i]);
+        log_score, counts[i], multi_word[i], known_pair[i]);
 
   printf("%#.4g %s\n", model.displayed_score(log_score),
          args.score_sequence.c_str());
   return true;
 }
 
-// Loads --pairs when it was given, reporting what arrived. Both modes call
-// this, so the option behaves identically in each.
+// Loads --pairs when it was given. Both modes call this, so the option behaves
+// identically in each.
 static bool load_pairs(Args const& args, DfsPairSet* pairs) {
   if (args.common.pair_file == NULL) return true;
-  size_t pair_count = 0;
-  if (!load_pair_file(args.common.pair_file, pairs, &pair_count)) return false;
-  dfs_diagnostic("pair list: %zu pairs, %zu keys\n",
-                 pair_count, pairs->size());
-  return true;
+  return load_pair_file(args.common.pair_file, pairs, true);
 }
 
 int main(int argc, char* argv[]) {
@@ -290,6 +300,7 @@ int main(int argc, char* argv[]) {
 
   DfsPairSet pairs;
   if (!load_pairs(args, &pairs)) return 1;
+  if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
     std::vector<std::string> entries;
@@ -301,7 +312,7 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     IndexReader reader(fp);
-    return print_sequence_score(reader, args, entries) ? 0 : 2;
+    return print_sequence_score(reader, args, entries, pairs) ? 0 : 2;
   }
 
   DfsDictionary dictionary;
@@ -319,13 +330,15 @@ int main(int argc, char* argv[]) {
 
   IndexReader reader(fp);
   DfsScoreModel const model(
-      args.common.segment_penalty, reader.count(), args.common.word_bonus);
+      args.common.segment_penalty, reader.count(), args.common.word_bonus,
+      args.common.pair_bonus);
   bool const include_phrases =
       args.require_completable || !args.words_only;
   DfsClassList classes(&reader, args.letters, args.common.min_word_len,
                        include_phrases, dictionary_filter,
                        args.common.max_extract_words,
-                       model.multi_word_log_bonus());
+                       &model,
+                       args.common.pair_file != NULL ? &pairs : NULL);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -339,7 +352,8 @@ int main(int argc, char* argv[]) {
     DfsAnagramSearch search(
         &classes, args.letters, args.common.segment_penalty, reader.count(),
         /*score_cache_bytes=*/0, /*preprocess_threads=*/1,
-        size_t(args.common.search_threads));
+        size_t(args.common.search_threads), /*exact_segments=*/0,
+        args.common.word_bonus, args.common.pair_bonus);
     DfsSearchStats stats;
     if (!search.find_completable_classes(
             &completable, &stats, /*progress_factor=*/1,
@@ -379,41 +393,55 @@ int main(int argc, char* argv[]) {
       for (size_t i = 0; i < row.text_length; ++i)
         putchar(row.text[i] == ' ' ? ',' : row.text[i]);
       putchar('\n');
-    } else if (args.common.word_bonus == 0.0)
+    } else if (args.common.word_bonus == 0.0 &&
+               args.common.pair_bonus == 0.0)
       printf("%lld %.*s\n", (long long) row.count,
              int(row.text_length), row.text);
     else
       printf("%#.4g %.*s\n",
              model.displayed_score(model.first_segment_log_score(
-                 row.count, is_phrase(row))),
+                 row.count, is_phrase(row), is_pair(row))),
              int(row.text_length), row.text);
   };
 
-  if (args.common.word_bonus == 0.0) {
+  if (args.common.word_bonus == 0.0 && args.common.pair_bonus == 0.0) {
     std::partial_sort(first, first + top, last, count_order);
     for (size_t i = 0; i < top; ++i) print_row(first[i]);
   } else {
-    // A constant bonus is order-preserving within each group, so sorting the
-    // two groups by count and merging them by score costs one partition
-    // instead of scoring every entry in a comparator.
-    DfsPackedMember* const mid = std::partition(first, last, is_phrase);
-    size_t const phrase_top = std::min(top, size_t(mid - first));
-    size_t const word_top = std::min(top, size_t(last - mid));
-    std::partial_sort(first, first + phrase_top, mid, count_order);
-    std::partial_sort(mid, mid + word_top, last, count_order);
+    // Both bonuses are constant within each of these groups, so count order
+    // is score order inside a group. Keep up to top candidates from each, then
+    // merge the three score-ordered runs.
+    DfsPackedMember* const pair_end =
+        std::partition(first, last, is_pair);
+    DfsPackedMember* const phrase_end =
+        std::partition(pair_end, last, is_phrase);
+    DfsPackedMember* const group_begin[3] = {
+      first, pair_end, phrase_end,
+    };
+    DfsPackedMember* const group_end[3] = {
+      pair_end, phrase_end, last,
+    };
+    size_t group_top[3];
+    for (size_t group = 0; group < 3; ++group) {
+      group_top[group] = std::min(
+          top, size_t(group_end[group] - group_begin[group]));
+      std::partial_sort(
+          group_begin[group], group_begin[group] + group_top[group],
+          group_end[group], count_order);
+    }
 
     ScoreOrder const order = { &model };
-    size_t phrase = 0;
-    size_t word = 0;
+    size_t position[3] = { 0, 0, 0 };
     for (size_t printed = 0; printed < top; ++printed) {
-      bool take_phrase;
-      if (phrase == phrase_top)
-        take_phrase = false;
-      else if (word == word_top)
-        take_phrase = true;
-      else
-        take_phrase = order(first[phrase], mid[word]);
-      print_row(take_phrase ? first[phrase++] : mid[word++]);
+      int best = -1;
+      for (int group = 0; group < 3; ++group) {
+        if (position[group] == group_top[group]) continue;
+        if (best < 0 || order(group_begin[group][position[group]],
+                              group_begin[best][position[best]]))
+          best = group;
+      }
+      assert(best >= 0);
+      print_row(group_begin[best][position[best]++]);
     }
   }
   return 0;

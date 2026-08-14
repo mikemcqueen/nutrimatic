@@ -15,6 +15,7 @@
 #include "dfs-alloc.h"
 
 class IndexReader;
+class DfsScoreModel;
 
 // Phase 1 of dfs-anagrams: extract every makeable corpus segment, then collapse
 // spellings with the same letter multiset into one class for the phase-2 DFS.
@@ -28,6 +29,8 @@ static int const DFS_SYMBOL_COUNT = 36;
 static size_t const DFS_MAX_BAG_LETTERS = 128;
 
 typedef std::unordered_set<std::string> DfsDictionary;
+// Owns each loaded pair in both orders as one space-separated whole-entry key.
+typedef std::unordered_set<std::string> DfsPairSet;
 
 int dfs_symbol_index(unsigned char ch);
 
@@ -43,7 +46,7 @@ struct DfsPackedMember {         // 16 bytes
   uint32_t count;
   uint8_t text_length;
   uint8_t word_count;
-  uint16_t reserved;             // tail padding, named
+  uint16_t known_pair;
 };
 
 // One anagram class. Its letters are not stored: they decode from the
@@ -88,6 +91,7 @@ struct DfsMemberView {
   size_t text_length;
   int64_t count;
   int word_count;
+  bool known_pair;
 };
 
 // A decoded letter requirement: (count << 6) | symbol. The count occupies the
@@ -130,15 +134,16 @@ class DfsClassList {
   // dfs-anagrams leaves it at its production default. The optional dictionary
   // is borrowed and restricts every emitted phrase word. max_extract_words
   // caps the words in one extracted entry; 0 means no cap beyond the one the
-  // bag and min_word_len already imply. multi_word_log_bonus selects the
-  // member ordering: members are sorted by log(count) plus this bonus for a
-  // multi-word spelling, so member 0 is the class's best score under whatever
-  // bonus the caller scores with. At the default 0 that is count order.
+  // bag and min_word_len already imply. The optional score model selects the
+  // member ordering, and pairs marks entries that earn its pair bonus; member
+  // 0 is therefore the class's best member under the caller's complete score.
+  // With no model that is raw count order.
   DfsClassList(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases = true,
                DfsDictionary const* dictionary = NULL,
                int max_extract_words = 0,
-               double multi_word_log_bonus = 0.0);
+               DfsScoreModel const* score_model = NULL,
+               DfsPairSet const* pairs = NULL);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };

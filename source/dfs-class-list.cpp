@@ -1,6 +1,7 @@
 #include "dfs-class-list.h"
 
 #include "dfs-diagnostic.h"
+#include "dfs-score.h"
 #include "index.h"
 
 #include <assert.h>
@@ -33,7 +34,7 @@ struct IntermediateMember {      // 24 bytes
   uint32_t count;
   uint8_t text_length;
   uint8_t word_count;
-  uint16_t reserved;
+  uint16_t known_pair;
 };
 
 // Appends fixed-size records, or byte runs, to chunks that are allocated once
@@ -195,7 +196,8 @@ class DfsExtractor {
  public:
   DfsExtractor(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases,
-               DfsDictionary const* dictionary, int requested_max_words):
+               DfsDictionary const* dictionary, int requested_max_words,
+               DfsPairSet const* pairs):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
@@ -205,6 +207,7 @@ class DfsExtractor {
           include_phrases ? int(letters.size()) / min_len : 1,
           requested_max_words)),
       dictionary(dictionary),
+      pairs(pairs),
       letters_left(int(letters.size())),
       nodes(0),
       signature(0) {
@@ -262,6 +265,12 @@ class DfsExtractor {
 
     size_t const length = text.size() - 1;
     DFS_CHECK(length <= UINT8_MAX && word_count <= UINT8_MAX);
+    bool known_pair = false;
+    if (pairs != NULL && word_count > 1) {
+      text.pop_back();
+      known_pair = pairs->count(text) != 0;
+      text.push_back(' ');
+    }
     char* const stored = static_cast<char*>(text_arena.append(length));
     if (stored == NULL) fatal_allocation("spelling text");
     memcpy(stored, text.data(), length);
@@ -282,7 +291,7 @@ class DfsExtractor {
     record->count = uint32_t(count);
     record->text_length = uint8_t(length);
     record->word_count = uint8_t(word_count);
-    record->reserved = 0;
+    record->known_pair = known_pair;
     ++entries;
   }
 
@@ -334,6 +343,7 @@ class DfsExtractor {
   int const min_len;
   int const max_extract_words;
   DfsDictionary const* const dictionary;
+  DfsPairSet const* const pairs;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
   int letters_left;
@@ -344,11 +354,12 @@ class DfsExtractor {
 };
 
 struct MemberOrder {
-  double multi_word_log_bonus;
+  DfsScoreModel const* model;
 
   double score(DfsPackedMember const& m) const {
-    return log(double(m.count)) +
-        (m.word_count > 1 ? multi_word_log_bonus : 0.0);
+    if (model == NULL) return log(double(m.count));
+    return model->segment_log_score(
+        m.count, m.word_count > 1, m.known_pair != 0);
   }
 
   bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
@@ -384,7 +395,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            int min_word_len, bool include_phrases,
                            DfsDictionary const* dictionary,
                            int max_extract_words,
-                           double multi_word_log_bonus):
+                           DfsScoreModel const* score_model,
+                           DfsPairSet const* pairs):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
@@ -412,7 +424,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
 
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
-      max_extract_words);
+      max_extract_words, pairs);
   extractor.run();
   nodes = extractor.nodes_visited();
   signature_digits = std::move(extractor.digits);
@@ -464,12 +476,12 @@ DfsClassList::DfsClassList(IndexReader const* reader,
       target.count = source[i].count;
       target.text_length = source[i].text_length;
       target.word_count = source[i].word_count;
-      target.reserved = 0;
+      target.known_pair = source[i].known_pair;
     }
   }
   extractor.member_arena.clear();
 
-  MemberOrder const member_order = { multi_word_log_bonus };
+  MemberOrder const member_order = { score_model };
   size_t write = 0;
   for (size_t id = 0; id < class_count; ++id) {
     DfsPackedMember* const first = members + base[id] - class_sizes[id];
@@ -587,7 +599,7 @@ DfsMemberView DfsClassList::member(size_t ci, size_t mi) const {
   DfsPackedMember const& packed = record.members[mi];
   DfsMemberView const view = {
     packed.text, packed.text_length, int64_t(packed.count),
-    int(packed.word_count),
+    int(packed.word_count), packed.known_pair != 0,
   };
   return view;
 }

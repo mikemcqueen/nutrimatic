@@ -6,9 +6,10 @@
 `--pairs FILE`, a shared option on `dfs-anagrams` and `query-index` that loads a
 list of word pairs into a lookup set.
 
-This plan lands the option, the file format, the loader, and the lookup seam.
-It does not apply a bonus. `--pair-bonus` itself is separate work, described
-under [Excluded](#excluded) and analyzed in `findings/bonus-issues.md`.
+The first two phases land the option, the file format, the loader, and the
+lookup seam. Phase 3 applies `--pair-bonus` throughout extraction, class
+ordering, phase-2 bounds, phase-3 spelling scores, and both `query-index`
+scoring modes. `findings/bonus-issues.md` is the supporting analysis.
 
 The scoring corrections `--pair-bonus` depended on have since landed — see
 [Already landed](#already-landed). They change nothing in this plan's phases;
@@ -31,10 +32,10 @@ Anyone wanting the old two-word extraction cap passes `-x 2` explicitly.
   testable in this commit.
 - Test updates for the tests that assert the old shorthand.
 
-### Excluded
+### Deferred to phase 3
 
-Nothing below is part of this plan, and this plan must not partially anticipate
-any of it:
+The first two phases deliberately leave the following work for phase 3, where
+it lands together because partial implementation would break score ordering:
 
 - `--pair-bonus`, and the third term in `DfsScoreModel`.
 - The pair-membership flag on `DfsPackedMember` / `IntermediateMember`, and the
@@ -169,6 +170,7 @@ unrelated edits.
 |---:|---|:---:|---|
 | 1 | Pair-set type and loader | [x] | `Add a pair-list file loader` |
 | 2 | `--pairs FILE` on both CLIs | [x] | `Repurpose --pairs as a pair-list file` |
+| 3 | `--pair-bonus` in every scoring path | [x] | `Apply pair bonuses to DFS scores` |
 
 ## Common setup
 
@@ -189,8 +191,8 @@ Corpus-backed checks use the configured index:
 export IDX=~/code/nutrimatic/idx/wiki-merged.5.index
 ```
 
-Neither phase changes search behavior, so no timing gate applies and no check
-for competing `dfs-anagrams` or `query-index` processes is needed.
+Phases 1 and 2 do not change search behavior. Phase 3 changes ranking but adds
+no timing-sensitive mechanism, so no timing gate applies.
 
 ## Phase 1 — pair-set type and loader [x]
 
@@ -335,11 +337,10 @@ tests, and the pair set has no effect on any output. Commit as:
 Repurpose --pairs as a pair-list file
 ```
 
-## Follow-up
+## Phase 3 — `--pair-bonus` in every scoring path [x]
 
-`--pair-bonus` is separate work; the scoring corrections it needed have already
-landed (see [Already landed](#already-landed)). Between them, this plan and that
-commit leave it these seams:
+The scoring corrections this phase needs have already landed (see
+[Already landed](#already-landed)). The implementation uses these seams:
 
 - `DfsCommonArgs::pair_file` and a loaded `DfsPairSet` in both `main()`s.
 - `reserved` fields in both member structs (`source/dfs-class-list.h:41-47`,
@@ -383,3 +384,27 @@ commit leave it these seams:
   (`source/dfs-class-list.h:38-47`). No planned work does that.
 - The query-index identical-stdout test, which is the tripwire that says the
   bonus started doing something.
+
+### Completed work
+
+- [x] Add shared `--pair-bonus N` parsing and a third additive term to
+      `DfsScoreModel`.
+- [x] Mark exact whole-entry pair membership during extraction without growing
+      either packed member record.
+- [x] Order class members with the complete score model so member 0 remains the
+      phase-2 bound and phase-3 descendants remain non-improving.
+- [x] Include pair membership in phase-3 spelling deltas.
+- [x] Apply the bonus in `query-index --score` and ordinary extraction output.
+- [x] Replace query-index's two-run merge with pair, other-phrase, and word
+      runs, retaining up to `-n` candidates from each before merging.
+- [x] Keep `--pairs FILE --pair-bonus 0` byte-identical to a run without a
+      pair list.
+
+### Verification
+
+- [x] `conan build .` succeeds.
+- [x] Focused `dfs-cli` and `query-index-cli` Meson tests pass.
+- [x] A listed rare phrase is promoted over a higher-count single-word member
+      of the same class without changing that single word's score.
+- [x] `query-index --score` applies word and pair bonuses additively and leaves
+      unlisted phrases unbonused.

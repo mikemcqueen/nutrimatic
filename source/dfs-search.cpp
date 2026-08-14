@@ -179,10 +179,11 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    size_t preprocess_threads,
                                    size_t search_threads,
                                    size_t exact_segments,
-                                   double word_bonus):
+                                   double word_bonus,
+                                   double pair_bonus):
     class_list(classes),
     letters(letters),
-    score_model(segment_penalty, corpus_total, word_bonus),
+    score_model(segment_penalty, corpus_total, word_bonus, pair_bonus),
     segment_boundary_log_score(
         score_model.segment_boundary_log_score()),
     exact_segments(exact_segments),
@@ -202,13 +203,13 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   best_member_log_scores.reserve(all_classes.size());
   // These are optimistic per-class bounds that phase 2 prunes against, so each
   // must be the best *score* in its class, which member 0 is by construction:
-  // the class list orders members under this same bonus.
+  // the class list orders members under this same score model.
   for (size_t i = 0; i < all_classes.size(); ++i) {
     assert(class_list->member_count(i) > 0);
     DfsMemberView const first = class_list->member(i, 0);
     assert(first.count > 0);
     best_member_log_scores.push_back(score_model.first_segment_log_score(
-        first.count, first.word_count > 1));
+        first.count, first.word_count > 1, first.known_pair));
   }
 }
 

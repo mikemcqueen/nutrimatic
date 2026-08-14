@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include <string>
-#include <unordered_set>
 
 #include "dfs-class-list.h"
 #include "dfs-score.h"
@@ -23,6 +22,7 @@ inline constexpr int DFS_DEFAULT_MIN_WORD_LEN = 4;
 inline constexpr int DFS_OPT_DICT = 300;
 inline constexpr int DFS_OPT_PAIRS = 301;
 inline constexpr int DFS_OPT_WORD_BONUS = 302;
+inline constexpr int DFS_OPT_PAIR_BONUS = 303;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -36,7 +36,8 @@ inline constexpr int DFS_OPT_WORD_BONUS = 302;
   { "top", 'n', OPTPARSE_REQUIRED }, \
   { "search-threads", 'S', OPTPARSE_REQUIRED }, \
   { "segment-penalty", 'P', OPTPARSE_REQUIRED }, \
-  { "word-bonus", DFS_OPT_WORD_BONUS, OPTPARSE_REQUIRED }
+  { "word-bonus", DFS_OPT_WORD_BONUS, OPTPARSE_REQUIRED }, \
+  { "pair-bonus", DFS_OPT_PAIR_BONUS, OPTPARSE_REQUIRED }
 
 // What the shared options parsed into. `top` has no shared default because the
 // two CLIs disagree on it; each sets its own before the option loop.
@@ -50,6 +51,7 @@ struct DfsCommonArgs {
   int search_threads = 1;
   double segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   double word_bonus = 0.0;
+  double pair_bonus = DFS_DEFAULT_PAIR_BONUS;
   bool min_word_len_given = false;
   bool max_extract_words_given = false;
 };
@@ -126,18 +128,16 @@ size_t resolve_preprocess_threads(int requested, size_t letter_count);
 // false if the file can't be opened or read.
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
 
-// A pair list: every loaded pair as both "left right" and "right left".
-// Owns its keys; probes are same-type find() against a caller's std::string.
-// Every key holds exactly one space, and matching is whole-entry, so pair
-// membership implies multi-word: no single-word entry can ever match.
-typedef std::unordered_set<std::string> DfsPairSet;
-
+// A pair list owns every loaded pair as both "left right" and "right left".
+// Every key holds exactly one space, so whole-entry membership implies a
+// multi-word spelling.
+//
 // Loads a newline-delimited list of "word,word" pairs, applying
 // load_dictionary()'s cleanup to each field, and inserts both word orders.
-// Lines containing '-' are skipped. *pair_count receives the number of pairs
-// read, which exceeds pairs->size() by however many reversals collided.
-// Prints an error and returns false if the file can't be opened or read, or if
-// any surviving line does not hold exactly two nonempty fields.
-bool load_pair_file(char const* path, DfsPairSet* pairs, size_t* pair_count);
+// Lines containing '-' are skipped. Unless quiet, reports the number of pairs
+// read and unique ordered keys loaded. Prints an error and returns false if the
+// file can't be opened or read, or if any surviving line does not hold exactly
+// two nonempty fields.
+bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet);
 
 #endif

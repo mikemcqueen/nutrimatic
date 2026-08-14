@@ -117,6 +117,7 @@ grep -q '^error: --segment-penalty must be at least 1$' \
 expect_score_failure ab penalty-fraction --segment-penalty 0.5
 expect_score_failure ab penalty-malformed -P nope
 expect_score_failure ab penalty-nonfinite -P inf
+expect_score_failure ab pair-bonus-malformed --pair-bonus nope
 
 expect_score_failure ab incompatible-option -n 1
 grep -q -- '--top cannot be used with --score' \
@@ -229,17 +230,34 @@ awk '{ print }' "$test_dir/extract-uncapped.stdout" |
 cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-x2.stdout" ||
   fail "-x 2 does not match the uncapped run filtered to two words"
 
-# A pair list is loaded and reported but consumed by nothing, so it cannot move
-# a single byte of output. This assertion is the tripwire that says --pair-bonus
-# started doing something; until then it must keep passing.
+# An explicit zero pair bonus makes loading a pair list leave output unchanged.
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
 "$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
-  --pairs "$test_dir/pairs.txt" \
+  --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
-grep -q 'pair list: 2 pairs, 2 keys$' "$test_dir/pair-list.stderr" ||
-  fail "the pair-list diagnostic did not report reversal and dedup"
+! grep -q 'pair list:' "$test_dir/pair-list.stderr" ||
+  fail "pair-list loading unexpectedly wrote to stderr"
 cmp "$test_dir/extract-uncapped.stdout" "$test_dir/pair-list.stdout" ||
-  fail "a loaded pair list changed stdout before --pair-bonus exists"
+  fail "a loaded pair list changed stdout at --pair-bonus 0"
+
+assert_close "$(score_value 'ab cd' --pairs "$test_dir/pairs.txt" \
+    -P 1)" 70000000 \
+  "--score should apply the default pair bonus to a listed pair"
+assert_close "$(score_value 'ab cd' --pairs "$test_dir/pairs.txt" \
+    --word-bonus 1 --pair-bonus 1 -P 1)" 70000000000000 \
+  "word and pair bonuses should be additive in log space"
+assert_close "$(score_value 'gh ij' --pairs "$test_dir/pairs.txt" \
+    --pair-bonus 1 -P 1)" 5 \
+  "--pair-bonus should not apply to an unlisted phrase"
+
+"$query_index" "$synthetic_index" abcdef -m 1 -n 1 \
+  --pairs "$test_dir/pairs.txt" \
+  > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"
+[[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/pair-bonus.stdout") \
+   == "ab cd" ]] ||
+  fail "query-index did not promote a listed pair above both other groups"
+assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
+  70000000 "query-index printed the wrong listed-pair score"
 
 # --csv keeps exactly the multi-word entries of an ordinary run, printed as
 # their words with the count column dropped.
