@@ -10,6 +10,27 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
+
+namespace {
+
+// One field's worth of load_dictionary()'s cleanup: lowercased, with every
+// character outside a-z/0-9 dropped.
+void clean_word(char const* begin, char const* end, std::string* out) {
+  out->clear();
+  out->reserve(size_t(end - begin));
+  for (char const* p = begin; p != end; ++p) {
+    unsigned char const ch = (unsigned char) *p;
+    if (ch >= 'A' && ch <= 'Z')
+      out->push_back(char(ch - 'A' + 'a'));
+    else if ((ch >= 'a' && ch <= 'z') ||
+             (ch >= '0' && ch <= '9'))
+      out->push_back(char(ch));
+  }
+}
+
+}  // namespace
 
 bool clean_letters(char const* in, char const* what, std::string* out) {
   for (; *in != '\0'; ++in) {
@@ -153,15 +174,7 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
     if (line.find('-') != std::string::npos) continue;
 
     std::string word;
-    word.reserve(line.size());
-    for (size_t i = 0; i < line.size(); ++i) {
-      unsigned char const ch = (unsigned char) line[i];
-      if (ch >= 'A' && ch <= 'Z')
-        word.push_back(char(ch - 'A' + 'a'));
-      else if ((ch >= 'a' && ch <= 'z') ||
-               (ch >= '0' && ch <= '9'))
-        word.push_back(char(ch));
-    }
+    clean_word(line.data(), line.data() + line.size(), &word);
     if (!word.empty()) dictionary->insert(word);
   }
 
@@ -169,6 +182,54 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
     fprintf(stderr, "error: can't read dictionary \"%s\"\n", path);
     return false;
   }
+  return true;
+}
+
+bool load_pair_file(char const* path, DfsPairSet* pairs, size_t* pair_count) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    fprintf(stderr, "error: can't open pair list \"%s\"\n", path);
+    return false;
+  }
+
+  std::vector<std::pair<std::string, std::string> > loaded;
+  std::string line;
+  std::string left;
+  std::string right;
+  size_t line_number = 0;
+  while (std::getline(input, line)) {
+    ++line_number;
+    if (line.find('-') != std::string::npos) continue;
+
+    size_t const comma = line.find(',');
+    bool const two_fields =
+        comma != std::string::npos &&
+        line.find(',', comma + 1) == std::string::npos;
+    if (two_fields) {
+      clean_word(line.data(), line.data() + comma, &left);
+      clean_word(line.data() + comma + 1, line.data() + line.size(), &right);
+    }
+    if (!two_fields || left.empty() || right.empty()) {
+      fprintf(stderr,
+          "error: pair list \"%s\" line %zu: "
+          "expected two comma-separated words\n",
+          path, line_number);
+      return false;
+    }
+    loaded.push_back(std::make_pair(left, right));
+  }
+
+  if (!input.eof()) {
+    fprintf(stderr, "error: can't read pair list \"%s\"\n", path);
+    return false;
+  }
+
+  pairs->reserve(2 * loaded.size());
+  for (size_t i = 0; i < loaded.size(); ++i) {
+    pairs->insert(loaded[i].first + " " + loaded[i].second);
+    pairs->insert(loaded[i].second + " " + loaded[i].first);
+  }
+  *pair_count = loaded.size();
   return true;
 }
 
@@ -203,8 +264,10 @@ DfsOptionResult dfs_parse_common_option(
       info.name = "--max-extract-words";
       break;
     case DFS_OPT_PAIRS:
-      out->pairs_given = true;
+      out->pair_file = options->optarg;
+      // A pair list is a scoring input, not an extraction filter.
       info.name = "--pairs";
+      info.score_incompatible = false;
       break;
     case 'n':
       if (!parse_count(options->optarg, "--top", &out->top))
@@ -241,16 +304,4 @@ DfsOptionResult dfs_parse_common_option(
 
   if (which != NULL) *which = info;
   return DFS_OPTION_HANDLED;
-}
-
-bool dfs_finalize_common_args(DfsCommonArgs* args) {
-  if (!args->pairs_given) return true;
-  if (args->max_extract_words_given &&
-      args->max_extract_words != DFS_PAIRS_LIMIT) {
-    fprintf(stderr, "error: --pairs is --max-extract-words %d, not %d\n",
-            DFS_PAIRS_LIMIT, args->max_extract_words);
-    return false;
-  }
-  args->max_extract_words = DFS_PAIRS_LIMIT;
-  return true;
 }

@@ -218,20 +218,28 @@ grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
   fail "a phrase was not retained as a completion path under --words-only"
 
 # -x caps the words in one extracted entry, so it can only remove entries a
-# capless run already found. --pairs is the same cap at 2.
+# capless run already found.
 "$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
   > "$test_dir/extract-uncapped.stdout" \
   2> "$test_dir/extract-uncapped.stderr"
-"$query_index" "$synthetic_index" abcdef -m 1 -n 0 --pairs \
-  > "$test_dir/extract-pairs.stdout" 2> "$test_dir/extract-pairs.stderr"
 "$query_index" "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
   > "$test_dir/extract-x2.stdout" 2> "$test_dir/extract-x2.stderr"
-cmp "$test_dir/extract-pairs.stdout" "$test_dir/extract-x2.stdout" ||
-  fail "--pairs and -x 2 disagree"
 awk '{ print }' "$test_dir/extract-uncapped.stdout" |
   awk 'gsub(/ /, " ") <= 2' > "$test_dir/extract-filtered.stdout"
-cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-pairs.stdout" ||
+cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-x2.stdout" ||
   fail "-x 2 does not match the uncapped run filtered to two words"
+
+# A pair list is loaded and reported but consumed by nothing, so it cannot move
+# a single byte of output. This assertion is the tripwire that says --pair-bonus
+# started doing something; until then it must keep passing.
+printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
+"$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
+  --pairs "$test_dir/pairs.txt" \
+  > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
+grep -q 'pair list: 2 pairs, 2 keys$' "$test_dir/pair-list.stderr" ||
+  fail "the pair-list diagnostic did not report reversal and dedup"
+cmp "$test_dir/extract-uncapped.stdout" "$test_dir/pair-list.stdout" ||
+  fail "a loaded pair list changed stdout before --pair-bonus exists"
 
 # --csv keeps exactly the multi-word entries of an ordinary run, printed as
 # their words with the count column dropped.

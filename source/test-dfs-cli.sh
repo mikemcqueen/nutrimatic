@@ -180,21 +180,44 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
     "$test_dir/penalty-one.stdout")" 70 \
   "one-segment phrase should be invariant"
 
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs \
-  > "$test_dir/pairs.stdout" 2> "$test_dir/pairs.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --max-extract-words 2 \
   > "$test_dir/extract-two.stdout" 2> "$test_dir/extract-two.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -x 1 \
   > "$test_dir/extract-one.stdout" 2> "$test_dir/extract-one.stderr"
-cmp "$test_dir/pairs.stdout" "$test_dir/extract-two.stdout" ||
-  fail "--pairs differs from --max-extract-words 2"
-cmp "$test_dir/all.stdout" "$test_dir/pairs.stdout" ||
-  fail "--pairs changed stdout where no entry holds three words"
+cmp "$test_dir/all.stdout" "$test_dir/extract-two.stdout" ||
+  fail "-x 2 changed stdout where no entry holds three words"
 [[ $(grep -c '^70.00 ab cd$' "$test_dir/extract-one.stdout") -eq 0 ]] ||
   fail "-x 1 kept the two-word index entry"
 grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
   fail "--max-extract-words diagnostic is missing from stderr"
+
+# The second line is the first one reversed, so its two insertions are the two
+# the first line already made: four insertions, two keys. Both reversal and
+# dedup show up in the reported key count.
+printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs "$test_dir/pairs.txt" \
+  > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
+grep -Eq "${diagnostic_prefix}pair list: 2 pairs, 2 keys$" \
+  "$test_dir/pair-list.stderr" ||
+  fail "the pair-list diagnostic did not report reversal and dedup"
+cmp "$test_dir/all.stdout" "$test_dir/pair-list.stdout" ||
+  fail "a loaded pair list changed stdout before --pair-bonus exists"
+
+# A '-' line is skipped rather than counted, but still advances the line
+# number the next error reports.
+printf 'ab,cd\ne-f,gh\nij,kl,mn\n' > "$test_dir/bad-pairs.txt"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --pairs "$test_dir/bad-pairs.txt"
+grep -q "^error: pair list \"$test_dir/bad-pairs.txt\" line 3: expected two comma-separated words$" \
+  "$test_dir/status.stderr" ||
+  fail "the malformed pair-line diagnostic did not name the right line"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --pairs "$test_dir/missing-pairs.txt"
+grep -q "^error: can't open pair list \"$test_dir/missing-pairs.txt\"$" \
+  "$test_dir/status.stderr" ||
+  fail "the missing pair-list diagnostic is unclear"
+expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs
 
 # "klmn" (1000) and "kl mn" (5) are one anagram class, so the bonus has to
 # reorder within a class to promote the phrase, and the single word's own
@@ -275,10 +298,6 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --projection-depth nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --max-extract-words nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc --pairs -x 3
-grep -q '^error: --pairs is --max-extract-words 2, not 3$' \
-  "$test_dir/status.stderr" ||
-  fail "conflicting --pairs diagnostic is unclear"
 expect_status 2 "$dfs_anagrams" "$index_file" abc -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
   "$test_dir/status.stderr" ||

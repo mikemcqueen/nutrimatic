@@ -38,7 +38,7 @@ static void usage(char const* program) {
       "usage: %s input.index letters"
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
-      " [-x max-extract-words] [--pairs]"
+      " [-x max-extract-words] [--pairs FILE]"
       " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
@@ -54,7 +54,8 @@ static void usage(char const* program) {
       "  --dict PATH filters entries to words in the dictionary\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
-      "  --pairs is shorthand for --max-extract-words 2\n"
+      "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
+      " in either order; it has no effect until --pair-bonus\n"
       "  -w, --words-only excludes multi-word phrases\n"
       "  --csv prints only multi-word entries, as their comma-separated"
       " words, with no count or score column\n"
@@ -131,8 +132,6 @@ static bool parse_args(char* argv[], Args* out) {
         return false;
     }
   }
-  if (!dfs_finalize_common_args(&out->common)) return false;
-
   char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
   if (index_file == NULL || letters == NULL ||
@@ -271,12 +270,26 @@ static bool print_sequence_score(
   return true;
 }
 
+// Loads --pairs when it was given, reporting what arrived. Both modes call
+// this, so the option behaves identically in each.
+static bool load_pairs(Args const& args, DfsPairSet* pairs) {
+  if (args.common.pair_file == NULL) return true;
+  size_t pair_count = 0;
+  if (!load_pair_file(args.common.pair_file, pairs, &pair_count)) return false;
+  dfs_diagnostic("pair list: %zu pairs, %zu keys\n",
+                 pair_count, pairs->size());
+  return true;
+}
+
 int main(int argc, char* argv[]) {
   dfs_reset_diagnostic_clock();
   dfs_set_diagnostic_stream(stderr);
 
   Args args;
   if (!parse_args(argv, &args)) return 2;
+
+  DfsPairSet pairs;
+  if (!load_pairs(args, &pairs)) return 1;
 
   if (args.score) {
     std::vector<std::string> entries;

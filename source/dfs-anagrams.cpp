@@ -56,7 +56,7 @@ static void usage(char const* program) {
       "usage: %s input.index letters"
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
-      " [-x max-extract-words] [--pairs]"
+      " [-x max-extract-words] [--pairs FILE]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
@@ -72,7 +72,8 @@ static void usage(char const* program) {
       " only within one -g run\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
-      "  --pairs is shorthand for --max-extract-words 2\n"
+      "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
+      " in either order; it has no effect until --pair-bonus\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
@@ -197,8 +198,6 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
-  if (!dfs_finalize_common_args(&out->common)) return false;
-
   char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
   if (index_file == NULL || letters == NULL ||
@@ -251,6 +250,14 @@ int main(int argc, char* argv[]) {
   if (args.common.dictionary_file != NULL) {
     if (!load_dictionary(args.common.dictionary_file, &dictionary)) return 1;
     dictionary_filter = &dictionary;
+  }
+
+  DfsPairSet pairs;
+  if (args.common.pair_file != NULL) {
+    size_t pair_count = 0;
+    if (!load_pair_file(args.common.pair_file, &pairs, &pair_count)) return 1;
+    dfs_diagnostic("pair list: %zu pairs, %zu keys\n",
+                   pair_count, pairs.size());
   }
 
   FILE* fp = fopen(args.index_file, "rb");

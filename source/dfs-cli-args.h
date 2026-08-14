@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <unordered_set>
 
 #include "dfs-class-list.h"
 #include "dfs-score.h"
@@ -15,8 +16,6 @@
 // option parsing, dictionary loading, and the options both CLIs accept.
 
 inline constexpr int DFS_DEFAULT_MIN_WORD_LEN = 4;
-// --pairs is exactly this cap on the words in one extracted entry.
-inline constexpr int DFS_PAIRS_LIMIT = 2;
 
 // Long-option codes for shared options with no short form. They sit well above
 // the range each CLI uses for its own codes, so adding a private option cannot
@@ -33,7 +32,7 @@ inline constexpr int DFS_OPT_WORD_BONUS = 302;
   { "dict", DFS_OPT_DICT, OPTPARSE_REQUIRED }, \
   { "min-word-length", 'm', OPTPARSE_REQUIRED }, \
   { "max-extract-words", 'x', OPTPARSE_REQUIRED }, \
-  { "pairs", DFS_OPT_PAIRS, OPTPARSE_NONE }, \
+  { "pairs", DFS_OPT_PAIRS, OPTPARSE_REQUIRED }, \
   { "top", 'n', OPTPARSE_REQUIRED }, \
   { "search-threads", 'S', OPTPARSE_REQUIRED }, \
   { "segment-penalty", 'P', OPTPARSE_REQUIRED }, \
@@ -44,6 +43,7 @@ inline constexpr int DFS_OPT_WORD_BONUS = 302;
 struct DfsCommonArgs {
   std::string used_letters;
   char const* dictionary_file = NULL;
+  char const* pair_file = NULL;
   int min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
   int max_extract_words = 0;
   int top = 0;
@@ -52,7 +52,6 @@ struct DfsCommonArgs {
   double word_bonus = 0.0;
   bool min_word_len_given = false;
   bool max_extract_words_given = false;
-  bool pairs_given = false;
 };
 
 enum DfsOptionResult {
@@ -75,9 +74,6 @@ DfsOptionResult dfs_parse_common_option(
     int option, struct optparse* options, DfsCommonArgs* out,
     DfsCommonOption* which);
 
-// Reconciles --pairs with an explicit --max-extract-words. Call once after the
-// option loop; prints an error and returns false when the two disagree.
-bool dfs_finalize_common_args(DfsCommonArgs* args);
 inline constexpr size_t DFS_DEFAULT_SCORE_CACHE_MIB = 64;
 inline constexpr unsigned int DFS_DEFAULT_MAX_PREPROCESS_THREADS = 20;
 inline constexpr size_t DFS_MIB = size_t(1024) * size_t(1024);
@@ -129,5 +125,19 @@ size_t resolve_preprocess_threads(int requested, size_t letter_count);
 // '-' and stripping characters outside a-z/0-9. Prints an error and returns
 // false if the file can't be opened or read.
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
+
+// A pair list: every loaded pair as both "left right" and "right left".
+// Owns its keys; probes are same-type find() against a caller's std::string.
+// Every key holds exactly one space, and matching is whole-entry, so pair
+// membership implies multi-word: no single-word entry can ever match.
+typedef std::unordered_set<std::string> DfsPairSet;
+
+// Loads a newline-delimited list of "word,word" pairs, applying
+// load_dictionary()'s cleanup to each field, and inserts both word orders.
+// Lines containing '-' are skipped. *pair_count receives the number of pairs
+// read, which exceeds pairs->size() by however many reversals collided.
+// Prints an error and returns false if the file can't be opened or read, or if
+// any surviving line does not hold exactly two nonempty fields.
+bool load_pair_file(char const* path, DfsPairSet* pairs, size_t* pair_count);
 
 #endif
