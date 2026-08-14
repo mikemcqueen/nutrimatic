@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "dfs-class-list.h"
+#include "dfs-score.h"
 #include "dfs-solution-sink.h"
 
 struct DfsSpelling {
@@ -59,7 +60,11 @@ struct HeapSlot {
 // across rehash, so the heap can hold raw pointers.
 class DfsTopN: public DfsSolutionSink {
  public:
-  DfsTopN(DfsClassList const* classes, size_t limit);
+  // The model must be the one phase 2 scored with: a spelling's score is its
+  // solution's score adjusted by the scored difference between each chosen
+  // member and its class's member 0.
+  DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
+          size_t limit);
 
   void emit(std::vector<size_t> const& class_indexes,
             double representative_log_score);
@@ -85,6 +90,7 @@ class DfsTopN: public DfsSolutionSink {
   double floor_log_score() const;
 
   DfsClassList const* const class_list;
+  DfsScoreModel const* const score_model;
   size_t const result_limit;
   size_t expanded;
 

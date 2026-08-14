@@ -66,6 +66,7 @@ struct ExpansionOrder {
 
 static double spelling_log_score(
     DfsClassList const& classes,
+    DfsScoreModel const& model,
     std::vector<size_t> const& class_indexes,
     std::vector<size_t> const& member_indexes,
     double representative_log_score) {
@@ -73,21 +74,26 @@ static double spelling_log_score(
   for (size_t i = 0; i < class_indexes.size(); ++i) {
     if (member_indexes[i] == 0) continue;
     size_t const class_index = class_indexes[i];
-    score +=
-        log(double(classes.member(class_index, member_indexes[i]).count)) -
-        log(double(classes.member(class_index, 0).count));
+    DfsMemberView const chosen =
+        classes.member(class_index, member_indexes[i]);
+    DfsMemberView const best = classes.member(class_index, 0);
+    score += model.segment_log_score(chosen.count, chosen.word_count > 1) -
+        model.segment_log_score(best.count, best.word_count > 1);
   }
   return score;
 }
 
-DfsTopN::DfsTopN(DfsClassList const* classes, size_t limit):
+DfsTopN::DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
+                 size_t limit):
     class_list(classes),
+    score_model(model),
     result_limit(limit),
     expanded(0),
     published_floor_bits(0),
     published_full(false),
     floor_announced(false) {
   assert(class_list != NULL);
+  assert(score_model != NULL);
   // Expansion indexes members by (class_index, member_index) throughout, so a
   // list whose grouping has been dropped cannot be expanded at all.
   assert(!class_list->members_invalidated());
@@ -196,7 +202,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
           }
         if (canonical) {
           next.log_score =
-              spelling_log_score(*class_list, class_indexes,
+              spelling_log_score(*class_list, *score_model, class_indexes,
                                  next.member_indexes,
                                  representative_log_score);
           if (!score_floor(&published) || next.log_score > published)

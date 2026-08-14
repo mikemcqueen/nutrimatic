@@ -112,6 +112,8 @@ static void exhaustive_product_test() {
   {
     IndexReader reader(fp);
     DfsClassList classes(&reader, "abcdefg", 2, false);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     size_t const ab = find_class(classes, "ab");
     size_t const cde = find_class(classes, "cde");
     size_t const fg = find_class(classes, "fg");
@@ -121,7 +123,7 @@ static void exhaustive_product_test() {
     path.push_back(fg);
 
     double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
-    DfsTopN output(&classes, 14);
+    DfsTopN output(&classes, &model, 14);
     output.emit(
         path, representative_score(
             classes, path, segment_penalty, reader.count()));
@@ -191,6 +193,8 @@ static void heap_churn_test() {
   {
     IndexReader reader(fp);
     DfsClassList classes(&reader, "aabbccddeeff", 2, false);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     size_t indexes[6] = {
       find_class(classes, "aa"),
       find_class(classes, "bb"),
@@ -200,7 +204,7 @@ static void heap_churn_test() {
       find_class(classes, "ff"),
     };
 
-    DfsTopN output(&classes, 5);
+    DfsTopN output(&classes, &model, 5);
     for (size_t i = 0; i < 5; ++i)
       output.emit(std::vector<size_t>(1, indexes[i]),
                   log(double(10 * (i + 1))));
@@ -240,7 +244,7 @@ static void heap_churn_test() {
               reused_results[0].word_set_key == "bb",
           "drained top-N output rejected a lower-scoring refill");
 
-    DfsTopN zero_output(&classes, 0);
+    DfsTopN zero_output(&classes, &model, 0);
     zero_output.emit(std::vector<size_t>(1, indexes[0]), log(40.0));
     zero_output.emit(std::vector<size_t>(1, indexes[1]), log(20.0));
     zero_output.emit(std::vector<size_t>(1, indexes[2]), log(30.0));
@@ -297,6 +301,8 @@ static void concurrent_top_n_test() {
   {
     IndexReader reader(fp);
     DfsClassList classes(&reader, "abcdefghijklmnop", 2, false);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     std::vector<size_t> indexes;
     char const* keys[] = {
       "ab", "cd", "ef", "gh", "ij", "kl", "mn", "op",
@@ -308,7 +314,7 @@ static void concurrent_top_n_test() {
     // concurrent worker-local expansion as well as shared heap updates.
     size_t const limit = 16;
     size_t const event_count = 256;
-    DfsTopN serial(&classes, limit);
+    DfsTopN serial(&classes, &model, limit);
     for (size_t event = 0; event < event_count; ++event)
       serial.emit(
           std::vector<size_t>(1, indexes[event % indexes.size()]),
@@ -316,7 +322,7 @@ static void concurrent_top_n_test() {
     std::vector<DfsSpelling> const expected =
         serial.take_sorted_results();
 
-    DfsTopN concurrent(&classes, limit);
+    DfsTopN concurrent(&classes, &model, limit);
     check(concurrent.supports_parallel_search(),
           "top-N output did not opt in to parallel search");
     for (size_t event = 0; event < limit; ++event)
@@ -407,12 +413,14 @@ static void repeated_class_test() {
   {
     IndexReader reader(fp);
     DfsClassList classes(&reader, "aaabbbcd", 2, false);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     size_t const ab = find_class(classes, "ab");
     size_t const cd = find_class(classes, "cd");
     std::vector<size_t> path(3, ab);
     double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
 
-    DfsTopN output(&classes, 14);
+    DfsTopN output(&classes, &model, 14);
     output.emit(
         path, representative_score(
             classes, path, segment_penalty, reader.count()));
@@ -447,7 +455,7 @@ static void repeated_class_test() {
     mixed_path.push_back(ab);
     mixed_path.push_back(ab);
     mixed_path.push_back(cd);
-    DfsTopN mixed_output(&classes, 14);
+    DfsTopN mixed_output(&classes, &model, 14);
     mixed_output.emit(
         mixed_path,
         representative_score(
@@ -514,11 +522,13 @@ static void large_repeated_class_test() {
   {
     IndexReader reader(fp);
     DfsClassList classes(&reader, "abcd", 4, false);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     size_t const abcd = find_class(classes, "abcd");
     std::vector<size_t> path(6, abcd);
     double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
 
-    DfsTopN output(&classes, 10000);
+    DfsTopN output(&classes, &model, 10000);
     output.emit(
         path, representative_score(
             classes, path, segment_penalty, reader.count()));
@@ -556,9 +566,11 @@ static void search_output_integration_test() {
     std::string const letters = "abcd";
     double const segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
     DfsClassList classes(&reader, letters, 2);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     DfsAnagramSearch search(
         &classes, letters, segment_penalty, reader.count());
-    DfsTopN output(&classes, 14);
+    DfsTopN output(&classes, &model, 14);
     DfsSearchStats search_stats;
     search.run(&output, &search_stats);
 

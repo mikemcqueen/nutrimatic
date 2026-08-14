@@ -305,11 +305,14 @@ int main(int argc, char* argv[]) {
   }
 
   IndexReader reader(fp);
+  DfsScoreModel const model(
+      args.common.segment_penalty, reader.count(), args.common.word_bonus);
   bool const include_phrases =
       args.require_completable || !args.words_only;
   DfsClassList classes(&reader, args.letters, args.common.min_word_len,
                        include_phrases, dictionary_filter,
-                       args.common.max_extract_words);
+                       args.common.max_extract_words,
+                       model.multi_word_log_bonus());
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -356,8 +359,6 @@ int main(int argc, char* argv[]) {
       ? survivors.count
       : std::min(survivors.count, size_t(args.common.top));
 
-  DfsScoreModel const model(
-      args.common.segment_penalty, reader.count(), args.common.word_bonus);
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = first + survivors.count;
   auto const print_row = [&](DfsPackedMember const& row) {

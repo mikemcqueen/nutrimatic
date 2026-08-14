@@ -4,6 +4,7 @@
 #include "index.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -342,12 +343,24 @@ class DfsExtractor {
   uint64_t signature;
 };
 
-bool member_order(DfsPackedMember const& a, DfsPackedMember const& b) {
-  if (a.count != b.count) return a.count > b.count;
-  int const order = dfs_member_text_compare(a, b);
-  if (order != 0) return order < 0;
-  return a.word_count < b.word_count;
-}
+struct MemberOrder {
+  double multi_word_log_bonus;
+
+  double score(DfsPackedMember const& m) const {
+    return log(double(m.count)) +
+        (m.word_count > 1 ? multi_word_log_bonus : 0.0);
+  }
+
+  bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
+    double const a_score = score(a);
+    double const b_score = score(b);
+    if (a_score != b_score) return a_score > b_score;
+    if (a.count != b.count) return a.count > b.count;
+    int const order = dfs_member_text_compare(a, b);
+    if (order != 0) return order < 0;
+    return a.word_count < b.word_count;
+  }
+};
 
 bool same_member(DfsPackedMember const& a, DfsPackedMember const& b) {
   return a.count == b.count && a.word_count == b.word_count &&
@@ -370,7 +383,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            std::string const& letters,
                            int min_word_len, bool include_phrases,
                            DfsDictionary const* dictionary,
-                           int max_extract_words):
+                           int max_extract_words,
+                           double multi_word_log_bonus):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
@@ -455,6 +469,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
   }
   extractor.member_arena.clear();
 
+  MemberOrder const member_order = { multi_word_log_bonus };
   size_t write = 0;
   for (size_t id = 0; id < class_count; ++id) {
     DfsPackedMember* const first = members + base[id] - class_sizes[id];

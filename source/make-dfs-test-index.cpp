@@ -24,6 +24,11 @@ int main(int argc, char* argv[]) {
     // "f" can only complete "fghij" through the phrase "gh ij".
     writer.next("f ", 0, 10);
     writer.next("gh ij ", 0, 5);
+    // One class holding both spellings of the same letters, so --word-bonus
+    // has a single-word member to promote the phrase over. k-n are otherwise
+    // unused, keeping this disjoint from every other bag in this fixture.
+    writer.next("kl mn ", 0, 5);
+    writer.next("klmn ", 0, 1000);
     // "uv" can only complete "qrstuv" through the phrase "qr st".
     writer.next("qr st ", 0, 3);
     writer.next("uv ", 0, 8);

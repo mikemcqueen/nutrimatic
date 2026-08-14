@@ -201,27 +201,14 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   DfsClassSpan const all_classes = class_list->classes();
   best_member_log_scores.reserve(all_classes.size());
   // These are optimistic per-class bounds that phase 2 prunes against, so each
-  // must be the best *score* in its class. Members are sorted by count, which
-  // makes member 0 the answer only when no bonus is in play; a nonzero bonus
-  // can lift a rarer multi-word member above it, so scan when that can happen.
-  // Under a zero bonus the scan is skipped and member 0 stands.
-  bool const bonus_reorders = score_model.multi_word_log_bonus() != 0.0;
+  // must be the best *score* in its class, which member 0 is by construction:
+  // the class list orders members under this same bonus.
   for (size_t i = 0; i < all_classes.size(); ++i) {
-    size_t const members = class_list->member_count(i);
-    assert(members > 0);
+    assert(class_list->member_count(i) > 0);
     DfsMemberView const first = class_list->member(i, 0);
     assert(first.count > 0);
-    double best = score_model.first_segment_log_score(
-        first.count, first.word_count > 1);
-    if (bonus_reorders) {
-      for (size_t m = 1; m < members; ++m) {
-        DfsMemberView const other = class_list->member(i, m);
-        assert(other.count > 0);
-        best = std::max(best, score_model.first_segment_log_score(
-            other.count, other.word_count > 1));
-      }
-    }
-    best_member_log_scores.push_back(best);
+    best_member_log_scores.push_back(score_model.first_segment_log_score(
+        first.count, first.word_count > 1));
   }
 }
 

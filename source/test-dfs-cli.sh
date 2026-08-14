@@ -196,6 +196,27 @@ grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
   fail "--max-extract-words diagnostic is missing from stderr"
 
+# "klmn" (1000) and "kl mn" (5) are one anagram class, so the bonus has to
+# reorder within a class to promote the phrase, and the single word's own
+# score must not move with a bonus it never earned.
+"$dfs_anagrams" "$index_file" klmn -m 2 -n 5 --word-bonus 0 \
+  > "$test_dir/bonus-zero.stdout" 2> "$test_dir/bonus-zero.stderr"
+"$dfs_anagrams" "$index_file" klmn -m 2 -n 5 --word-bonus 1 \
+  > "$test_dir/bonus-one.stdout" 2> "$test_dir/bonus-one.stderr"
+[[ $(awk 'NR == 1 { print $2 }' "$test_dir/bonus-zero.stdout") == klmn ]] ||
+  fail "--word-bonus 0 did not rank the more frequent single word first"
+assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/bonus-zero.stdout")" \
+  1000 "--word-bonus 0 should score the single word by its raw count"
+[[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/bonus-one.stdout") \
+   == "kl mn" ]] ||
+  fail "--word-bonus 1 did not promote the phrase within its class"
+assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/bonus-one.stdout")" \
+  5000000 "--word-bonus 1 should multiply the phrase by one million"
+[[ $(awk 'NR == 2 { print $2 }' "$test_dir/bonus-one.stdout") == klmn ]] ||
+  fail "--word-bonus 1 dropped the single word from the class"
+assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/bonus-one.stdout")" \
+  1000 "--word-bonus 1 should leave the single word's score alone"
+
 # Every result line's entry list must be pasteable into "query-index --score"
 # and reproduce that line's own score.
 while read -r result_score result_entries; do

@@ -284,8 +284,11 @@ int main(int argc, char* argv[]) {
                    args.common.max_extract_words == 1 ? "" : "s");
 
   IndexReader reader(fp);
+  DfsScoreModel const model(
+      args.common.segment_penalty, reader.count(), args.common.word_bonus);
   DfsClassList classes(&reader, args.letters, args.common.min_word_len, true,
-                       dictionary_filter, args.common.max_extract_words);
+                       dictionary_filter, args.common.max_extract_words,
+                       model.multi_word_log_bonus());
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -297,7 +300,7 @@ int main(int argc, char* argv[]) {
       args.score_cache_bytes, preprocess_threads,
       size_t(args.common.search_threads), size_t(args.num_segments),
       args.common.word_bonus);
-  DfsTopN output(&classes, size_t(args.common.top));
+  DfsTopN output(&classes, &model, size_t(args.common.top));
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,

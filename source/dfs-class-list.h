@@ -51,7 +51,7 @@ struct DfsPackedMember {         // 16 bytes
 // letters themselves are not.
 struct DfsClassRecord {          // 24 bytes
   uint64_t signature;            // mixed-radix subbag code
-  DfsPackedMember const* members;  // member_count entries, highest count first
+  DfsPackedMember const* members;  // member_count entries, highest score first
   uint8_t member_count;
   uint8_t key_length;            // total letters
   uint8_t letters_count;         // distinct symbols
@@ -130,11 +130,15 @@ class DfsClassList {
   // dfs-anagrams leaves it at its production default. The optional dictionary
   // is borrowed and restricts every emitted phrase word. max_extract_words
   // caps the words in one extracted entry; 0 means no cap beyond the one the
-  // bag and min_word_len already imply.
+  // bag and min_word_len already imply. multi_word_log_bonus selects the
+  // member ordering: members are sorted by log(count) plus this bonus for a
+  // multi-word spelling, so member 0 is the class's best score under whatever
+  // bonus the caller scores with. At the default 0 that is count order.
   DfsClassList(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases = true,
                DfsDictionary const* dictionary = NULL,
-               int max_extract_words = 0);
+               int max_extract_words = 0,
+               double multi_word_log_bonus = 0.0);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };
