@@ -1,3 +1,9 @@
+# Superseded
+
+This proposal is retained as design history. The canonical implementation plan
+is `plans/solo-words.md`, which incorporates its mask/correction invariants
+without growing every packed member by 50%.
+
 # Plan: `--solo-words` as candidate pair partners
 
 ## Context

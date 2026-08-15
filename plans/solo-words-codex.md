@@ -1,3 +1,10 @@
+# Superseded
+
+This proposal is retained as design history. The canonical implementation plan
+is `plans/solo-words.md`, which preserves its 16-byte packed-member design and
+closes the correctness and semantic issues in
+`findings/solo-words-codex-review.md`.
+
 # Plan: add `--solo-words` candidate-pair scoring
 
 ## Outcome
