@@ -91,6 +91,7 @@ dfs_class_list_lib = library(
     'dfs-cli-args.cpp',
     'dfs-diagnostic.cpp',
     'dfs-score.cpp',
+    'dfs-solo-words.cpp',
     'dfs-search.cpp',
     'dfs-all-runner.cpp',
     'dfs-any-runner.cpp',
@@ -231,6 +232,14 @@ test_dfs_output = executable(
   install: false,
 )
 test('dfs-output', test_dfs_output)
+
+test_dfs_solo_words = executable(
+  'test-dfs-solo-words', 'test-dfs-solo-words.cpp',
+  link_with: [dfs_class_list_lib, index_lib],
+  dependencies: thread_dep,
+  install: false,
+)
+test('dfs-solo-words', test_dfs_solo_words)
 
 make_dfs_test_index = executable(
   'make-dfs-test-index', 'make-dfs-test-index.cpp',
