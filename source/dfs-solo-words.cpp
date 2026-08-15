@@ -14,14 +14,6 @@
 
 namespace {
 
-uint16_t profile_flags(DfsSoloMasks masks) {
-  assert((masks.pair_mask & ~masks.word_mask) == 0);
-  uint16_t flags = 0;
-  if (masks.word_mask != 0) flags |= DFS_MEMBER_SOLO_WORD_EDGE;
-  if (masks.pair_mask != 0) flags |= DFS_MEMBER_SOLO_PAIR_EDGE;
-  return flags;
-}
-
 long double local_upper(DfsSoloMasks masks,
                         long double word_log_bonus,
                         long double pair_log_bonus) {
@@ -62,6 +54,14 @@ void add_edge(std::vector<std::vector<FlowEdge> >* graph,
 
 }  // namespace
 
+uint16_t dfs_solo_score_flags(DfsSoloMasks masks) {
+  assert((masks.pair_mask & ~masks.word_mask) == 0);
+  uint16_t flags = 0;
+  if (masks.word_mask != 0) flags |= DFS_MEMBER_SOLO_WORD_EDGE;
+  if (masks.pair_mask != 0) flags |= DFS_MEMBER_SOLO_PAIR_EDGE;
+  return flags;
+}
+
 DfsSoloWords::DfsSoloWords(
     IndexReader const* reader, std::vector<std::string> const& words,
     std::unordered_set<std::string> const* pairs,
@@ -78,13 +78,17 @@ DfsSoloWords::DfsSoloWords(
     pair_edges(0),
     frozen(false) {
   assert(reader != NULL);
+  assert(score_model != NULL);
   assert(words.size() <= 16);
+  assert(score_model->multi_word_log_bonus() >= 0.0);
+  assert(score_model->pair_log_bonus() >= 0.0);
   solo_positions.reserve(words.size());
   for (size_t i = 0; i < words.size(); ++i) {
     SoloPosition saved;
     IndexReader::EntryPosition position;
     saved.present = probe_word_edges &&
-        reader->aggregate_entry_position(words[i], &position);
+        reader->aggregate_entry_position(words[i], &position) &&
+        position.continuation != off_t(-1);
     saved.continuation = saved.present ? position.continuation : off_t(-1);
     saved.aggregate_count = saved.present ? position.aggregate_count : 0;
     solo_positions.push_back(saved);
@@ -136,7 +140,8 @@ DfsSoloMasks DfsSoloWords::resolve(
     off_t candidate_continuation,
     int64_t candidate_aggregate_count) const {
   return resolve_from_position(
-      candidate, candidate_continuation, candidate_aggregate_count, true);
+      candidate, candidate_continuation, candidate_aggregate_count,
+      candidate_continuation != off_t(-1));
 }
 
 DfsSoloMasks DfsSoloWords::resolve(std::string_view candidate) const {
@@ -161,7 +166,7 @@ uint16_t DfsSoloWords::register_profile(
   profiles.push_back(std::move(profile));
   word_edges += size_t(__builtin_popcount(unsigned(masks.word_mask)));
   pair_edges += size_t(__builtin_popcount(unsigned(masks.pair_mask)));
-  return profile_flags(masks);
+  return dfs_solo_score_flags(masks);
 }
 
 void DfsSoloWords::freeze() {
@@ -280,15 +285,25 @@ double dfs_solo_score_correction(
   assert(isfinite(pair_log_bonus) && pair_log_bonus >= 0.0);
   if (profiles.size() <= 1 || disjoint_profiles(profiles)) return 0.0;
 
-  long double upper = 0.0L;
-  for (size_t i = 0; i < profiles.size(); ++i)
-    upper += local_upper(
+  long double mathematical_upper = 0.0L;
+  long double pending_local_upper = 0.0L;
+  for (size_t i = 0; i < profiles.size(); ++i) {
+    mathematical_upper += local_upper(
         profiles[i], static_cast<long double>(word_log_bonus),
         static_cast<long double>(pair_log_bonus));
-  long double correction = dfs_solo_exact_bonus(
+    double const pending_term = profiles[i].pair_mask != 0
+        ? word_log_bonus + pair_log_bonus
+        : (profiles[i].word_mask != 0 ? word_log_bonus : 0.0);
+    pending_local_upper += static_cast<long double>(pending_term);
+  }
+  long double const exact = dfs_solo_exact_bonus(
       profiles, static_cast<long double>(word_log_bonus),
-      static_cast<long double>(pair_log_bonus)) - upper;
-  assert(correction <= 0.0L);
+      static_cast<long double>(pair_log_bonus));
+  assert(exact <= mathematical_upper);
+  long double correction = exact - pending_local_upper;
+  // The pending terms were individually rounded to double. A positive value
+  // here can only be that rounding artifact; correction must never improve an
+  // upper score.
   if (correction > 0.0L) correction = 0.0L;
 
   double rounded = static_cast<double>(correction);

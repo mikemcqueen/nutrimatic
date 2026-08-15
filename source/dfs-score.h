@@ -39,6 +39,9 @@ class DfsScoreModel {
       bool known_pair = false) const;
   double append_log_score(
       double accumulated, double segment_log_score) const;
+  double solo_local_upper_log_bonus(uint16_t score_flags) const;
+  double member_upper_log_score(
+      int64_t count, bool multi_word, uint16_t score_flags) const;
 
   double segment_boundary_log_score() const {
     return segment_boundary_log_score_;

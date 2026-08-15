@@ -352,8 +352,10 @@ bool ProjectedActions::build(
         by_delta.begin(), by_delta.end(),
         [&](DeltaClass const& a, DeltaClass const& b) {
           if (a.delta != b.delta) return a.delta < b.delta;
-          double const a_score = data.best_member_log_scores[a.class_id];
-          double const b_score = data.best_member_log_scores[b.class_id];
+          double const a_score =
+              data.best_member_upper_log_scores[a.class_id];
+          double const b_score =
+              data.best_member_upper_log_scores[b.class_id];
           if (a_score != b_score) return a_score > b_score;
           return a.class_id < b.class_id;
         });
@@ -405,7 +407,7 @@ bool ProjectedActions::build(
       FitClass const& fit = data.fit_classes.get()[id];
       ProjectedAction action;
       action.score_key_delta = data.score_key_deltas.get()[id];
-      double const class_score = data.best_member_log_scores[id];
+      double const class_score = data.best_member_upper_log_scores[id];
       action.partial_score =
           class_score + data.segment_boundary_log_score;
       action.rounding_error_base =

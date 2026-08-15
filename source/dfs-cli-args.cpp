@@ -141,6 +141,59 @@ bool parse_segment_penalty(char const* in, double* out) {
   return true;
 }
 
+bool parse_solo_words(
+    char const* in, std::vector<std::string>* solo_words) {
+  std::string const value(in);
+  size_t start = 0;
+  for (;;) {
+    size_t const comma = value.find(',', start);
+    size_t const end = comma == std::string::npos ? value.size() : comma;
+    if (end == start) {
+      fputs("error: --solo-words contains an empty word\n", stderr);
+      return false;
+    }
+    std::string const word = value.substr(start, end - start);
+    for (size_t i = 0; i < word.size(); ++i) {
+      char const ch = word[i];
+      if ((ch < 'a' || ch > 'z') && (ch < '0' || ch > '9')) {
+        fprintf(stderr,
+                "error: --solo-words word \"%s\" must contain only"
+                " lowercase a-z0-9\n",
+                word.c_str());
+        return false;
+      }
+    }
+    if (std::find(solo_words->begin(), solo_words->end(), word) !=
+        solo_words->end()) {
+      fprintf(stderr, "error: duplicate --solo-words word \"%s\"\n",
+              word.c_str());
+      return false;
+    }
+    if (solo_words->size() == 16) {
+      fputs("error: --solo-words accepts at most 16 words\n", stderr);
+      return false;
+    }
+    solo_words->push_back(word);
+    if (comma == std::string::npos) return true;
+    start = comma + 1;
+  }
+}
+
+bool validate_solo_bonuses(DfsCommonArgs const& args) {
+  if (args.solo_words.empty()) return true;
+  if (args.word_bonus < 0.0) {
+    fputs("error: --word-bonus must be non-negative with --solo-words\n",
+          stderr);
+    return false;
+  }
+  if (args.pair_bonus < 0.0) {
+    fputs("error: --pair-bonus must be non-negative with --solo-words\n",
+          stderr);
+    return false;
+  }
+  return true;
+}
+
 bool finalize_min_word_length(
     std::string const& letters, bool explicitly_given, int* min_word_len) {
   if (!explicitly_given && *min_word_len > int(letters.size()))
@@ -306,6 +359,12 @@ DfsOptionResult dfs_parse_common_option(
       if (!parse_double(options->optarg, "--pair-bonus", &out->pair_bonus))
         return DFS_OPTION_ERROR;
       info.name = "--pair-bonus";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_SOLO_WORDS:
+      if (!parse_solo_words(options->optarg, &out->solo_words))
+        return DFS_OPTION_ERROR;
+      info.name = "--solo-words";
       info.score_incompatible = false;
       break;
     default:

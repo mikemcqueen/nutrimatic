@@ -41,7 +41,7 @@ struct DfsSearchData {
   DfsClassList const* class_list = NULL;
   ScoreBounds score_bounds;
   DfsScoreModel score_model{1.0, 1, 0.0};
-  std::vector<double> best_member_log_scores;
+  std::vector<double> best_member_upper_log_scores;
   double segment_boundary_log_score = 0.0;
   size_t letter_count = 0;
   size_t max_depth = 0;

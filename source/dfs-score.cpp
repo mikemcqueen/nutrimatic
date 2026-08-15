@@ -1,5 +1,7 @@
 #include "dfs-score.h"
 
+#include "dfs-solo-words.h"
+
 #include <assert.h>
 #include <math.h>
 
@@ -56,6 +58,23 @@ double DfsScoreModel::append_segment_log_score(
 double DfsScoreModel::append_log_score(
     double accumulated, double segment_log_score) const {
   return accumulated + segment_boundary_log_score_ + segment_log_score;
+}
+
+double DfsScoreModel::solo_local_upper_log_bonus(
+    uint16_t score_flags) const {
+  if ((score_flags & DFS_MEMBER_SOLO_PAIR_EDGE) != 0)
+    return multi_word_log_bonus_ + pair_log_bonus_;
+  if ((score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0)
+    return multi_word_log_bonus_;
+  return 0.0;
+}
+
+double DfsScoreModel::member_upper_log_score(
+    int64_t count, bool multi_word, uint16_t score_flags) const {
+  return segment_log_score(
+      count, multi_word,
+      (score_flags & DFS_MEMBER_KNOWN_PAIR) != 0) +
+      solo_local_upper_log_bonus(score_flags);
 }
 
 double DfsScoreModel::displayed_score(double log_score) const {

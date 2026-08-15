@@ -23,6 +23,8 @@ int main(int argc, char* argv[]) {
     writer.next("dc ", 0, 2);
     // "f" can only complete "fghij" through the phrase "gh ij".
     writer.next("f ", 0, 10);
+    // "f gh" exists only as an aggregate prefix, not an exact residual.
+    writer.next("f gh ij ", 0, 1);
     writer.next("gh ij ", 0, 5);
     // One class holding both spellings of the same letters, so --word-bonus
     // has a single-word member to promote the phrase over. k-n are otherwise

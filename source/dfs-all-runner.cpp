@@ -63,7 +63,8 @@ void DfsAllSolutionsRunner::visit_fitting_class(
     size_t letters_left, double representative_log_score,
     DfsSolutionSink* sink) {
   if (DFS_UNLIKELY(worker->path.size() >= data.max_depth)) return;
-  double const class_score = data.best_member_log_scores[class_index];
+  double const class_score =
+      data.best_member_upper_log_scores[class_index];
   size_t const candidate_length =
       hot_letter_length(metadata.packed_length_and_count);
   assert(candidate_length <= letters_left);

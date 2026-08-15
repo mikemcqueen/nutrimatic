@@ -23,6 +23,8 @@ struct DfsSoloMasks {
   uint16_t pair_mask = 0;
 };
 
+uint16_t dfs_solo_score_flags(DfsSoloMasks masks);
+
 // Resolves the score edges from extracted single-word candidates to at most
 // sixteen external solo words. Registration is phase-1-only; freeze() sorts
 // the compact table before any search worker can read it.

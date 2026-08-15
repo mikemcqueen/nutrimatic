@@ -52,43 +52,45 @@ static std::string make_word_set_key(std::string const& text) {
 }
 
 struct ExpansionCandidate {
-  double log_score;
+  double upper_log_score;
   std::vector<size_t> member_indexes;
 };
 
 struct ExpansionOrder {
   bool operator()(ExpansionCandidate const& a,
                   ExpansionCandidate const& b) const {
-    if (a.log_score != b.log_score) return a.log_score < b.log_score;
+    if (a.upper_log_score != b.upper_log_score)
+      return a.upper_log_score < b.upper_log_score;
     return a.member_indexes > b.member_indexes;
   }
 };
 
-static double spelling_log_score(
+static double spelling_upper_log_score(
     DfsClassList const& classes,
     DfsScoreModel const& model,
     std::vector<size_t> const& class_indexes,
     std::vector<size_t> const& member_indexes,
-    double representative_log_score) {
-  double score = representative_log_score;
+    double representative_upper_log_score) {
+  double score = representative_upper_log_score;
   for (size_t i = 0; i < class_indexes.size(); ++i) {
     if (member_indexes[i] == 0) continue;
     size_t const class_index = class_indexes[i];
     DfsMemberView const chosen =
         classes.member(class_index, member_indexes[i]);
     DfsMemberView const best = classes.member(class_index, 0);
-    score += model.segment_log_score(
-                 chosen.count, chosen.word_count > 1, chosen.known_pair) -
-        model.segment_log_score(
-                 best.count, best.word_count > 1, best.known_pair);
+    score += model.member_upper_log_score(
+                 chosen.count, chosen.word_count > 1, chosen.score_flags) -
+        model.member_upper_log_score(
+                 best.count, best.word_count > 1, best.score_flags);
   }
   return score;
 }
 
 DfsTopN::DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
-                 size_t limit):
+                 size_t limit, DfsSoloWords const* solo_words):
     class_list(classes),
     score_model(model),
+    solo_words(solo_words),
     result_limit(limit),
     expanded(0),
     published_floor_bits(0),
@@ -132,15 +134,15 @@ bool DfsTopN::score_floor(double* floor) const {
 }
 
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
-                   double representative_log_score) {
+                   double representative_upper_log_score) {
   if (class_indexes.empty()) return;
   double published;
   if (score_floor(&published) &&
-      representative_log_score <= published)
+      representative_upper_log_score <= published)
     return;
 
   ExpansionCandidate first;
-  first.log_score = representative_log_score;
+  first.upper_log_score = representative_upper_log_score;
   first.member_indexes.assign(class_indexes.size(), 0);
 
   std::priority_queue<ExpansionCandidate,
@@ -150,19 +152,34 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 
   while (!pending.empty()) {
     ExpansionCandidate const current = pending.top();
-    if (score_floor(&published) && current.log_score <= published) break;
+    if (score_floor(&published) && current.upper_log_score <= published) break;
     pending.pop();
 
     DfsSpelling spelling;
-    spelling.log_score = current.log_score;
     spelling.segment_lengths.reserve(class_indexes.size());
+    std::vector<DfsSoloMasks> profiles;
+    if (solo_words != NULL) profiles.reserve(class_indexes.size());
     for (size_t i = 0; i < class_indexes.size(); ++i) {
       DfsMemberView const view = class_list->member(
           class_indexes[i], current.member_indexes[i]);
       if (!spelling.text.empty()) spelling.text.push_back(' ');
       spelling.text.append(view.text, view.text_length);
       spelling.segment_lengths.push_back(uint8_t(view.text_length));
+      if (solo_words != NULL && view.word_count == 1 &&
+          (view.score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0) {
+        DfsSoloMasks const profile = solo_words->lookup(
+            std::string_view(view.text, view.text_length));
+        uint16_t const solo_flags = view.score_flags &
+            (DFS_MEMBER_SOLO_WORD_EDGE | DFS_MEMBER_SOLO_PAIR_EDGE);
+        assert(dfs_solo_score_flags(profile) == solo_flags);
+        (void) solo_flags;
+        profiles.push_back(profile);
+      }
     }
+    spelling.log_score = current.upper_log_score + dfs_solo_score_correction(
+        profiles, score_model->multi_word_log_bonus(),
+        score_model->pair_log_bonus());
+    assert(spelling.log_score <= current.upper_log_score);
     spelling.word_set_key = make_word_set_key(spelling.text);
     {
       std::lock_guard<std::mutex> const guard(heap_mutex);
@@ -170,7 +187,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
       // constructed. Since pending is score ordered and descendants cannot
       // improve on their parent, an authoritative cutoff ends this expansion.
       if (result_limit != 0 && heap.size() == result_limit &&
-          current.log_score <= floor_log_score())
+          current.upper_log_score <= floor_log_score())
         break;
       ++expanded;
       if (offer(std::move(spelling))) publish_floor();
@@ -203,11 +220,10 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
             break;
           }
         if (canonical) {
-          next.log_score =
-              spelling_log_score(*class_list, *score_model, class_indexes,
-                                 next.member_indexes,
-                                 representative_log_score);
-          if (!score_floor(&published) || next.log_score > published)
+          next.upper_log_score = spelling_upper_log_score(
+              *class_list, *score_model, class_indexes,
+              next.member_indexes, representative_upper_log_score);
+          if (!score_floor(&published) || next.upper_log_score > published)
             pending.push(std::move(next));
         }
       }

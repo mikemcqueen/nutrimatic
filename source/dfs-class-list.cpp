@@ -2,6 +2,7 @@
 
 #include "dfs-diagnostic.h"
 #include "dfs-score.h"
+#include "dfs-solo-words.h"
 #include "index.h"
 
 #include <assert.h>
@@ -34,7 +35,7 @@ struct IntermediateMember {      // 24 bytes
   uint32_t count;
   uint8_t text_length;
   uint8_t word_count;
-  uint16_t known_pair;
+  uint16_t score_flags;
 };
 
 // Appends fixed-size records, or byte runs, to chunks that are allocated once
@@ -197,7 +198,7 @@ class DfsExtractor {
   DfsExtractor(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases,
                DfsDictionary const* dictionary, int requested_max_words,
-               DfsPairSet const* pairs):
+               DfsPairSet const* pairs, DfsSoloWords* solo_words):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
@@ -208,6 +209,7 @@ class DfsExtractor {
           requested_max_words)),
       dictionary(dictionary),
       pairs(pairs),
+      solo_words(solo_words),
       letters_left(int(letters.size())),
       nodes(0),
       signature(0) {
@@ -253,7 +255,8 @@ class DfsExtractor {
   size_t entries;
 
  private:
-  void emit(int64_t count, int word_count) {
+  void emit(int64_t count, int word_count,
+            IndexReader::Node continuation) {
     if (count > int64_t(UINT32_MAX)) {
       dfs_diagnostic_to_stream(stderr,
           "error: corpus count %lld for \"%.*s\" exceeds the %llu a packed"
@@ -265,10 +268,17 @@ class DfsExtractor {
 
     size_t const length = text.size() - 1;
     DFS_CHECK(length <= UINT8_MAX && word_count <= UINT8_MAX);
-    bool known_pair = false;
+    uint16_t score_flags = 0;
     if (pairs != NULL && word_count > 1) {
       text.pop_back();
-      known_pair = pairs->count(text) != 0;
+      if (pairs->count(text) != 0)
+        score_flags |= DFS_MEMBER_KNOWN_PAIR;
+      text.push_back(' ');
+    }
+    if (solo_words != NULL && word_count == 1) {
+      text.pop_back();
+      score_flags |= solo_words->register_profile(
+          text, continuation, count);
       text.push_back(' ');
     }
     char* const stored = static_cast<char*>(text_arena.append(length));
@@ -291,7 +301,7 @@ class DfsExtractor {
     record->count = uint32_t(count);
     record->text_length = uint8_t(length);
     record->word_count = uint8_t(word_count);
-    record->known_pair = known_pair;
+    record->score_flags = score_flags;
     ++entries;
   }
 
@@ -318,7 +328,7 @@ class DfsExtractor {
                             size_t(word_len))) == dictionary->end())
           continue;
         text.push_back(' ');
-        emit(choice.count, words + 1);
+        emit(choice.count, words + 1, choice.next);
         if (words + 1 < max_extract_words && letters_left >= min_len &&
             choice.next != IndexReader::Node(-1))
           walk(choice.next, choice.count, 0, words + 1, depth + 1);
@@ -344,6 +354,7 @@ class DfsExtractor {
   int const max_extract_words;
   DfsDictionary const* const dictionary;
   DfsPairSet const* const pairs;
+  DfsSoloWords* const solo_words;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
   int letters_left;
@@ -358,8 +369,8 @@ struct MemberOrder {
 
   double score(DfsPackedMember const& m) const {
     if (model == NULL) return log(double(m.count));
-    return model->segment_log_score(
-        m.count, m.word_count > 1, m.known_pair != 0);
+    return model->member_upper_log_score(
+        m.count, m.word_count > 1, m.score_flags);
   }
 
   bool operator()(DfsPackedMember const& a, DfsPackedMember const& b) const {
@@ -374,9 +385,14 @@ struct MemberOrder {
 };
 
 bool same_member(DfsPackedMember const& a, DfsPackedMember const& b) {
-  return a.count == b.count && a.word_count == b.word_count &&
+  bool const same =
+      a.count == b.count && a.word_count == b.word_count &&
       a.text_length == b.text_length &&
       memcmp(a.text, b.text, a.text_length) == 0;
+  // Equal text resolves to one stable out-of-line solo profile and therefore
+  // must never carry conflicting flags. Flags are not part of dedup identity.
+  if (same) assert(a.score_flags == b.score_flags);
+  return same;
 }
 
 std::string letters_key(uint16_t const* letters, size_t count) {
@@ -396,7 +412,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            DfsDictionary const* dictionary,
                            int max_extract_words,
                            DfsScoreModel const* score_model,
-                           DfsPairSet const* pairs):
+                           DfsPairSet const* pairs,
+                           DfsSoloWords* solo_words):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
@@ -424,8 +441,9 @@ DfsClassList::DfsClassList(IndexReader const* reader,
 
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
-      max_extract_words, pairs);
+      max_extract_words, pairs, solo_words);
   extractor.run();
+  if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();
   signature_digits = std::move(extractor.digits);
   text_chunks = std::move(extractor.text_arena.storage());
@@ -476,7 +494,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
       target.count = source[i].count;
       target.text_length = source[i].text_length;
       target.word_count = source[i].word_count;
-      target.known_pair = source[i].known_pair;
+      target.score_flags = source[i].score_flags;
     }
   }
   extractor.member_arena.clear();
@@ -599,7 +617,7 @@ DfsMemberView DfsClassList::member(size_t ci, size_t mi) const {
   DfsPackedMember const& packed = record.members[mi];
   DfsMemberView const view = {
     packed.text, packed.text_length, int64_t(packed.count),
-    int(packed.word_count), packed.known_pair != 0,
+    int(packed.word_count), packed.score_flags,
   };
   return view;
 }

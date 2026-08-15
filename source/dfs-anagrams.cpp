@@ -3,6 +3,7 @@
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
 #include "dfs-score.h"
+#include "dfs-solo-words.h"
 #include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
@@ -13,6 +14,7 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -57,6 +59,7 @@ static void usage(char const* program) {
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
+      " [--solo-words WORD[,WORD...]]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
@@ -75,6 +78,13 @@ static void usage(char const* program) {
       " entry; defaults to 0 (no limit)\n"
       "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
       " in either order\n"
+      "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
+      " external words; they consume no letters and are not printed\n"
+      "    a selected single-word entry earns --word-bonus when either"
+      " phrase order is an aggregate index phrase or is asserted by"
+      " --pairs; an asserted pair also earns --pair-bonus\n"
+      "    each solo word can be used once per answer; both bonuses must be"
+      " non-negative, and the aggregate phrase test matches phase 1\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
@@ -197,6 +207,8 @@ static bool parse_args(char* argv[], Args* out) {
     }
   }
 
+  if (!validate_solo_bonuses(out->common)) return false;
+
   if (out->weighted && !out->segments) {
     fputs("error: --weighted requires --segments\n", stderr);
     return false;
@@ -296,14 +308,26 @@ int main(int argc, char* argv[]) {
   DfsScoreModel const model(
       args.common.segment_penalty, reader.count(), args.common.word_bonus,
       args.common.pair_bonus);
+  std::unique_ptr<DfsSoloWords> solo_words;
+  if (!args.common.solo_words.empty() &&
+      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0))
+    solo_words.reset(new DfsSoloWords(
+        &reader, args.common.solo_words,
+        args.common.pair_file != NULL ? &pairs : NULL, &model));
   DfsClassList classes(&reader, args.letters, args.common.min_word_len, true,
                        dictionary_filter, args.common.max_extract_words,
                        &model,
-                       args.common.pair_file != NULL ? &pairs : NULL);
+                       args.common.pair_file != NULL ? &pairs : NULL,
+                       solo_words.get());
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
       (long long) classes.nodes_visited());
+  if (solo_words != NULL)
+    dfs_diagnostic(
+        "solo words: %zu profiles, %zu word edges, %zu pair edges\n",
+        solo_words->profile_count(), solo_words->word_edge_count(),
+        solo_words->pair_edge_count());
   fflush(stderr);
 
   DfsAnagramSearch search(
@@ -311,7 +335,8 @@ int main(int argc, char* argv[]) {
       args.score_cache_bytes, preprocess_threads,
       size_t(args.common.search_threads), size_t(args.num_segments),
       args.common.word_bonus, args.common.pair_bonus);
-  DfsTopN output(&classes, &model, size_t(args.common.top));
+  DfsTopN output(
+      &classes, &model, size_t(args.common.top), solo_words.get());
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,

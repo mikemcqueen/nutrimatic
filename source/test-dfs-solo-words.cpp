@@ -136,17 +136,27 @@ static void matching_test() {
   check(correction <= 0.0 && correction == -double(word),
         "scarcity correction is not exact and non-positive");
 
-  // A correction halfway between adjacent doubles must be rounded toward
-  // negative infinity rather than back toward zero.
-  double const one = 1.0;
-  double const below = nextafter(one, 0.0);
+  // This exact correction lies nearer the next double toward zero. The
+  // conversion must nevertheless round down to preserve the pending bound.
+  double const tiny = ldexp(3.0, -55);
   std::vector<DfsSoloMasks> ulp = {
     masks(0x1, 0x1), masks(0x1),
   };
-  double const ulp_correction = dfs_solo_score_correction(ulp, below, one);
-  long double const exact = -static_cast<long double>(below);
+  double const ulp_correction = dfs_solo_score_correction(ulp, 1.0, tiny);
+  long double const exact = -1.0L + static_cast<long double>(tiny);
   check(static_cast<long double>(ulp_correction) <= exact,
         "correction conversion rounded above the exact value");
+  check(ulp_correction == -1.0,
+        "correction was not directed to the lower adjacent double");
+
+  // Two overlapping profiles can still take two high edges. If W + P rounded
+  // down in each pending term, the long-double difference is a tiny positive
+  // artifact and must clamp to zero rather than improve the upper score.
+  std::vector<DfsSoloMasks> rounded_upper = {
+    masks(0x3, 0x3), masks(0x3, 0x3),
+  };
+  check(dfs_solo_score_correction(rounded_upper, 1.0, tiny) == 0.0,
+        "positive pending-term rounding artifact was not clamped");
 }
 
 int main() {

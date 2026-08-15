@@ -259,6 +259,62 @@ assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
 assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   1000 "--pair-bonus should leave the unlisted single word's score alone"
 
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --solo-words cd --word-bonus 0 --pair-bonus 0 \
+  > "$test_dir/solo-inert.stdout" 2> "$test_dir/solo-inert.stderr"
+cmp "$test_dir/all.stdout" "$test_dir/solo-inert.stdout" ||
+  fail "score-inert --solo-words changed DFS output"
+
+# A pairs-only external edge promotes the split spelling above the contiguous
+# phrase even with a bounded top-N queue.
+printf 'ab,zz\n' > "$test_dir/solo-top-pairs.txt"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 1 -P 1 \
+  --solo-words zz --word-bonus 0 \
+  --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 \
+  > "$test_dir/solo-top.stdout" 2> "$test_dir/solo-top.stderr"
+[[ $(awk 'NR == 1 { print $2 }' "$test_dir/solo-top.stdout") == ab,cd ]] ||
+  fail "solo-word upper bounds did not retain the bounded winner"
+solo_top_score=$(awk 'NR == 1 { print $1 }' "$test_dir/solo-top.stdout")
+solo_top_round_trip=$("$query_index" "$index_file" ab,cd --score -P 1 \
+  --solo-words zz --word-bonus 0 \
+  --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
+assert_close "$solo_top_score" "$solo_top_round_trip" \
+  "DFS solo-word score did not round-trip through query-index --score"
+
+printf 'ba,cd\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
+"$dfs_anagrams" "$index_file" abba -m 2 -n 10 -P 1 \
+  --solo-words cd --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0 \
+  > "$test_dir/solo-scarcity.stdout" 2> "$test_dir/solo-scarcity.stderr"
+scarce_score=$(awk '$2 == "ab,ba" { print $1 }' \
+  "$test_dir/solo-scarcity.stdout")
+[[ -n $scarce_score ]] || fail "solo-word scarcity spelling is missing"
+scarce_round_trip=$("$query_index" "$index_file" ab,ba --score -P 1 \
+  --solo-words cd --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0 | awk '{ print $1 }')
+assert_close "$scarce_score" "$scarce_round_trip" \
+  "DFS spent one solo word more than once"
+
+# wx can reroute from its asserted ab edge to its aggregate yz edge, leaving
+# ab for xy. This is the non-greedy maximum-score assignment.
+"$dfs_anagrams" "$index_file" wxxy -m 2 -n 1 -P 1 \
+  --solo-words ab,yz --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
+  > "$test_dir/solo-reroute.stdout" 2> "$test_dir/solo-reroute.stderr"
+[[ $(awk 'NR == 1 { print $2 }' "$test_dir/solo-reroute.stdout") \
+   == wx,xy ]] ||
+  fail "solo-word assignment reroute lost the bounded DFS winner"
+reroute_score=$(awk 'NR == 1 { print $1 }' \
+  "$test_dir/solo-reroute.stdout")
+reroute_round_trip=$("$query_index" "$index_file" wx,xy --score -P 1 \
+  --solo-words ab,yz --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
+assert_close "$reroute_score" "$reroute_round_trip" \
+  "rerouted DFS score did not round-trip through query-index --score"
+grep -Eq "${diagnostic_prefix}solo words: 2 profiles, 3 word edges, 2 pair edges$" \
+  "$test_dir/solo-reroute.stderr" ||
+  fail "solo profile and edge diagnostics are missing"
+
 # Every result line's entry list must be pasteable into "query-index --score"
 # and reproduce that line's own score.
 while read -r result_score result_entries; do
@@ -325,6 +381,11 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --segment-penalty 0.5
 expect_status 2 "$dfs_anagrams" "$index_file" abc -P nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc -P inf
+expect_status 2 "$dfs_anagrams" "$index_file" abc \
+  --solo-words ab --word-bonus -1
+grep -q '^error: --word-bonus must be non-negative with --solo-words$' \
+  "$test_dir/status.stderr" ||
+  fail "negative solo-word bonus diagnostic is unclear"
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --cache-size 0
 grep -q '^error: projected dense score table requires at least 1 MiB; supplied cache is 0 MiB$' \

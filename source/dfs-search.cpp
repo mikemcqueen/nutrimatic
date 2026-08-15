@@ -200,7 +200,7 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
   // only production read of the member store outside output.
   assert(!class_list->members_invalidated());
   DfsClassSpan const all_classes = class_list->classes();
-  best_member_log_scores.reserve(all_classes.size());
+  best_member_upper_log_scores.reserve(all_classes.size());
   // These are optimistic per-class bounds that phase 2 prunes against, so each
   // must be the best *score* in its class, which member 0 is by construction:
   // the class list orders members under this same score model.
@@ -208,8 +208,9 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
     assert(class_list->member_count(i) > 0);
     DfsMemberView const first = class_list->member(i, 0);
     assert(first.count > 0);
-    best_member_log_scores.push_back(score_model.first_segment_log_score(
-        first.count, first.word_count > 1, first.known_pair));
+    best_member_upper_log_scores.push_back(
+        score_model.member_upper_log_score(
+            first.count, first.word_count > 1, first.score_flags));
   }
 }
 
@@ -401,10 +402,10 @@ bool DfsAnagramSearch::prepare_length_certificate(DfsSearchData* data) {
         previous_length = length;
         data->certificate_max_score[base + length] = std::max(
             data->certificate_max_score[base + length],
-            best_member_log_scores[i]);
+            best_member_upper_log_scores[i]);
         data->certificate_group_end[base + length] = uint32_t(i + 1);
         best_score[length] = std::max(
-            best_score[length], best_member_log_scores[i]);
+            best_score[length], best_member_upper_log_scores[i]);
       }
     }
 
@@ -490,7 +491,7 @@ bool DfsAnagramSearch::prepare_phase_two(
   *stats = DfsSearchStats();
   data->class_list = class_list;
   data->score_model = score_model;
-  data->best_member_log_scores = best_member_log_scores;
+  data->best_member_upper_log_scores = best_member_upper_log_scores;
   data->segment_boundary_log_score = segment_boundary_log_score;
   data->letter_count = letters.size();
   data->max_depth = max_depth;

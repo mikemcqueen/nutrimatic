@@ -11,6 +11,7 @@
 
 #include "dfs-class-list.h"
 #include "dfs-score.h"
+#include "dfs-solo-words.h"
 #include "dfs-solution-sink.h"
 
 struct DfsSpelling {
@@ -61,13 +62,14 @@ struct HeapSlot {
 class DfsTopN: public DfsSolutionSink {
  public:
   // The model must be the one phase 2 scored with: a spelling's score is its
-  // solution's score adjusted by the scored difference between each chosen
-  // member and its class's member 0.
+  // solution's upper score adjusted by the upper-score difference between
+  // each chosen member and its class's member 0. solo_words supplies the exact
+  // profiles used to correct a concrete spelling before retention.
   DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
-          size_t limit);
+          size_t limit, DfsSoloWords const* solo_words = NULL);
 
   void emit(std::vector<size_t> const& class_indexes,
-            double representative_log_score);
+            double representative_upper_log_score);
   bool supports_score_pruning() const { return result_limit != 0; }
   bool score_floor(double* floor) const;
   bool supports_parallel_search() const { return true; }
@@ -91,6 +93,7 @@ class DfsTopN: public DfsSolutionSink {
 
   DfsClassList const* const class_list;
   DfsScoreModel const* const score_model;
+  DfsSoloWords const* const solo_words;
   size_t const result_limit;
   size_t expanded;
 

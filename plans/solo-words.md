@@ -10,7 +10,7 @@ Status values are `[ ]` pending, `[-]` in progress, and `[x]` complete.
 | Phase | Deliverable | Status | Proposed commit |
 |---:|---|:---:|---|
 | 1 | Shared pair-profile and assignment helper | [x] | `Add solo-word pair matching` |
-| 2 | Shared CLI and complete score integration | [ ] | `Score words with solo-word partners` |
+| 2 | Shared CLI and complete score integration | [x] | `Score words with solo-word partners` |
 
 ## Outcome
 
@@ -367,7 +367,7 @@ Completion gate: the helper returns admissible local upper bonuses and an
 exact, order-independent, capacity-constrained correction without any CLI
 behavior or packed-record change.
 
-## Phase 2 — expose and integrate the option [ ]
+## Phase 2 — expose and integrate the option [x]
 
 Primary files:
 
@@ -382,22 +382,22 @@ Primary files:
 
 Tasks:
 
-- [ ] Add parsing, validation, diagnostics, and help to both CLIs.
-- [ ] Populate score flags while preserving the 16-byte packed and 24-byte
+- [x] Add parsing, validation, diagnostics, and help to both CLIs.
+- [x] Populate score flags while preserving the 16-byte packed and 24-byte
       intermediate static assertions.
-- [ ] Apply local upper scores consistently to class ordering and every search
+- [x] Apply local upper scores consistently to class ordering and every search
       bound.
-- [ ] Apply exact correction only after concrete spelling expansion.
-- [ ] Apply the same logic to `query-index --score` and the efficient ordinary
+- [x] Apply exact correction only after concrete spelling expansion.
+- [x] Apply the same logic to `query-index --score` and the efficient ordinary
       three-group merge.
-- [ ] Add smoke cases for index-leading, index-trailing, and pairs-only edges;
+- [x] Add smoke cases for index-leading, index-trailing, and pairs-only edges;
       pair bonuses; one-use scarcity; an assignment reroute; a bounded top-N
       winner; DFS/query score round-trip; ordinary bounded output equaling the
       unlimited prefix; aggregate-prefix semantics; and byte-identical output
       with omitted or score-inert solo words.
-- [ ] Add only focused parser failures: empty field, malformed word, duplicate,
+- [x] Add only focused parser failures: empty field, malformed word, duplicate,
       17th word, missing argument, and negative bonus with solo words.
-- [ ] Run focused tests, then `/review`, affected reruns, and
+- [x] Run focused tests, then `/review`, affected reruns, and
       `git diff --check`.
 
 Completion gate: both CLIs share one documented scoring contract, all retained

@@ -73,7 +73,7 @@ class DfsAnagramSearch {
   std::string const letters;
   DfsScoreModel const score_model;
   double const segment_boundary_log_score;
-  std::vector<double> best_member_log_scores;
+  std::vector<double> best_member_upper_log_scores;
   // Declared before max_depth: a nonzero exact_segments clamps it, so the
   // member initializer for max_depth reads this one.
   size_t const exact_segments;

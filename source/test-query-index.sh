@@ -55,13 +55,13 @@ expect_score_failure() {
     fail "$name printed output before rejecting the sequence"
 }
 
-# The synthetic corpus total is 1141. Each comma after the first divides by
+# The synthetic corpus total is 1142. Each comma after the first divides by
 # corpus_total * P; spaces inside an exact entry do not add a segment. An
 # entry counts what phase 1 counts, which is its whole trailing-space subtree:
 # "ab" is 80, its own 10 plus the 70 of "ab cd".
 default_two_entry_score=$(score_value 'ab,cd')
 assert_close "$default_two_entry_score" \
-  "$(awk 'BEGIN { print 80 * 7 / (1141 * 1000000) }')" \
+  "$(awk 'BEGIN { print 80 * 7 / (1142 * 1000000) }')" \
   "the default should preserve the production segment penalty"
 assert_close "$(score_value 'ab,cd' -P 1000000)" \
   "$default_two_entry_score" \
@@ -73,17 +73,17 @@ for penalty in 1 100 1000000; do
 done
 
 assert_close "$(score_value 'ab,cd' -P 100)" \
-  "$(awk 'BEGIN { print 80 * 7 / (1141 * 100) }')" \
+  "$(awk 'BEGIN { print 80 * 7 / (1142 * 100) }')" \
   "two entries should pay one segment penalty"
 assert_close "$(score_value 'ab,cd,ab' --segment-penalty 100)" \
-  "$(awk 'BEGIN { print 80 * 7 * 80 / (1141 * 100)^2 }')" \
+  "$(awk 'BEGIN { print 80 * 7 * 80 / (1142 * 100)^2 }')" \
   "three entries should pay two segment penalties"
 for penalty in 1 100 1000000; do
   assert_close "$(score_value 'ab cd' -P "$penalty")" 70 \
     "a multi-word entry should remain one segment at P=$penalty"
 done
 assert_close "$(score_value 'ab,ab')" \
-  "$(awk 'BEGIN { print 80 * 80 / (1141 * 1000000) }')" \
+  "$(awk 'BEGIN { print 80 * 80 / (1142 * 1000000) }')" \
   "repeated entries should contribute repeatedly"
 
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
@@ -99,7 +99,7 @@ expect_score_failure 'ab  cd' malformed-spacing
 assert_close "$(score_value 'ab cd' -P 1)" 70 \
   "a multi-word entry should score as its own count without a bonus"
 assert_close "$(score_value 'ab cd,ab' -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1141 }')" \
+  "$(awk 'BEGIN { print 70 * 80 / 1142 }')" \
   "word count should not affect any segment's score without a bonus"
 
 assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
@@ -107,7 +107,7 @@ assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
 assert_close "$(score_value ab --word-bonus 1)" 80 \
   "--word-bonus should not apply to a single-word segment"
 assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1141 * 1e6 }')" \
+  "$(awk 'BEGIN { print 70 * 80 / 1142 * 1e6 }')" \
   "a mixed sequence should bonus only its multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0
@@ -258,6 +258,66 @@ assert_close "$(score_value 'gh ij' --pairs "$test_dir/pairs.txt" \
   fail "query-index did not promote a listed pair above both other groups"
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   70000000 "query-index printed the wrong listed-pair score"
+
+# Solo words are external one-use partners. Index phrases work in either
+# order, asserted pairs work without index support, and an aggregate-only
+# phrase prefix has the same presence semantics as phase 1.
+assert_close "$(score_value ab --solo-words cd --word-bonus 1)" 80000000 \
+  "candidate-leading solo edge did not earn the word bonus"
+assert_close "$(score_value cd --solo-words ab --word-bonus 1)" 7000000 \
+  "solo-leading edge did not earn the word bonus"
+assert_close "$(score_value f --solo-words gh --word-bonus 1)" 11000000 \
+  "aggregate-only phrase prefix did not create a solo edge"
+
+printf 'ba,dc\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
+assert_close "$(score_value ba --solo-words dc --word-bonus 1 \
+    --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1)" 5000000000000 \
+  "pairs-only solo edge did not earn both bonuses"
+
+# Both entries can reach cd, but the external word has capacity one.
+assert_close "$(score_value 'ab,ba' -P 1 --solo-words cd --word-bonus 1 \
+    --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0)" \
+  "$(awk 'BEGIN { print 80 * 5 / 1142 * 1e6 }')" \
+  "one solo word was spent twice in --score"
+
+# wx prefers the high edge to ab but can reroute to yz; xy has only the high
+# edge to ab. The optimum therefore needs the augmenting-path reroute and earns
+# three log-space bonus units.
+reroute_score=$(score_value 'wx,xy' -P 1 --solo-words ab,yz \
+  --word-bonus 1 --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1)
+assert_close "$reroute_score" \
+  "$(awk 'BEGIN { print 7 * 4 / 1142 * 1e18 }')" \
+  "solo assignment did not reroute to its maximum-score matching"
+
+"$query_index" "$synthetic_index" wxyz -m 2 -n 0 \
+  --solo-words ab,yz --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
+  > "$test_dir/solo-unlimited.stdout" 2> "$test_dir/solo-unlimited.stderr"
+"$query_index" "$synthetic_index" wxyz -m 2 -n 2 \
+  --solo-words ab,yz --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
+  > "$test_dir/solo-top2.stdout" 2> "$test_dir/solo-top2.stderr"
+head -n 2 "$test_dir/solo-unlimited.stdout" \
+  > "$test_dir/solo-expected-top2.stdout"
+cmp "$test_dir/solo-expected-top2.stdout" "$test_dir/solo-top2.stdout" ||
+  fail "bounded solo-word output differs from the unlimited prefix"
+
+"$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
+  --solo-words ab --word-bonus 0 --pair-bonus 0 \
+  > "$test_dir/solo-inert.stdout" 2> "$test_dir/solo-inert.stderr"
+cmp "$test_dir/extract-uncapped.stdout" "$test_dir/solo-inert.stdout" ||
+  fail "score-inert --solo-words changed ordinary output"
+
+expect_score_failure ab solo-empty --solo-words ab,
+expect_score_failure ab solo-malformed --solo-words Ab
+expect_score_failure ab solo-duplicate --solo-words ab --solo-words ab
+expect_score_failure ab solo-missing-argument --solo-words
+seventeen=a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q
+expect_score_failure ab solo-too-many --solo-words "$seventeen"
+expect_score_failure ab solo-negative-word \
+  --solo-words cd --word-bonus -1
+expect_score_failure ab solo-negative-pair \
+  --solo-words cd --pair-bonus -1
 
 # --csv keeps exactly the multi-word entries of an ordinary run, printed as
 # their words with the count column dropped.

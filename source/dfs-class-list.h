@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "dfs-alloc.h"
+#include "dfs-solo-words.h"
 
 class IndexReader;
 class DfsScoreModel;
@@ -46,7 +47,7 @@ struct DfsPackedMember {         // 16 bytes
   uint32_t count;
   uint8_t text_length;
   uint8_t word_count;
-  uint16_t known_pair;
+  uint16_t score_flags;
 };
 
 // One anagram class. Its letters are not stored: they decode from the
@@ -91,7 +92,7 @@ struct DfsMemberView {
   size_t text_length;
   int64_t count;
   int word_count;
-  bool known_pair;
+  uint16_t score_flags;
 };
 
 // A decoded letter requirement: (count << 6) | symbol. The count occupies the
@@ -136,14 +137,16 @@ class DfsClassList {
   // caps the words in one extracted entry; 0 means no cap beyond the one the
   // bag and min_word_len already imply. The optional score model selects the
   // member ordering, and pairs marks entries that earn its pair bonus; member
-  // 0 is therefore the class's best member under the caller's complete score.
+  // 0 is therefore the class's best member under the caller's admissible
+  // upper score. solo_words is mutable only while phase 1 registers profiles.
   // With no model that is raw count order.
   DfsClassList(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases = true,
                DfsDictionary const* dictionary = NULL,
                int max_extract_words = 0,
                DfsScoreModel const* score_model = NULL,
-               DfsPairSet const* pairs = NULL);
+               DfsPairSet const* pairs = NULL,
+               DfsSoloWords* solo_words = NULL);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };
