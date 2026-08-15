@@ -140,6 +140,9 @@ weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
   link_with: segment_report_lib,
   install: true)
 
+top_segments = executable('top-segments', 'top-segments.cpp',
+  install: true)
+
 # Keep the class-visitor logic in the hot caller rather than leaving it as a
 # separate call in the final binary.  This runs as part of the normal build so
 # a regression is caught even when the test suite is not run.
@@ -258,6 +261,11 @@ test(
   'weighted-segments',
   bash,
   args: [files('test-weighted-segments.sh'), weighted_segments],
+)
+test(
+  'top-segments',
+  bash,
+  args: [files('test-top-segments.sh'), top_segments],
 )
 test(
   'query-index-cli',
