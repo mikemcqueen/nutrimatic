@@ -23,13 +23,17 @@ struct DfsSpelling {
   // offsets of length + 1. An entry's own text may contain spaces, so this is
   // the only way back to the segmentation.
   std::vector<uint8_t> segment_lengths;
+  // Aligned with segment_lengths when any external partner was selected.
+  // Multi-word and unmatched entries contain DFS_NO_SOLO_WORD.
+  std::vector<uint8_t> solo_word_indexes;
 };
 
 // Rewrites a spelling's text with a comma between index entries, leaving the
-// spaces inside an entry alone. The result is exactly the sequence syntax that
-// "query-index --score" parses, so a printed result line can be pasted back to
-// reproduce its own score.
-std::string dfs_spelling_entry_list(DfsSpelling const& spelling);
+// spaces inside an entry alone. Without solo_words the result is exactly the
+// sequence syntax that "query-index --score" parses. With solo_words, selected
+// external partners are appended as human-readable parenthetical annotations.
+std::string dfs_spelling_entry_list(
+    DfsSpelling const& spelling, DfsSoloWords const* solo_words = NULL);
 
 // The dedup table's payload. The map key (not duplicated here) is the
 // word-set key. When the result limit is nonzero, heap_pos is this entry's
@@ -38,6 +42,7 @@ std::string dfs_spelling_entry_list(DfsSpelling const& spelling);
 struct RetainedSpelling {
   std::string text;
   std::vector<uint8_t> segment_lengths;
+  std::vector<uint8_t> solo_word_indexes;
   double log_score;
   size_t heap_pos;
 };

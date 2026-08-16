@@ -60,6 +60,7 @@ static void usage(char const* program) {
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
       " [--solo-words WORD[,WORD...]]"
+      " [--hide-solo-words]"
       " [-p progress-factor] [--cache-size MiB]"
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
@@ -79,12 +80,14 @@ static void usage(char const* program) {
       "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
       " in either order\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
-      " external words; they consume no letters and are not printed\n"
+      " external words; they consume no letters and matched partners are"
+      " printed in parentheses\n"
       "    a selected single-word entry earns --word-bonus when either"
       " phrase order is an aggregate index phrase or is asserted by"
       " --pairs; an asserted pair also earns --pair-bonus\n"
       "    each solo word can be used once per answer; both bonuses must be"
       " non-negative, and the aggregate phrase test matches phase 1\n"
+      "  --hide-solo-words omits parenthesized solo partners from output\n"
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
@@ -391,7 +394,9 @@ int main(int argc, char* argv[]) {
   } else {
     for (size_t i = 0; i < results.size(); ++i)
       printf("%#.4g %s\n", exp(results[i].log_score),
-             dfs_spelling_entry_list(results[i]).c_str());
+             dfs_spelling_entry_list(
+                 results[i], args.common.hide_solo_words
+                     ? NULL : solo_words.get()).c_str());
   }
   return 0;
 }

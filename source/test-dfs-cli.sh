@@ -272,7 +272,8 @@ printf 'ab,zz\n' > "$test_dir/solo-top-pairs.txt"
   --solo-words zz --word-bonus 0 \
   --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 \
   > "$test_dir/solo-top.stdout" 2> "$test_dir/solo-top.stderr"
-[[ $(awk 'NR == 1 { print $2 }' "$test_dir/solo-top.stdout") == ab,cd ]] ||
+[[ $(sed -n '1s/^[^ ]* //p' "$test_dir/solo-top.stdout") \
+   == "ab (zz),cd" ]] ||
   fail "solo-word upper bounds did not retain the bounded winner"
 solo_top_score=$(awk 'NR == 1 { print $1 }' "$test_dir/solo-top.stdout")
 solo_top_round_trip=$("$query_index" "$index_file" ab,cd --score -P 1 \
@@ -286,7 +287,7 @@ printf 'ba,cd\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
   --solo-words cd --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0 \
   > "$test_dir/solo-scarcity.stdout" 2> "$test_dir/solo-scarcity.stderr"
-scarce_score=$(awk '$2 == "ab,ba" { print $1 }' \
+scarce_score=$(awk '$0 ~ / ab,ba \(cd\)$/ { print $1 }' \
   "$test_dir/solo-scarcity.stdout")
 [[ -n $scarce_score ]] || fail "solo-word scarcity spelling is missing"
 scarce_round_trip=$("$query_index" "$index_file" ab,ba --score -P 1 \
@@ -301,8 +302,8 @@ assert_close "$scarce_score" "$scarce_round_trip" \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
   > "$test_dir/solo-reroute.stdout" 2> "$test_dir/solo-reroute.stderr"
-[[ $(awk 'NR == 1 { print $2 }' "$test_dir/solo-reroute.stdout") \
-   == wx,xy ]] ||
+[[ $(sed -n '1s/^[^ ]* //p' "$test_dir/solo-reroute.stdout") \
+   == "wx (yz),xy (ab)" ]] ||
   fail "solo-word assignment reroute lost the bounded DFS winner"
 reroute_score=$(awk 'NR == 1 { print $1 }' \
   "$test_dir/solo-reroute.stdout")
@@ -311,6 +312,18 @@ reroute_round_trip=$("$query_index" "$index_file" wx,xy --score -P 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
 assert_close "$reroute_score" "$reroute_round_trip" \
   "rerouted DFS score did not round-trip through query-index --score"
+"$dfs_anagrams" "$index_file" wxxy -m 2 -n 1 -P 1 \
+  --solo-words ab,yz --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
+  --hide-solo-words \
+  > "$test_dir/solo-reroute-hidden.stdout" \
+  2> "$test_dir/solo-reroute-hidden.stderr"
+[[ $(awk 'NR == 1 { print $2 }' \
+      "$test_dir/solo-reroute-hidden.stdout") == wx,xy ]] ||
+  fail "--hide-solo-words did not restore the unannotated DFS spelling"
+assert_close "$(awk 'NR == 1 { print $1 }' \
+    "$test_dir/solo-reroute-hidden.stdout")" "$reroute_score" \
+  "--hide-solo-words changed the DFS score"
 grep -Eq "${diagnostic_prefix}solo words: 2 profiles, 3 word edges, 2 pair edges$" \
   "$test_dir/solo-reroute.stderr" ||
   fail "solo profile and edge diagnostics are missing"

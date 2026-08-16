@@ -301,6 +301,18 @@ head -n 2 "$test_dir/solo-unlimited.stdout" \
   > "$test_dir/solo-expected-top2.stdout"
 cmp "$test_dir/solo-expected-top2.stdout" "$test_dir/solo-top2.stdout" ||
   fail "bounded solo-word output differs from the unlimited prefix"
+grep -q ' wx (ab)$' "$test_dir/solo-unlimited.stdout" ||
+  fail "ordinary output did not show wx's selected solo partner"
+
+"$query_index" "$synthetic_index" wxyz -m 2 -n 0 \
+  --solo-words ab,yz --word-bonus 1 \
+  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
+  --hide-solo-words \
+  > "$test_dir/solo-hidden.stdout" 2> "$test_dir/solo-hidden.stderr"
+grep -q ' wx$' "$test_dir/solo-hidden.stdout" ||
+  fail "--hide-solo-words dropped or annotated wx"
+grep -q '(' "$test_dir/solo-hidden.stdout" &&
+  fail "--hide-solo-words left a partner annotation"
 
 "$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
   --solo-words ab --word-bonus 0 --pair-bonus 0 \

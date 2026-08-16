@@ -19,16 +19,24 @@ static bool weaker(HeapSlot const& a, HeapSlot const& b) {
   return ea.second.text > eb.second.text;
 }
 
-std::string dfs_spelling_entry_list(DfsSpelling const& spelling) {
-  std::string list = spelling.text;
-  // The separators sit at the offsets the segment lengths walk to; every one
-  // of them is a space that joins two entries, so overwriting is enough.
+std::string dfs_spelling_entry_list(
+    DfsSpelling const& spelling, DfsSoloWords const* solo_words) {
+  assert(spelling.solo_word_indexes.empty() ||
+         spelling.solo_word_indexes.size() == spelling.segment_lengths.size());
+  std::string list;
+  list.reserve(spelling.text.size());
   size_t offset = 0;
-  for (size_t s = 0; s + 1 < spelling.segment_lengths.size(); ++s) {
-    offset += spelling.segment_lengths[s];
-    assert(offset < list.size() && list[offset] == ' ');
-    list[offset] = ',';
-    ++offset;
+  for (size_t s = 0; s < spelling.segment_lengths.size(); ++s) {
+    if (s != 0) list.push_back(',');
+    size_t const length = spelling.segment_lengths[s];
+    list.append(spelling.text, offset, length);
+    if (solo_words != NULL && !spelling.solo_word_indexes.empty() &&
+        spelling.solo_word_indexes[s] != DFS_NO_SOLO_WORD) {
+      list += " (";
+      list += solo_words->word(spelling.solo_word_indexes[s]);
+      list.push_back(')');
+    }
+    offset += length + 1;
   }
   return list;
 }
@@ -158,7 +166,11 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
     DfsSpelling spelling;
     spelling.segment_lengths.reserve(class_indexes.size());
     std::vector<DfsSoloMasks> profiles;
-    if (solo_words != NULL) profiles.reserve(class_indexes.size());
+    std::vector<size_t> profile_segments;
+    if (solo_words != NULL) {
+      profiles.reserve(class_indexes.size());
+      profile_segments.reserve(class_indexes.size());
+    }
     for (size_t i = 0; i < class_indexes.size(); ++i) {
       DfsMemberView const view = class_list->member(
           class_indexes[i], current.member_indexes[i]);
@@ -174,12 +186,24 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
         assert(dfs_solo_score_flags(profile) == solo_flags);
         (void) solo_flags;
         profiles.push_back(profile);
+        profile_segments.push_back(i);
       }
     }
+    std::vector<uint8_t> profile_matches;
     spelling.log_score = current.upper_log_score + dfs_solo_score_correction(
         profiles, score_model->multi_word_log_bonus(),
-        score_model->pair_log_bonus());
+        score_model->pair_log_bonus(),
+        solo_words != NULL ? &profile_matches : NULL);
     assert(spelling.log_score <= current.upper_log_score);
+    if (std::find_if(profile_matches.begin(), profile_matches.end(),
+                     [](uint8_t match) {
+                       return match != DFS_NO_SOLO_WORD;
+                     }) != profile_matches.end()) {
+      spelling.solo_word_indexes.assign(
+          spelling.segment_lengths.size(), DFS_NO_SOLO_WORD);
+      for (size_t i = 0; i < profile_matches.size(); ++i)
+        spelling.solo_word_indexes[profile_segments[i]] = profile_matches[i];
+    }
     spelling.word_set_key = make_word_set_key(spelling.text);
     {
       std::lock_guard<std::mutex> const guard(heap_mutex);
@@ -244,6 +268,8 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     if (found->second.log_score >= spelling.log_score) return false;
     found->second.text = std::move(spelling.text);
     found->second.segment_lengths = std::move(spelling.segment_lengths);
+    found->second.solo_word_indexes =
+        std::move(spelling.solo_word_indexes);
     found->second.log_score = spelling.log_score;
     if (result_limit != 0) {
       size_t const position = found->second.heap_pos;
@@ -258,6 +284,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     RetainedSpelling value;
     value.text = std::move(spelling.text);
     value.segment_lengths = std::move(spelling.segment_lengths);
+    value.solo_word_indexes = std::move(spelling.solo_word_indexes);
     value.log_score = spelling.log_score;
     value.heap_pos = position;
     std::pair<RetainedMap::iterator, bool> const inserted =
@@ -281,6 +308,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
   node.key() = std::move(spelling.word_set_key);
   node.mapped().text = std::move(spelling.text);
   node.mapped().segment_lengths = std::move(spelling.segment_lengths);
+  node.mapped().solo_word_indexes = std::move(spelling.solo_word_indexes);
   node.mapped().log_score = spelling.log_score;
   node.mapped().heap_pos = 0;
   RetainedMap::insert_return_type const reinserted =
@@ -337,6 +365,8 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
       spelling.log_score = entry->second.log_score;
       spelling.text = std::move(entry->second.text);
       spelling.segment_lengths = std::move(entry->second.segment_lengths);
+      spelling.solo_word_indexes =
+          std::move(entry->second.solo_word_indexes);
       spelling.word_set_key = entry->first;
       results.push_back(std::move(spelling));
     }

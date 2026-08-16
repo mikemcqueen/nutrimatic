@@ -111,17 +111,26 @@ static void matching_test() {
   std::vector<DfsSoloMasks> reroute = {
     masks(0x3), masks(0x1),
   };
-  check_close(dfs_solo_exact_bonus(reroute, word, pair), 2.0L * word,
+  DfsSoloMatching const rerouted =
+      dfs_solo_exact_matching(reroute, word, pair);
+  check_close(rerouted.bonus, 2.0L * word,
               "augmenting path did not reroute an earlier match");
+  check(rerouted.solo_word_indexes[0] == 1 &&
+            rerouted.solo_word_indexes[1] == 0,
+        "augmenting path assignment was not preserved");
 
   // The maximum-cardinality matching uses two ordinary edges (4), while the
   // one-edge matching can keep the high edge (7) and must win.
   std::vector<DfsSoloMasks> fewer_is_better = {
     masks(0x3, 0x1), masks(0x1),
   };
-  check_close(dfs_solo_exact_bonus(fewer_is_better, word, pair),
-              word + pair,
+  DfsSoloMatching const fewer =
+      dfs_solo_exact_matching(fewer_is_better, word, pair);
+  check_close(fewer.bonus, word + pair,
               "matching cardinality displaced a higher-score frontier");
+  check(fewer.solo_word_indexes[0] == 0 &&
+            fewer.solo_word_indexes[1] == DFS_NO_SOLO_WORD,
+        "selected assignment did not preserve the best frontier");
 
   std::vector<DfsSoloMasks> disjoint = {
     masks(0x1, 0x1), masks(0x2),

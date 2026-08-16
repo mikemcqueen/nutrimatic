@@ -42,6 +42,7 @@ static void usage(char const* program) {
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N]"
       " [--solo-words WORD[,WORD...]]"
+      " [--hide-solo-words]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
       " [-w|--words-only] [--csv] [--require-completable]"
@@ -64,13 +65,16 @@ static void usage(char const* program) {
       "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
       " in either order\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
-      " external words; they consume no letters and are not printed\n"
+      " external words; they consume no letters and matched partners are"
+      " printed in parentheses\n"
       "    a selected single-word entry earns --word-bonus when either"
       " phrase order is an aggregate index phrase or is asserted by"
       " --pairs; an asserted pair also earns --pair-bonus\n"
       "    each solo word can be used once per row or --score sequence; both"
       " bonuses must be non-negative, and the aggregate phrase test matches"
       " phase 1\n"
+      "  --hide-solo-words omits parenthesized solo partners from ordinary"
+      " output\n"
       "  -w, --words-only excludes multi-word phrases\n"
       "  --csv prints only multi-word entries, as their comma-separated"
       " words, with no count or score column\n"
@@ -444,19 +448,35 @@ int main(int argc, char* argv[]) {
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = first + survivors.count;
   auto const print_row = [&](DfsPackedMember const& row) {
+    char const* partner = NULL;
+    if (!args.common.hide_solo_words && solo_words != NULL &&
+        row.word_count == 1 &&
+        (row.score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0) {
+      std::vector<DfsSoloMasks> profiles(
+          1, solo_words->lookup(
+                 std::string_view(row.text, row.text_length)));
+      DfsSoloMatching const matching = dfs_solo_exact_matching(
+          profiles, model.multi_word_log_bonus(), model.pair_log_bonus());
+      if (matching.solo_word_indexes[0] != DFS_NO_SOLO_WORD)
+        partner = solo_words->word(matching.solo_word_indexes[0]).c_str();
+    }
     if (args.csv) {
       for (size_t i = 0; i < row.text_length; ++i)
         putchar(row.text[i] == ' ' ? ',' : row.text[i]);
       putchar('\n');
     } else if (args.common.word_bonus == 0.0 &&
                args.common.pair_bonus == 0.0)
-      printf("%lld %.*s\n", (long long) row.count,
-             int(row.text_length), row.text);
+      printf("%lld %.*s%s%s%s\n", (long long) row.count,
+             int(row.text_length), row.text,
+             partner != NULL ? " (" : "", partner != NULL ? partner : "",
+             partner != NULL ? ")" : "");
     else
-      printf("%#.4g %.*s\n",
+      printf("%#.4g %.*s%s%s%s\n",
              model.displayed_score(model.member_upper_log_score(
                  row.count, is_phrase(row), row.score_flags)),
-             int(row.text_length), row.text);
+             int(row.text_length), row.text,
+             partner != NULL ? " (" : "", partner != NULL ? partner : "",
+             partner != NULL ? ")" : "");
   };
 
   if (args.common.word_bonus == 0.0 && args.common.pair_bonus == 0.0) {

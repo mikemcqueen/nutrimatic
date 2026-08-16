@@ -25,6 +25,7 @@ inline constexpr int DFS_OPT_PAIRS = 301;
 inline constexpr int DFS_OPT_WORD_BONUS = 302;
 inline constexpr int DFS_OPT_PAIR_BONUS = 303;
 inline constexpr int DFS_OPT_SOLO_WORDS = 304;
+inline constexpr int DFS_OPT_HIDE_SOLO_WORDS = 305;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -40,7 +41,8 @@ inline constexpr int DFS_OPT_SOLO_WORDS = 304;
   { "segment-penalty", 'P', OPTPARSE_REQUIRED }, \
   { "word-bonus", DFS_OPT_WORD_BONUS, OPTPARSE_REQUIRED }, \
   { "pair-bonus", DFS_OPT_PAIR_BONUS, OPTPARSE_REQUIRED }, \
-  { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED }
+  { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED }, \
+  { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE }
 
 // What the shared options parsed into. `top` has no shared default because the
 // two CLIs disagree on it; each sets its own before the option loop.
@@ -56,6 +58,7 @@ struct DfsCommonArgs {
   double word_bonus = 0.0;
   double pair_bonus = DFS_DEFAULT_PAIR_BONUS;
   std::vector<std::string> solo_words;
+  bool hide_solo_words = false;
   bool min_word_len_given = false;
   bool max_extract_words_given = false;
 };

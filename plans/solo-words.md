@@ -18,12 +18,14 @@ Add the shared option:
 
 ```text
 --solo-words WORD[,WORD...]
+--hide-solo-words
 ```
 
 to `dfs-anagrams` and `query-index`. A supplied solo word is external context:
-it consumes no letters, is not an output segment, and is not printed. A
-selected single-word entry can instead use it as a two-word partner and earn
-the existing word and pair bonuses.
+it consumes no letters and is not an output segment. A selected single-word
+entry can use it as a two-word partner and earn the existing word and pair
+bonuses. Normal output annotates that entry as `entry (solo)` by default;
+`--hide-solo-words` restores the unannotated form.
 
 The following requirements are settled:
 
@@ -37,7 +39,7 @@ The following requirements are settled:
 - Each of at most 16 supplied solo words can be used once in a complete DFS
   spelling or one `query-index --score` sequence.
 - Solo words do not affect extraction eligibility, dictionaries, minimum word
-  length, `--max-extract-words`, or output text.
+  length, or `--max-extract-words`.
 
 No option means no changed score, output, search bound, packed-record size, or
 profile work.
@@ -339,6 +341,12 @@ with an `O(E log E)` all-member score sort. The raw-count fast path remains
 active whenever both effective bonuses are zero, including score-inert
 `--solo-words` input.
 
+Print the selected solo word in parentheses after its matched single-word
+entry. Preserve the exact assignment chosen by the score matcher so scarcity
+and rerouting are represented correctly. `--hide-solo-words` suppresses only
+these annotations. `query-index --score` continues to echo its supplied
+sequence without annotations.
+
 `--csv` prints phrases only, so solo profiles cannot change its rows.
 
 ## Phase 1 — shared profile and assignment helper [x]
@@ -394,7 +402,8 @@ Tasks:
       pair bonuses; one-use scarcity; an assignment reroute; a bounded top-N
       winner; DFS/query score round-trip; ordinary bounded output equaling the
       unlimited prefix; aggregate-prefix semantics; and byte-identical output
-      with omitted or score-inert solo words.
+      with omitted or score-inert solo words. Check default partner annotations
+      and `--hide-solo-words` in both ordinary output paths.
 - [x] Add only focused parser failures: empty field, malformed word, duplicate,
       17th word, missing argument, and negative bonus with solo words.
 - [x] Run focused tests, then `/review`, affected reruns, and

@@ -201,17 +201,24 @@ DfsSoloMasks DfsSoloWords::lookup(std::string_view candidate) const {
   return found->masks;
 }
 
-long double dfs_solo_exact_bonus(
+DfsSoloMatching dfs_solo_exact_matching(
     std::vector<DfsSoloMasks> const& profiles,
     long double word_log_bonus, long double pair_log_bonus) {
   assert(word_log_bonus >= 0.0L && pair_log_bonus >= 0.0L);
-  if (profiles.empty()) return 0.0L;
+  DfsSoloMatching result;
+  result.solo_word_indexes.assign(profiles.size(), DFS_NO_SOLO_WORD);
+  if (profiles.empty()) return result;
   if (disjoint_profiles(profiles)) {
-    long double total = 0.0L;
-    for (size_t i = 0; i < profiles.size(); ++i)
-      total += local_upper(
+    for (size_t i = 0; i < profiles.size(); ++i) {
+      long double const bonus = local_upper(
           profiles[i], word_log_bonus, pair_log_bonus);
-    return total;
+      result.bonus += bonus;
+      if (bonus == 0.0L) continue;
+      uint16_t const preferred = profiles[i].pair_mask != 0
+          ? profiles[i].pair_mask : profiles[i].word_mask;
+      result.solo_word_indexes[i] = uint8_t(__builtin_ctz(unsigned(preferred)));
+    }
+    return result;
   }
 
   int const segment_count = int(profiles.size());
@@ -235,7 +242,6 @@ long double dfs_solo_exact_bonus(
     add_edge(&graph, segment_count + solo, sink, 1, 0);
 
   int total_cost = 0;
-  long double best = 0.0L;
   int const infinity = std::numeric_limits<int>::max() / 4;
   for (int cardinality = 1; cardinality <= 16; ++cardinality) {
     std::vector<int> distance(graph.size(), infinity);
@@ -273,17 +279,49 @@ long double dfs_solo_exact_bonus(
     long double const bonus =
         static_cast<long double>(cardinality) * word_log_bonus +
         static_cast<long double>(high_edges) * pair_log_bonus;
-    best = std::max(best, bonus);
+    if (bonus <= result.bonus) continue;
+    result.bonus = bonus;
+    std::fill(result.solo_word_indexes.begin(),
+              result.solo_word_indexes.end(), DFS_NO_SOLO_WORD);
+    for (int segment = 0; segment < segment_count; ++segment) {
+      for (size_t edge = 0; edge < graph[size_t(segment)].size(); ++edge) {
+        FlowEdge const& candidate = graph[size_t(segment)][edge];
+        if (candidate.to < segment_count ||
+            candidate.to >= segment_count + solo_count ||
+            candidate.capacity != 0)
+          continue;
+        result.solo_word_indexes[size_t(segment)] =
+            uint8_t(candidate.to - segment_count);
+        break;
+      }
+    }
   }
-  return best;
+  return result;
+}
+
+long double dfs_solo_exact_bonus(
+    std::vector<DfsSoloMasks> const& profiles,
+    long double word_log_bonus, long double pair_log_bonus) {
+  return dfs_solo_exact_matching(
+      profiles, word_log_bonus, pair_log_bonus).bonus;
 }
 
 double dfs_solo_score_correction(
     std::vector<DfsSoloMasks> const& profiles,
-    double word_log_bonus, double pair_log_bonus) {
+    double word_log_bonus, double pair_log_bonus,
+    std::vector<uint8_t>* solo_word_indexes) {
   assert(isfinite(word_log_bonus) && word_log_bonus >= 0.0);
   assert(isfinite(pair_log_bonus) && pair_log_bonus >= 0.0);
-  if (profiles.size() <= 1 || disjoint_profiles(profiles)) return 0.0;
+  bool const needs_correction =
+      profiles.size() > 1 && !disjoint_profiles(profiles);
+  if (!needs_correction && solo_word_indexes == NULL) return 0.0;
+
+  DfsSoloMatching matching = dfs_solo_exact_matching(
+      profiles, static_cast<long double>(word_log_bonus),
+      static_cast<long double>(pair_log_bonus));
+  if (solo_word_indexes != NULL)
+    *solo_word_indexes = std::move(matching.solo_word_indexes);
+  if (!needs_correction) return 0.0;
 
   long double mathematical_upper = 0.0L;
   long double pending_local_upper = 0.0L;
@@ -296,9 +334,7 @@ double dfs_solo_score_correction(
         : (profiles[i].word_mask != 0 ? word_log_bonus : 0.0);
     pending_local_upper += static_cast<long double>(pending_term);
   }
-  long double const exact = dfs_solo_exact_bonus(
-      profiles, static_cast<long double>(word_log_bonus),
-      static_cast<long double>(pair_log_bonus));
+  long double const exact = matching.bonus;
   assert(exact <= mathematical_upper);
   long double correction = exact - pending_local_upper;
   // The pending terms were individually rounded to double. A positive value
