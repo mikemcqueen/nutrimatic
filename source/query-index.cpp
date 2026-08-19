@@ -1,7 +1,8 @@
-// Prints the highest-corpus-frequency words/phrases makeable from a subset
-// of a given letter bag. By default this is phase 1 of dfs-anagrams
-// (DfsClassList) only. --require-completable adds shared phase-2 feasibility
-// filtering. --score instead scores an exact sequence of index entries.
+// Queries aggregate index entries in three modes. By default, prints the
+// highest-corpus-frequency words/phrases makeable from a subset of a letter
+// bag. --require-completable adds shared phase-2 feasibility filtering.
+// --score scores an exact sequence, while --near finds phrases with supplied
+// endpoints and at least one complete intervening word.
 
 #include "dfs-class-list.h"
 #include "dfs-cli-args.h"
@@ -28,12 +29,16 @@ struct Args {
   char const* index_file;
   std::string letters;
   std::string score_sequence;
+  std::string near_input;
+  std::string near_target;
   DfsCommonArgs common;
   bool words_only;
   bool csv;
   bool require_completable;
   bool score;
+  bool near;
   char const* score_incompatible_option;
+  char const* near_incompatible_option;
 };
 
 static void usage(char const* program) {
@@ -47,8 +52,17 @@ static void usage(char const* program) {
       " [-x max-extract-words] [--pairs FILE]"
       " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
+      "       %s input.index sequence --score"
+      " [-P|--segment-penalty P] [--word-bonus N]"
+      " [--pair-bonus N] [--pairs FILE]"
+      " [--solo-words WORD[,WORD...]]\n"
+      "       %s input.index input --near word [-n top]\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
       "    entries and prints its DFS-model score\n"
+      "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
+      "    it prints aggregate phrases spanning the endpoints with at least\n"
+      "    one complete intervening word, searching each endpoint that is an\n"
+      "    aggregate index entry\n"
       "  -P, --segment-penalty P divides the score by P for each selected"
       " index entry after the first; P must be at least 1 and defaults to"
       " %.0f\n"
@@ -82,7 +96,8 @@ static void usage(char const* program) {
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
       "    -m), using shared exact validation without a score cache\n"
       "  -S, --search-threads defaults to 1\n",
-      program, DFS_DEFAULT_SEGMENT_PENALTY, DFS_WORD_BONUS_BASE, 0.0,
+      program, program, program, DFS_DEFAULT_SEGMENT_PENALTY,
+      DFS_WORD_BONUS_BASE, 0.0,
       DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS,
       DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP);
 }
@@ -90,12 +105,14 @@ static void usage(char const* program) {
 static int const OPT_REQUIRE_COMPLETABLE = 256;
 static int const OPT_SCORE = 257;
 static int const OPT_CSV = 258;
+static int const OPT_NEAR = 259;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
   { "words-only", 'w', OPTPARSE_NONE },
   { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
+  { "near", OPT_NEAR, OPTPARSE_REQUIRED },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
@@ -105,6 +122,32 @@ static void mark_score_incompatible(Args* args, char const* option) {
     args->score_incompatible_option = option;
 }
 
+static void mark_near_incompatible(Args* args, char const* option) {
+  if (args->near_incompatible_option == NULL)
+    args->near_incompatible_option = option;
+}
+
+static bool validate_literal_entry(std::string const& entry) {
+  for (size_t i = 0; i < entry.size(); ++i) {
+    char const ch = entry[i];
+    bool const letter_or_digit =
+        (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+    bool const single_internal_space =
+        ch == ' ' && i != 0 && i + 1 != entry.size() &&
+        entry[i - 1] != ' ';
+    if (!letter_or_digit && !single_internal_space) {
+      fprintf(stderr, "error: malformed index entry \"%s\"\n",
+              entry.c_str());
+      return false;
+    }
+  }
+  if (entry.empty()) {
+    fputs("error: malformed index entry \"\"\n", stderr);
+    return false;
+  }
+  return true;
+}
+
 static bool parse_args(char* argv[], Args* out) {
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
@@ -112,7 +155,9 @@ static bool parse_args(char* argv[], Args* out) {
   out->csv = false;
   out->require_completable = false;
   out->score = false;
+  out->near = false;
   out->score_incompatible_option = NULL;
+  out->near_incompatible_option = NULL;
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -126,6 +171,7 @@ static bool parse_args(char* argv[], Args* out) {
       case DFS_OPTION_HANDLED:
         if (which.score_incompatible)
           mark_score_incompatible(out, which.name);
+        if (opt != 'n') mark_near_incompatible(out, which.name);
         continue;
       case DFS_OPTION_OTHER:
         break;
@@ -134,17 +180,26 @@ static bool parse_args(char* argv[], Args* out) {
       case 'w':
         out->words_only = true;
         mark_score_incompatible(out, "--words-only");
+        mark_near_incompatible(out, "--words-only");
         break;
       case OPT_CSV:
         out->csv = true;
         mark_score_incompatible(out, "--csv");
+        mark_near_incompatible(out, "--csv");
         break;
       case OPT_SCORE:
         out->score = true;
+        mark_near_incompatible(out, "--score");
+        break;
+      case OPT_NEAR:
+        out->near = true;
+        out->near_target = options.optarg;
+        mark_score_incompatible(out, "--near");
         break;
       case OPT_REQUIRE_COMPLETABLE:
         out->require_completable = true;
         mark_score_incompatible(out, "--require-completable");
+        mark_near_incompatible(out, "--require-completable");
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
@@ -160,6 +215,17 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
   out->index_file = index_file;
+
+  if (out->near) {
+    if (out->near_incompatible_option != NULL) {
+      fprintf(stderr, "error: %s cannot be used with --near\n",
+              out->near_incompatible_option);
+      return false;
+    }
+    out->near_input = letters;
+    return validate_literal_entry(out->near_input) &&
+        validate_literal_entry(out->near_target);
+  }
 
   if (!validate_solo_bonuses(out->common)) return false;
 
@@ -246,23 +312,158 @@ static bool parse_score_sequence(
       fputs("error: empty entry in --score sequence\n", stderr);
       return false;
     }
-    for (size_t i = 0; i < entry.size(); ++i) {
-      char const ch = entry[i];
-      bool const letter_or_digit =
-          (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
-      bool const single_internal_space =
-          ch == ' ' && i != 0 && i + 1 != entry.size() &&
-          entry[i - 1] != ' ';
-      if (!letter_or_digit && !single_internal_space) {
-        fprintf(stderr, "error: malformed index entry \"%s\"\n",
-                entry.c_str());
-        return false;
-      }
-    }
+    if (!validate_literal_entry(entry)) return false;
     entries->push_back(entry);
     if (comma == std::string::npos) return true;
     start = comma + 1;
   }
+}
+
+struct NearResult {
+  int64_t count;
+  std::string phrase;
+};
+
+static bool near_result_better(NearResult const& a, NearResult const& b) {
+  if (a.count != b.count) return a.count > b.count;
+  return a.phrase < b.phrase;
+}
+
+struct NearHeapOrder {
+  bool operator()(NearResult const& a, NearResult const& b) const {
+    return near_result_better(a, b);
+  }
+};
+
+class NearResults {
+ public:
+  explicit NearResults(size_t top) : top_(top) {}
+
+  bool can_contain(int64_t count) const {
+    return top_ == 0 || rows_.size() < top_ ||
+        count >= rows_.front().count;
+  }
+
+  void add(int64_t count, std::string phrase) {
+    NearResult result = {count, phrase};
+    if (top_ == 0) {
+      rows_.push_back(result);
+      return;
+    }
+    NearHeapOrder const order;
+    if (rows_.size() < top_) {
+      rows_.push_back(result);
+      std::push_heap(rows_.begin(), rows_.end(), order);
+    } else if (near_result_better(result, rows_.front())) {
+      std::pop_heap(rows_.begin(), rows_.end(), order);
+      rows_.back() = result;
+      std::push_heap(rows_.begin(), rows_.end(), order);
+    }
+  }
+
+  std::vector<NearResult> finish() {
+    std::vector<NearResult> result;
+    result.swap(rows_);
+    std::sort(result.begin(), result.end(), near_result_better);
+    return result;
+  }
+
+ private:
+  size_t top_;
+  std::vector<NearResult> rows_;
+};
+
+static bool near_choice_better(
+    IndexReader::Choice const& a, IndexReader::Choice const& b) {
+  if (a.count != b.count) return a.count > b.count;
+  return (unsigned char) a.ch < (unsigned char) b.ch;
+}
+
+static void walk_near_direction(
+    IndexReader const& reader, IndexReader::EntryPosition const& position,
+    std::string const& anchor, std::string const& target,
+    std::string* path, NearResults* results) {
+  if (!results->can_contain(position.aggregate_count)) return;
+
+  IndexReader::CharSet allowed;
+  allowed.fill();
+  std::vector<IndexReader::Choice> choices;
+  reader.children(position.continuation, position.aggregate_count,
+                  allowed, &choices);
+  std::sort(choices.begin(), choices.end(), near_choice_better);
+
+  for (size_t i = 0; i < choices.size(); ++i) {
+    IndexReader::Choice const& choice = choices[i];
+    if (!results->can_contain(choice.count)) break;
+
+    size_t const old_size = path->size();
+    path->push_back(choice.ch);
+    IndexReader::EntryPosition const child = {choice.next, choice.count};
+    if (choice.ch == ' ') {
+      IndexReader::EntryPosition match;
+      if (reader.continuation_entry_position(child, target, &match))
+        results->add(match.aggregate_count,
+                     anchor + " " + *path + target);
+    }
+    walk_near_direction(reader, child, anchor, target, path, results);
+    path->resize(old_size);
+  }
+}
+
+static std::vector<NearResult> find_near_direction(
+    IndexReader const& reader, IndexReader::EntryPosition const& anchor_position,
+    std::string const& anchor, std::string const& target, size_t top) {
+  NearResults results(top);
+  std::string path;
+  walk_near_direction(
+      reader, anchor_position, anchor, target, &path, &results);
+  return results.finish();
+}
+
+static bool same_near_phrase(NearResult const& a, NearResult const& b) {
+  return a.phrase == b.phrase;
+}
+
+static bool near_phrase_order(NearResult const& a, NearResult const& b) {
+  if (a.phrase != b.phrase) return a.phrase < b.phrase;
+  return a.count > b.count;
+}
+
+static int run_near_query(IndexReader const& reader, Args const& args) {
+  IndexReader::EntryPosition input_position;
+  IndexReader::EntryPosition target_position;
+  bool const input_present = reader.aggregate_entry_position(
+      args.near_input, &input_position);
+  bool const target_present = reader.aggregate_entry_position(
+      args.near_target, &target_position);
+  if (!input_present && !target_present) {
+    fprintf(stderr,
+            "error: index has neither near anchor \"%s\" nor \"%s\"\n",
+            args.near_input.c_str(), args.near_target.c_str());
+    return 2;
+  }
+
+  size_t const top = size_t(args.common.top);
+  std::vector<NearResult> rows;
+  if (input_present) {
+    std::vector<NearResult> direction = find_near_direction(
+        reader, input_position, args.near_input, args.near_target, top);
+    rows.insert(rows.end(), direction.begin(), direction.end());
+  }
+  if (target_present && args.near_target != args.near_input) {
+    std::vector<NearResult> direction = find_near_direction(
+        reader, target_position, args.near_target, args.near_input, top);
+    rows.insert(rows.end(), direction.begin(), direction.end());
+  }
+
+  std::sort(rows.begin(), rows.end(), near_phrase_order);
+  rows.erase(std::unique(rows.begin(), rows.end(), same_near_phrase),
+             rows.end());
+  std::sort(rows.begin(), rows.end(), near_result_better);
+  if (top != 0 && rows.size() > top) rows.resize(top);
+  for (size_t i = 0; i < rows.size(); ++i)
+    printf("%lld %s\n", (long long) rows[i].count, rows[i].phrase.c_str());
+  return 0;
 }
 
 static bool print_sequence_score(
@@ -335,20 +536,25 @@ int main(int argc, char* argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
 
+  std::vector<std::string> score_entries;
+  if (args.score &&
+      !parse_score_sequence(args.score_sequence, &score_entries))
+    return 2;
+
+  FILE* fp = fopen(args.index_file, "rb");
+  if (fp == NULL) {
+    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
+    return 1;
+  }
+  IndexReader reader(fp);
+
+  if (args.near) return run_near_query(reader, args);
+
   DfsPairSet pairs;
   if (!load_pairs(args, &pairs)) return 1;
   if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
-    std::vector<std::string> entries;
-    if (!parse_score_sequence(args.score_sequence, &entries)) return 2;
-
-    FILE* fp = fopen(args.index_file, "rb");
-    if (fp == NULL) {
-      fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
-      return 1;
-    }
-    IndexReader reader(fp);
     DfsScoreModel const model(
         args.common.segment_penalty, reader.count(), args.common.word_bonus,
         args.common.pair_bonus);
@@ -359,7 +565,7 @@ int main(int argc, char* argv[]) {
           &reader, args.common.solo_words,
           args.common.pair_file != NULL ? &pairs : NULL, &model));
     return print_sequence_score(
-        reader, args, entries, pairs, model, solo_words.get()) ? 0 : 2;
+        reader, args, score_entries, pairs, model, solo_words.get()) ? 0 : 2;
   }
 
   DfsDictionary dictionary;
@@ -369,13 +575,6 @@ int main(int argc, char* argv[]) {
     dictionary_filter = &dictionary;
   }
 
-  FILE* fp = fopen(args.index_file, "rb");
-  if (fp == NULL) {
-    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
-    return 1;
-  }
-
-  IndexReader reader(fp);
   DfsScoreModel const model(
       args.common.segment_penalty, reader.count(), args.common.word_bonus,
       args.common.pair_bonus);

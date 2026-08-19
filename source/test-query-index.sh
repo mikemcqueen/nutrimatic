@@ -55,6 +55,51 @@ expect_score_failure() {
     fail "$name printed output before rejecting the sequence"
 }
 
+expect_near_failure() {
+  local input=$1
+  local target=$2
+  local name=$3
+  shift 3
+  set +e
+  "$query_index" "$synthetic_index" "$input" --near "$target" "$@" \
+    > "$test_dir/$name.stdout" 2> "$test_dir/$name.stderr"
+  local status=$?
+  set -e
+  [[ $status -eq 2 ]] ||
+    fail "$name should exit 2, got $status"
+  [[ ! -s "$test_dir/$name.stdout" ]] ||
+    fail "$name printed output before rejecting the query"
+}
+
+[[ "$("$query_index" "$synthetic_index" f --near ij)" == \
+   "1 f gh ij" ]] ||
+  fail "near query did not find the one-anchor intervening phrase"
+[[ "$("$query_index" "$synthetic_index" ij --near f)" == \
+   "1 f gh ij" ]] ||
+  fail "near query did not search from the second argument's anchor"
+[[ -z $("$query_index" "$synthetic_index" gh --near ij) ]] ||
+  fail "near query printed an adjacent-only phrase"
+[[ -z $("$query_index" "$synthetic_index" ab --near cd) ]] ||
+  fail "near query with two anchors printed an unexpected phrase"
+[[ "$("$query_index" "$synthetic_index" f --near ij -n 1)" == \
+   "1 f gh ij" ]] ||
+  fail "--top was not accepted in near mode"
+
+expect_near_failure nope missing near-missing-anchors
+grep -q 'index has neither near anchor "nope" nor "missing"' \
+  "$test_dir/near-missing-anchors.stderr" ||
+  fail "missing-anchor error does not name both arguments"
+expect_near_failure ab cd near-dfs-option -m 1
+grep -q -- '--min-word-length cannot be used with --near' \
+  "$test_dir/near-dfs-option.stderr" ||
+  fail "near-mode DFS option error is unclear"
+expect_near_failure ab cd near-score --score
+grep -q -- '--score cannot be used with --near' \
+  "$test_dir/near-score.stderr" ||
+  fail "--score should be rejected with --near"
+expect_near_failure 'f  gh' ij near-malformed-spacing
+expect_near_failure f iJ near-malformed-character
+
 # The synthetic corpus total is 1142. Each comma after the first divides by
 # corpus_total * P; spaces inside an exact entry do not add a segment. An
 # entry counts what phase 1 counts, which is its whole trailing-space subtree:
