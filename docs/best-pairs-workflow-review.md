@@ -39,7 +39,7 @@ Add the actual lifecycle:
    ../words/wf -d "$WFROOT" extract p1 yes \
      --pairs "$NUT/idx/idx.2.s2.m4" \
      --pm .85 --pr .15 \
-     -o "$NUT/results/s2/idx.2.s2.m4.85.15.p1.yes"
+     -o "$NUT/results/s2/pairs.s2.idx2.m4.x2.85.15.p1.yes"
    ```
 
 Absolute paths are intentional because the `../words/wf` wrapper changes its
@@ -90,9 +90,9 @@ Applied to the draft:
   pair bonus 1 is the default. Add an explicit field later if either varies.
 - Omit execution-only settings such as search-thread count, progress factor,
   cache size, preprocessing threads, projection depth, and verbosity.
-- Decide separately whether stable project-wide inputs such as the index,
-  dictionary, `m`, and `x` need tokens at all; their mere presence in current
-  filenames is not evidence that they do.
+- Retain `idx2`, `m`, and `x`: they distinguish the index generation and the
+  candidate-entry constraints. Omit the dictionary because it is a stable
+  project-wide input for this workflow rather than an experiment dimension.
 
 Resolution: filenames encode semantic identity only. Exact commands carry full
 reproducibility. Compact positional fields are acceptable where their position
@@ -161,8 +161,8 @@ Keep the existing done-set behavior. P2 completion merges the whole evaluated
 batch, including unchecked entries, into `p2_done.pairs`. Later P2 evaluations
 filter that set by default.
 
-For BEST PAIRS top-1000 reviews, using `wf eval p2 --no-filter` is probably a
-good default. The batches are small enough to reconsider soft NOs, and review
+For BEST PAIRS top-1000 reviews, recommend `wf eval p2 --no-filter`, but do not
+require it. The batches are small enough to reconsider soft NOs, and review
 quality matters more than avoiding every repeated item. Be explicit that
 `--no-filter` restores all previously completed pairs present in the submitted
 file, including prior confirmed YES entries as well as soft NOs.
@@ -237,21 +237,27 @@ unchecked P2 soft NOs as hard classifications.
 In this workflow `-x 2` keeps candidate segments to at most two words; a broader
 future segment exclusion format would need to account for more than two words.
 
-## 7. After the naming decisions: specify the concrete names and parameters
+## 7. Concrete names and parameters — resolved
 
-The retention rule is settled, but the recipe still needs a concrete name for
-each artifact and a fixed field order. Treat DFS `-n` and the top-segment cutoff
-as empirical parameters, not fixed truths.
-
-For example:
+Use the following concrete names and field order. Treat DFS `-n` and the
+top-segment cutoff as empirical parameters, not fixed truths.
 
 ```text
-<p1-seed-content-key>.p1.yes
+pairs.s2.idx2.m4.x2.85.15.p1.yes
 dfs.s2.idx2.m4.x2.g4.85.15.1000000
-<p2-candidate-content-key>.pairs
+top.s2.m4.g4.1000.pairs
+top.s2.m4.g4.1000.p2.yes
+dfs.s2.idx2.m4.x2.g4.top1000.1000000
 ```
 
-The examples above are illustrative, not yet the naming contract.
+The first name is the P1 seed. `pairs` identifies its contents, while `85.15`
+is the P1 probability band and `.p1.yes` preserves its workflow provenance and
+kind. The second is the provisional DFS output scored with that seed.
+
+The final name is the DFS output scored with confirmed BEST PAIRS. `top1000`
+identifies the pair-bonus set as the confirmed output derived from the
+top-1000 candidate review; it distinguishes this output from the provisional
+DFS run without copying that run's full derivation chain.
 
 For P2 manual review, the resolved bundle name deliberately drops most upstream
 DFS context:
