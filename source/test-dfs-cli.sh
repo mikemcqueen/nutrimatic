@@ -9,8 +9,7 @@ index_file=$test_dir/test.index
 diagnostic_prefix='^\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] '
 
 cleanup() {
-  rm -f "$test_dir"/*
-  rmdir "$test_dir"
+  rm -rf "$test_dir"
 }
 trap cleanup EXIT
 
@@ -220,6 +219,68 @@ grep -q "^error: can't open pair list \"$test_dir/missing-pairs.txt\"$" \
   "$test_dir/status.stderr" ||
   fail "the missing pair-list diagnostic is unclear"
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs
+
+# --exclude-pairs drops the whole "ab cd" index entry, in either written
+# order. The two-entry "ab,cd" answer survives: the exclusion is over index
+# entries, not over adjacency in a result.
+printf 'cd,ab\n' > "$test_dir/exclude.pairs"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/exclude.pairs" \
+  > "$test_dir/excluded.stdout" 2> "$test_dir/excluded.stderr"
+grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys$" \
+  "$test_dir/excluded.stderr" ||
+  fail "the exclude-list diagnostic is missing from stderr"
+grep -q '^70\.00 ab cd$' "$test_dir/all.stdout" ||
+  fail "the unexcluded run should rank the \"ab cd\" entry first"
+[[ $(grep -c ' ab cd$' "$test_dir/excluded.stdout") -eq 0 ]] ||
+  fail "--exclude-pairs kept the excluded index entry"
+grep -q ' ab,cd$' "$test_dir/excluded.stdout" ||
+  fail "--exclude-pairs dropped a result built from two separate entries"
+
+# The test is whole-entry equality, so a longer entry holding the excluded
+# pair -- here at its end -- is a different spelling and is kept.
+printf 'gh,ij\n' > "$test_dir/exclude-ghij.pairs"
+"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 \
+  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
+  > "$test_dir/exclude-prefix.stdout" 2> "$test_dir/exclude-prefix.stderr"
+grep -q ' f gh ij$' "$test_dir/exclude-prefix.stdout" ||
+  fail "--exclude-pairs dropped a longer entry containing the excluded pair"
+
+# A workflow root resolves to its hard-NO aggregate; a directory with no .wf
+# is an error rather than an empty exclusion set.
+mkdir -p "$test_dir/wf/.wf/classified/no"
+cp "$test_dir/exclude.pairs" "$test_dir/wf/.wf/classified/no/no.pairs"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/wf" \
+  > "$test_dir/exclude-wf.stdout" 2> "$test_dir/exclude-wf.stderr"
+cmp "$test_dir/excluded.stdout" "$test_dir/exclude-wf.stdout" ||
+  fail "a workflow root did not resolve to the same exclusion set"
+mkdir -p "$test_dir/not-wf"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/not-wf"
+grep -q "^error: --exclude-pairs directory \"$test_dir/not-wf\" has no workflow metadata \"$test_dir/not-wf/.wf\"$" \
+  "$test_dir/status.stderr" ||
+  fail "the missing-workflow diagnostic did not name both paths"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/missing-exclude.pairs"
+grep -q "^error: can't open exclude list \"$test_dir/missing-exclude.pairs\"$" \
+  "$test_dir/status.stderr" ||
+  fail "the missing exclude-list diagnostic is unclear"
+
+# A '-' line is a skipped bonus but a dropped exclusion, so only the exclusion
+# list rejects it rather than quietly enforcing less than it was given.
+printf 'a-b,cd\n' > "$test_dir/hyphen.pairs"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --pairs "$test_dir/hyphen.pairs" --pair-bonus 0 \
+  > /dev/null 2> "$test_dir/hyphen-bonus.stderr"
+grep -Eq "${diagnostic_prefix}pair list: 0 pairs, 0 keys$" \
+  "$test_dir/hyphen-bonus.stderr" ||
+  fail "a '-' line should still be skipped in a bonus list"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/hyphen.pairs"
+grep -q "^error: exclude list \"$test_dir/hyphen.pairs\" line 1: '-' would silently skip this entry$" \
+  "$test_dir/status.stderr" ||
+  fail "a '-' line in an exclusion list was not rejected"
 
 # "klmn" (1000) and "kl mn" (5) are one anagram class, so the bonus has to
 # reorder within a class to promote the phrase, and the single word's own

@@ -198,7 +198,8 @@ class DfsExtractor {
   DfsExtractor(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases,
                DfsDictionary const* dictionary, int requested_max_words,
-               DfsPairSet const* pairs, DfsSoloWords* solo_words):
+               DfsPairSet const* pairs, DfsSoloWords* solo_words,
+               DfsPairSet const* exclude_pairs):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
@@ -210,6 +211,7 @@ class DfsExtractor {
       dictionary(dictionary),
       pairs(pairs),
       solo_words(solo_words),
+      exclude_pairs(exclude_pairs),
       letters_left(int(letters.size())),
       nodes(0),
       signature(0) {
@@ -257,6 +259,13 @@ class DfsExtractor {
  private:
   void emit(int64_t count, int word_count,
             IndexReader::Node continuation) {
+    if (exclude_pairs != NULL && word_count > 1) {
+      text.pop_back();
+      bool const excluded = exclude_pairs->count(text) != 0;
+      text.push_back(' ');
+      if (excluded) return;
+    }
+
     if (count > int64_t(UINT32_MAX)) {
       dfs_diagnostic_to_stream(stderr,
           "error: corpus count %lld for \"%.*s\" exceeds the %llu a packed"
@@ -355,6 +364,7 @@ class DfsExtractor {
   DfsDictionary const* const dictionary;
   DfsPairSet const* const pairs;
   DfsSoloWords* const solo_words;
+  DfsPairSet const* const exclude_pairs;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
   int letters_left;
@@ -413,7 +423,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            int max_extract_words,
                            DfsScoreModel const* score_model,
                            DfsPairSet const* pairs,
-                           DfsSoloWords* solo_words):
+                           DfsSoloWords* solo_words,
+                           DfsPairSet const* exclude_pairs):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
@@ -441,7 +452,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
 
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
-      max_extract_words, pairs, solo_words);
+      max_extract_words, pairs, solo_words, exclude_pairs);
   extractor.run();
   if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();

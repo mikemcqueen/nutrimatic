@@ -24,6 +24,7 @@ struct Args {
   char const* index_file;
   std::string letters;
   DfsCommonArgs common;
+  char const* exclude_pair_file;
   int max_combine_words;
   int num_segments;
   int64_t progress_factor;
@@ -59,6 +60,7 @@ static void usage(char const* program) {
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
+      " [--exclude-pairs FILE|WORKFLOW-DIR]"
       " [--solo-words WORD[,WORD...]]"
       " [--hide-solo-words]"
       " [-p progress-factor] [--cache-size MiB]"
@@ -79,6 +81,14 @@ static void usage(char const* program) {
       " entry; defaults to 0 (no limit)\n"
       "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
       " in either order\n"
+      "  --exclude-pairs FILE|WORKFLOW-DIR loads pairs in the same format and"
+      " drops every index entry spelled exactly like one, in either order, so"
+      " no result can contain it\n"
+      "    the test is whole-entry equality, so a longer entry containing the"
+      " pair is kept; -x 2 is what confines entries to the two words this"
+      " compares\n"
+      "    a directory resolves to DIR/.wf/classified/no/no.pairs and must"
+      " hold a .wf subdirectory\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
       " external words; they consume no letters and matched partners are"
       " printed in parentheses\n"
@@ -120,9 +130,11 @@ static void usage(char const* program) {
 
 static int const OPT_SEGMENTS = 256;
 static int const OPT_WEIGHTED = 257;
+static int const OPT_EXCLUDE_PAIRS = 258;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
+  { "exclude-pairs", OPT_EXCLUDE_PAIRS, OPTPARSE_REQUIRED },
   { "num-segments", 'g', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "cache-size", 'C', OPTPARSE_REQUIRED },
@@ -138,6 +150,7 @@ static struct optparse_long const long_options[] = {
 static bool parse_args(char* argv[], Args* out) {
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
+  out->exclude_pair_file = NULL;
   out->num_segments = 0;
   out->progress_factor = 1;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
@@ -190,6 +203,9 @@ static bool parse_args(char* argv[], Args* out) {
         if (!parse_count(options.optarg, "--projection-depth",
                          &out->exact_letters))
           return false;
+        break;
+      case OPT_EXCLUDE_PAIRS:
+        out->exclude_pair_file = options.optarg;
         break;
       case OPT_SEGMENTS:
         out->segments = true;
@@ -273,9 +289,16 @@ int main(int argc, char* argv[]) {
 
   DfsPairSet pairs;
   if (args.common.pair_file != NULL) {
-    if (!load_pair_file(args.common.pair_file, &pairs, false)) return 1;
+    if (!load_pair_file(
+            args.common.pair_file, "pair list", &pairs, false, false))
+      return 1;
   } else
     args.common.pair_bonus = 0.0;
+
+  DfsPairSet exclude_pairs;
+  if (args.exclude_pair_file != NULL &&
+      !load_exclude_pair_file(args.exclude_pair_file, &exclude_pairs))
+    return 1;
 
   FILE* fp = fopen(args.index_file, "rb");
   if (fp == NULL) {
@@ -321,7 +344,8 @@ int main(int argc, char* argv[]) {
                        dictionary_filter, args.common.max_extract_words,
                        &model,
                        args.common.pair_file != NULL ? &pairs : NULL,
-                       solo_words.get());
+                       solo_words.get(),
+                       args.exclude_pair_file != NULL ? &exclude_pairs : NULL);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),

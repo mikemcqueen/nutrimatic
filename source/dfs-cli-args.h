@@ -147,14 +147,25 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary);
 
 // A pair list owns every loaded pair as both "left right" and "right left".
 // Every key holds exactly one space, so whole-entry membership implies a
-// multi-word spelling.
+// two-word spelling.
 //
 // Loads a newline-delimited list of "word,word" pairs, applying
 // load_dictionary()'s cleanup to each field, and inserts both word orders.
-// Lines containing '-' are skipped. Unless quiet, reports the number of pairs
-// read and unique ordered keys loaded. Prints an error and returns false if the
-// file can't be opened or read, or if any surviving line does not hold exactly
-// two nonempty fields.
-bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet);
+// Lines containing '-' are skipped, or are an error when reject_hyphens: a
+// skipped line costs a bonus list nothing, but silently drops an entry a
+// caller meant to enforce. Unless quiet, reports the number of pairs read and
+// unique ordered keys loaded. Prints an error and returns false if the file
+// can't be opened or read, or if any surviving line does not hold exactly two
+// nonempty fields. `what` names the list in every diagnostic.
+bool load_pair_file(
+    char const* path, char const* what, DfsPairSet* pairs, bool quiet,
+    bool reject_hyphens);
+
+// Loads an exclusion list in the same format from either a regular file or a
+// workflow root, which resolves to DIR/.wf/classified/no/no.pairs. A directory
+// without a .wf subdirectory is an error, and so is a '-' line: asking for
+// exclusions is explicit, so neither a missing workflow nor an unreadable line
+// quietly narrows the exclusion set.
+bool load_exclude_pair_file(char const* path, DfsPairSet* pairs);
 
 #endif

@@ -526,7 +526,8 @@ static bool print_sequence_score(
 // identically in each.
 static bool load_pairs(Args const& args, DfsPairSet* pairs) {
   if (args.common.pair_file == NULL) return true;
-  return load_pair_file(args.common.pair_file, pairs, true);
+  return load_pair_file(
+      args.common.pair_file, "pair list", pairs, true, false);
 }
 
 int main(int argc, char* argv[]) {

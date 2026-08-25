@@ -7,6 +7,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <fstream>
@@ -240,10 +242,12 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   return true;
 }
 
-bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet) {
+bool load_pair_file(
+    char const* path, char const* what, DfsPairSet* pairs, bool quiet,
+    bool reject_hyphens) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    fprintf(stderr, "error: can't open pair list \"%s\"\n", path);
+    fprintf(stderr, "error: can't open %s \"%s\"\n", what, path);
     return false;
   }
 
@@ -254,7 +258,13 @@ bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet) {
   size_t line_number = 0;
   while (std::getline(input, line)) {
     ++line_number;
-    if (line.find('-') != std::string::npos) continue;
+    if (line.find('-') != std::string::npos) {
+      if (!reject_hyphens) continue;
+      fprintf(stderr,
+          "error: %s \"%s\" line %zu: '-' would silently skip this entry\n",
+          what, path, line_number);
+      return false;
+    }
 
     size_t const comma = line.find(',');
     bool const two_fields =
@@ -266,16 +276,16 @@ bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet) {
     }
     if (!two_fields || left.empty() || right.empty()) {
       fprintf(stderr,
-          "error: pair list \"%s\" line %zu: "
+          "error: %s \"%s\" line %zu: "
           "expected two comma-separated words\n",
-          path, line_number);
+          what, path, line_number);
       return false;
     }
     loaded.push_back(std::make_pair(left, right));
   }
 
   if (!input.eof()) {
-    fprintf(stderr, "error: can't read pair list \"%s\"\n", path);
+    fprintf(stderr, "error: can't read %s \"%s\"\n", what, path);
     return false;
   }
 
@@ -285,9 +295,38 @@ bool load_pair_file(char const* path, DfsPairSet* pairs, bool quiet) {
     pairs->insert(loaded[i].second + " " + loaded[i].first);
   }
   if (!quiet)
-    dfs_diagnostic("pair list: %zu pairs, %zu keys\n",
-                   loaded.size(), pairs->size());
+    dfs_diagnostic("%s: %zu pairs, %zu keys\n",
+                   what, loaded.size(), pairs->size());
   return true;
+}
+
+bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
+  struct stat status;
+  if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
+    return load_pair_file(path, "exclude list", pairs, false, true);
+
+  std::string const metadata = std::string(path) + "/.wf";
+  struct stat metadata_status;
+  if (stat(metadata.c_str(), &metadata_status) != 0) {
+    // Anything but ENOENT means .wf may well be there and simply unreachable,
+    // so "create it" would be the wrong thing to tell the caller.
+    if (errno != ENOENT) {
+      fprintf(stderr,
+          "error: --exclude-pairs can't read workflow metadata \"%s\": %s\n",
+          metadata.c_str(), strerror(errno));
+      return false;
+    }
+    metadata_status.st_mode = 0;
+  }
+  if (!S_ISDIR(metadata_status.st_mode)) {
+    fprintf(stderr,
+        "error: --exclude-pairs directory \"%s\" has no workflow metadata"
+        " \"%s\"\n",
+        path, metadata.c_str());
+    return false;
+  }
+  std::string const resolved = metadata + "/classified/no/no.pairs";
+  return load_pair_file(resolved.c_str(), "exclude list", pairs, false, true);
 }
 
 DfsOptionResult dfs_parse_common_option(

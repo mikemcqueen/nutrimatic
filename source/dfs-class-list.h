@@ -139,14 +139,19 @@ class DfsClassList {
   // member ordering, and pairs marks entries that earn its pair bonus; member
   // 0 is therefore the class's best member under the caller's admissible
   // upper score. solo_words is mutable only while phase 1 registers profiles.
-  // With no model that is raw count order.
+  // With no model that is raw count order. exclude_pairs drops any entry whose
+  // whole spelling it holds, so no phase-2 result can contain one. The test is
+  // whole-entry equality: a longer entry containing the pair anywhere is a
+  // different spelling and survives, which is why the workflow pairs this with
+  // an -x that caps entries at two words.
   DfsClassList(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases = true,
                DfsDictionary const* dictionary = NULL,
                int max_extract_words = 0,
                DfsScoreModel const* score_model = NULL,
                DfsPairSet const* pairs = NULL,
-               DfsSoloWords* solo_words = NULL);
+               DfsSoloWords* solo_words = NULL,
+               DfsPairSet const* exclude_pairs = NULL);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };
