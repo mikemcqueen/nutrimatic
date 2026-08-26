@@ -22,10 +22,10 @@ run is not part of this plan; see "Not in this plan".
 
 | Milestone | Deliverable | Status | Proposed commit |
 |---:|---|:---:|---|
-| 0 | Prerequisites: `complete` preflight, `top-segments -n`, `setops.common(stable_mtime=)`, `init` no.pairs, `-d` from `$WFROOT` | [ ] | one commit each |
+| 0 | Prerequisites: `complete` preflight, `top-segments -n`, `setops.{diff,common}(stable_mtime=)`, `init` classified aggregates, `-d` from `$WFROOT` | [ ] | one commit each |
 | 1 | `.wf/best` layout, target accessor, freshness, `wf best status` | [ ] | `Add the BEST PAIRS state layout` |
 | 2 | `gen dfs.seed`, `gen top.segments`, status after every operation | [ ] | `Run provisional DFS and top-segments from wf` |
-| 3 | `exclude`, `review`, `complete`, `gen best.pairs` | [ ] | `Materialize BEST PAIRS from the confirmed-YES set` |
+| 3 | `exclude`, `review`, `complete`, `gen best.pairs` | [ ] | `Accumulate BEST PAIRS from the confirmed-YES set` |
 | 4 | `gen dfs.best` | [ ] | `Add the final DFS stage` |
 
 Each milestone brings whatever smoke test its own deliverable needs, named
@@ -90,7 +90,7 @@ The workflow's own state lives under `.wf/best/`:
         dfs.seed -> RESULTS/dfs.s2.idx2.85.15.m4.x2.g4.1000000
         top.segments
         best.pairs
-        dfs.best -> RESULTS/dfs.s2.idx2.85.15.m4.x2.g4.top1000.1000000
+        dfs.best -> RESULTS/dfs.s2.idx2.85.15.m4.x2.g4.best.1000000
       g5/
         ...
 ```
@@ -168,8 +168,15 @@ A superseded refinement round is not retained. Regenerating any artifact
 overwrites it in place. Nothing here records which round produced what, how
 many rounds have run, or what a previous round's ranking looked like.
 
-This is affordable for two reasons. Every artifact is reproducible from its
-inputs, so a superseded round is not information, it is a cache. And the
+`best.pairs` is the exception, and the only one: it unions the prior artifact
+into each regeneration, so confirmations accumulate across rounds rather than
+tracking the current sample. That is history of a kind -- the set, never the
+sequence -- and it is there because `best.pairs` is the workflow's product
+rather than an intermediate. See "What accumulation costs".
+
+Everything else is affordable for two reasons. Every other artifact is
+reproducible from its inputs, so a superseded round is not information, it is
+a cache. And the
 question history would be kept for -- "how many rounds have I run on this
 target?" -- is already answered elsewhere: the p2 archive holds one bundle per
 completed round, `p2/done/in/top.s2.m4.g4.*.pairs`, with the ordinals `review`
@@ -194,7 +201,7 @@ This is the core of the design. Freshness is derived, never stored.
 |---|---|---|
 | `dfs.seed` | the seed newer, or `classified/no/no.pairs` newer | minutes–hours |
 | `top.segments` | `dfs.seed` newer | seconds |
-| `best.pairs` | `top.segments` newer, or `classified/yes/yes.pairs` newer | milliseconds |
+| `best.pairs` | `top.segments` newer, or either `classified` aggregate newer | milliseconds |
 | `dfs.best` | `best.pairs` newer, or `classified/no/no.pairs` newer | minutes–hours |
 
 Comparisons are against the symlink *target*'s mtime for `dfs.seed` and
@@ -400,8 +407,8 @@ file, unlink the old one — with an observable intermediate state and an
 invariant a crash can violate. Both parameters are recoverable without it:
 
 - `top.segments` is `top-segments -n N` output, so its N is `wc -l`.
-- `best.pairs` is derived from `top.segments`, which is in the same directory,
-  so its universe size is `wc -l top.segments`.
+- `best.pairs` has no parameter to carry. It accumulates across rounds, so it
+  is not scoped to any one cutoff and there is no N that would be true of it.
 
 Each is therefore a fixed name published by a single `rename(2)`, which
 `setops._place` already does.
@@ -452,11 +459,25 @@ A requested top-N larger than the number of available segments yields fewer
 lines than requested, and `wc -l` reports what is actually there. Re-requesting
 the larger N regenerates byte-identical output, which rule 3 turns into a no-op.
 
-## BEST PAIRS is an intersection
+## BEST PAIRS accumulates
 
 ```text
-best.pairs = common(sorted(top.segments), .wf/classified/yes/yes.pairs)
+best.pairs = diff(common(merge(sorted(top.segments), best.pairs),
+                         .wf/classified/yes/yes.pairs),
+                  .wf/classified/no/no.pairs)
 ```
+
+The prior `best.pairs` is an operand of its own regeneration. This is the one
+artifact in the tree that carries history, and the exception is deliberate:
+`best.pairs` is what the whole workflow exists to produce, and a confirmed pair
+that has fallen out of the current sample is still a confirmed pair worth
+bonusing. The union is with the prior artifact only -- not a log of rounds --
+so what accumulates is the set itself, nothing about how it got that way.
+
+On the first generation there is no prior file, and `merge` takes the collated
+`top.segments` copy alone. That is the same existence guard `setops.fold`
+already writes once, applied to a scratch destination rather than to an
+accumulator in place.
 
 `top.segments` is stored **ranked** -- descending count, ties broken by text,
 exactly as `top-segments --pairs` emits it. That ordering is what makes
@@ -465,29 +486,118 @@ interpretable to a human. It is therefore not a `setops` set: `comm -12`
 requires `LC_ALL=C` collation and returns a silently wrong intersection given
 anything else.
 
-So `gen best.pairs` collates a scratch copy under `LC_ALL=C` and intersects
-that. The sort is internal to the stage and never appears in the tree -- storing
-a collated sibling would be storing a derived fact. On a file of a few thousand
-lines it is unmeasurable, so the intersection is still a pure function of two
-files costing milliseconds.
+So `gen best.pairs` collates a scratch copy under `LC_ALL=C` and unions the
+prior artifact into it. The sort is internal to the stage and never appears in
+the tree -- storing a collated sibling would be storing a derived fact. The
+prior `best.pairs` needs no sorting: it was placed by `comm` output and is
+already a set. On files of a few thousand lines the whole expression is
+unmeasurable, still milliseconds.
 
-**not** the current review batch's `*.p2.yes`. v2 treats one bundle's
+What it is **not**, at any point in the expression, is the current review
+batch's `*.p2.yes`. v2 treats one bundle's
 `*.p2.yes` as the complete BEST PAIRS artifact, which makes the artifact a
 record of one review rather than a statement about the current candidate set.
 Those come apart as soon as a verdict is reached anywhere else: `wooden,toy`
 confirmed under `g4` belongs in `g5`'s BEST PAIRS, and no `g5` bundle has to
 exist for that to be true.
 
-The intersection states the thing directly -- *the top segments that are
-confirmed YES* -- and it holds whatever the review history looks like. Under
+The expression states the thing directly -- *the segments this target has
+ranked, that are confirmed YES and not hard NO* -- and it holds whatever the
+review history looks like. Under
 p2's default filtering a known YES would be dropped from the bundle and missing
 from its `*.p2.yes`; under this plan's unfiltered review it would be
 re-confirmed and present. The intersection is the same file either way.
 
 That is also what makes it rebuildable with no review to run. `classified/yes`
-grows from other targets, and `gen best.pairs` picks that up as a pure function
-of two files costing milliseconds -- so it is regenerated rather than
-accumulated, and a raised cutoff simply rebuilds it over the longer prefix.
+grows from other targets, and `gen best.pairs` picks that up for milliseconds
+-- so it is regenerated on demand, and a raised cutoff simply rebuilds it over
+the longer prefix.
+
+### Hard NOs are subtracted
+
+The subtraction is the only thing that ever removes an entry, which under
+accumulation makes it load-bearing rather than tidy: without it a hard NO that
+once reached `best.pairs` would stay there for every future round. `classify` records
+a verdict into one aggregate and never withdraws it from the other: a pair
+confirmed YES in p2 and later hard-NO'd by `exclude` sits in both, and
+`classify.py`'s `_warn_if_contradicted` warns and proceeds precisely because
+"there is no un-classify to undo the earlier call with". The contradiction is a
+supported, durable state, and resolving it is the consumer's job.
+
+`gen best.pairs` is that consumer, and the precedence is already settled
+elsewhere in words: a hard NO says the pair must not appear in a result at all,
+which is stronger than any YES. So the intersection is followed by a difference
+against `classified/no`, and `classified/no` joins the artifact's freshness
+row.
+
+The DFS would paper over the omission -- `--exclude-pairs` drops the entry from
+every result, so a hard-NO pair carrying a bonus cannot reach the output -- but
+three things still go wrong without the subtraction:
+
+- `status` reports `best.pairs` up to date immediately after an `exclude`,
+  because `no.pairs` is not one of its prerequisites. The one artifact whose
+  content the exclusion just invalidated is the one nothing offers to rebuild.
+- `wc -l best.pairs` would overstate the bonus set that actually took effect,
+  and under accumulation the overstatement is permanent.
+- `review` already subtracts the same aggregate. Leaving the next stage without
+  it makes the pipeline defend against one contamination at submit and forget
+  about it a stage later.
+
+Doing it here rather than only at `review` is also what survives the human
+gate. `review`'s subtraction is a snapshot taken at submit; the bundle then
+sits in `p2/eval/` for days, and an `exclude` in that window cannot reach notes
+already written. The pair stays checkable, `complete p2` folds it into
+`classified/yes` -- through `fold_classified`, which carries no contradiction
+warning -- and `complete`'s own `best.pairs` tail would publish it. Only a
+subtraction evaluated at generation time sees every verdict that exists by
+then.
+
+Both operands are `LC_ALL=C` sets already: `fold_classified` is the one writer
+of either aggregate and places through `merge`, which is `sort -u`. Both carry
+`stable_mtime: True` in `config._CLASSIFIED`, so adding `classified/no` to the
+freshness row cannot manufacture a false stale from a no-op fold. The cost is a
+second `comm` over a few thousand lines.
+
+### What accumulation costs
+
+Three properties are given up, knowingly.
+
+**`best.pairs` is not reproducible from its current inputs.** Delete it and
+regenerate, and what comes back is the current prefix's confirmed pairs alone
+-- correct, but smaller. It is the one file in the tree an operator cannot
+prune and rebuild, and the only one whose backup is worth having. Nothing
+guards it; it is a few thousand lines of text and the operator owns the tree.
+
+**The cutoff only opens.** Raising `-n` widens the universe and adds entries;
+lowering it removes nothing, because the entries from the wider prefix are
+already folded in. Narrowing a target's BEST PAIRS means deleting the file and
+regenerating at the smaller cutoff, which is the deliberate act the previous
+paragraph describes.
+
+**`wc -l best.pairs` no longer measures the current prefix.** Rule 2's
+recoverability argument does not reach this file: its universe is every prefix
+that has ever been generated here, and nothing records that.
+
+That is also why `dfs.best` renders as `dfs.<sentence>.<seed>.m<N>.x2.g<N>.best.<n>`
+rather than carrying `top<cutoff>`. The cutoff was only ever true of a
+single-round intersection, and a name that asserts a universe the file does not
+have is worse than one that asserts less. `best` still separates the stage from
+`dfs.seed`, which is all that component was structurally doing.
+
+What is *not* given up is any verdict. `classified/yes` and `classified/no`
+remain the standing record, `best.pairs` is downstream of both, and a hard NO
+still reaches it on the next generation.
+
+Because the file only grows, what came in is worth seeing:
+
+```text
+$ wf best gen s2 -g 4 best.pairs
+Generated 152 best pairs (9 added, 2 dropped) -> s2/m4/g4/best.pairs
+```
+
+The counts are against the file being replaced, which `gen` has in hand before
+`_place` renames over it. Added is the new confirmations; dropped is hard NOs,
+and is normally zero.
 
 ### `review` does not filter
 
@@ -575,7 +685,7 @@ stage you type and the file that appears are the same string.
 |---|---|---|
 | `gen dfs.seed` | `dfs-anagrams --pairs <seed>` | `g4/dfs.seed` -> results/ |
 | `gen top.segments` | `top-segments --pairs -n N` | `g4/top.segments` |
-| `gen best.pairs` | `common(sorted(top.segments), classified/yes)` | `g4/best.pairs` |
+| `gen best.pairs` | prior `best.pairs` + `top.segments`, ∩ `classified/yes`, less `classified/no` | `g4/best.pairs` |
 | `gen dfs.best` | `dfs-anagrams --pairs best.pairs` | `g4/dfs.best` -> results/ |
 
 The other three commands are verbs rather than stages because they are not
@@ -712,7 +822,7 @@ s2/m4/g4: dfs.seed out of date (hard-NO set changed)
   next: wf best gen s2 -g 4 dfs.seed
 
 $ wf best gen s2 -g 4 dfs.best
-Generated 1000000 results in 16m03s -> /home/mike/code/nutrimatic/results/s2/dfs...top1000.1000000
+Generated 1000000 results in 16m03s -> /home/mike/code/nutrimatic/results/s2/dfs...g4.best.1000000
 s2/m4/g4: up to date
 ```
 
@@ -887,16 +997,42 @@ Milestone 0, still open:
   than `head`'s -- through the pipe, a crashed `top-segments` yields a
   truncated file and exit 0 -- and removes the SIGPIPE the pipe delivers on
   every run.
-- `wf init` creates an empty `.wf/classified/no/no.pairs` when it is absent, so
-  the hard-NO aggregate always exists. `dfs-anagrams` treats a missing
-  aggregate as an error rather than an empty exclusion set, deliberately, so
-  without this the first `gen dfs.seed` on any root fails -- and both live
-  roots have an empty `classified/no/` today. `load_pair_file` reads an empty
-  file as `0 pairs, 0 keys` and succeeds, so `gen dfs.*` passes
-  `--exclude-pairs <root>` unconditionally and has no branch.
-- `setops.common` gains the `stable_mtime` parameter `merge` and `fold` already
-  have. `best.pairs` is placed with it, and without it every regeneration of an
-  unchanged intersection marks `dfs.best` stale.
+- `wf init` creates an empty `.wf/classified/yes/yes.pairs` and
+  `.wf/classified/no/no.pairs` when they are absent, so both standing
+  aggregates always exist. Neither reader tolerates a missing one.
+  `dfs-anagrams` treats a missing hard-NO aggregate as an error rather than an
+  empty exclusion set, deliberately, so without this the first `gen dfs.seed`
+  on any root fails. `common` and `diff` shell out to `comm`, which fails on a
+  missing operand, so `gen best.pairs` fails the same way until some other
+  target's `complete p2` happens to have created `yes.pairs` first -- and
+  nothing creates it before then, since `fold_classified` writes it only when
+  there is a verdict to fold. Both live roots are in exactly that state today:
+  `~/code/words/.wf/classified/{yes,no}` are empty directories, and
+  `$WFROOT` (`~/code/words/final`) has no `.wf` at all.
+
+  Empty is the right initial value for both, not merely a convenient one.
+  `load_pair_file` reads an empty file as `0 pairs, 0 keys` and succeeds, so
+  `gen dfs.*` passes `--exclude-pairs <root>` unconditionally and has no
+  branch; `comm` over an empty operand yields the empty intersection and the
+  unchanged difference, which is what "nothing has been classified yet"
+  means. The alternative -- every reader branching on existence -- puts the same
+  three-way check in four places and makes an absent file mean "empty" in one
+  and "error" in another.
+
+  `gen best.pairs` warns when the result comes out empty -- the result, not
+  this round's intersection, which under accumulation can be empty while the
+  file is not. That is the signal that this target has never been reviewed and
+  no other target has confirmed anything in its top segments, and it is not
+  otherwise visible:
+  `dfs-anagrams` zeroes `pair_bonus` only when `--pairs` is absent
+  (`dfs-anagrams.cpp:295`), not when the file it names is empty, so
+  `gen dfs.best` would run bonus-free while looking fully configured.
+- `setops.diff` and `setops.common` gain the `stable_mtime` parameter `merge`
+  and `fold` already have. `best.pairs` is placed by the `diff` -- the
+  intersection goes to a scratch file beside the collated `top.segments` copy
+  -- so `diff` is the one that must have it, and `common` gets it in the same
+  commit because the two are one signature. Without it every regeneration of an
+  unchanged `best.pairs` marks `dfs.best` stale.
 - `-d` defaults to `$WFROOT` when it is set, falling back to `Path.cwd()`
   (`wf.py:50`). The variable is exported; nothing reads it yet.
 
@@ -916,7 +1052,10 @@ What the design work so far established, so it is not lost:
 - **Freshness is generic, not per-stage.** Every step declares `inputs(ctx)`
   and `outputs(ctx)`, so the whole "what needs regenerating" table is one
   `is_done` variant -- "outputs exist and are not older than their inputs" --
-  beside the default "outputs exist".
+  beside the default "outputs exist". `best.pairs` is the one step whose output
+  is also an operand, and it must not appear in its own `inputs(ctx)`: a file
+  is never older than itself, so declaring it would make the step permanently
+  up to date.
 - **The runner has no blocked state.** A step that is neither done nor runnable
   is exactly what the review gate is: `top.segments` is up to date, and
   `best.pairs` should not be built until a human checks notes -- it *would*
