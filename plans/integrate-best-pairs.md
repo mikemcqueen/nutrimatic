@@ -2,8 +2,9 @@
 
 ## Status
 
-This is an implementation plan. No source changes have been made for it yet,
-beyond the `stable_mtime` prerequisite noted below.
+This implementation plan was completed on August 26, 2026. The workflow
+changes live in `words`; the `top-segments -n` prerequisite lives in
+Nutrimatic.
 
 It supersedes `findings/integrate-pairs-workflow-codex.md`,
 `findings/integrate-pairs-workflow-claude.md`, and
@@ -20,19 +21,20 @@ Primitives first. Every milestone below is one operation on one target, doing
 exactly what it is told. The collective operation that decides *which* stage to
 run is not part of this plan; see "Not in this plan".
 
-| Milestone | Deliverable | Status | Proposed commit |
+| Milestone | Deliverable | Status | Commit(s) |
 |---:|---|:---:|---|
-| 0 | Prerequisites: `complete` preflight, `top-segments -n`, `setops.{diff,common}(stable_mtime=)`, `init` classified aggregates, `-d` from `$WFROOT` | [ ] | one commit each |
-| 1 | `.wf/best` layout, target accessor, freshness, `wf best status` | [ ] | `Add the BEST PAIRS state layout` |
-| 2 | `gen dfs.seed`, `gen top.segments`, status after every operation | [ ] | `Run provisional DFS and top-segments from wf` |
-| 3 | `exclude`, `review`, `complete`, `gen best.pairs` | [ ] | `Accumulate BEST PAIRS from the confirmed-YES set` |
-| 4 | `gen dfs.best` | [ ] | `Add the final DFS stage` |
+| 0 | Prerequisites: `complete` preflight, `top-segments -n`, `setops.{diff,common}(stable_mtime=)`, `init` classified aggregates, `-d` from `$WFROOT` | [x] | `a9c475f`, `41c798a`, `993ae7e`, `d90a516`, `101b22c` |
+| 1 | `.wf/best` layout, target accessor, freshness, `wf best status` | [x] | `33f2175` Add the BEST PAIRS state layout |
+| 2 | `gen dfs.seed`, `gen top.segments`, status after every operation | [x] | `27915b9` Run provisional DFS and top-segments from wf |
+| 3 | `exclude`, `review`, `complete`, `gen best.pairs` | [x] | `b38f66b` Accumulate BEST PAIRS from the confirmed-YES set |
+| 4 | `gen dfs.best` | [x] | `4602568` Add the final DFS stage |
 
-Each milestone brings whatever smoke test its own deliverable needs, named
-when the milestone is worked rather than enumerated here. Python tests go in
-`words/tests/`, building their tree with `wf_fixture` so a layout change stays
-a one-line edit in `config.CONFIG_LAYOUT`; the `top-segments -n` prerequisite
-is tested in nutrimatic. Smoke tests only, per `CLAUDE.md`.
+All listed commits are in `words` except `41c798a`, which is in Nutrimatic.
+
+Each milestone includes the smoke test its own deliverable needs. Python tests
+are in `words/tests/`, building their tree with `wf_fixture` so a layout change
+stays a one-line edit in `config.CONFIG_LAYOUT`; the `top-segments -n`
+prerequisite is tested in Nutrimatic. Smoke tests only, per `CLAUDE.md`.
 
 Milestone 1 is one unit because `status` is what shapes the accessor: with no
 registry, enumerating targets means walking the tree, so the accessor needs
@@ -48,13 +50,13 @@ because their contents genuinely vary; a target's do not.
 ## Outcome
 
 `docs/best-pairs-workflow-v2.md` describes a recipe whose scheduler, parameter
-store, and status database is the operator. This plan makes stages 3 through 7
-of that recipe a managed object: a **run**, keyed by sentence, minimum word
-length, and exact segment count.
+store, and status database is the operator. The implementation makes stages 3
+through 7 of that recipe a managed object: a **run**, keyed by sentence,
+minimum word length, and exact segment count.
 
 Stages 1 and 2 stay manual. Candidate generation, the `comm` against
 `p1_done.pairs`, chunking, and the `evalpair` cycle remain as v2 documents
-them; this plan begins with the seed already extracted.
+them; the managed workflow begins with the seed already extracted.
 
 The scope boundary and the ownership boundary are the same line. Everything
 stages 1 and 2 produce is placed by hand; everything stages 3 through 7 produce
@@ -89,7 +91,9 @@ The workflow's own state lives under `.wf/best/`:
       g4/
         dfs.seed -> RESULTS/dfs.s2.idx2.85.15.m4.x2.g4.1000000
         top.segments
+        .top.segments.gen            # generation stamp; see "Two mtimes"
         best.pairs
+        .best.pairs.gen
         dfs.best -> RESULTS/dfs.s2.idx2.85.15.m4.x2.g4.best.1000000
       g5/
         ...
@@ -206,6 +210,32 @@ This is the core of the design. Freshness is derived, never stored.
 
 Comparisons are against the symlink *target*'s mtime for `dfs.seed` and
 `dfs.best`, which is what `Path.stat()` returns.
+
+### Two mtimes
+
+The stale-when column for `top.segments` and `best.pairs` reads their
+**generation stamp** -- `.top.segments.gen`, `.best.pairs.gen`, an empty marker
+beside the artifact that `gen` touches on every run -- and not the artifact
+itself. Everything downstream still reads the artifact's own mtime. The two
+answer different questions, and one file cannot answer both:
+
+- *Did the content change?* is what `best.pairs` asks of `top.segments`, and
+  what `dfs.best` asks of `best.pairs`. `stable_mtime` exists so a
+  byte-identical regeneration answers **no**, and a no-op does not cascade into
+  an hours-long DFS.
+- *Has this been generated since its input moved?* is what `status` asks of the
+  artifact. `stable_mtime` makes the artifact's own mtime unable to answer it:
+  an input that moves and yields identical content would stay stale forever,
+  because the `gen` offered to clear it is precisely the write `stable_mtime`
+  suppresses.
+
+The stamp advances on every `gen`, no-op or not, so the second question always
+has a current answer. Absent a stamp the artifact dates itself -- what a tree
+built before stamps existed, or an artifact placed by hand, does.
+
+This is still rule 2. The stamp records when a command ran, which is not a fact
+the artifact yields and cannot be recovered from it; freshness remains nothing
+but mtimes.
 
 A **dangling** symlink -- target garbage-collected, or `results/` cleaned by
 hand -- has no mtime to compare. `Path.stat()` follows the link and raises;
@@ -394,8 +424,10 @@ multiplying.
    is where the bundle sits.
 3. **An mtime means the content changed**, for every artifact `setops` places.
    `top.segments` and `best.pairs` are written with `stable_mtime=True`, so a
-   byte-identical regeneration disturbs nothing downstream. The two DFS stages
-   are outside the rule; see below.
+   byte-identical regeneration disturbs nothing downstream. That the `gen`
+   *ran* is recorded separately, in a generation stamp, because one mtime
+   cannot mean both things at once -- see "Two mtimes". The two DFS stages are
+   outside the rule; see below.
 4. **A derived fact may be cached for a human to read, never consumed by the
    tool.**
 
@@ -447,6 +479,16 @@ freshly-renamed target's, so a byte-identical rerun always marks
 hours-long run to avoid a few seconds of `top-segments` is not a trade worth
 making, and the error is in the safe direction -- the same false-stale the
 global `no.pairs` aggregate already produces.
+
+That direction is only safe because the false stale is **clearable**, and it is
+the generation stamp that makes it so: rerunning `gen top.segments` advances the
+stamp whether or not the output changed. Dating the artifact by its own
+`stable_mtime`-preserved mtime would have made this particular false stale
+permanent -- the rerun produces identical bytes, writes nothing, leaves the
+mtime where it was, and `status` goes on offering the same command forever, with
+the review gate and everything downstream of it unreachable. `best.pairs` has
+the same shape with no DFS involved at all: a review round that confirms nothing
+new leaves `classified/yes` untouched, so the recomputed set is identical.
 
 Orphans and abandoned scratch files are the **operator's** to clean. Nothing
 reports them and no command removes them. There is one per rendered-name change
@@ -967,7 +1009,7 @@ apart.
 
 ## Prerequisites
 
-Landed:
+Landed before milestone work:
 
 - `wf submit p2 FILE` queues a neutral `*.pairs` idempotently, and `wf eval p2`
   accepts both `*.pairs` and `*.p1.yes` (`names.QUEUE_SUFFIXES`).
@@ -978,18 +1020,18 @@ Landed:
   `PYTHONPATH` and runs `python -P`. Together those give the workflow root a
   name and restore the caller's working directory, which is what `-r` and every
   other relative path argument resolve against.
-- `setops` `stable_mtime`, and `config.fold_classified` as the one way to write
-  the classified aggregates. Rule 3 depends on this.
+- `setops.merge` and `setops.fold` support `stable_mtime`, and
+  `config.fold_classified` is the one way to write the classified aggregates.
+  Rule 3 depends on this.
 
-Milestone 0, still open:
+Milestone 0, implemented:
 
 - `complete` preflights every archive destination and requires `-f` on that
-  invocation when an archived artifact would be replaced. Today the archive
-  steps call `fs.move_into` / `fs.rename_once` one at a time with `ctx.force`,
-  so a collision fails partway through the recipe instead of before it starts.
+  invocation when an archived artifact would be replaced. A collision is
+  therefore reported before any archive step changes the recipe state.
 - `top-segments -n N` prints only the top N rows, defaulting to 1000, and
   replaces `| head -n N`.
-  `print_counts` already builds the ordered vector, so this is a
+  `print_counts` builds the ordered vector, using a
   `std::partial_sort` and a bounded print loop. The pipeline is what makes
   `top.segments` unplaceable: `setops._place` takes one argv and no shell, so
   without `-n` it cannot produce the file at all, let alone with the content
@@ -1003,12 +1045,9 @@ Milestone 0, still open:
   `dfs-anagrams` treats a missing hard-NO aggregate as an error rather than an
   empty exclusion set, deliberately, so without this the first `gen dfs.seed`
   on any root fails. `common` and `diff` shell out to `comm`, which fails on a
-  missing operand, so `gen best.pairs` fails the same way until some other
-  target's `complete p2` happens to have created `yes.pairs` first -- and
-  nothing creates it before then, since `fold_classified` writes it only when
-  there is a verdict to fold. Both live roots are in exactly that state today:
-  `~/code/words/.wf/classified/{yes,no}` are empty directories, and
-  `$WFROOT` (`~/code/words/final`) has no `.wf` at all.
+  missing operand. Creating both aggregates during `init` gives every reader
+  the same valid empty initial state rather than making each one branch on
+  file existence.
 
   Empty is the right initial value for both, not merely a convenient one.
   `load_pair_file` reads an empty file as `0 pairs, 0 keys` and succeeds, so
@@ -1027,21 +1066,21 @@ Milestone 0, still open:
   `dfs-anagrams` zeroes `pair_bonus` only when `--pairs` is absent
   (`dfs-anagrams.cpp:295`), not when the file it names is empty, so
   `gen dfs.best` would run bonus-free while looking fully configured.
-- `setops.diff` and `setops.common` gain the `stable_mtime` parameter `merge`
-  and `fold` already have. `best.pairs` is placed by the `diff` -- the
+- `setops.diff` and `setops.common` accept the `stable_mtime` parameter `merge`
+  and `fold` already had. `best.pairs` is placed by the `diff` -- the
   intersection goes to a scratch file beside the collated `top.segments` copy
   -- so `diff` is the one that must have it, and `common` gets it in the same
   commit because the two are one signature. Without it every regeneration of an
   unchanged `best.pairs` marks `dfs.best` stale.
-- `-d` defaults to `$WFROOT` when it is set, falling back to `Path.cwd()`
-  (`wf.py:50`). The variable is exported; nothing reads it yet.
+- `-d` defaults to `$WFROOT` when it is set, falling back to `Path.cwd()` only
+  when the variable is absent or empty.
 
 ## Not in this plan
 
 The collective operation -- one command that decides which stage a target needs
-and runs everything mechanical until it reaches a human gate. The primitives
-above are deliberately dumb so that it can be designed against them once they
-exist, rather than guessed at now.
+and runs everything mechanical until it reaches a human gate. The implemented
+primitives are deliberately dumb so that operation can be designed against
+their concrete behavior rather than guessed at here.
 
 What the design work so far established, so it is not lost:
 
@@ -1094,4 +1133,3 @@ Two proposals from the superseded findings are deliberately out:
 
 Also outside this plan: v2 stages 1 and 2 (candidate generation, the `comm`
 against `p1_done.pairs`, chunking, and the `evalpair` cycle), which stay manual.
-
