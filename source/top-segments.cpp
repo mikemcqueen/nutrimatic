@@ -14,15 +14,28 @@
 
 typedef std::unordered_map<std::string, uint64_t> SegmentCounts;
 
+static uint64_t const DEFAULT_LIMIT = 1000;
+
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs] [FILE ...]\n"
+      "usage: %s [--pairs] [-n N] [FILE ...]\n"
       "  count comma-delimited segments in dfs-anagrams output and print\n"
       "  \"count segment\" rows in descending count order\n"
       "  --pairs prints only multi-word segments as comma-separated words,\n"
       "          without counts\n"
+      "  -n N prints at most N rows; defaults to %" PRIu64 "\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program);
+      program, DEFAULT_LIMIT);
+}
+
+static bool parse_limit(char const* text, uint64_t* limit) {
+  if (text[0] == '\0' || text[0] == '-') return false;
+  errno = 0;
+  char* end;
+  unsigned long long const parsed = strtoull(text, &end, 10);
+  if (errno == ERANGE || *end != '\0') return false;
+  *limit = parsed;
+  return true;
 }
 
 static bool count_stream(
@@ -77,7 +90,8 @@ static bool count_stream(
   return true;
 }
 
-static bool print_counts(SegmentCounts const& counts, bool pairs) {
+static bool print_counts(
+    SegmentCounts const& counts, bool pairs, uint64_t limit) {
   std::vector<SegmentCounts::const_iterator> ordered;
   ordered.reserve(counts.size());
   uint64_t largest = 0;
@@ -87,14 +101,15 @@ static bool print_counts(SegmentCounts const& counts, bool pairs) {
     ordered.push_back(entry);
     largest = std::max(largest, entry->second);
   }
-  std::sort(ordered.begin(), ordered.end(),
-      [](SegmentCounts::const_iterator a, SegmentCounts::const_iterator b) {
-        if (a->second != b->second) return a->second > b->second;
-        return a->first < b->first;
-      });
+  size_t const top = limit < ordered.size() ? size_t(limit) : ordered.size();
+  std::partial_sort(ordered.begin(), ordered.begin() + top, ordered.end(),
+    [](SegmentCounts::const_iterator a, SegmentCounts::const_iterator b) {
+      if (a->second != b->second) return a->second > b->second;
+      return a->first < b->first;
+    });
 
   int const width = snprintf(NULL, 0, "%" PRIu64, largest);
-  for (size_t i = 0; i < ordered.size(); ++i) {
+  for (size_t i = 0; i < top; ++i) {
     if (pairs) {
       std::string words = ordered[i]->first;
       std::replace(words.begin(), words.end(), ' ', ',');
@@ -111,6 +126,7 @@ int main(int argc, char* argv[]) {
   std::vector<char const*> paths;
   bool parse_options = true;
   bool pairs = false;
+  uint64_t limit = DEFAULT_LIMIT;
   for (int i = 1; i < argc; ++i) {
     if (parse_options && strcmp(argv[i], "--") == 0) {
       parse_options = false;
@@ -121,6 +137,12 @@ int main(int argc, char* argv[]) {
       return 0;
     } else if (parse_options && strcmp(argv[i], "--pairs") == 0) {
       pairs = true;
+    } else if (parse_options && strcmp(argv[i], "-n") == 0) {
+      if (++i == argc || !parse_limit(argv[i], &limit)) {
+        fprintf(stderr, "top-segments: -n requires a non-negative integer\n");
+        usage(stderr, argv[0]);
+        return 2;
+      }
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "top-segments: unknown option \"%s\"\n", argv[i]);
       usage(stderr, argv[0]);
@@ -151,5 +173,5 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  return print_counts(counts, pairs) ? 0 : 1;
+  return print_counts(counts, pairs, limit) ? 0 : 1;
 }
