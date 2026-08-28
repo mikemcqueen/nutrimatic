@@ -69,6 +69,8 @@ static void usage(char const* program) {
       " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
       " [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
+      "  -u, --used-letters LETTERS subtracts letters already used from the"
+      " input letters before searching\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
       "  --dict PATH filters entries to words in the dictionary\n"
