@@ -46,9 +46,9 @@ bad entry from `--pairs` merely removes its pair bonus.
 
 ## Setup
 
-The examples use sentence S2, minimum word length 4, and exactly four DFS
-segments. Change `SENTENCE`, `LETTERS`, `MIN_WORD_LENGTH`, and `SEGMENTS` for
-another run.
+The examples use sentence S2, the letter set `u-thisandthat`, minimum word
+length 4, and exactly four DFS segments. Change `SENTENCE`, `LETTER_SET`,
+`DFS_LETTERS`, `MIN_WORD_LENGTH`, and `SEGMENTS` for another run.
 
 ```sh
 cd ~/code/nutrimatic
@@ -66,6 +66,9 @@ DICT=$NUT/tmp/words.big
 
 SENTENCE=s2
 LETTERS=$S2
+LETTER_SET=u-thisandthat
+DFS_LETTERS=("$LETTERS" -u thisandthat)   # u- form
+# DFS_LETTERS=(thisandthat)               # o- form
 MIN_WORD_LENGTH=4
 MAX_EXTRACT_WORDS=2
 SEGMENTS=4
@@ -83,6 +86,35 @@ mkdir -p "$RESULT_DIR"
 longer sentence or a sample dominated by a few common entries may require more
 retained DFS results or another candidate increment.
 
+### The letter set
+
+A full sentence has too many letters for `dfs-anagrams` and `top-segments` to
+produce a useful candidate sample, so in practice stages 3 through 7 run
+against a **subset** of `$LETTERS`, and an entire run -- every refinement, every
+review round -- belongs to one such subset.
+
+`dfs-anagrams` takes that working bag two ways, and both are used:
+
+| Form | Meaning | Invocation |
+| --- | --- | --- |
+| `o-LETTERS` | use **only** these letters | positional letters = `LETTERS` |
+| `u-LETTERS` | the sentence **less** these letters | positional `$LETTERS`, plus `-u LETTERS` |
+
+Both exist for legibility, not for expressiveness: they describe the same bag
+from opposite ends, and which one reads better depends on whether more letters
+were kept or removed. `LETTERS` is whatever string is comprehensible -- the
+words run together -- and it is passed to `dfs-anagrams` verbatim.
+
+`LETTER_SET` is that label as it appears in artifact names. `DFS_LETTERS` is
+the argv fragment, an array because the two forms differ in argument count,
+which keeps stages 3, 5, and 7 to one substitution -- `"${DFS_LETTERS[@]}"` in
+place of `"$LETTERS"` -- and free of a branch.
+
+Stages 1 and 2 are unaffected. A restricted bag's candidate set is a subset of
+the full bag's, so the sentence-wide P1 seed is a valid superset for every
+letter set at one `MIN_WORD_LENGTH`: one P1 cycle, the expensive stage, serves
+them all.
+
 ## Artifact names
 
 Filenames are canonical content keys. They retain dimensions needed to find,
@@ -93,13 +125,16 @@ command history.
 | --- | --- |
 | Candidate P1 input | `idx/idx.2.s2.m4` |
 | P1 85/15 seed list | `pairs.s2.idx2.m4.x2.85.15.p1.yes` |
-| Provisional DFS output | `dfs.s2.idx2.m4.x2.g4.85.15.1000000` |
-| P2 candidate input | `top.s2.m4.g4.1000.pairs` |
-| Confirmed BEST PAIRS | `top.s2.m4.g4.1000.p2.yes` |
-| Final DFS output | `dfs.s2.idx2.m4.x2.g4.top1000.1000000` |
+| Provisional DFS output | `dfs.s2.idx2.m4.x2.g4.85.15.1000000.u-thisandthat` |
+| P2 candidate input | `top.s2.m4.g4.u-thisandthat.1000.pairs` |
+| Confirmed BEST PAIRS | `top.s2.m4.g4.u-thisandthat.1000.p2.yes` |
+| Final DFS output | `dfs.s2.idx2.m4.x2.g4.top1000.1000000.u-thisandthat` |
 
 The sentence and artifact kind persist throughout. DFS-derived and BEST PAIRS
-artifacts retain the exact segment count. Selection boundaries remain while
+artifacts retain the exact segment count and the letter set they were searched
+under -- trailing on the DFS names, which are read by eye and matched by
+nothing, and ahead of the cutoff on the P2 bundle, whose name must stay a true
+prefix of every artifact derived from it. Selection boundaries remain while
 they distinguish candidate sets: the P1 probability band, retained DFS result
 count, and P2 candidate cutoff.
 
@@ -115,11 +150,11 @@ Set the paths used by the recipe:
 CANDIDATES=$NUT/idx/idx.2.$SENTENCE.m$MIN_WORD_LENGTH
 REMAINING=$CANDIDATES.remain
 P1_SEED=$RESULT_DIR/pairs.$SENTENCE.idx2.m$MIN_WORD_LENGTH.x$MAX_EXTRACT_WORDS.85.15.p1.yes
-PROVISIONAL_DFS=$RESULT_DIR/dfs.$SENTENCE.idx2.m$MIN_WORD_LENGTH.x$MAX_EXTRACT_WORDS.g$SEGMENTS.85.15.$DFS_RESULTS
-TOP_BUNDLE=top.$SENTENCE.m$MIN_WORD_LENGTH.g$SEGMENTS.$TOP_COUNT
+PROVISIONAL_DFS=$RESULT_DIR/dfs.$SENTENCE.idx2.m$MIN_WORD_LENGTH.x$MAX_EXTRACT_WORDS.g$SEGMENTS.85.15.$DFS_RESULTS.$LETTER_SET
+TOP_BUNDLE=top.$SENTENCE.m$MIN_WORD_LENGTH.g$SEGMENTS.$LETTER_SET.$TOP_COUNT
 TOP_PAIRS=$RESULT_DIR/$TOP_BUNDLE.pairs
 BEST_PAIRS=$WFROOT/.wf/p2/done/out/$TOP_BUNDLE.p2.yes
-FINAL_DFS=$RESULT_DIR/dfs.$SENTENCE.idx2.m$MIN_WORD_LENGTH.x$MAX_EXTRACT_WORDS.g$SEGMENTS.top$TOP_COUNT.$DFS_RESULTS
+FINAL_DFS=$RESULT_DIR/dfs.$SENTENCE.idx2.m$MIN_WORD_LENGTH.x$MAX_EXTRACT_WORDS.g$SEGMENTS.top$TOP_COUNT.$DFS_RESULTS.$LETTER_SET
 ```
 
 ## 1. Generate and complete P1 candidate batches
@@ -210,7 +245,7 @@ changes its working directory.
 Use the P1 seed as a pair-bonus list:
 
 ```sh
-build/dfs-anagrams "$IDX" "$LETTERS" \
+build/dfs-anagrams "$IDX" "${DFS_LETTERS[@]}" \
   -m "$MIN_WORD_LENGTH" \
   -S 20 \
   -p 10000000 \
@@ -224,7 +259,8 @@ build/dfs-anagrams "$IDX" "$LETTERS" \
 ```
 
 The exact `-g` value is essential. Repeat the provisional, review, and final
-stages independently for every relevant segment count.
+stages independently for every relevant segment count, and for every letter
+set.
 
 ## 4. Rank P2 candidates
 
@@ -276,7 +312,7 @@ comm -23 \
   "$WFROOT/.wf/classified/no/no.pairs" \
   > "$REFINED_SEED"
 
-build/dfs-anagrams "$IDX" "$LETTERS" \
+build/dfs-anagrams "$IDX" "${DFS_LETTERS[@]}" \
   -m "$MIN_WORD_LENGTH" \
   -S 20 \
   -p 10000000 \
@@ -314,9 +350,9 @@ because some frequent segments may not have been members of the P1 seed list.
 queue/bundle transition:
 
 ```text
-top.s2.m4.g4.1000.pairs
-  -> .wf/p2/queued/top.s2.m4.g4.1000.pairs
-  -> .wf/p2/eval/top.s2.m4.g4.1000/
+top.s2.m4.g4.u-thisandthat.1000.pairs
+  -> .wf/p2/queued/top.s2.m4.g4.u-thisandthat.1000.pairs
+  -> .wf/p2/eval/top.s2.m4.g4.u-thisandthat.1000/
 ```
 
 `--no-filter` is recommended for these small, high-value review batches, but it
@@ -341,7 +377,7 @@ Do not reproduce this step with a hand-written note retrieval loop. The
 confirmed BEST PAIRS artifact is:
 
 ```text
-$WFROOT/.wf/p2/done/out/top.s2.m4.g4.1000.p2.yes
+$WFROOT/.wf/p2/done/out/top.s2.m4.g4.u-thisandthat.1000.p2.yes
 ```
 
 ## 7. Run final DFS with BEST PAIRS
@@ -355,7 +391,7 @@ if test -f "$WFROOT/.wf/classified/no/no.pairs"; then
   EXCLUDE_ARGS=(--exclude-pairs "$WFROOT")
 fi
 
-build/dfs-anagrams "$IDX" "$LETTERS" \
+build/dfs-anagrams "$IDX" "${DFS_LETTERS[@]}" \
   -m "$MIN_WORD_LENGTH" \
   -S 20 \
   -p 10000000 \
@@ -369,8 +405,9 @@ build/dfs-anagrams "$IDX" "$LETTERS" \
   > "$FINAL_DFS"
 ```
 
-The result is the final ranked anagram sample for this sentence and segment
-count. Repeat stages 3 through 7 for other segment counts. P2's completed-pair
+The result is the final ranked anagram sample for this sentence, letter set,
+and segment count. Repeat stages 3 through 7 for other segment counts and
+other letter sets. P2's completed-pair
 filter normally handles overlap between their top-segment lists; use
 `--no-filter` when deliberately reconsidering prior decisions.
 

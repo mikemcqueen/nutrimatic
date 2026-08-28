@@ -2,20 +2,23 @@
 
 ## Status
 
-Pending. All code is in `words`. Nutrimatic needs no source change, but
-`docs/best-pairs-workflow-v2.md` lives there and is updated as a separate
-Nutrimatic commit.
+Complete. All code is in `words`. Nutrimatic needed no source change;
+`docs/best-pairs-workflow-v2.md` lives here and is updated alongside this
+plan.
 
-This plan extends `plans/integrate-best-pairs.md`, which stays authoritative
-for everything it describes. Only what changes is written here. It is motivated
-by `findings/best-letters.md`.
+Both milestones landed together in one `words` commit. Milestone 2 was
+separable only to keep milestone 1 from waiting on it -- until it landed the
+operator would have made `<letter-set>/` and `m<N>/` by hand -- and that
+transitional value does not exist when the two arrive at once.
+
+It is motivated by `findings/best-letters.md`.
 
 Status values are `[ ]` pending, `[-]` in progress, and `[x]` complete.
 
 | Milestone | Deliverable | Status | Commit(s) |
 |---:|---|:---:|---|
-| 1 | Address grammar, `Target`, seed relocation, `status`, the old-shape diagnostic, and the letter set in the `dfs-anagrams` invocation, the rendered DFS names, and the review bundle name | [ ] | |
-| 2 | Validation, the duplicate check, `-f` creation | [ ] | |
+| 1 | Address grammar, `Target`, seed relocation, `status`, the old-shape diagnostic, and the letter set in the `dfs-anagrams` invocation, the rendered DFS names, and the review bundle name | [x] | `words` 3d48f73 |
+| 2 | Validation, the duplicate check, `-f` creation | [x] | `words` 3d48f73 |
 
 Milestone 1 is one change and does not divide. Land the level without the
 rendered names and two letter sets at one `s`/`m`/`g` write the same DFS output
@@ -190,7 +193,7 @@ That is not the same as skipping the leaf's review round, and the two must not
 be read together. `_review_state` gates on an archived bundle for *this* leaf,
 so a new letter set still runs one round before `status` offers `best.pairs`,
 and that round bundles its whole top-N because `wf best review` passes
-`--no-filter` always — `plans/integrate-best-pairs.md`, *`review` does not
+`--no-filter` always — `plans/archive/integrate-best-pairs.md`, *`review` does not
 filter*, which already settles that re-presentation is not re-review. The
 verdict carries across letter sets; the reading of a new ranked set does not.
 The gate is per leaf today for the same reason, `g4` and `g5` each needing their
@@ -243,7 +246,7 @@ name list.
 It stops being the candidate universe. With the seed gone it holds nothing of
 its own and survives purely as a key on `-m`. `Target.universe` keeps its name
 to avoid churn, but the level's justification in
-`plans/integrate-best-pairs.md` — "the seed and anything else determined by
+`plans/archive/integrate-best-pairs.md` — "the seed and anything else determined by
 `-m`" — no longer applies to it.
 
 ### Migrating the tree that exists
@@ -494,7 +497,7 @@ these" form. No Nutrimatic source change is needed for any milestone.
   intended, and the review bundle already passes `--no-filter`
   (`commands.py:195`) so a pair confirmed elsewhere is still re-presented for
   review here.
-- **The collective operation**, which `plans/integrate-best-pairs.md` already
+- **The collective operation**, which `plans/archive/integrate-best-pairs.md` already
   places out of scope. Its gate on an existing target directory extends to the
   letter-set level unchanged: it never creates one, and `gen dfs.seed -f`
   remains the only path to directory creation in the tool.
