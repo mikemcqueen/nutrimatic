@@ -64,11 +64,11 @@ actual=$(head -n 3 "$input" |
 [[ $actual == "$expected" ]] || fail "stdin or short result is wrong: $actual"
 
 wfroot=$test_dir/wf
-mkdir -p "$wfroot/classified/yes" "$wfroot/classified/no"
-cat > "$wfroot/classified/yes/yes_pairs" <<'EOF'
+mkdir -p "$wfroot/.wf/classified/yes" "$wfroot/.wf/classified/no"
+cat > "$wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
 beta,alpha
 EOF
-cat > "$wfroot/classified/no/no_pairs" <<'EOF'
+cat > "$wfroot/.wf/classified/no/no.pairs" <<'EOF'
 gamma,beta
 EOF
 
@@ -78,8 +78,8 @@ actual=$(WFROOT=$wfroot "$first_segments" -n 2 --wf "$input" 2>/dev/null)
 [[ $actual == "$expected" ]] || fail "--wf exclusions are wrong: $actual"
 
 partial_wfroot=$test_dir/partial-wf
-mkdir -p "$partial_wfroot/classified/yes"
-cat > "$partial_wfroot/classified/yes/yes_pairs" <<'EOF'
+mkdir -p "$partial_wfroot/.wf/classified/yes"
+cat > "$partial_wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
 beta,alpha
 EOF
 diagnostics=$test_dir/wf-diagnostics.txt
@@ -88,7 +88,7 @@ delta,epsilon'
 actual=$(WFROOT=$partial_wfroot "$first_segments" -n 2 --wf "$input" \
   2> "$diagnostics")
 [[ $actual == "$expected" ]] || fail "missing workflow file changed output: $actual"
-expected_diagnostics="first-segments: WARNING: classified pair file \"$partial_wfroot/classified/no/no_pairs\" is not present
+expected_diagnostics="first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
 found segment 2 on line 2"
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||

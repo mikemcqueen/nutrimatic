@@ -157,6 +157,10 @@ first_segments = executable('first-segments', 'first-segments.cpp',
   dependencies: pair_exclusions_dep,
   install: true)
 
+filter_segments = executable('filter-segments', 'filter-segments.cpp',
+  dependencies: pair_exclusions_dep,
+  install: true)
+
 # Keep the class-visitor logic in the hot caller rather than leaving it as a
 # separate call in the final binary.  This runs as part of the normal build so
 # a regression is caught even when the test suite is not run.
@@ -293,6 +297,11 @@ test(
   'first-segments',
   bash,
   args: [files('test-first-segments.sh'), first_segments],
+)
+test(
+  'filter-segments',
+  bash,
+  args: [files('test-filter-segments.sh'), filter_segments],
 )
 test(
   'query-index-cli',

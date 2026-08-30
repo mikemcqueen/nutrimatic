@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+filter_segments=$1
+test_dir=$(mktemp -d "${TMPDIR:-/tmp}/nutrimatic-filter-segments.XXXXXX")
+
+cleanup() {
+  rm -rf "$test_dir"
+}
+trap cleanup EXIT
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+input=$test_dir/results.txt
+cat > "$input" <<'EOF'
+9 alpha beta,beta gamma
+8 delta epsilon,zeta eta
+7 theta iota,kappa lambda
+6 mu nu
+EOF
+
+exclude=$test_dir/exclude.pairs
+cat > "$exclude" <<'EOF'
+gamma,beta
+iota,theta
+EOF
+
+expected='8 delta epsilon,zeta eta
+6 mu nu'
+actual=$("$filter_segments" -x "$exclude" "$input")
+[[ $actual == "$expected" ]] || fail "file filtering is wrong: $actual"
+
+expected='8 delta epsilon,zeta eta'
+actual=$("$filter_segments" -n 1 --exclude "$exclude" "$input")
+[[ $actual == "$expected" ]] || fail "output limit is wrong: $actual"
+
+actual=$("$filter_segments" -n 0 --exclude "$exclude" "$input")
+[[ -z $actual ]] || fail "-n 0 produced output: $actual"
+
+expected='9 alpha beta,beta gamma
+8 delta epsilon,zeta eta
+7 theta iota,kappa lambda
+6 mu nu'
+actual=$("$filter_segments" < "$input")
+[[ $actual == "$expected" ]] || fail "default stdin is wrong: $actual"
+
+expected='8 delta epsilon,zeta eta
+6 mu nu'
+actual=$("$filter_segments" -x "$exclude" - < "$input")
+[[ $actual == "$expected" ]] || fail "explicit stdin is wrong: $actual"
+
+wfroot=$test_dir/wf
+mkdir -p "$wfroot/.wf/classified/yes" "$wfroot/.wf/classified/no"
+cat > "$wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
+epsilon,delta
+EOF
+cat > "$wfroot/.wf/classified/no/no.pairs" <<'EOF'
+nu,mu
+EOF
+
+expected='8 delta epsilon,zeta eta'
+actual=$(WFROOT=$wfroot "$filter_segments" --wf -x "$exclude" "$input")
+[[ $actual == "$expected" ]] || fail "--wf exclusions are wrong: $actual"
+
+if "$filter_segments" "$input" "$input" >/dev/null 2>&1; then
+  fail "multiple input files succeeded"
+fi
+
+if "$filter_segments" -n nope "$input" >/dev/null 2>&1; then
+  fail "invalid -n succeeded"
+fi
+
+echo PASS

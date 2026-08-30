@@ -4,25 +4,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <unordered_set>
-#include <vector>
 
 #include "pair-exclusions.h"
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s -n N [-x FILE | --exclude FILE]... [--wf] RESULTS\n"
-      "  print the first N distinct, non-excluded segments from\n"
-      "  dfs-anagrams RESULTS as comma-separated pairs\n"
-      "  -n N                 maximum number of segments to print\n"
+      "usage: %s [-n N] [-x FILE | --exclude FILE]... [--wf] [FILE]\n"
+      "  print dfs-anagrams result lines that contain no excluded segment\n"
+      "  -n N                 print at most N result lines\n"
       "  -x, --exclude FILE   exclude comma-separated pairs from FILE;\n"
       "                       may be repeated\n"
-      "  --wf                 exclude classified YES and NO pairs below\n"
-      "                       $WFROOT; missing files produce warnings\n",
+      "  --wf                 exclude classified NO pairs below\n"
+      "                       $WFROOT; missing files produce warnings\n"
+      "  with no FILE, or when FILE is -, read standard input\n",
       program);
 }
 
@@ -36,23 +33,14 @@ static bool parse_limit(char const* text, uint64_t* limit) {
   return true;
 }
 
-static bool print_segments(std::vector<std::string> const& segments) {
-  for (size_t i = 0; i < segments.size(); ++i) {
-    std::string pair = segments[i];
-    std::replace(pair.begin(), pair.end(), ' ', ',');
-    printf("%s\n", pair.c_str());
-  }
-  return !ferror(stdout);
-}
-
-static bool find_segments(
+static bool filter_stream(
     std::istream* input, char const* name, DfsPairSet const& excluded,
-    uint64_t limit) {
-  std::unordered_set<std::string> found;
-  std::vector<std::string> result;
+    bool have_limit, uint64_t limit) {
   std::string line;
   uint64_t line_number = 0;
-  while (result.size() < limit && std::getline(*input, line)) {
+  uint64_t output_count = 0;
+  while ((!have_limit || output_count < limit) &&
+         std::getline(*input, line)) {
     ++line_number;
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
@@ -62,41 +50,44 @@ static bool find_segments(
     if (score_end == line.c_str() || *score_end != ' ' ||
         score_end[1] == '\0') {
       fprintf(stderr,
-          "first-segments: %s:%" PRIu64
+          "filter-segments: %s:%" PRIu64
           ": expected \"score segment[,segment ...]\"\n",
           name, line_number);
       return false;
     }
 
+    bool include = true;
     size_t start = size_t(score_end - line.c_str()) + 1;
-    while (result.size() < limit) {
+    while (true) {
       size_t const end = line.find(',', start);
       size_t const length =
           end == std::string::npos ? line.size() - start : end - start;
       if (length == 0) {
         fprintf(stderr,
-            "first-segments: %s:%" PRIu64 ": empty segment\n",
+            "filter-segments: %s:%" PRIu64 ": empty segment\n",
             name, line_number);
         return false;
       }
 
-      std::string const segment = line.substr(start, length);
-      if (excluded.find(segment) == excluded.end() &&
-          found.insert(segment).second)
-        result.push_back(segment);
+      if (excluded.find(line.substr(start, length)) != excluded.end())
+        include = false;
 
       if (end == std::string::npos) break;
       start = end + 1;
     }
+
+    if (include) {
+      printf("%s\n", line.c_str());
+      if (ferror(stdout)) return false;
+      ++output_count;
+    }
   }
 
   if (input->bad()) {
-    fprintf(stderr, "first-segments: can't read \"%s\"\n", name);
+    fprintf(stderr, "filter-segments: can't read \"%s\"\n", name);
     return false;
   }
-  fprintf(stderr, "found segment %zu on line %" PRIu64 "\n",
-      result.size(), line_number);
-  return print_segments(result);
+  return fflush(stdout) == 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -108,7 +99,7 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairExclusionOptionResult const result = parse_pair_exclusion_option(
-          argc, argv, &i, "first-segments", &exclusion_options);
+          argc, argv, &i, "filter-segments", &exclusion_options);
       if (result == PAIR_EXCLUSION_OPTION_ERROR) {
         usage(stderr, argv[0]);
         return 2;
@@ -123,20 +114,20 @@ int main(int argc, char* argv[]) {
                 strcmp(argv[i], "--help") == 0)) {
       usage(stdout, argv[0]);
       return 0;
-    } else if (parse_options &&
-               (strcmp(argv[i], "-n") == 0)) {
+    } else if (parse_options && strcmp(argv[i], "-n") == 0) {
       if (++i == argc || !parse_limit(argv[i], &limit)) {
-        fputs("first-segments: -n requires a non-negative integer\n", stderr);
+        fputs("filter-segments: -n requires a non-negative integer\n",
+            stderr);
         usage(stderr, argv[0]);
         return 2;
       }
       have_limit = true;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "first-segments: unknown option \"%s\"\n", argv[i]);
+      fprintf(stderr, "filter-segments: unknown option \"%s\"\n", argv[i]);
       usage(stderr, argv[0]);
       return 2;
     } else if (results_path != NULL) {
-      fputs("first-segments: exactly one RESULTS file is required\n", stderr);
+      fputs("filter-segments: at most one FILE may be specified\n", stderr);
       usage(stderr, argv[0]);
       return 2;
     } else {
@@ -144,26 +135,22 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (!have_limit || results_path == NULL) {
-    fputs("first-segments: -n N and RESULTS are required\n", stderr);
-    usage(stderr, argv[0]);
-    return 2;
-  }
-
   DfsPairSet excluded;
   if (!load_pair_exclusions(
-          exclusion_options, {"yes", "no"}, "first-segments", &excluded))
+          exclusion_options, {"no"}, "filter-segments", &excluded))
     return 1;
 
-  if (strcmp(results_path, "-") == 0)
-    return find_segments(&std::cin, "-", excluded, limit) ? 0 : 1;
+  if (results_path == NULL || strcmp(results_path, "-") == 0)
+    return filter_stream(
+        &std::cin, "-", excluded, have_limit, limit) ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
   if (!input.is_open()) {
-    fprintf(stderr, "first-segments: can't open \"%s\": %s\n",
+    fprintf(stderr, "filter-segments: can't open \"%s\": %s\n",
         results_path, strerror(errno));
     return 1;
   }
-  return find_segments(&input, results_path, excluded, limit) ? 0 : 1;
+  return filter_stream(
+      &input, results_path, excluded, have_limit, limit) ? 0 : 1;
 }

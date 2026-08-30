@@ -2,6 +2,7 @@
 #define NUTRIMATIC_PAIR_EXCLUSIONS_H
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "dfs-class-list.h"
@@ -23,11 +24,14 @@ PairExclusionOptionResult parse_pair_exclusion_option(
     int argc, char* const argv[], int* index, char const* program,
     PairExclusionOptions* out);
 
-// Loads explicit exclusions and, when requested, the classified YES and NO
-// pair files below $WFROOT. Missing workflow files warn and are skipped;
-// explicit missing files and all malformed or unreadable files are errors.
+// Loads explicit exclusions and, when requested, the classified pair files
+// selected by `workflow_selectors` below $WFROOT. Missing workflow files warn
+// and are skipped; unknown selectors, explicit missing files, and all malformed
+// or unreadable files are errors.
 bool load_pair_exclusions(
-    PairExclusionOptions const& options, char const* program,
+    PairExclusionOptions const& options,
+    std::unordered_set<std::string> const& workflow_selectors,
+    char const* program,
     DfsPairSet* excluded);
 
 #endif

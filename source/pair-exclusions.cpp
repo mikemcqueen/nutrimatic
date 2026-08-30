@@ -7,11 +7,16 @@
 #include <sys/stat.h>
 
 #include <string>
-#include <vector>
+#include <unordered_map>
 
 #include "dfs-cli-args.h"
 
 namespace {
+
+std::unordered_map<std::string, std::string> const workflow_pair_paths = {
+  {"yes", ".wf/classified/yes/yes.pairs"},
+  {"no", ".wf/classified/no/no.pairs"},
+};
 
 std::string workflow_path(char const* root, char const* relative) {
   std::string path(root);
@@ -56,7 +61,9 @@ PairExclusionOptionResult parse_pair_exclusion_option(
 }
 
 bool load_pair_exclusions(
-    PairExclusionOptions const& options, char const* program,
+    PairExclusionOptions const& options,
+    std::unordered_set<std::string> const& workflow_selectors,
+    char const* program,
     DfsPairSet* excluded) {
   char const* wfroot = NULL;
   if (options.workflow) {
@@ -75,12 +82,15 @@ bool load_pair_exclusions(
   }
   if (!options.workflow) return true;
 
-  std::vector<std::string> const workflow_paths = {
-    workflow_path(wfroot, ".wf/classified/yes/yes.pairs"),
-    workflow_path(wfroot, ".wf/classified/no/no.pairs"),
-  };
-  for (size_t i = 0; i < workflow_paths.size(); ++i) {
-    if (!load_workflow_pair_file(workflow_paths[i], program, excluded))
+  for (std::string const& selector : workflow_selectors) {
+    auto const path = workflow_pair_paths.find(selector);
+    if (path == workflow_pair_paths.end()) {
+      fprintf(stderr, "%s: unknown workflow pair selector \"%s\"\n",
+          program, selector.c_str());
+      return false;
+    }
+    if (!load_workflow_pair_file(
+            workflow_path(wfroot, path->second.c_str()), program, excluded))
       return false;
   }
   return true;
