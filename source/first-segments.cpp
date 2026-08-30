@@ -13,17 +13,21 @@
 
 #include "pair-exclusions.h"
 
+static uint64_t const DEFAULT_LIMIT = 1000;
+
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s -n N [-x FILE | --exclude FILE]... [--wf] RESULTS\n"
+      "usage: %s [-n N] [-x FILE | --exclude FILE]... [--wf] [RESULTS]\n"
       "  print the first N distinct, non-excluded segments from\n"
       "  dfs-anagrams RESULTS as comma-separated pairs\n"
-      "  -n N                 maximum number of segments to print\n"
+      "  -n N                 maximum number of segments to print; defaults\n"
+      "                       to %" PRIu64 "\n"
       "  -x, --exclude FILE   exclude comma-separated pairs from FILE;\n"
       "                       may be repeated\n"
       "  --wf                 exclude classified YES and NO pairs below\n"
-      "                       $WFROOT; missing files produce warnings\n",
-      program);
+      "                       $WFROOT; missing files produce warnings\n"
+      "  with no RESULTS, or when RESULTS is -, read standard input\n",
+      program, DEFAULT_LIMIT);
 }
 
 static bool parse_limit(char const* text, uint64_t* limit) {
@@ -103,8 +107,7 @@ int main(int argc, char* argv[]) {
   PairExclusionOptions exclusion_options;
   char const* results_path = NULL;
   bool parse_options = true;
-  bool have_limit = false;
-  uint64_t limit = 0;
+  uint64_t limit = DEFAULT_LIMIT;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairExclusionOptionResult const result = parse_pair_exclusion_option(
@@ -130,13 +133,12 @@ int main(int argc, char* argv[]) {
         usage(stderr, argv[0]);
         return 2;
       }
-      have_limit = true;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "first-segments: unknown option \"%s\"\n", argv[i]);
       usage(stderr, argv[0]);
       return 2;
     } else if (results_path != NULL) {
-      fputs("first-segments: exactly one RESULTS file is required\n", stderr);
+      fputs("first-segments: at most one RESULTS file may be given\n", stderr);
       usage(stderr, argv[0]);
       return 2;
     } else {
@@ -144,18 +146,12 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (!have_limit || results_path == NULL) {
-    fputs("first-segments: -n N and RESULTS are required\n", stderr);
-    usage(stderr, argv[0]);
-    return 2;
-  }
-
   DfsPairSet excluded;
   if (!load_pair_exclusions(
           exclusion_options, {"yes", "no"}, "first-segments", &excluded))
     return 1;
 
-  if (strcmp(results_path, "-") == 0)
+  if (results_path == NULL || strcmp(results_path, "-") == 0)
     return find_segments(&std::cin, "-", excluded, limit) ? 0 : 1;
 
   errno = 0;

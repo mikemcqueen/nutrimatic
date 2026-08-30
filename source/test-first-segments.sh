@@ -61,7 +61,18 @@ mu,nu'
 actual=$(head -n 3 "$input" |
   "$first_segments" -n 10 -x "$exclude1" --exclude "$exclude2" - \
   2>/dev/null)
-[[ $actual == "$expected" ]] || fail "stdin or short result is wrong: $actual"
+[[ $actual == "$expected" ]] || fail "explicit stdin is wrong: $actual"
+
+actual=$(head -n 3 "$input" |
+  "$first_segments" -x "$exclude1" --exclude "$exclude2" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "implicit stdin is wrong: $actual"
+
+default_input=$test_dir/default-results.txt
+for i in $(seq 1 1001); do
+  echo "1 pair $i"
+done > "$default_input"
+actual=$("$first_segments" "$default_input" 2>/dev/null | wc -l)
+[[ $actual == 1000 ]] || fail "default limit is wrong: $actual"
 
 wfroot=$test_dir/wf
 mkdir -p "$wfroot/.wf/classified/yes" "$wfroot/.wf/classified/no"
@@ -105,10 +116,6 @@ actual=$(< "$diagnostics")
 
 if WFROOT= "$first_segments" -n 1 --wf "$input" >/dev/null 2>&1; then
   fail "--wf with empty WFROOT succeeded"
-fi
-
-if "$first_segments" "$input" >/dev/null 2>&1; then
-  fail "missing -n succeeded"
 fi
 
 if "$first_segments" -n nope "$input" >/dev/null 2>&1; then
