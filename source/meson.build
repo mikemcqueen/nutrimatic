@@ -144,6 +144,11 @@ weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
 top_segments = executable('top-segments', 'top-segments.cpp',
   install: true)
 
+first_segments = executable('first-segments', 'first-segments.cpp',
+  link_with: dfs_class_list_lib,
+  dependencies: thread_dep,
+  install: true)
+
 # Keep the class-visitor logic in the hot caller rather than leaving it as a
 # separate call in the final binary.  This runs as part of the normal build so
 # a regression is caught even when the test suite is not run.
@@ -275,6 +280,11 @@ test(
   'top-segments',
   bash,
   args: [files('test-top-segments.sh'), top_segments],
+)
+test(
+  'first-segments',
+  bash,
+  args: [files('test-first-segments.sh'), first_segments],
 )
 test(
   'query-index-cli',
