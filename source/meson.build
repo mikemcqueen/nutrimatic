@@ -102,6 +102,15 @@ dfs_class_list_lib = library(
   dependencies: thread_dep,
 )
 
+# Shared source dependency for small pair-selecting CLIs. Each consumer
+# compiles the option/loading helper directly; no separately linked library is
+# needed for this small interface.
+pair_exclusions_dep = declare_dependency(
+  sources: files('pair-exclusions.cpp'),
+  link_with: dfs_class_list_lib,
+  dependencies: thread_dep,
+)
+
 search_lib = library(
   'search',
   ['search-driver.cpp', 'search-printer.cpp'],
@@ -145,8 +154,7 @@ top_segments = executable('top-segments', 'top-segments.cpp',
   install: true)
 
 first_segments = executable('first-segments', 'first-segments.cpp',
-  link_with: dfs_class_list_lib,
-  dependencies: thread_dep,
+  dependencies: pair_exclusions_dep,
   install: true)
 
 # Keep the class-visitor logic in the hot caller rather than leaving it as a

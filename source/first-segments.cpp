@@ -11,16 +11,18 @@
 #include <unordered_set>
 #include <vector>
 
-#include "dfs-cli-args.h"
+#include "pair-exclusions.h"
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s -n N [-x FILE | --exclude FILE]... RESULTS\n"
+      "usage: %s -n N [-x FILE | --exclude FILE]... [--wf] RESULTS\n"
       "  print the first N distinct, non-excluded segments from\n"
       "  dfs-anagrams RESULTS as comma-separated pairs\n"
       "  -n N                 maximum number of segments to print\n"
       "  -x, --exclude FILE   exclude comma-separated pairs from FILE;\n"
-      "                       may be repeated\n",
+      "                       may be repeated\n"
+      "  --wf                 exclude classified YES and NO pairs below\n"
+      "                       $WFROOT; missing files produce warnings\n",
       program);
 }
 
@@ -98,12 +100,22 @@ static bool find_segments(
 }
 
 int main(int argc, char* argv[]) {
-  std::vector<char const*> exclude_paths;
+  PairExclusionOptions exclusion_options;
   char const* results_path = NULL;
   bool parse_options = true;
   bool have_limit = false;
   uint64_t limit = 0;
   for (int i = 1; i < argc; ++i) {
+    if (parse_options) {
+      PairExclusionOptionResult const result = parse_pair_exclusion_option(
+          argc, argv, &i, "first-segments", &exclusion_options);
+      if (result == PAIR_EXCLUSION_OPTION_ERROR) {
+        usage(stderr, argv[0]);
+        return 2;
+      }
+      if (result == PAIR_EXCLUSION_OPTION_HANDLED) continue;
+    }
+
     if (parse_options && strcmp(argv[i], "--") == 0) {
       parse_options = false;
     } else if (parse_options &&
@@ -119,15 +131,6 @@ int main(int argc, char* argv[]) {
         return 2;
       }
       have_limit = true;
-    } else if (parse_options &&
-               (strcmp(argv[i], "-x") == 0 ||
-                strcmp(argv[i], "--exclude") == 0)) {
-      if (++i == argc) {
-        fprintf(stderr, "first-segments: %s requires a file\n", argv[i - 1]);
-        usage(stderr, argv[0]);
-        return 2;
-      }
-      exclude_paths.push_back(argv[i]);
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "first-segments: unknown option \"%s\"\n", argv[i]);
       usage(stderr, argv[0]);
@@ -148,11 +151,9 @@ int main(int argc, char* argv[]) {
   }
 
   DfsPairSet excluded;
-  for (size_t i = 0; i < exclude_paths.size(); ++i) {
-    if (!load_pair_file(
-            exclude_paths[i], "exclude list", &excluded, true, true))
-      return 1;
-  }
+  if (!load_pair_exclusions(
+          exclusion_options, "first-segments", &excluded))
+    return 1;
 
   if (strcmp(results_path, "-") == 0)
     return find_segments(&std::cin, "-", excluded, limit) ? 0 : 1;
