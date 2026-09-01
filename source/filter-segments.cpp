@@ -12,13 +12,14 @@
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [-n N] [-x FILE | --exclude FILE]... [--wf] [FILE]\n"
-      "  print dfs-anagrams result lines that contain no excluded segment\n"
+      "usage: %s [-n N] [-r FILE | --reject FILE]... [--wf] [FILE]\n"
+      "  print dfs-anagrams result lines that contain no rejected segment\n"
       "  -n N                 print at most N result lines\n"
-      "  -x, --exclude FILE   exclude comma-separated pairs from FILE;\n"
+      "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
       "                       may be repeated\n"
-      "  --wf                 exclude classified NO pairs below\n"
-      "                       $WFROOT; missing files produce warnings\n"
+      "  --wf                 reject pairs listed in\n"
+      "                       $WFROOT/.wf/classified/no/no.pairs; missing\n"
+      "                       files produce warnings\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program);
 }
@@ -34,7 +35,7 @@ static bool parse_limit(char const* text, uint64_t* limit) {
 }
 
 static bool filter_stream(
-    std::istream* input, char const* name, DfsPairSet const& excluded,
+    std::istream* input, char const* name, DfsPairSet const& rejected,
     bool have_limit, uint64_t limit) {
   std::string line;
   uint64_t line_number = 0;
@@ -69,7 +70,7 @@ static bool filter_stream(
         return false;
       }
 
-      if (excluded.find(line.substr(start, length)) != excluded.end())
+      if (rejected.find(line.substr(start, length)) != rejected.end())
         include = false;
 
       if (end == std::string::npos) break;
@@ -91,20 +92,20 @@ static bool filter_stream(
 }
 
 int main(int argc, char* argv[]) {
-  PairExclusionOptions exclusion_options;
+  PairFilterOptions filter_options;
   char const* results_path = NULL;
   bool parse_options = true;
   bool have_limit = false;
   uint64_t limit = 0;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
-      PairExclusionOptionResult const result = parse_pair_exclusion_option(
-          argc, argv, &i, "filter-segments", &exclusion_options);
-      if (result == PAIR_EXCLUSION_OPTION_ERROR) {
+      PairFilterOptionResult const result = parse_pair_filter_option(
+          argc, argv, &i, "filter-segments", false, false, &filter_options);
+      if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(stderr, argv[0]);
         return 2;
       }
-      if (result == PAIR_EXCLUSION_OPTION_HANDLED) continue;
+      if (result == PAIR_FILTER_OPTION_HANDLED) continue;
     }
 
     if (parse_options && strcmp(argv[i], "--") == 0) {
@@ -135,14 +136,15 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  DfsPairSet excluded;
-  if (!load_pair_exclusions(
-          exclusion_options, {"no"}, "filter-segments", &excluded))
+  DfsPairSet ignored;
+  DfsPairSet rejected;
+  if (!load_pair_filters(
+          filter_options, "filter-segments", &ignored, &rejected))
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
     return filter_stream(
-        &std::cin, "-", excluded, have_limit, limit) ? 0 : 1;
+        &std::cin, "-", rejected, have_limit, limit) ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
@@ -152,5 +154,5 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   return filter_stream(
-      &input, results_path, excluded, have_limit, limit) ? 0 : 1;
+      &input, results_path, rejected, have_limit, limit) ? 0 : 1;
 }

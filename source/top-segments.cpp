@@ -11,24 +11,37 @@
 #include <unordered_map>
 #include <vector>
 
+#include "pair-exclusions.h"
 #include "segment-output.h"
 
 typedef std::unordered_map<std::string, uint64_t> SegmentCounts;
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs] [-n N] [FILE ...]\n"
+      "usage: %s [--pairs] [-n N] [-i FILE | --ignore FILE]...\n"
+      "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
+      "          [FILE ...]\n"
       "  count comma-delimited segments in dfs-anagrams output and print\n"
       "  \"count segment\" rows in descending count order\n"
-      "  --pairs prints only multi-word segments as comma-separated words,\n"
-      "          without counts\n"
-      "  -n N prints at most N rows; defaults to %" PRIu64 "\n"
+      "  --pairs             print only multi-word segments as\n"
+      "                      comma-separated words, without counts\n"
+      "  -n N                print at most N rows; defaults to %" PRIu64 "\n"
+      "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
+      "                      repeated\n"
+      "  -r, --reject FILE   discard rows containing pairs listed in FILE;\n"
+      "                      may be repeated\n"
+      "  --wf                reject pairs listed in\n"
+      "                      $WFROOT/.wf/classified/no/no.pairs; missing\n"
+      "                      files produce warnings\n"
+      "  -y, --yes           with --wf, ignore pairs listed in\n"
+      "                      $WFROOT/.wf/classified/yes/yes.pairs\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
 
 static bool count_stream(
-    std::istream* input, char const* name, SegmentCounts* counts) {
+    std::istream* input, char const* name, DfsPairSet const& ignored,
+    DfsPairSet const& rejected, SegmentCounts* counts) {
   std::string line;
   uint64_t line_number = 0;
   while (std::getline(*input, line)) {
@@ -47,6 +60,8 @@ static bool count_stream(
       return false;
     }
 
+    std::vector<std::string> segments;
+    bool reject_line = false;
     size_t start = size_t(score_end - line.c_str()) + 1;
     while (true) {
       size_t const end = line.find(',', start);
@@ -59,16 +74,23 @@ static bool count_stream(
         return false;
       }
 
-      std::string const segment = line.substr(start, length);
+      segments.push_back(line.substr(start, length));
+      if (rejected.find(segments.back()) != rejected.end())
+        reject_line = true;
+
+      if (end == std::string::npos) break;
+      start = end + 1;
+    }
+
+    if (reject_line) continue;
+    for (std::string const& segment : segments) {
+      if (ignored.find(segment) != ignored.end()) continue;
       uint64_t& count = (*counts)[segment];
       if (count == std::numeric_limits<uint64_t>::max()) {
         fprintf(stderr, "top-segments: segment count overflow\n");
         return false;
       }
       ++count;
-
-      if (end == std::string::npos) break;
-      start = end + 1;
     }
   }
 
@@ -111,10 +133,19 @@ static bool print_counts(
 
 int main(int argc, char* argv[]) {
   std::vector<char const*> paths;
+  PairFilterOptions filter_options;
   bool parse_options = true;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
+      PairFilterOptionResult const filter_result = parse_pair_filter_option(
+          argc, argv, &i, "top-segments", true, true, &filter_options);
+      if (filter_result == PAIR_FILTER_OPTION_ERROR) {
+        usage(stderr, argv[0]);
+        return 2;
+      }
+      if (filter_result == PAIR_FILTER_OPTION_HANDLED) continue;
+
       SegmentOutputOptionResult const result = parse_segment_output_option(
           argc, argv, &i, "top-segments", &output_options);
       if (result == SEGMENT_OUTPUT_OPTION_ERROR) {
@@ -140,13 +171,26 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  if (filter_options.workflow_yes && !filter_options.workflow) {
+    fputs("top-segments: --yes requires --wf\n", stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
+
+  DfsPairSet ignored;
+  DfsPairSet rejected;
+  if (!load_pair_filters(
+          filter_options, "top-segments", &ignored, &rejected))
+    return 1;
+
   SegmentCounts counts;
   if (paths.empty()) {
-    if (!count_stream(&std::cin, "-", &counts)) return 1;
+    if (!count_stream(&std::cin, "-", ignored, rejected, &counts)) return 1;
   } else {
     for (size_t i = 0; i < paths.size(); ++i) {
       if (strcmp(paths[i], "-") == 0) {
-        if (!count_stream(&std::cin, "-", &counts)) return 1;
+        if (!count_stream(&std::cin, "-", ignored, rejected, &counts))
+          return 1;
         continue;
       }
 
@@ -157,7 +201,8 @@ int main(int argc, char* argv[]) {
             paths[i], strerror(errno));
         return 1;
       }
-      if (!count_stream(&input, paths[i], &counts)) return 1;
+      if (!count_stream(&input, paths[i], ignored, rejected, &counts))
+        return 1;
     }
   }
 

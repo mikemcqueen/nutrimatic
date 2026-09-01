@@ -155,7 +155,7 @@ weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
   install: true)
 
 top_segments = executable('top-segments', 'top-segments.cpp',
-  dependencies: segment_output_dep,
+  dependencies: [pair_exclusions_dep, segment_output_dep],
   install: true)
 
 first_segments = executable('first-segments', 'first-segments.cpp',

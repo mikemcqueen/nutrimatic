@@ -7,31 +7,33 @@
 
 #include "dfs-class-list.h"
 
-struct PairExclusionOptions {
-  std::vector<std::string> paths;
+struct PairFilterOptions {
+  std::vector<std::string> ignore_paths;
+  std::vector<std::string> reject_paths;
   bool workflow = false;
+  bool workflow_yes = false;
 };
 
-enum PairExclusionOptionResult {
-  PAIR_EXCLUSION_OPTION_OTHER,
-  PAIR_EXCLUSION_OPTION_HANDLED,
-  PAIR_EXCLUSION_OPTION_ERROR,
+enum PairFilterOptionResult {
+  PAIR_FILTER_OPTION_OTHER,
+  PAIR_FILTER_OPTION_HANDLED,
+  PAIR_FILTER_OPTION_ERROR,
 };
 
-// Parses -x FILE, --exclude FILE, and --wf. `index` points to the current
-// argument and advances over a consumed FILE. Errors are diagnosed already.
-PairExclusionOptionResult parse_pair_exclusion_option(
+// Parses -i FILE, --ignore FILE, -r FILE, --reject FILE, --wf, and
+// -y/--yes. Ignore and -y/--yes options are returned as OTHER when their
+// support flags are false. `index` points to the current argument and advances
+// over a consumed FILE. Errors are diagnosed already.
+PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
-    PairExclusionOptions* out);
+    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out);
 
-// Loads explicit exclusions and, when requested, the classified pair files
-// selected by `workflow_selectors` below $WFROOT. Missing workflow files warn
-// and are skipped; unknown selectors, explicit missing files, and all malformed
-// or unreadable files are errors.
-bool load_pair_exclusions(
-    PairExclusionOptions const& options,
-    std::unordered_set<std::string> const& workflow_selectors,
-    char const* program,
-    DfsPairSet* excluded);
+// Loads explicit ignore/reject files. With --wf, classified NO pairs below
+// $WFROOT are rejected; with --wf --yes, classified YES pairs are ignored.
+// Missing workflow files warn and are skipped. Explicit missing files and all
+// malformed or unreadable files are errors.
+bool load_pair_filters(
+    PairFilterOptions const& options, char const* program,
+    DfsPairSet* ignored, DfsPairSet* rejected);
 
 #endif

@@ -22,22 +22,22 @@ cat > "$input" <<'EOF'
 6 mu nu
 EOF
 
-exclude=$test_dir/exclude.pairs
-cat > "$exclude" <<'EOF'
+reject=$test_dir/reject.pairs
+cat > "$reject" <<'EOF'
 gamma,beta
 iota,theta
 EOF
 
 expected='8 delta epsilon,zeta eta
 6 mu nu'
-actual=$("$filter_segments" -x "$exclude" "$input")
+actual=$("$filter_segments" -r "$reject" "$input")
 [[ $actual == "$expected" ]] || fail "file filtering is wrong: $actual"
 
 expected='8 delta epsilon,zeta eta'
-actual=$("$filter_segments" -n 1 --exclude "$exclude" "$input")
+actual=$("$filter_segments" -n 1 --reject "$reject" "$input")
 [[ $actual == "$expected" ]] || fail "output limit is wrong: $actual"
 
-actual=$("$filter_segments" -n 0 --exclude "$exclude" "$input")
+actual=$("$filter_segments" -n 0 --reject "$reject" "$input")
 [[ -z $actual ]] || fail "-n 0 produced output: $actual"
 
 expected='9 alpha beta,beta gamma
@@ -49,7 +49,7 @@ actual=$("$filter_segments" < "$input")
 
 expected='8 delta epsilon,zeta eta
 6 mu nu'
-actual=$("$filter_segments" -x "$exclude" - < "$input")
+actual=$("$filter_segments" -r "$reject" - < "$input")
 [[ $actual == "$expected" ]] || fail "explicit stdin is wrong: $actual"
 
 wfroot=$test_dir/wf
@@ -62,8 +62,20 @@ nu,mu
 EOF
 
 expected='8 delta epsilon,zeta eta'
-actual=$(WFROOT=$wfroot "$filter_segments" --wf -x "$exclude" "$input")
-[[ $actual == "$expected" ]] || fail "--wf exclusions are wrong: $actual"
+actual=$(WFROOT=$wfroot "$filter_segments" --wf -r "$reject" "$input")
+[[ $actual == "$expected" ]] || fail "--wf rejections are wrong: $actual"
+
+if "$filter_segments" -i "$reject" "$input" >/dev/null 2>&1; then
+  fail "unsupported -i option succeeded"
+fi
+
+if "$filter_segments" --yes "$input" >/dev/null 2>&1; then
+  fail "unsupported --yes option succeeded"
+fi
+
+if "$filter_segments" -x "$reject" "$input" >/dev/null 2>&1; then
+  fail "removed -x option succeeded"
+fi
 
 if "$filter_segments" "$input" "$input" >/dev/null 2>&1; then
   fail "multiple input files succeeded"

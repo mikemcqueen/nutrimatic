@@ -14,17 +14,23 @@
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs] [-n N] [-x FILE | --exclude FILE]... [--wf]\n"
+      "usage: %s [--pairs] [-n N] [-i FILE | --ignore FILE]...\n"
+      "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
       "          [RESULTS]\n"
-      "  print the first N distinct, non-excluded segments from\n"
-      "  dfs-anagrams RESULTS as comma-separated pairs\n"
+      "  print the first N distinct, non-ignored segments from valid\n"
+      "  dfs-anagrams RESULTS rows as comma-separated pairs\n"
       "  --pairs             print only multi-word segments\n"
       "  -n N                 maximum number of segments to print; defaults\n"
       "                       to %" PRIu64 "\n"
-      "  -x, --exclude FILE   exclude comma-separated pairs from FILE;\n"
+      "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
+      "                       repeated\n"
+      "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
       "                       may be repeated\n"
-      "  --wf                 exclude classified YES and NO pairs below\n"
-      "                       $WFROOT; missing files produce warnings\n"
+      "  --wf                 reject pairs listed in\n"
+      "                       $WFROOT/.wf/classified/no/no.pairs; missing\n"
+      "                       files produce warnings\n"
+      "  -y, --yes            with --wf, ignore pairs listed in\n"
+      "                       $WFROOT/.wf/classified/yes/yes.pairs\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
@@ -36,7 +42,8 @@ static bool print_segments(std::vector<std::string> const& segments) {
 }
 
 static bool find_segments(
-    std::istream* input, char const* name, DfsPairSet const& excluded,
+    std::istream* input, char const* name, DfsPairSet const& ignored,
+    DfsPairSet const& rejected,
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
   std::vector<std::string> result;
@@ -58,8 +65,10 @@ static bool find_segments(
       return false;
     }
 
+    std::vector<std::string> segments;
+    bool reject_line = false;
     size_t start = size_t(score_end - line.c_str()) + 1;
-    while (result.size() < output_options.limit) {
+    while (true) {
       size_t const end = line.find(',', start);
       size_t const length =
           end == std::string::npos ? line.size() - start : end - start;
@@ -70,14 +79,21 @@ static bool find_segments(
         return false;
       }
 
-      std::string const segment = line.substr(start, length);
-      if ((!output_options.pairs || is_pair_segment(segment)) &&
-          excluded.find(segment) == excluded.end() &&
-          found.insert(segment).second)
-        result.push_back(segment);
+      segments.push_back(line.substr(start, length));
+      if (rejected.find(segments.back()) != rejected.end())
+        reject_line = true;
 
       if (end == std::string::npos) break;
       start = end + 1;
+    }
+
+    if (reject_line) continue;
+    for (std::string const& segment : segments) {
+      if (result.size() == output_options.limit) break;
+      if ((!output_options.pairs || is_pair_segment(segment)) &&
+          ignored.find(segment) == ignored.end() &&
+          found.insert(segment).second)
+        result.push_back(segment);
     }
   }
 
@@ -91,19 +107,19 @@ static bool find_segments(
 }
 
 int main(int argc, char* argv[]) {
-  PairExclusionOptions exclusion_options;
+  PairFilterOptions filter_options;
   char const* results_path = NULL;
   bool parse_options = true;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
-      PairExclusionOptionResult const result = parse_pair_exclusion_option(
-          argc, argv, &i, "first-segments", &exclusion_options);
-      if (result == PAIR_EXCLUSION_OPTION_ERROR) {
+      PairFilterOptionResult const result = parse_pair_filter_option(
+          argc, argv, &i, "first-segments", true, true, &filter_options);
+      if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(stderr, argv[0]);
         return 2;
       }
-      if (result == PAIR_EXCLUSION_OPTION_HANDLED) continue;
+      if (result == PAIR_FILTER_OPTION_HANDLED) continue;
 
       SegmentOutputOptionResult const output_result =
           parse_segment_output_option(
@@ -135,14 +151,21 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  DfsPairSet excluded;
-  if (!load_pair_exclusions(
-          exclusion_options, {"yes", "no"}, "first-segments", &excluded))
+  if (filter_options.workflow_yes && !filter_options.workflow) {
+    fputs("first-segments: --yes requires --wf\n", stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
+
+  DfsPairSet ignored;
+  DfsPairSet rejected;
+  if (!load_pair_filters(
+          filter_options, "first-segments", &ignored, &rejected))
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
     return find_segments(
-        &std::cin, "-", excluded, output_options) ? 0 : 1;
+        &std::cin, "-", ignored, rejected, output_options) ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
@@ -152,5 +175,5 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   return find_segments(
-      &input, results_path, excluded, output_options) ? 0 : 1;
+      &input, results_path, ignored, rejected, output_options) ? 0 : 1;
 }

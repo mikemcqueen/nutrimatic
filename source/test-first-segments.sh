@@ -22,13 +22,13 @@ cat > "$input" <<'EOF'
 this trailing row is not parsed after the limit
 EOF
 
-exclude1=$test_dir/exclude1.pairs
-cat > "$exclude1" <<'EOF'
+ignore1=$test_dir/ignore1.pairs
+cat > "$ignore1" <<'EOF'
 gamma,beta
 EOF
 
-exclude2=$test_dir/exclude2.pairs
-cat > "$exclude2" <<'EOF'
+ignore2=$test_dir/ignore2.pairs
+cat > "$ignore2" <<'EOF'
 eta,zeta
 iota,theta
 EOF
@@ -37,7 +37,7 @@ expected='alpha,beta
 delta,epsilon
 kappa,lambda'
 diagnostics=$test_dir/diagnostics.txt
-actual=$("$first_segments" -n 3 -x "$exclude1" --exclude "$exclude2" \
+actual=$("$first_segments" -n 3 -i "$ignore1" --ignore "$ignore2" \
   "$input" 2> "$diagnostics")
 [[ $actual == "$expected" ]] || fail "first segments are wrong: $actual"
 
@@ -45,6 +45,12 @@ expected_diagnostics='found segment 3 on line 3'
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
   fail "found-segment diagnostics are wrong: $actual"
+
+expected='theta,iota
+kappa,lambda
+mu,nu'
+actual=$("$first_segments" -n 3 -r "$ignore1" "$input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "rejected row was not discarded: $actual"
 
 expected='alpha,beta
 beta,gamma'
@@ -75,12 +81,12 @@ delta,epsilon
 kappa,lambda
 mu,nu'
 actual=$(head -n 3 "$input" |
-  "$first_segments" -n 10 -x "$exclude1" --exclude "$exclude2" - \
+  "$first_segments" -n 10 -i "$ignore1" --ignore "$ignore2" - \
   2>/dev/null)
 [[ $actual == "$expected" ]] || fail "explicit stdin is wrong: $actual"
 
 actual=$(head -n 3 "$input" |
-  "$first_segments" -x "$exclude1" --exclude "$exclude2" 2>/dev/null)
+  "$first_segments" -i "$ignore1" --ignore "$ignore2" 2>/dev/null)
 [[ $actual == "$expected" ]] || fail "implicit stdin is wrong: $actual"
 
 default_input=$test_dir/default-results.txt
@@ -93,16 +99,28 @@ actual=$("$first_segments" "$default_input" 2>/dev/null | wc -l)
 wfroot=$test_dir/wf
 mkdir -p "$wfroot/.wf/classified/yes" "$wfroot/.wf/classified/no"
 cat > "$wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
-beta,alpha
+eta,zeta
 EOF
 cat > "$wfroot/.wf/classified/no/no.pairs" <<'EOF'
-gamma,beta
+beta,alpha
 EOF
 
 expected='delta,epsilon
+beta,gamma
 zeta,eta'
-actual=$(WFROOT=$wfroot "$first_segments" -n 2 --wf "$input" 2>/dev/null)
-[[ $actual == "$expected" ]] || fail "--wf exclusions are wrong: $actual"
+actual=$(WFROOT=$wfroot "$first_segments" -n 3 --wf "$input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--wf rejections are wrong: $actual"
+
+expected='delta,epsilon
+beta,gamma
+theta,iota'
+actual=$(WFROOT=$wfroot "$first_segments" -n 3 --wf --yes "$input" \
+  2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--wf --yes filtering is wrong: $actual"
+
+actual=$(WFROOT=$wfroot "$first_segments" -n 3 --wf -y "$input" \
+  2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--wf -y filtering is wrong: $actual"
 
 partial_wfroot=$test_dir/partial-wf
 mkdir -p "$partial_wfroot/.wf/classified/yes"
@@ -110,13 +128,13 @@ cat > "$partial_wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
 beta,alpha
 EOF
 diagnostics=$test_dir/wf-diagnostics.txt
-expected='beta,gamma
-delta,epsilon'
 actual=$(WFROOT=$partial_wfroot "$first_segments" -n 2 --wf "$input" \
   2> "$diagnostics")
-[[ $actual == "$expected" ]] || fail "missing workflow file changed output: $actual"
+expected='alpha,beta
+beta,gamma'
+[[ $actual == "$expected" ]] || fail "--wf loaded YES pairs: $actual"
 expected_diagnostics="first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
-found segment 2 on line 2"
+found segment 2 on line 1"
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
   fail "missing workflow file diagnostics are wrong: $actual"
@@ -132,6 +150,17 @@ actual=$(< "$diagnostics")
 
 if WFROOT= "$first_segments" -n 1 --wf "$input" >/dev/null 2>&1; then
   fail "--wf with empty WFROOT succeeded"
+fi
+
+if "$first_segments" --yes "$input" >/dev/null 2> "$diagnostics"; then
+  fail "--yes without --wf succeeded"
+fi
+if ! grep -q -- '--yes requires --wf' "$diagnostics"; then
+  fail "--yes without --wf diagnostic is wrong"
+fi
+
+if "$first_segments" -x "$ignore1" "$input" >/dev/null 2>&1; then
+  fail "removed -x option succeeded"
 fi
 
 if "$first_segments" -n nope "$input" >/dev/null 2>&1; then
