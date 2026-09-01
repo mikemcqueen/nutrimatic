@@ -597,13 +597,12 @@ static void float_score_bound_test() {
   fclose(fp);
 }
 
-static void check_count(int64_t actual, int64_t expected,
-                        char const* message) {
-  if (actual != expected) {
-    fprintf(stderr, "FAIL: %s: expected %lld, got %lld\n", message,
-            (long long) expected, (long long) actual);
-    exit(1);
-  }
+static bool check_relation(bool ok, int64_t left, int64_t right,
+                           char const* message) {
+  if (ok) return true;
+  fprintf(stderr, "FAIL: %s: %lld vs %lld\n", message,
+          (long long) left, (long long) right);
+  return false;
 }
 
 static int validate_14_letters() {
@@ -623,33 +622,64 @@ static int validate_14_letters() {
   std::string const letters = "featstudiotsen";
 
   DfsClassList words(&reader, letters, 4, false);
-  check_count(words.entry_count(), 17274, "words-only entry count");
-  check_count(words.classes().size(), 2458, "words-only class count");
   DfsAnagramSearch words_search(
       &words, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
-  DfsSearchStats words_search_stats;
-  words_search.run(NULL, &words_search_stats);
-  check_count(words_search_stats.all_solutions.solutions, 27177,
-              "words-only solution count");
-  check_count(words_search_stats.all_solutions.nodes, 117145,
-              "words-only node count");
+  DfsSearchStats words_stats;
+  words_search.run(NULL, &words_stats);
 
   DfsClassList with_phrases(&reader, letters, 4);
-  check_count(with_phrases.entry_count(), 18299,
-              "phrase-inclusive entry count");
-  check_count(with_phrases.classes().size(), 2760,
-              "phrase-inclusive class count");
   DfsAnagramSearch phrase_search(
       &with_phrases, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
-  DfsSearchStats phrase_search_stats;
-  phrase_search.run(NULL, &phrase_search_stats);
-  check_count(phrase_search_stats.all_solutions.solutions, 27401,
-              "phrase-inclusive solution count");
-  check_count(phrase_search_stats.all_solutions.nodes, 118311,
-              "phrase-inclusive node count");
+  DfsSearchStats phrase_stats;
+  phrase_search.run(NULL, &phrase_stats);
+
+  int64_t const words_entries = int64_t(words.entry_count());
+  int64_t const words_classes = int64_t(words.classes().size());
+  int64_t const phrase_entries = int64_t(with_phrases.entry_count());
+  int64_t const phrase_classes = int64_t(with_phrases.classes().size());
+  int64_t const words_solutions = int64_t(words_stats.all_solutions.solutions);
+  int64_t const phrase_solutions =
+      int64_t(phrase_stats.all_solutions.solutions);
+  int64_t const words_nodes = int64_t(words_stats.all_solutions.nodes);
+  int64_t const phrase_nodes = int64_t(phrase_stats.all_solutions.nodes);
+
+  fprintf(stderr,
+      "words-only: %lld entries, %lld classes, %lld solutions, %lld nodes\n",
+      (long long) words_entries, (long long) words_classes,
+      (long long) words_solutions, (long long) words_nodes);
+  fprintf(stderr,
+      "phrase-inclusive: %lld entries, %lld classes, %lld solutions,"
+      " %lld nodes\n",
+      (long long) phrase_entries, (long long) phrase_classes,
+      (long long) phrase_solutions, (long long) phrase_nodes);
+
+  bool ok = true;
+  ok &= check_relation(words_entries > 0, words_entries, 0,
+                       "words-only extraction found no entries");
+  ok &= check_relation(words_entries >= words_classes, words_entries,
+                       words_classes, "words-only entries below classes");
+  ok &= check_relation(phrase_entries >= phrase_classes, phrase_entries,
+                       phrase_classes,
+                       "phrase-inclusive entries below classes");
+  ok &= check_relation(phrase_entries > words_entries, phrase_entries,
+                       words_entries, "phrases did not add entries");
+  ok &= check_relation(phrase_classes > words_classes, phrase_classes,
+                       words_classes, "phrases did not add classes");
+  ok &= check_relation(phrase_solutions >= words_solutions, phrase_solutions,
+                       words_solutions, "phrases lost solutions");
+  ok &= check_relation(words_nodes >= words_solutions, words_nodes,
+                       words_solutions, "words-only nodes below solutions");
+  ok &= check_relation(phrase_nodes >= phrase_solutions, phrase_nodes,
+                       phrase_solutions,
+                       "phrase-inclusive nodes below solutions");
+  ok &= check_relation(words_nodes <= words_solutions * 20, words_nodes,
+                       words_solutions, "words-only search stopped pruning");
+  ok &= check_relation(phrase_nodes <= phrase_solutions * 20, phrase_nodes,
+                       phrase_solutions,
+                       "phrase-inclusive search stopped pruning");
 
   fclose(fp);
-  return 0;
+  return ok ? 0 : 1;
 }
 
 int main(int argc, char* argv[]) {

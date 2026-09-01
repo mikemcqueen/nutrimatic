@@ -18,7 +18,8 @@ typedef std::unordered_map<std::string, uint64_t> SegmentCounts;
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs | --solo-words | --all-words] [-n N]\n"
+      "usage: %s [--pairs [-c] | --solo-words | --all-words]\n"
+      "          [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
       "          [FILE ...]\n"
@@ -26,6 +27,7 @@ static void usage(FILE* fp, char const* program) {
       "  \"count segment\" rows in descending count order\n"
       "  --pairs             print only multi-word segments as\n"
       "                      comma-separated words, without counts\n"
+      "  -c, --counts        include counts with --pairs\n"
       "  --solo-words        print only single-word segments\n"
       "  --all-words         count every word occurrence, splitting\n"
       "                      multi-word segments into their words\n"
@@ -122,7 +124,8 @@ static bool split_counts(SegmentCounts const& counts, SegmentCounts* words) {
 }
 
 static bool print_counts(
-    SegmentCounts const& counts, SegmentOutputMode mode, uint64_t limit) {
+    SegmentCounts const& counts, SegmentOutputMode mode, uint64_t limit,
+    bool show_pair_counts) {
   SegmentCounts split;
   if (mode == SEGMENT_OUTPUT_ALL_WORDS && !split_counts(counts, &split))
     return false;
@@ -151,7 +154,12 @@ static bool print_counts(
   int const width = snprintf(NULL, 0, "%" PRIu64, largest);
   for (size_t i = 0; i < top; ++i) {
     if (mode == SEGMENT_OUTPUT_PAIRS) {
-      printf("%s\n", format_pair_segment(ordered[i]->first).c_str());
+      std::string const pair = format_pair_segment(ordered[i]->first);
+      if (show_pair_counts) {
+        printf("%*" PRIu64 " %s\n", width, ordered[i]->second, pair.c_str());
+      } else {
+        printf("%s\n", pair.c_str());
+      }
     } else {
       printf("%*" PRIu64 " %s\n", width, ordered[i]->second,
           ordered[i]->first.c_str());
@@ -164,9 +172,15 @@ int main(int argc, char* argv[]) {
   std::vector<char const*> paths;
   PairFilterOptions filter_options;
   bool parse_options = true;
+  bool show_pair_counts = false;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
+      if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--counts") == 0) {
+        show_pair_counts = true;
+        continue;
+      }
+
       PairFilterOptionResult const filter_result = parse_pair_filter_option(
           argc, argv, &i, "top-segments", true, true, &filter_options);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
@@ -205,6 +219,11 @@ int main(int argc, char* argv[]) {
     usage(stderr, argv[0]);
     return 2;
   }
+  if (show_pair_counts && output_options.mode != SEGMENT_OUTPUT_PAIRS) {
+    fputs("top-segments: --counts requires --pairs\n", stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
 
   DfsPairSet ignored;
   DfsPairSet rejected;
@@ -236,5 +255,6 @@ int main(int argc, char* argv[]) {
   }
 
   return print_counts(
-      counts, output_options.mode, output_options.limit) ? 0 : 1;
+      counts, output_options.mode, output_options.limit, show_pair_counts)
+      ? 0 : 1;
 }

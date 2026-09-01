@@ -40,6 +40,17 @@ one,two,three'
 actual=$("$top_segments" --pairs "$input")
 [[ $actual == "$expected_pairs" ]] || fail "pair output is wrong: $actual"
 
+expected_pair_counts='2 beta,gamma
+1 epsilon,zeta
+1 one,two,three'
+actual=$("$top_segments" --pairs --counts "$input")
+[[ $actual == "$expected_pair_counts" ]] ||
+  fail "pair count output is wrong: $actual"
+
+actual=$("$top_segments" --pairs -c "$input")
+[[ $actual == "$expected_pair_counts" ]] ||
+  fail "-c pair count output is wrong: $actual"
+
 expected_top='3 alpha
 2 beta gamma'
 actual=$("$top_segments" -n 2 "$input")
@@ -70,6 +81,10 @@ actual=$("$top_segments" --all-words "$input")
 
 if "$top_segments" --pairs --all-words "$input" >/dev/null 2>&1; then
   fail "--pairs with --all-words succeeded"
+fi
+
+if "$top_segments" --counts "$input" >/dev/null 2>&1; then
+  fail "--counts without --pairs succeeded"
 fi
 
 ignore1=$test_dir/ignore1.pairs
