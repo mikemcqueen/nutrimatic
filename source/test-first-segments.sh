@@ -54,6 +54,22 @@ actual=$("$first_segments" -n 2 "$input" 2>/dev/null)
 actual=$("$first_segments" -n 0 "$input" 2>/dev/null)
 [[ -z $actual ]] || fail "-n 0 produced output: $actual"
 
+pairs_input=$test_dir/pair-results.txt
+cat > "$pairs_input" <<'EOF'
+9 solo,alpha beta
+8 another,beta gamma,alpha beta
+7 final,kappa lambda
+EOF
+
+expected='alpha,beta
+beta,gamma'
+actual=$("$first_segments" --pairs -n 2 "$pairs_input" 2> "$diagnostics")
+[[ $actual == "$expected" ]] || fail "--pairs output is wrong: $actual"
+expected_diagnostics='found segment 2 on line 2'
+actual=$(< "$diagnostics")
+[[ $actual == "$expected_diagnostics" ]] ||
+  fail "--pairs diagnostics are wrong: $actual"
+
 expected='alpha,beta
 delta,epsilon
 kappa,lambda

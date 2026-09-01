@@ -1,7 +1,6 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -12,9 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
-typedef std::unordered_map<std::string, uint64_t> SegmentCounts;
+#include "segment-output.h"
 
-static uint64_t const DEFAULT_LIMIT = 1000;
+typedef std::unordered_map<std::string, uint64_t> SegmentCounts;
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
@@ -25,17 +24,7 @@ static void usage(FILE* fp, char const* program) {
       "          without counts\n"
       "  -n N prints at most N rows; defaults to %" PRIu64 "\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program, DEFAULT_LIMIT);
-}
-
-static bool parse_limit(char const* text, uint64_t* limit) {
-  if (text[0] == '\0' || text[0] == '-') return false;
-  errno = 0;
-  char* end;
-  unsigned long long const parsed = strtoull(text, &end, 10);
-  if (errno == ERANGE || *end != '\0') return false;
-  *limit = parsed;
-  return true;
+      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
 
 static bool count_stream(
@@ -97,7 +86,7 @@ static bool print_counts(
   uint64_t largest = 0;
   for (SegmentCounts::const_iterator entry = counts.begin();
        entry != counts.end(); ++entry) {
-    if (pairs && entry->first.find(' ') == std::string::npos) continue;
+    if (pairs && !is_pair_segment(entry->first)) continue;
     ordered.push_back(entry);
     largest = std::max(largest, entry->second);
   }
@@ -111,9 +100,7 @@ static bool print_counts(
   int const width = snprintf(NULL, 0, "%" PRIu64, largest);
   for (size_t i = 0; i < top; ++i) {
     if (pairs) {
-      std::string words = ordered[i]->first;
-      std::replace(words.begin(), words.end(), ' ', ',');
-      printf("%s\n", words.c_str());
+      printf("%s\n", format_pair_segment(ordered[i]->first).c_str());
     } else {
       printf("%*" PRIu64 " %s\n", width, ordered[i]->second,
           ordered[i]->first.c_str());
@@ -125,9 +112,18 @@ static bool print_counts(
 int main(int argc, char* argv[]) {
   std::vector<char const*> paths;
   bool parse_options = true;
-  bool pairs = false;
-  uint64_t limit = DEFAULT_LIMIT;
+  SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
+    if (parse_options) {
+      SegmentOutputOptionResult const result = parse_segment_output_option(
+          argc, argv, &i, "top-segments", &output_options);
+      if (result == SEGMENT_OUTPUT_OPTION_ERROR) {
+        usage(stderr, argv[0]);
+        return 2;
+      }
+      if (result == SEGMENT_OUTPUT_OPTION_HANDLED) continue;
+    }
+
     if (parse_options && strcmp(argv[i], "--") == 0) {
       parse_options = false;
     } else if (parse_options &&
@@ -135,14 +131,6 @@ int main(int argc, char* argv[]) {
                 strcmp(argv[i], "--help") == 0)) {
       usage(stdout, argv[0]);
       return 0;
-    } else if (parse_options && strcmp(argv[i], "--pairs") == 0) {
-      pairs = true;
-    } else if (parse_options && strcmp(argv[i], "-n") == 0) {
-      if (++i == argc || !parse_limit(argv[i], &limit)) {
-        fprintf(stderr, "top-segments: -n requires a non-negative integer\n");
-        usage(stderr, argv[0]);
-        return 2;
-      }
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "top-segments: unknown option \"%s\"\n", argv[i]);
       usage(stderr, argv[0]);
@@ -173,5 +161,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  return print_counts(counts, pairs, limit) ? 0 : 1;
+  return print_counts(
+      counts, output_options.pairs, output_options.limit) ? 0 : 1;
 }

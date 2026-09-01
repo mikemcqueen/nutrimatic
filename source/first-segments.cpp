@@ -1,10 +1,8 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
-#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -12,14 +10,15 @@
 #include <vector>
 
 #include "pair-exclusions.h"
-
-static uint64_t const DEFAULT_LIMIT = 1000;
+#include "segment-output.h"
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [-n N] [-x FILE | --exclude FILE]... [--wf] [RESULTS]\n"
+      "usage: %s [--pairs] [-n N] [-x FILE | --exclude FILE]... [--wf]\n"
+      "          [RESULTS]\n"
       "  print the first N distinct, non-excluded segments from\n"
       "  dfs-anagrams RESULTS as comma-separated pairs\n"
+      "  --pairs             print only multi-word segments\n"
       "  -n N                 maximum number of segments to print; defaults\n"
       "                       to %" PRIu64 "\n"
       "  -x, --exclude FILE   exclude comma-separated pairs from FILE;\n"
@@ -27,36 +26,23 @@ static void usage(FILE* fp, char const* program) {
       "  --wf                 exclude classified YES and NO pairs below\n"
       "                       $WFROOT; missing files produce warnings\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
-      program, DEFAULT_LIMIT);
-}
-
-static bool parse_limit(char const* text, uint64_t* limit) {
-  if (text[0] == '\0' || text[0] == '-') return false;
-  errno = 0;
-  char* end;
-  unsigned long long const parsed = strtoull(text, &end, 10);
-  if (errno == ERANGE || *end != '\0') return false;
-  *limit = parsed;
-  return true;
+      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
 
 static bool print_segments(std::vector<std::string> const& segments) {
-  for (size_t i = 0; i < segments.size(); ++i) {
-    std::string pair = segments[i];
-    std::replace(pair.begin(), pair.end(), ' ', ',');
-    printf("%s\n", pair.c_str());
-  }
+  for (size_t i = 0; i < segments.size(); ++i)
+    printf("%s\n", format_pair_segment(segments[i]).c_str());
   return !ferror(stdout);
 }
 
 static bool find_segments(
     std::istream* input, char const* name, DfsPairSet const& excluded,
-    uint64_t limit) {
+    SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
   std::vector<std::string> result;
   std::string line;
   uint64_t line_number = 0;
-  while (result.size() < limit && std::getline(*input, line)) {
+  while (result.size() < output_options.limit && std::getline(*input, line)) {
     ++line_number;
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
@@ -73,7 +59,7 @@ static bool find_segments(
     }
 
     size_t start = size_t(score_end - line.c_str()) + 1;
-    while (result.size() < limit) {
+    while (result.size() < output_options.limit) {
       size_t const end = line.find(',', start);
       size_t const length =
           end == std::string::npos ? line.size() - start : end - start;
@@ -85,7 +71,8 @@ static bool find_segments(
       }
 
       std::string const segment = line.substr(start, length);
-      if (excluded.find(segment) == excluded.end() &&
+      if ((!output_options.pairs || is_pair_segment(segment)) &&
+          excluded.find(segment) == excluded.end() &&
           found.insert(segment).second)
         result.push_back(segment);
 
@@ -107,7 +94,7 @@ int main(int argc, char* argv[]) {
   PairExclusionOptions exclusion_options;
   char const* results_path = NULL;
   bool parse_options = true;
-  uint64_t limit = DEFAULT_LIMIT;
+  SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairExclusionOptionResult const result = parse_pair_exclusion_option(
@@ -117,6 +104,15 @@ int main(int argc, char* argv[]) {
         return 2;
       }
       if (result == PAIR_EXCLUSION_OPTION_HANDLED) continue;
+
+      SegmentOutputOptionResult const output_result =
+          parse_segment_output_option(
+              argc, argv, &i, "first-segments", &output_options);
+      if (output_result == SEGMENT_OUTPUT_OPTION_ERROR) {
+        usage(stderr, argv[0]);
+        return 2;
+      }
+      if (output_result == SEGMENT_OUTPUT_OPTION_HANDLED) continue;
     }
 
     if (parse_options && strcmp(argv[i], "--") == 0) {
@@ -126,13 +122,6 @@ int main(int argc, char* argv[]) {
                 strcmp(argv[i], "--help") == 0)) {
       usage(stdout, argv[0]);
       return 0;
-    } else if (parse_options &&
-               (strcmp(argv[i], "-n") == 0)) {
-      if (++i == argc || !parse_limit(argv[i], &limit)) {
-        fputs("first-segments: -n requires a non-negative integer\n", stderr);
-        usage(stderr, argv[0]);
-        return 2;
-      }
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "first-segments: unknown option \"%s\"\n", argv[i]);
       usage(stderr, argv[0]);
@@ -152,7 +141,8 @@ int main(int argc, char* argv[]) {
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
-    return find_segments(&std::cin, "-", excluded, limit) ? 0 : 1;
+    return find_segments(
+        &std::cin, "-", excluded, output_options) ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
@@ -161,5 +151,6 @@ int main(int argc, char* argv[]) {
         results_path, strerror(errno));
     return 1;
   }
-  return find_segments(&input, results_path, excluded, limit) ? 0 : 1;
+  return find_segments(
+      &input, results_path, excluded, output_options) ? 0 : 1;
 }
