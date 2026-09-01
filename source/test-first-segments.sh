@@ -76,6 +76,23 @@ actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
   fail "--pairs diagnostics are wrong: $actual"
 
+expected='solo
+another'
+actual=$("$first_segments" --solo-words -n 2 "$pairs_input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--solo-words output is wrong: $actual"
+
+expected='solo
+alpha
+beta
+another'
+actual=$("$first_segments" --all-words -n 4 "$pairs_input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--all-words output is wrong: $actual"
+
+if "$first_segments" --solo-words --all-words "$pairs_input" \
+    >/dev/null 2>&1; then
+  fail "--solo-words with --all-words succeeded"
+fi
+
 expected='alpha,beta
 delta,epsilon
 kappa,lambda

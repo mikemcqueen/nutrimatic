@@ -50,6 +50,28 @@ epsilon,zeta'
 actual=$("$top_segments" --pairs -n 2 "$input")
 [[ $actual == "$expected_top_pairs" ]] || fail "pair -n output is wrong: $actual"
 
+expected_solo='3 alpha
+2 delta'
+actual=$("$top_segments" --solo-words "$input")
+[[ $actual == "$expected_solo" ]] || fail "--solo-words output is wrong: $actual"
+
+expected_all_words='3 alpha
+2 beta
+2 delta
+2 gamma
+1 epsilon
+1 one
+1 three
+1 two
+1 zeta'
+actual=$("$top_segments" --all-words "$input")
+[[ $actual == "$expected_all_words" ]] ||
+  fail "--all-words output is wrong: $actual"
+
+if "$top_segments" --pairs --all-words "$input" >/dev/null 2>&1; then
+  fail "--pairs with --all-words succeeded"
+fi
+
 ignore1=$test_dir/ignore1.pairs
 cat > "$ignore1" <<'EOF'
 gamma,beta

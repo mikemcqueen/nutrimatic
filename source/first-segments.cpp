@@ -14,12 +14,16 @@
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs] [-n N] [-i FILE | --ignore FILE]...\n"
+      "usage: %s [--pairs | --solo-words | --all-words] [-n N]\n"
+      "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
       "          [RESULTS]\n"
       "  print the first N distinct, non-ignored segments from valid\n"
       "  dfs-anagrams RESULTS rows as comma-separated pairs\n"
-      "  --pairs             print only multi-word segments\n"
+      "  --pairs              print only multi-word segments\n"
+      "  --solo-words         print only single-word segments\n"
+      "  --all-words          print the first N distinct words, splitting\n"
+      "                       multi-word segments into their words\n"
       "  -n N                 maximum number of segments to print; defaults\n"
       "                       to %" PRIu64 "\n"
       "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
@@ -90,10 +94,24 @@ static bool find_segments(
     if (reject_line) continue;
     for (std::string const& segment : segments) {
       if (result.size() == output_options.limit) break;
-      if ((!output_options.pairs || is_pair_segment(segment)) &&
-          ignored.find(segment) == ignored.end() &&
-          found.insert(segment).second)
-        result.push_back(segment);
+      if (ignored.find(segment) != ignored.end()) continue;
+      if (output_options.mode == SEGMENT_OUTPUT_PAIRS &&
+          !is_pair_segment(segment))
+        continue;
+      if (output_options.mode == SEGMENT_OUTPUT_SOLO_WORDS &&
+          !is_solo_segment(segment))
+        continue;
+
+      if (output_options.mode != SEGMENT_OUTPUT_ALL_WORDS) {
+        if (found.insert(segment).second) result.push_back(segment);
+        continue;
+      }
+
+      std::vector<std::string> const words = split_segment_words(segment);
+      for (size_t i = 0; i < words.size(); ++i) {
+        if (result.size() == output_options.limit) break;
+        if (found.insert(words[i]).second) result.push_back(words[i]);
+      }
     }
   }
 
