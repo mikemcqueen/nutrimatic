@@ -49,6 +49,10 @@ SegmentOutputOptionResult parse_segment_output_option(
     return set_mode(SEGMENT_OUTPUT_ALL_WORDS, program, out)
         ? SEGMENT_OUTPUT_OPTION_HANDLED : SEGMENT_OUTPUT_OPTION_ERROR;
   }
+  if (strcmp(option, "-l") == 0 || strcmp(option, "--by-length") == 0) {
+    out->by_length = true;
+    return SEGMENT_OUTPUT_OPTION_HANDLED;
+  }
   if (strcmp(option, "-n") != 0) return SEGMENT_OUTPUT_OPTION_OTHER;
 
   if (++*index == argc || !parse_limit(argv[*index], &out->limit)) {
@@ -78,6 +82,10 @@ std::vector<std::string> split_segment_words(std::string const& segment) {
     start = end + 1;
   }
   return words;
+}
+
+size_t segment_nonspace_length(std::string const& segment) {
+  return segment.size() - std::count(segment.begin(), segment.end(), ' ');
 }
 
 std::string format_pair_segment(std::string segment) {

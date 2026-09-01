@@ -61,6 +61,24 @@ epsilon,zeta'
 actual=$("$top_segments" --pairs -n 2 "$input")
 [[ $actual == "$expected_top_pairs" ]] || fail "pair -n output is wrong: $actual"
 
+expected_by_length='1 epsilon zeta
+1 one two three
+2 beta gamma
+3 alpha
+2 delta'
+actual=$("$top_segments" --by-length "$input")
+[[ $actual == "$expected_by_length" ]] ||
+  fail "--by-length output is wrong: $actual"
+
+actual=$("$top_segments" -l "$input")
+[[ $actual == "$expected_by_length" ]] || fail "-l output is wrong: $actual"
+
+expected_longest_pairs='epsilon,zeta
+one,two,three'
+actual=$("$top_segments" --pairs --by-length -n 2 "$input")
+[[ $actual == "$expected_longest_pairs" ]] ||
+  fail "--pairs --by-length -n output is wrong: $actual"
+
 expected_solo='3 alpha
 2 delta'
 actual=$("$top_segments" --solo-words "$input")

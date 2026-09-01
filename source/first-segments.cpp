@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -12,9 +13,16 @@
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
+struct FoundSegment {
+  std::string text;
+  size_t length;
+};
+
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs | --solo-words | --all-words] [-n N]\n"
+      "usage: %s [--pairs | --solo-words | --all-words]\n"
+      "          [-l]\n"
+      "          [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
       "          [RESULTS]\n"
@@ -24,6 +32,7 @@ static void usage(FILE* fp, char const* program) {
       "  --solo-words         print only single-word segments\n"
       "  --all-words          print the first N distinct words, splitting\n"
       "                       multi-word segments into their words\n"
+      "  -l, --by-length      sort by descending non-space character length\n"
       "  -n N                 maximum number of segments to print; defaults\n"
       "                       to %" PRIu64 "\n"
       "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
@@ -39,9 +48,9 @@ static void usage(FILE* fp, char const* program) {
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
 
-static bool print_segments(std::vector<std::string> const& segments) {
+static bool print_segments(std::vector<FoundSegment> const& segments) {
   for (size_t i = 0; i < segments.size(); ++i)
-    printf("%s\n", format_pair_segment(segments[i]).c_str());
+    printf("%s\n", format_pair_segment(segments[i].text).c_str());
   return !ferror(stdout);
 }
 
@@ -50,7 +59,7 @@ static bool find_segments(
     DfsPairSet const& rejected,
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
-  std::vector<std::string> result;
+  std::vector<FoundSegment> result;
   std::string line;
   uint64_t line_number = 0;
   while (result.size() < output_options.limit && std::getline(*input, line)) {
@@ -103,14 +112,18 @@ static bool find_segments(
         continue;
 
       if (output_options.mode != SEGMENT_OUTPUT_ALL_WORDS) {
-        if (found.insert(segment).second) result.push_back(segment);
+        if (found.insert(segment).second) {
+          result.push_back(
+              FoundSegment{segment, segment_nonspace_length(segment)});
+        }
         continue;
       }
 
       std::vector<std::string> const words = split_segment_words(segment);
       for (size_t i = 0; i < words.size(); ++i) {
         if (result.size() == output_options.limit) break;
-        if (found.insert(words[i]).second) result.push_back(words[i]);
+        if (found.insert(words[i]).second)
+          result.push_back(FoundSegment{words[i], words[i].size()});
       }
     }
   }
@@ -118,6 +131,12 @@ static bool find_segments(
   if (input->bad()) {
     fprintf(stderr, "first-segments: can't read \"%s\"\n", name);
     return false;
+  }
+  if (output_options.by_length) {
+    std::stable_sort(result.begin(), result.end(),
+        [](FoundSegment const& a, FoundSegment const& b) {
+          return a.length > b.length;
+        });
   }
   fprintf(stderr, "found segment %zu on line %" PRIu64 "\n",
       result.size(), line_number);

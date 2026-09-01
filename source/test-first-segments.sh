@@ -88,6 +88,16 @@ another'
 actual=$("$first_segments" --all-words -n 4 "$pairs_input" 2>/dev/null)
 [[ $actual == "$expected" ]] || fail "--all-words output is wrong: $actual"
 
+expected='alpha,beta
+beta,gamma
+another
+solo'
+actual=$("$first_segments" --by-length -n 4 "$pairs_input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--by-length output is wrong: $actual"
+
+actual=$("$first_segments" -l -n 4 "$pairs_input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "-l output is wrong: $actual"
+
 if "$first_segments" --solo-words --all-words "$pairs_input" \
     >/dev/null 2>&1; then
   fail "--solo-words with --all-words succeeded"

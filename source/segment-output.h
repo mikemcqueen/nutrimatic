@@ -20,6 +20,7 @@ enum SegmentOutputMode {
 struct SegmentOutputOptions {
   SegmentOutputMode mode = SEGMENT_OUTPUT_SEGMENTS;
   uint64_t limit = DEFAULT_SEGMENT_OUTPUT_LIMIT;
+  bool by_length = false;
 };
 
 enum SegmentOutputOptionResult {
@@ -28,10 +29,10 @@ enum SegmentOutputOptionResult {
   SEGMENT_OUTPUT_OPTION_ERROR,
 };
 
-// Parses --pairs, --solo-words, --all-words and -n N. `index` points to the
-// current argument and advances over a consumed N. The three mode options are
-// mutually exclusive, though repeating one is allowed. Errors are diagnosed
-// already.
+// Parses --pairs, --solo-words, --all-words, -l/--by-length and -n N. `index`
+// points to the current argument and advances over a consumed N. The three
+// mode options are mutually exclusive, though repeating one is allowed. Errors
+// are diagnosed already.
 SegmentOutputOptionResult parse_segment_output_option(
     int argc, char* const argv[], int* index, char const* program,
     SegmentOutputOptions* out);
@@ -42,6 +43,9 @@ bool is_solo_segment(std::string const& segment);
 
 // Returns the words of a segment in order; a solo segment yields itself.
 std::vector<std::string> split_segment_words(std::string const& segment);
+
+// Returns the number of characters other than spaces in a segment.
+size_t segment_nonspace_length(std::string const& segment);
 
 // Returns a pair-file representation of a segment.
 std::string format_pair_segment(std::string segment);

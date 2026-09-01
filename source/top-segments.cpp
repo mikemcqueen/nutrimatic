@@ -14,12 +14,17 @@
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
-typedef std::unordered_map<std::string, uint64_t> SegmentCounts;
+struct SegmentStats {
+  uint64_t count;
+  size_t length;
+};
+
+typedef std::unordered_map<std::string, SegmentStats> SegmentCounts;
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
       "usage: %s [--pairs [-c] | --solo-words | --all-words]\n"
-      "          [-n N]\n"
+      "          [-l] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
       "          [FILE ...]\n"
@@ -31,6 +36,7 @@ static void usage(FILE* fp, char const* program) {
       "  --solo-words        print only single-word segments\n"
       "  --all-words         count every word occurrence, splitting\n"
       "                      multi-word segments into their words\n"
+      "  -l, --by-length     sort by descending non-space character length\n"
       "  -n N                print at most N rows; defaults to %" PRIu64 "\n"
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
       "                      repeated\n"
@@ -91,12 +97,16 @@ static bool count_stream(
     if (reject_line) continue;
     for (std::string const& segment : segments) {
       if (ignored.find(segment) != ignored.end()) continue;
-      uint64_t& count = (*counts)[segment];
-      if (count == std::numeric_limits<uint64_t>::max()) {
+      SegmentCounts::iterator entry = counts->find(segment);
+      if (entry == counts->end()) {
+        entry = counts->emplace(
+            segment, SegmentStats{0, segment_nonspace_length(segment)}).first;
+      }
+      if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
         fprintf(stderr, "top-segments: segment count overflow\n");
         return false;
       }
-      ++count;
+      ++entry->second.count;
     }
   }
 
@@ -112,56 +122,70 @@ static bool split_counts(SegmentCounts const& counts, SegmentCounts* words) {
        entry != counts.end(); ++entry) {
     std::vector<std::string> const split = split_segment_words(entry->first);
     for (size_t i = 0; i < split.size(); ++i) {
-      uint64_t& count = (*words)[split[i]];
-      if (count > std::numeric_limits<uint64_t>::max() - entry->second) {
+      SegmentCounts::iterator word = words->find(split[i]);
+      if (word == words->end()) {
+        word = words->emplace(
+            split[i], SegmentStats{0, split[i].size()}).first;
+      }
+      if (word->second.count >
+          std::numeric_limits<uint64_t>::max() - entry->second.count) {
         fprintf(stderr, "top-segments: word count overflow\n");
         return false;
       }
-      count += entry->second;
+      word->second.count += entry->second.count;
     }
   }
   return true;
 }
 
 static bool print_counts(
-    SegmentCounts const& counts, SegmentOutputMode mode, uint64_t limit,
+    SegmentCounts const& counts, SegmentOutputOptions const& output_options,
     bool show_pair_counts) {
   SegmentCounts split;
-  if (mode == SEGMENT_OUTPUT_ALL_WORDS && !split_counts(counts, &split))
+  if (output_options.mode == SEGMENT_OUTPUT_ALL_WORDS &&
+      !split_counts(counts, &split))
     return false;
   SegmentCounts const& rows =
-      mode == SEGMENT_OUTPUT_ALL_WORDS ? split : counts;
+      output_options.mode == SEGMENT_OUTPUT_ALL_WORDS ? split : counts;
 
   std::vector<SegmentCounts::const_iterator> ordered;
   ordered.reserve(rows.size());
   uint64_t largest = 0;
   for (SegmentCounts::const_iterator entry = rows.begin();
        entry != rows.end(); ++entry) {
-    if (mode == SEGMENT_OUTPUT_PAIRS && !is_pair_segment(entry->first))
+    if (output_options.mode == SEGMENT_OUTPUT_PAIRS &&
+        !is_pair_segment(entry->first))
       continue;
-    if (mode == SEGMENT_OUTPUT_SOLO_WORDS && !is_solo_segment(entry->first))
+    if (output_options.mode == SEGMENT_OUTPUT_SOLO_WORDS &&
+        !is_solo_segment(entry->first))
       continue;
     ordered.push_back(entry);
-    largest = std::max(largest, entry->second);
+    largest = std::max(largest, entry->second.count);
   }
-  size_t const top = limit < ordered.size() ? size_t(limit) : ordered.size();
+  size_t const top = output_options.limit < ordered.size()
+      ? size_t(output_options.limit) : ordered.size();
   std::partial_sort(ordered.begin(), ordered.begin() + top, ordered.end(),
-    [](SegmentCounts::const_iterator a, SegmentCounts::const_iterator b) {
-      if (a->second != b->second) return a->second > b->second;
+    [&output_options](
+        SegmentCounts::const_iterator a, SegmentCounts::const_iterator b) {
+      if (output_options.by_length && a->second.length != b->second.length)
+        return a->second.length > b->second.length;
+      if (a->second.count != b->second.count)
+        return a->second.count > b->second.count;
       return a->first < b->first;
     });
 
   int const width = snprintf(NULL, 0, "%" PRIu64, largest);
   for (size_t i = 0; i < top; ++i) {
-    if (mode == SEGMENT_OUTPUT_PAIRS) {
+    if (output_options.mode == SEGMENT_OUTPUT_PAIRS) {
       std::string const pair = format_pair_segment(ordered[i]->first);
       if (show_pair_counts) {
-        printf("%*" PRIu64 " %s\n", width, ordered[i]->second, pair.c_str());
+        printf("%*" PRIu64 " %s\n",
+            width, ordered[i]->second.count, pair.c_str());
       } else {
         printf("%s\n", pair.c_str());
       }
     } else {
-      printf("%*" PRIu64 " %s\n", width, ordered[i]->second,
+      printf("%*" PRIu64 " %s\n", width, ordered[i]->second.count,
           ordered[i]->first.c_str());
     }
   }
@@ -255,6 +279,6 @@ int main(int argc, char* argv[]) {
   }
 
   return print_counts(
-      counts, output_options.mode, output_options.limit, show_pair_counts)
+      counts, output_options, show_pair_counts)
       ? 0 : 1;
 }
