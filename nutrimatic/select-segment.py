@@ -150,6 +150,191 @@ def build_segment_letter_map(
     return result
 
 
+def _display_segment_hierarchy(
+    selected_segment: str,
+    segment_list: list[str],
+    remaining_letters: str,
+    total: int,
+    depth: int,
+    *,
+    quiet: bool,
+) -> None:
+    segment_letter_map = build_segment_letter_map(
+        segment_list, remaining_letters, quiet=quiet
+    )
+    print(
+        f'{"  " * depth}{selected_segment} '
+        f'({len(segment_letter_map)}/{total})',
+        file=sys.stderr,
+    )
+
+    compatible_segments = list(segment_letter_map)
+    for segment, child_remaining_letters in segment_letter_map.items():
+        child_segment_list = remove_segment(
+            compatible_segments, segment
+        )
+        _display_segment_hierarchy(
+            segment,
+            child_segment_list,
+            child_remaining_letters,
+            len(compatible_segments),
+            depth + 1,
+            quiet=quiet,
+        )
+
+
+def display_segment_hierarchy(
+    segment_list: list[str],
+    selected_segment: str,
+    remaining_letters: str,
+    *,
+    quiet: bool = True,
+) -> None:
+    segment_list = remove_segment(segment_list, selected_segment)
+    try:
+        remaining_letters = subtract_letters(
+            remaining_letters, segment_letters(selected_segment)
+        )
+    except DiagnosticError as error:
+        raise DiagnosticError(
+            f'selected segment is not contained in remaining letters: '
+            f'"{selected_segment}"'
+        ) from error
+    _display_segment_hierarchy(
+        selected_segment,
+        segment_list,
+        remaining_letters,
+        len(segment_list),
+        0,
+        quiet=quiet,
+    )
+
+
+def grep_segment_results(
+    dfs_results: str, segment: str
+) -> tuple[str, int]:
+    result_segment = segment.replace(",", " ")
+    pattern = (
+        rf"(^[^ ]+ |,){re.escape(result_segment)}(,|$)"
+    )
+    path_segment = segment.replace(" ", "_").replace(",", "_")
+    filtered_path = Path(f"{dfs_results}.{path_segment}")
+    created = False
+
+    try:
+        with filtered_path.open("xb") as filtered:
+            created = True
+            completed = subprocess.run(
+                ["grep", "-E", "--", pattern, dfs_results],
+                stdout=filtered,
+            )
+        if completed.returncode not in (0, 1):
+            raise DiagnosticError(
+                f'grep failed with exit status {completed.returncode}'
+            )
+        with filtered_path.open("rb") as filtered:
+            count = sum(1 for _ in filtered)
+    except FileNotFoundError as error:
+        if created:
+            filtered_path.unlink(missing_ok=True)
+        if error.filename == "grep":
+            raise DiagnosticError('command not found: "grep"') from error
+        raise DiagnosticError(
+            f'cannot create result file "{filtered_path}": {error}'
+        ) from error
+    except OSError as error:
+        if created:
+            filtered_path.unlink(missing_ok=True)
+        raise DiagnosticError(
+            f'cannot process result file "{filtered_path}": {error}'
+        ) from error
+    except BaseException:
+        if created:
+            filtered_path.unlink(missing_ok=True)
+        raise
+
+    return str(filtered_path), count
+
+
+def _display_result_hierarchy(
+    selected_segment: str,
+    segment_list: list[str],
+    remaining_letters: str,
+    dfs_results: str,
+    result_count: int,
+    depth: int,
+    *,
+    quiet: bool,
+) -> None:
+    if result_count == 0:
+        return
+
+    print(
+        f'{"  " * depth}{selected_segment} ({result_count})',
+        file=sys.stderr,
+    )
+
+    segment_letter_map = build_segment_letter_map(
+        segment_list, remaining_letters, quiet=quiet
+    )
+    compatible_segments = list(segment_letter_map)
+    for segment, child_remaining_letters in segment_letter_map.items():
+        child_segment_list = remove_segment(
+            compatible_segments, segment
+        )
+        child_results, child_count = grep_segment_results(
+            dfs_results, segment
+        )
+        try:
+            _display_result_hierarchy(
+                segment,
+                child_segment_list,
+                child_remaining_letters,
+                child_results,
+                child_count,
+                depth + 1,
+                quiet=quiet,
+            )
+        finally:
+            Path(child_results).unlink(missing_ok=True)
+
+
+def display_result_hierarchy(
+    dfs_results: str,
+    segment_list: list[str],
+    selected_segment: str,
+    remaining_letters: str,
+    *,
+    quiet: bool = True,
+) -> None:
+    segment_list = remove_segment(segment_list, selected_segment)
+    try:
+        remaining_letters = subtract_letters(
+            remaining_letters, segment_letters(selected_segment)
+        )
+    except DiagnosticError as error:
+        raise DiagnosticError(
+            f'selected segment is not contained in remaining letters: '
+            f'"{selected_segment}"'
+        ) from error
+
+    selected_results, result_count = grep_segment_results(
+        dfs_results, selected_segment
+    )
+    try:
+        _display_result_hierarchy(
+            selected_segment,
+            segment_list,
+            remaining_letters,
+            selected_results,
+            result_count,
+            0,
+            quiet=quiet,
+        )
+    finally:
+        Path(selected_results).unlink(missing_ok=True)
+
+
 def remaining_letters(
     root: Path, sentence: str, form: str, named_letters: str
 ) -> str:
@@ -255,18 +440,9 @@ def _select_segments_impl(
     remaining: str
 ) -> None:
     segment_list = generate_segments(dfs_results, args)
-    segment_list = remove_segment(segment_list, selected_segment)
-    selected_letters = segment_letters(selected_segment)
-    try:
-        remaining = subtract_letters(remaining, selected_letters)
-    except DiagnosticError as error:
-        raise DiagnosticError(
-            f'selected segment is not contained in remaining letters: '
-            f'"{selected_segment}"'
-        ) from error
-    segment_letter_map = build_segment_letter_map(segment_list, remaining)
-    for segment in segment_letter_map:
-        print(segment)
+    display_result_hierarchy(
+        dfs_results, segment_list, selected_segment, remaining
+    )
 
 
 def select_segments(
