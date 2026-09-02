@@ -26,7 +26,8 @@ static void usage(FILE* fp, char const* program) {
       "usage: %s [--pairs [-c] | --solo-words | --all-words]\n"
       "          [-l] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
-      "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
+      "          [-r FILE | --reject FILE]...\n"
+      "          [--wf | --wfroot DIR] [-y]\n"
       "          [FILE ...]\n"
       "  count comma-delimited segments in dfs-anagrams output and print\n"
       "  \"count segment\" rows in descending count order\n"
@@ -45,8 +46,11 @@ static void usage(FILE* fp, char const* program) {
       "  --wf                reject pairs listed in\n"
       "                      $WFROOT/.wf/classified/no/no.pairs; missing\n"
       "                      files produce warnings\n"
-      "  -y, --yes           with --wf, ignore pairs listed in\n"
-      "                      $WFROOT/.wf/classified/yes/yes.pairs\n"
+      "  --wfroot DIR        reject pairs listed in\n"
+      "                      DIR/.wf/classified/no/no.pairs; missing files\n"
+      "                      produce warnings\n"
+      "  -y, --yes           with --wf or --wfroot, ignore pairs in the\n"
+      "                      selected root's .wf/classified/yes/yes.pairs\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
@@ -238,8 +242,9 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (filter_options.workflow_yes && !filter_options.workflow) {
-    fputs("top-segments: --yes requires --wf\n", stderr);
+  if (filter_options.workflow_yes && !filter_options.workflow &&
+      filter_options.workflow_root.empty()) {
+    fputs("top-segments: --yes requires --wf or --wfroot\n", stderr);
     usage(stderr, argv[0]);
     return 2;
   }

@@ -24,7 +24,8 @@ static void usage(FILE* fp, char const* program) {
       "          [-l]\n"
       "          [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
-      "          [-r FILE | --reject FILE]... [--wf [-y | --yes]]\n"
+      "          [-r FILE | --reject FILE]...\n"
+      "          [--wf | --wfroot DIR] [-y]\n"
       "          [RESULTS]\n"
       "  print the first N distinct, non-ignored segments from valid\n"
       "  dfs-anagrams RESULTS rows as comma-separated pairs\n"
@@ -42,8 +43,11 @@ static void usage(FILE* fp, char const* program) {
       "  --wf                 reject pairs listed in\n"
       "                       $WFROOT/.wf/classified/no/no.pairs; missing\n"
       "                       files produce warnings\n"
-      "  -y, --yes            with --wf, ignore pairs listed in\n"
-      "                       $WFROOT/.wf/classified/yes/yes.pairs\n"
+      "  --wfroot DIR         reject pairs listed in\n"
+      "                       DIR/.wf/classified/no/no.pairs; missing files\n"
+      "                       produce warnings\n"
+      "  -y, --yes            with --wf or --wfroot, ignore pairs in the\n"
+      "                       selected root's .wf/classified/yes/yes.pairs\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
 }
@@ -188,8 +192,9 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (filter_options.workflow_yes && !filter_options.workflow) {
-    fputs("first-segments: --yes requires --wf\n", stderr);
+  if (filter_options.workflow_yes && !filter_options.workflow &&
+      filter_options.workflow_root.empty()) {
+    fputs("first-segments: --yes requires --wf or --wfroot\n", stderr);
     usage(stderr, argv[0]);
     return 2;
   }

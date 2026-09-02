@@ -65,6 +65,15 @@ expected='8 delta epsilon,zeta eta'
 actual=$(WFROOT=$wfroot "$filter_segments" --wf -r "$reject" "$input")
 [[ $actual == "$expected" ]] || fail "--wf rejections are wrong: $actual"
 
+actual=$(WFROOT=$test_dir/not-the-root \
+  "$filter_segments" --wfroot "$wfroot" -r "$reject" "$input")
+[[ $actual == "$expected" ]] || fail "--wfroot rejections are wrong: $actual"
+
+if "$filter_segments" --wf --wfroot "$wfroot" "$input" \
+    >/dev/null 2>&1; then
+  fail "--wf with --wfroot succeeded"
+fi
+
 if "$filter_segments" -i "$reject" "$input" >/dev/null 2>&1; then
   fail "unsupported -i option succeeded"
 fi

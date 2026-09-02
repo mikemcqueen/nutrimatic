@@ -150,6 +150,15 @@ actual=$(WFROOT=$wfroot "$top_segments" --wf --yes "$input")
 actual=$(WFROOT=$wfroot "$top_segments" --wf -y "$input")
 [[ $actual == "$expected_wf_yes" ]] || fail "--wf -y counts are wrong: $actual"
 
+actual=$(WFROOT=$test_dir/not-the-root \
+  "$top_segments" --wfroot "$wfroot" -y "$input")
+[[ $actual == "$expected_wf_yes" ]] || fail "--wfroot -y counts are wrong: $actual"
+
+if "$top_segments" --wf --wfroot "$wfroot" "$input" \
+    >/dev/null 2>&1; then
+  fail "--wf with --wfroot succeeded"
+fi
+
 limit_input=$test_dir/limit.txt
 for i in $(seq -w 0 1000); do
   printf '1 segment%s\n' "$i"

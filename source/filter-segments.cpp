@@ -12,7 +12,8 @@
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [-n N] [-r FILE | --reject FILE]... [--wf] [FILE]\n"
+      "usage: %s [-n N] [-r FILE | --reject FILE]...\n"
+      "          [--wf | --wfroot DIR] [FILE]\n"
       "  print dfs-anagrams result lines that contain no rejected segment\n"
       "  -n N                 print at most N result lines\n"
       "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
@@ -20,6 +21,9 @@ static void usage(FILE* fp, char const* program) {
       "  --wf                 reject pairs listed in\n"
       "                       $WFROOT/.wf/classified/no/no.pairs; missing\n"
       "                       files produce warnings\n"
+      "  --wfroot DIR         reject pairs listed in\n"
+      "                       DIR/.wf/classified/no/no.pairs; missing files\n"
+      "                       produce warnings\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program);
 }

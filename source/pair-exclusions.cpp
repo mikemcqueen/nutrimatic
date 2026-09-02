@@ -44,7 +44,26 @@ PairFilterOptionResult parse_pair_filter_option(
     bool support_ignore, bool support_workflow_yes, PairFilterOptions* out) {
   char const* const option = argv[*index];
   if (strcmp(option, "--wf") == 0) {
+    if (!out->workflow_root.empty()) {
+      fprintf(stderr, "%s: --wf and --wfroot are mutually exclusive\n",
+          program);
+      return PAIR_FILTER_OPTION_ERROR;
+    }
     out->workflow = true;
+    return PAIR_FILTER_OPTION_HANDLED;
+  }
+  if (strcmp(option, "--wfroot") == 0) {
+    if (out->workflow) {
+      fprintf(stderr, "%s: --wf and --wfroot are mutually exclusive\n",
+          program);
+      return PAIR_FILTER_OPTION_ERROR;
+    }
+    if (++*index == argc || argv[*index][0] == '\0') {
+      fprintf(stderr, "%s: --wfroot requires a nonempty directory\n",
+          program);
+      return PAIR_FILTER_OPTION_ERROR;
+    }
+    out->workflow_root = argv[*index];
     return PAIR_FILTER_OPTION_HANDLED;
   }
   if (support_workflow_yes &&
@@ -83,6 +102,8 @@ bool load_pair_filters(
           "%s: --wf requires WFROOT to be set and nonempty\n", program);
       return false;
     }
+  } else if (!options.workflow_root.empty()) {
+    wfroot = options.workflow_root.c_str();
   }
 
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
@@ -97,7 +118,7 @@ bool load_pair_filters(
             true, true))
       return false;
   }
-  if (!options.workflow) return true;
+  if (wfroot == NULL) return true;
 
   if (!load_workflow_pair_file(
           workflow_path(wfroot, workflow_no_path), program, "reject list",

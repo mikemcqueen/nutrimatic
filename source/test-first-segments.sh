@@ -149,6 +149,15 @@ actual=$(WFROOT=$wfroot "$first_segments" -n 3 --wf -y "$input" \
   2>/dev/null)
 [[ $actual == "$expected" ]] || fail "--wf -y filtering is wrong: $actual"
 
+actual=$(env -u WFROOT "$first_segments" -n 3 --wfroot "$wfroot" -y \
+  "$input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--wfroot -y filtering is wrong: $actual"
+
+if "$first_segments" --wfroot "$wfroot" --wf "$input" \
+    >/dev/null 2>&1; then
+  fail "--wfroot with --wf succeeded"
+fi
+
 partial_wfroot=$test_dir/partial-wf
 mkdir -p "$partial_wfroot/.wf/classified/yes"
 cat > "$partial_wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
@@ -182,7 +191,7 @@ fi
 if "$first_segments" --yes "$input" >/dev/null 2> "$diagnostics"; then
   fail "--yes without --wf succeeded"
 fi
-if ! grep -q -- '--yes requires --wf' "$diagnostics"; then
+if ! grep -q -- '--yes requires --wf or --wfroot' "$diagnostics"; then
   fail "--yes without --wf diagnostic is wrong"
 fi
 
