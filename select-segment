@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "$0")" && pwd)"
+py="$here/.env/bin/python"
+[[ -x "$py" ]] || {
+  echo "select-segment: venv interpreter not found: $py" >&2
+  exit 1
+}
+
+# Keep relative arguments rooted at the caller's cwd while making the local
+# Python package available regardless of where this launcher is invoked.
+exec env PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" \
+  "$py" -P "$here/nutrimatic/select-segment.py" "$@"
