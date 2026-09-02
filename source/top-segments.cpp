@@ -38,7 +38,8 @@ static void usage(FILE* fp, char const* program) {
       "  --all-words         count every word occurrence, splitting\n"
       "                      multi-word segments into their words\n"
       "  -l, --by-length     sort by descending non-space character length\n"
-      "  -n N                print at most N rows; defaults to %" PRIu64 "\n"
+      "  -n N                print at most N rows; 0 prints all; defaults to "
+      "%" PRIu64 "\n"
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
       "                      repeated\n"
       "  -r, --reject FILE   discard rows containing pairs listed in FILE;\n"
@@ -166,7 +167,8 @@ static bool print_counts(
     ordered.push_back(entry);
     largest = std::max(largest, entry->second.count);
   }
-  size_t const top = output_options.limit < ordered.size()
+  size_t const top = output_options.limit != 0 &&
+          output_options.limit < ordered.size()
       ? size_t(output_options.limit) : ordered.size();
   std::partial_sort(ordered.begin(), ordered.begin() + top, ordered.end(),
     [&output_options](

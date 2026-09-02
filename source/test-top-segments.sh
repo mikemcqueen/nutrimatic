@@ -166,6 +166,9 @@ done > "$limit_input"
 actual=$("$top_segments" "$limit_input" | wc -l)
 [[ $actual == 1000 ]] || fail "default -n is not 1000: $actual"
 
+actual=$("$top_segments" -n 0 "$limit_input" | wc -l)
+[[ $actual == 1001 ]] || fail "-n 0 did not print all rows: $actual"
+
 if "$top_segments" -n nope "$input" >/dev/null 2>&1; then
   fail "invalid -n succeeded"
 fi
