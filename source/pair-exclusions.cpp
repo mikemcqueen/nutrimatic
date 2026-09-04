@@ -9,12 +9,11 @@
 #include <string>
 #include "dfs-cli-args.h"
 
-namespace {
+char const* const WORKFLOW_NO_PAIRS_PATH = ".wf/classified/no/no.pairs";
+char const* const WORKFLOW_YES_PAIRS_PATH = ".wf/classified/yes/yes.pairs";
+char const* const WORKFLOW_DICT_PATH = ".wf/best/dict/words.big";
 
-char const* const workflow_yes_path =
-    ".wf/classified/yes/yes.pairs";
-char const* const workflow_no_path =
-    ".wf/classified/no/no.pairs";
+namespace {
 
 std::string workflow_path(char const* root, char const* relative) {
   std::string path(root);
@@ -23,17 +22,22 @@ std::string workflow_path(char const* root, char const* relative) {
   return path;
 }
 
+bool workflow_file_missing(
+    std::string const& path, char const* program, char const* description) {
+  struct stat status;
+  if (stat(path.c_str(), &status) == 0 ||
+      (errno != ENOENT && errno != ENOTDIR))
+    return false;
+  fprintf(stderr, "%s: WARNING: %s \"%s\" is not present\n",
+      program, description, path.c_str());
+  return true;
+}
+
 bool load_workflow_pair_file(
     std::string const& path, char const* program, char const* description,
     DfsPairSet* pairs) {
-  struct stat status;
-  if (stat(path.c_str(), &status) != 0 &&
-      (errno == ENOENT || errno == ENOTDIR)) {
-    fprintf(stderr,
-        "%s: WARNING: classified pair file \"%s\" is not present\n",
-        program, path.c_str());
+  if (workflow_file_missing(path, program, "classified pair file"))
     return true;
-  }
   return load_pair_file(path.c_str(), description, pairs, true, true);
 }
 
@@ -93,7 +97,7 @@ PairFilterOptionResult parse_pair_filter_option(
 
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
-    DfsPairSet* ignored, DfsPairSet* rejected) {
+    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary) {
   char const* wfroot = NULL;
   if (options.workflow) {
     wfroot = getenv("WFROOT");
@@ -118,17 +122,41 @@ bool load_pair_filters(
             true, true))
       return false;
   }
-  if (wfroot == NULL) return true;
+  if (wfroot == NULL) {
+    fprintf(stderr, "%s: WARNING: NO DICTIONARY SUPPLIED\n", program);
+    return true;
+  }
 
   if (!load_workflow_pair_file(
-          workflow_path(wfroot, workflow_no_path), program, "reject list",
-          rejected))
+          workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
+          "reject list", rejected))
     return false;
   if (options.workflow_yes) {
     if (!load_workflow_pair_file(
-            workflow_path(wfroot, workflow_yes_path), program, "ignore list",
-            ignored))
+            workflow_path(wfroot, WORKFLOW_YES_PAIRS_PATH), program,
+            "ignore list", ignored))
       return false;
   }
-  return true;
+
+  std::string const dict_path = workflow_path(wfroot, WORKFLOW_DICT_PATH);
+  if (workflow_file_missing(dict_path, program, "dictionary")) return true;
+  return load_dictionary(dict_path.c_str(), dictionary);
+}
+
+bool all_words_in_dict(
+    DfsDictionary const& dictionary, std::string const& segment) {
+  if (dictionary.empty()) return true;
+  size_t start = 0;
+  while (true) {
+    size_t const end = segment.find(' ', start);
+    if (end == std::string::npos) {
+      return start == 0
+          ? dictionary.find(segment) != dictionary.end()
+          : dictionary.find(segment.substr(start)) != dictionary.end();
+    }
+    if (dictionary.find(segment.substr(start, end - start)) ==
+        dictionary.end())
+      return false;
+    start = end + 1;
+  }
 }

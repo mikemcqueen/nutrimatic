@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
-import re
 import signal
+
+from nutrimatic.counts import strip_count_prefix
 
 
 DEFAULT_DICTIONARY = "/usr/share/dict/words"
-COUNT_PREFIX_RE = re.compile(r"^ *[0-9]+ ")
 
 
 def main() -> None:
@@ -28,7 +28,7 @@ def main() -> None:
 
     with open(args.text_file, encoding="utf-8") as input_file:
         for line in input_file:
-            text = COUNT_PREFIX_RE.sub("", line.rstrip("\r\n"))
+            text = strip_count_prefix(line.rstrip("\r\n"))
             words = text.split(" ")
             matches = all(word in dictionary for word in words)
             if matches != args.v:

@@ -44,21 +44,20 @@ static void usage(FILE* fp, char const* program) {
       "                      repeated\n"
       "  -r, --reject FILE   discard rows containing pairs listed in FILE;\n"
       "                      may be repeated\n"
-      "  --wf                reject pairs listed in\n"
-      "                      $WFROOT/.wf/classified/no/no.pairs; missing\n"
-      "                      files produce warnings\n"
-      "  --wfroot DIR        reject pairs listed in\n"
-      "                      DIR/.wf/classified/no/no.pairs; missing files\n"
-      "                      produce warnings\n"
+      "  --wfroot DIR        implies -r DIR/%s; discards\n"
+      "                      rows with any word not in DIR/%s\n"
+      "  --wf                shortcut for --wfroot $WFROOT\n"
       "  -y, --yes           with --wf or --wfroot, ignore pairs in the\n"
-      "                      selected root's .wf/classified/yes/yes.pairs\n"
+      "                      selected root's %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
+      program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
+      WORKFLOW_DICT_PATH, WORKFLOW_YES_PAIRS_PATH);
 }
 
 static bool count_stream(
     std::istream* input, char const* name, DfsPairSet const& ignored,
-    DfsPairSet const& rejected, SegmentCounts* counts) {
+    DfsPairSet const& rejected, DfsDictionary const& dictionary,
+    SegmentCounts* counts) {
   std::string line;
   uint64_t line_number = 0;
   while (std::getline(*input, line)) {
@@ -92,7 +91,8 @@ static bool count_stream(
       }
 
       segments.push_back(line.substr(start, length));
-      if (rejected.find(segments.back()) != rejected.end())
+      if (is_rejected_segment(rejected, segments.back()) ||
+          !all_words_in_dict(dictionary, segments.back()))
         reject_line = true;
 
       if (end == std::string::npos) break;
@@ -258,17 +258,20 @@ int main(int argc, char* argv[]) {
 
   DfsPairSet ignored;
   DfsPairSet rejected;
+  DfsDictionary dictionary;
   if (!load_pair_filters(
-          filter_options, "top-segments", &ignored, &rejected))
+          filter_options, "top-segments", &ignored, &rejected, &dictionary))
     return 1;
 
   SegmentCounts counts;
   if (paths.empty()) {
-    if (!count_stream(&std::cin, "-", ignored, rejected, &counts)) return 1;
+    if (!count_stream(&std::cin, "-", ignored, rejected, dictionary, &counts))
+      return 1;
   } else {
     for (size_t i = 0; i < paths.size(); ++i) {
       if (strcmp(paths[i], "-") == 0) {
-        if (!count_stream(&std::cin, "-", ignored, rejected, &counts))
+        if (!count_stream(
+                &std::cin, "-", ignored, rejected, dictionary, &counts))
           return 1;
         continue;
       }
@@ -280,7 +283,8 @@ int main(int argc, char* argv[]) {
             paths[i], strerror(errno));
         return 1;
       }
-      if (!count_stream(&input, paths[i], ignored, rejected, &counts))
+      if (!count_stream(
+              &input, paths[i], ignored, rejected, dictionary, &counts))
         return 1;
     }
   }

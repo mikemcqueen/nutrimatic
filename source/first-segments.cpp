@@ -40,16 +40,14 @@ static void usage(FILE* fp, char const* program) {
       "                       repeated\n"
       "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
       "                       may be repeated\n"
-      "  --wf                 reject pairs listed in\n"
-      "                       $WFROOT/.wf/classified/no/no.pairs; missing\n"
-      "                       files produce warnings\n"
-      "  --wfroot DIR         reject pairs listed in\n"
-      "                       DIR/.wf/classified/no/no.pairs; missing files\n"
-      "                       produce warnings\n"
+      "  --wfroot DIR         implies -r DIR/%s; discards\n"
+      "                       rows with any word not in DIR/%s\n"
+      "  --wf                 shortcut for --wfroot $WFROOT\n"
       "  -y, --yes            with --wf or --wfroot, ignore pairs in the\n"
-      "                       selected root's .wf/classified/yes/yes.pairs\n"
+      "                       selected root's %s\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
-      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
+      program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
+      WORKFLOW_DICT_PATH, WORKFLOW_YES_PAIRS_PATH);
 }
 
 static bool print_segments(std::vector<FoundSegment> const& segments) {
@@ -60,7 +58,7 @@ static bool print_segments(std::vector<FoundSegment> const& segments) {
 
 static bool find_segments(
     std::istream* input, char const* name, DfsPairSet const& ignored,
-    DfsPairSet const& rejected,
+    DfsPairSet const& rejected, DfsDictionary const& dictionary,
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
   std::vector<FoundSegment> result;
@@ -97,7 +95,8 @@ static bool find_segments(
       }
 
       segments.push_back(line.substr(start, length));
-      if (rejected.find(segments.back()) != rejected.end())
+      if (is_rejected_segment(rejected, segments.back()) ||
+          !all_words_in_dict(dictionary, segments.back()))
         reject_line = true;
 
       if (end == std::string::npos) break;
@@ -201,13 +200,15 @@ int main(int argc, char* argv[]) {
 
   DfsPairSet ignored;
   DfsPairSet rejected;
+  DfsDictionary dictionary;
   if (!load_pair_filters(
-          filter_options, "first-segments", &ignored, &rejected))
+          filter_options, "first-segments", &ignored, &rejected, &dictionary))
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
     return find_segments(
-        &std::cin, "-", ignored, rejected, output_options) ? 0 : 1;
+        &std::cin, "-", ignored, rejected, dictionary, output_options)
+        ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
@@ -217,5 +218,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   return find_segments(
-      &input, results_path, ignored, rejected, output_options) ? 0 : 1;
+      &input, results_path, ignored, rejected, dictionary, output_options)
+      ? 0 : 1;
 }

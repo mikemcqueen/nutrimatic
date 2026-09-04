@@ -7,6 +7,12 @@
 
 #include "dfs-class-list.h"
 
+// Workflow-root-relative paths --wf and --wfroot resolve against. Shared so
+// the loader and every tool's help text name the same files.
+extern char const* const WORKFLOW_NO_PAIRS_PATH;
+extern char const* const WORKFLOW_YES_PAIRS_PATH;
+extern char const* const WORKFLOW_DICT_PATH;
+
 struct PairFilterOptions {
   std::vector<std::string> ignore_paths;
   std::vector<std::string> reject_paths;
@@ -31,12 +37,25 @@ PairFilterOptionResult parse_pair_filter_option(
     bool support_ignore, bool support_workflow_yes, PairFilterOptions* out);
 
 // Loads explicit ignore/reject files. With --wf or --wfroot, classified NO
-// pairs below the selected workflow root are rejected; with -y/--yes,
+// pairs below the selected workflow root are rejected, the root's
+// .wf/best/dict/words.big is loaded into `dictionary`, and with -y/--yes,
 // classified YES pairs are ignored. Missing workflow files warn and are
-// skipped. Explicit missing files and all malformed or unreadable files are
-// errors.
+// skipped, leaving `dictionary` empty. Without a workflow root there is no
+// dictionary to load at all, which warns. Explicit missing files and all
+// malformed or unreadable files are errors.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
-    DfsPairSet* ignored, DfsPairSet* rejected);
+    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary);
+
+inline bool is_rejected_segment(
+    DfsPairSet const& rejected, std::string const& segment) {
+  return rejected.find(segment) != rejected.end();
+}
+
+// Returns true when `dictionary` is empty, or when every space-delimited word
+// of `segment` is in it. An empty dictionary is the no-workflow case, where
+// there is nothing to check against.
+bool all_words_in_dict(
+    DfsDictionary const& dictionary, std::string const& segment);
 
 #endif

@@ -4,3 +4,4 @@
 * -P 10000 default
 * filter index entries containing configurable "skip words" during phase 1,
   especially `the`
+* add -d/--dict option to top-segments, first-segments, filter-segments

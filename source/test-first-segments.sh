@@ -41,7 +41,8 @@ actual=$("$first_segments" -n 3 -i "$ignore1" --ignore "$ignore2" \
   "$input" 2> "$diagnostics")
 [[ $actual == "$expected" ]] || fail "first segments are wrong: $actual"
 
-expected_diagnostics='found segment 3 on line 3'
+expected_diagnostics='first-segments: WARNING: NO DICTIONARY SUPPLIED
+found segment 3 on line 3'
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
   fail "found-segment diagnostics are wrong: $actual"
@@ -71,7 +72,8 @@ expected='alpha,beta
 beta,gamma'
 actual=$("$first_segments" --pairs -n 2 "$pairs_input" 2> "$diagnostics")
 [[ $actual == "$expected" ]] || fail "--pairs output is wrong: $actual"
-expected_diagnostics='found segment 2 on line 2'
+expected_diagnostics='first-segments: WARNING: NO DICTIONARY SUPPLIED
+found segment 2 on line 2'
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
   fail "--pairs diagnostics are wrong: $actual"
@@ -170,6 +172,7 @@ expected='alpha,beta
 beta,gamma'
 [[ $actual == "$expected" ]] || fail "--wf loaded YES pairs: $actual"
 expected_diagnostics="first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
+first-segments: WARNING: dictionary \"$partial_wfroot/.wf/best/dict/words.big\" is not present
 found segment 2 on line 1"
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
