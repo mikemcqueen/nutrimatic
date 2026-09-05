@@ -161,11 +161,12 @@ bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens);
 
-// Loads an exclusion list in the same format from either a regular file or a
-// workflow root, which resolves to DIR/.wf/classified/no/no.pairs. A directory
-// without a .wf subdirectory is an error, and so is a '-' line: asking for
-// exclusions is explicit, so neither a missing workflow nor an unreadable line
-// quietly narrows the exclusion set.
-bool load_exclude_pair_file(char const* path, DfsPairSet* pairs);
+// Loads and combines exclusion lists in the same format from regular files and
+// at most one workflow root, which resolves to
+// DIR/.wf/classified/no/no.pairs. A directory without a .wf subdirectory is an
+// error, and so is a '-' line: asking for exclusions is explicit, so neither a
+// missing workflow nor an unreadable line quietly narrows the exclusion set.
+bool load_exclude_pair_files(
+    std::vector<std::string> const& paths, DfsPairSet* pairs);
 
 #endif

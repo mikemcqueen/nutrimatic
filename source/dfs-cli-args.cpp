@@ -300,7 +300,7 @@ bool load_pair_file(
   return true;
 }
 
-bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
+static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
   struct stat status;
   if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
     return load_pair_file(path, "exclude list", pairs, false, true);
@@ -327,6 +327,25 @@ bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
   }
   std::string const resolved = metadata + "/classified/no/no.pairs";
   return load_pair_file(resolved.c_str(), "exclude list", pairs, false, true);
+}
+
+bool load_exclude_pair_files(
+    std::vector<std::string> const& paths, DfsPairSet* pairs) {
+  size_t directories = 0;
+  for (size_t i = 0; i < paths.size(); ++i) {
+    struct stat status;
+    if (stat(paths[i].c_str(), &status) == 0 && S_ISDIR(status.st_mode) &&
+        ++directories > 1) {
+      fputs("error: only one --exclude-pairs argument may be a directory\n",
+            stderr);
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < paths.size(); ++i) {
+    if (!load_exclude_pair_file(paths[i].c_str(), pairs)) return false;
+  }
+  return true;
 }
 
 DfsOptionResult dfs_parse_common_option(

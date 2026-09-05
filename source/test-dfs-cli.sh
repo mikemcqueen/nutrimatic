@@ -237,9 +237,26 @@ grep -q '^70\.00 ab cd$' "$test_dir/all.stdout" ||
 grep -q ' ab,cd$' "$test_dir/excluded.stdout" ||
   fail "--exclude-pairs dropped a result built from two separate entries"
 
+# Repeated files are unioned rather than replacing an earlier option.
+printf 'gh,ij\n' > "$test_dir/exclude-ghij.pairs"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/exclude.pairs" \
+  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
+  > "$test_dir/excluded-multiple.stdout" \
+  2> "$test_dir/excluded-multiple.stderr"
+cmp "$test_dir/excluded.stdout" "$test_dir/excluded-multiple.stdout" ||
+  fail "repeated --exclude-pairs did not combine both files"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
+  --exclude-pairs "$test_dir/exclude.pairs" \
+  > "$test_dir/excluded-multiple-reversed.stdout" \
+  2> "$test_dir/excluded-multiple-reversed.stderr"
+cmp "$test_dir/excluded.stdout" \
+    "$test_dir/excluded-multiple-reversed.stdout" ||
+  fail "reversed --exclude-pairs options did not combine both files"
+
 # The test is whole-entry equality, so a longer entry holding the excluded
 # pair -- here at its end -- is a different spelling and is kept.
-printf 'gh,ij\n' > "$test_dir/exclude-ghij.pairs"
 "$dfs_anagrams" "$index_file" fghij -m 1 -n 10 \
   --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   > "$test_dir/exclude-prefix.stdout" 2> "$test_dir/exclude-prefix.stderr"
@@ -251,10 +268,18 @@ grep -q ' f gh ij$' "$test_dir/exclude-prefix.stdout" ||
 mkdir -p "$test_dir/wf/.wf/classified/no"
 cp "$test_dir/exclude.pairs" "$test_dir/wf/.wf/classified/no/no.pairs"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   --exclude-pairs "$test_dir/wf" \
   > "$test_dir/exclude-wf.stdout" 2> "$test_dir/exclude-wf.stderr"
 cmp "$test_dir/excluded.stdout" "$test_dir/exclude-wf.stdout" ||
-  fail "a workflow root did not resolve to the same exclusion set"
+  fail "a file and workflow root did not combine their exclusion sets"
+mkdir -p "$test_dir/wf2/.wf/classified/no"
+cp "$test_dir/exclude.pairs" "$test_dir/wf2/.wf/classified/no/no.pairs"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  --exclude-pairs "$test_dir/wf" --exclude-pairs "$test_dir/wf2"
+grep -q '^error: only one --exclude-pairs argument may be a directory$' \
+  "$test_dir/status.stderr" ||
+  fail "multiple --exclude-pairs directories were not rejected clearly"
 mkdir -p "$test_dir/not-wf"
 expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/not-wf"

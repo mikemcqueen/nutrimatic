@@ -24,7 +24,7 @@ struct Args {
   char const* index_file;
   std::string letters;
   DfsCommonArgs common;
-  char const* exclude_pair_file;
+  std::vector<std::string> exclude_pair_files;
   int max_combine_words;
   int num_segments;
   int64_t progress_factor;
@@ -60,7 +60,7 @@ static void usage(char const* program) {
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
-      " [--exclude-pairs FILE|WORKFLOW-DIR]"
+      " [--exclude-pairs FILE|WORKFLOW-DIR]..."
       " [--solo-words WORD[,WORD...]]"
       " [--hide-solo-words]"
       " [-p progress-factor] [--cache-size MiB]"
@@ -86,6 +86,8 @@ static void usage(char const* program) {
       "  --exclude-pairs FILE|WORKFLOW-DIR loads pairs in the same format and"
       " drops every index entry spelled exactly like one, in either order, so"
       " no result can contain it\n"
+      "    may be repeated to combine inputs, but only one argument may be a"
+      " directory\n"
       "    the test is whole-entry equality, so a longer entry containing the"
       " pair is kept; -x 2 is what confines entries to the two words this"
       " compares\n"
@@ -152,7 +154,7 @@ static struct optparse_long const long_options[] = {
 static bool parse_args(char* argv[], Args* out) {
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
-  out->exclude_pair_file = NULL;
+  out->exclude_pair_files.clear();
   out->num_segments = 0;
   out->progress_factor = 1;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
@@ -207,7 +209,7 @@ static bool parse_args(char* argv[], Args* out) {
           return false;
         break;
       case OPT_EXCLUDE_PAIRS:
-        out->exclude_pair_file = options.optarg;
+        out->exclude_pair_files.push_back(options.optarg);
         break;
       case OPT_SEGMENTS:
         out->segments = true;
@@ -298,8 +300,7 @@ int main(int argc, char* argv[]) {
     args.common.pair_bonus = 0.0;
 
   DfsPairSet exclude_pairs;
-  if (args.exclude_pair_file != NULL &&
-      !load_exclude_pair_file(args.exclude_pair_file, &exclude_pairs))
+  if (!load_exclude_pair_files(args.exclude_pair_files, &exclude_pairs))
     return 1;
 
   FILE* fp = fopen(args.index_file, "rb");
@@ -347,7 +348,8 @@ int main(int argc, char* argv[]) {
                        &model,
                        args.common.pair_file != NULL ? &pairs : NULL,
                        solo_words.get(),
-                       args.exclude_pair_file != NULL ? &exclude_pairs : NULL);
+                       !args.exclude_pair_files.empty()
+                           ? &exclude_pairs : NULL);
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),

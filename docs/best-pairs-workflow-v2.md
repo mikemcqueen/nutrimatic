@@ -35,8 +35,8 @@ implemented:
 - `wf eval p2` accepts both `*.pairs` and `*.p1.yes` queue inputs.
 - `wf classify no FILE` normalizes and unions explicit hard-NO pairs into
   `.wf/classified/no/no.pairs`.
-- `dfs-anagrams` accepts `--exclude-pairs FILE|WORKFLOW-DIR` and excludes exact
-  matching index entries from every result.
+- `dfs-anagrams` accepts repeated `--exclude-pairs FILE|WORKFLOW-DIR` options,
+  combines their exclusions, and allows at most one workflow directory.
 - `complete` preflights all archive destinations and requires `-f` on that
   invocation when an archived artifact would be replaced.
 
