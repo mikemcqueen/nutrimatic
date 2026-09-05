@@ -19,10 +19,14 @@ static void usage(FILE* fp, char const* program) {
       "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
       "                       may be repeated\n"
       "  --wfroot DIR         implies -r DIR/%s; discards\n"
-      "                       rows with any word not in DIR/%s\n"
+      "                       rows with any word not in DIR/%s;\n"
+      "                       also implies -r on the target FILE belongs to,\n"
+      "                       by its directory or by its name:\n"
+      "                       DIR/%s\n"
       "  --wf                 shortcut for --wfroot $WFROOT\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH);
+      program, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH,
+      WORKFLOW_TARGET_NO_PAIRS_PATH);
 }
 
 static bool parse_limit(char const* text, uint64_t* limit) {
@@ -138,6 +142,9 @@ int main(int argc, char* argv[]) {
       results_path = argv[i];
     }
   }
+
+  if (results_path != NULL && strcmp(results_path, "-") != 0)
+    filter_options.input_path = results_path;
 
   DfsPairSet ignored;
   DfsPairSet rejected;

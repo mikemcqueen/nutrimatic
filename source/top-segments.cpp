@@ -45,13 +45,17 @@ static void usage(FILE* fp, char const* program) {
       "  -r, --reject FILE   discard rows containing pairs listed in FILE;\n"
       "                      may be repeated\n"
       "  --wfroot DIR        implies -r DIR/%s; discards\n"
-      "                      rows with any word not in DIR/%s\n"
+      "                      rows with any word not in DIR/%s;\n"
+      "                      also implies -r on the target FILE belongs to,\n"
+      "                      by its directory or by its name:\n"
+      "                      DIR/%s\n"
       "  --wf                shortcut for --wfroot $WFROOT\n"
       "  -y, --yes           with --wf or --wfroot, ignore pairs in the\n"
       "                      selected root's %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
-      WORKFLOW_DICT_PATH, WORKFLOW_YES_PAIRS_PATH);
+      WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_YES_PAIRS_PATH);
 }
 
 static bool count_stream(
@@ -255,6 +259,11 @@ int main(int argc, char* argv[]) {
     usage(stderr, argv[0]);
     return 2;
   }
+
+  // Only a single named file names a single target; several files may sit in
+  // several, and standard input sits in none.
+  if (paths.size() == 1 && strcmp(paths[0], "-") != 0)
+    filter_options.input_path = paths[0];
 
   DfsPairSet ignored;
   DfsPairSet rejected;

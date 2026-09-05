@@ -181,4 +181,79 @@ if "$top_segments" -x "$ignore1" "$input" >/dev/null 2>&1; then
   fail "removed -x option succeeded"
 fi
 
+# A target artifact's own no.pairs joins the root's, inferred from the
+# directory the input file sits in. Its rejection is whole-row, so "delta"
+# goes with the "mu nu" it shares a line with.
+target=$wfroot/.wf/best/s2/u-abc/m4/g4
+mkdir -p "$target"
+cat > "$target/dfs.seed" <<'EOF'
+9 alpha,beta gamma
+8 delta,mu nu
+EOF
+
+expected_untargeted='1 alpha
+1 delta
+1 mu nu'
+actual=$("$top_segments" --wfroot "$wfroot" -y "$target/dfs.seed" 2>/dev/null)
+[[ $actual == "$expected_untargeted" ]] ||
+  fail "absent target no.pairs changed the counts: $actual"
+
+cat > "$target/no.pairs" <<'EOF'
+nu,mu
+EOF
+
+actual=$("$top_segments" --wfroot "$wfroot" -y "$target/dfs.seed" 2>/dev/null)
+[[ $actual == "1 alpha" ]] || fail "target no.pairs is wrong: $actual"
+
+# Standard input names no target, so the same rows survive, with a warning
+# saying the filtering --wf was asked for did not all happen.
+actual=$("$top_segments" --wfroot "$wfroot" -y - < "$target/dfs.seed" \
+  2>/dev/null)
+[[ $actual == "$expected_untargeted" ]] ||
+  fail "stdin applied a target no.pairs: $actual"
+
+if ! "$top_segments" --wfroot "$wfroot" -y - < "$target/dfs.seed" 2>&1 \
+    >/dev/null | grep -q "no single input file"; then
+  fail "stdin did not warn that no target could be named"
+fi
+
+if ! "$top_segments" --wfroot "$wfroot" -y "$input" 2>&1 >/dev/null |
+    grep -q "no workflow target"; then
+  fail "a non-target input did not warn"
+fi
+
+# A results file kept outside the tree names its target instead, and the
+# name is read inward from both ends: the seed annotation in the middle is
+# any number of components, and .best may or may not be there.
+cat > "$target/no.pairs" <<'EOF'
+nu,mu
+EOF
+results=$test_dir/results/s2
+mkdir -p "$results"
+for name in dfs.s2.idx2.85.15.m4.x2.g4.1000000.u-abc \
+            dfs.s2.idx2.85.15.m4.x2.g4.best.1000000.u-abc \
+            dfs.s2.m4.x2.g4.1000000.u-abc; do
+  cp "$target/dfs.seed" "$results/$name"
+  actual=$("$top_segments" --wfroot "$wfroot" -y "$results/$name" 2>/dev/null)
+  [[ $actual == "1 alpha" ]] || fail "$name named no target: $actual"
+done
+
+# The directory a results file sits in says nothing, so a no.pairs kept
+# beside it is not the target's and is never read.
+cat > "$results/no.pairs" <<'EOF'
+gamma,beta
+EOF
+actual=$("$top_segments" --wfroot "$wfroot" -y \
+  "$results/dfs.s2.m4.x2.g4.1000000.u-abc" 2>/dev/null)
+[[ $actual == "1 alpha" ]] || fail "a results-dir no.pairs was read: $actual"
+
+# A name that parses but names a target that is not there is a misread, not
+# silently no exclusions.
+cp "$target/dfs.seed" "$results/dfs.s2.m4.x2.g9.1000000.u-abc"
+if ! "$top_segments" --wfroot "$wfroot" -y \
+    "$results/dfs.s2.m4.x2.g9.1000000.u-abc" 2>&1 >/dev/null |
+    grep -q "no workflow target"; then
+  fail "an absent named target did not warn"
+fi
+
 echo PASS

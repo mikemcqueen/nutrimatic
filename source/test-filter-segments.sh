@@ -110,4 +110,23 @@ if "$filter_segments" -n nope "$input" >/dev/null 2>&1; then
   fail "invalid -n succeeded"
 fi
 
+# The target a FILE is an artifact of contributes its own rejections, which
+# the pipeline relies on: filtering here is what lets a downstream tool read
+# standard input without needing a target of its own.
+target=$wfroot/.wf/best/s2/u-abc/m4/g4
+mkdir -p "$target"
+cp "$input" "$target/dfs.seed"
+cat > "$target/no.pairs" <<'EOF'
+beta,alpha
+EOF
+
+expected='8 delta epsilon,zeta eta'
+actual=$(WFROOT=$wfroot "$filter_segments" --wf "$target/dfs.seed")
+[[ $actual == "$expected" ]] || fail "target no.pairs is wrong: $actual"
+
+expected='9 alpha beta,beta gamma
+8 delta epsilon,zeta eta'
+actual=$(WFROOT=$wfroot "$filter_segments" --wf < "$target/dfs.seed")
+[[ $actual == "$expected" ]] || fail "stdin applied a target no.pairs: $actual"
+
 echo PASS

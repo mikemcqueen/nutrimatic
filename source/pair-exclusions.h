@@ -13,12 +13,27 @@ extern char const* const WORKFLOW_NO_PAIRS_PATH;
 extern char const* const WORKFLOW_YES_PAIRS_PATH;
 extern char const* const WORKFLOW_DICT_PATH;
 
+// Where a target's own exclusions sit, as help text and warnings spell it.
+// The capitalised components stand for one target's sentence, letter set,
+// minimum word length and segment count: this is a shape to match, not a
+// path to open.
+extern char const* const WORKFLOW_TARGET_NO_PAIRS_PATH;
+
+// How the workflow renders a dfs-anagrams results file kept outside the
+// tree. The bracketed parts are the ones that may be absent. Like the path
+// above this is a shape, shown when a name could not be read as one.
+extern char const* const WORKFLOW_RESULTS_NAME;
+
 struct PairFilterOptions {
   std::vector<std::string> ignore_paths;
   std::vector<std::string> reject_paths;
   bool workflow = false;
   std::string workflow_root;
   bool workflow_yes = false;
+  // The one input file the tool is about to read, or empty when it will read
+  // standard input or more than one file. Set by the tool once its arguments
+  // are parsed, because only a single named file identifies a single target.
+  std::string input_path;
 };
 
 enum PairFilterOptionResult {
@@ -43,6 +58,12 @@ PairFilterOptionResult parse_pair_filter_option(
 // skipped, leaving `dictionary` empty. Without a workflow root there is no
 // dictionary to load at all, which warns. Explicit missing files and all
 // malformed or unreadable files are errors.
+//
+// A workflow root also rejects `options.input_path`'s own target no.pairs,
+// so that asking for the workflow's filtering gets all of it rather than the
+// root-level half. A target that cannot be identified warns, because the
+// request was for filtering that then did not happen; a target with no
+// no.pairs is silent, because having none is the ordinary case.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary);

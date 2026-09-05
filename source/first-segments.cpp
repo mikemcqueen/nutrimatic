@@ -41,13 +41,17 @@ static void usage(FILE* fp, char const* program) {
       "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
       "                       may be repeated\n"
       "  --wfroot DIR         implies -r DIR/%s; discards\n"
-      "                       rows with any word not in DIR/%s\n"
+      "                       rows with any word not in DIR/%s;\n"
+      "                       also implies -r on the target RESULTS belongs to,\n"
+      "                       by its directory or by its name:\n"
+      "                       DIR/%s\n"
       "  --wf                 shortcut for --wfroot $WFROOT\n"
       "  -y, --yes            with --wf or --wfroot, ignore pairs in the\n"
       "                       selected root's %s\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
-      WORKFLOW_DICT_PATH, WORKFLOW_YES_PAIRS_PATH);
+      WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_YES_PAIRS_PATH);
 }
 
 static bool print_segments(std::vector<FoundSegment> const& segments) {
@@ -197,6 +201,9 @@ int main(int argc, char* argv[]) {
     usage(stderr, argv[0]);
     return 2;
   }
+
+  if (results_path != NULL && strcmp(results_path, "-") != 0)
+    filter_options.input_path = results_path;
 
   DfsPairSet ignored;
   DfsPairSet rejected;

@@ -172,6 +172,7 @@ expected='alpha,beta
 beta,gamma'
 [[ $actual == "$expected" ]] || fail "--wf loaded YES pairs: $actual"
 expected_diagnostics="first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
+first-segments: WARNING: no workflow target for \"$input\": not in ROOT/.wf/best/SENTENCE/LETTERS/mN/gN, and not named dfs.SENTENCE[.SEED].mN.x2.gN[.best].LIMIT.LETTERS; TARGET/no.pairs was not applied
 first-segments: WARNING: dictionary \"$partial_wfroot/.wf/best/dict/words.big\" is not present
 found segment 2 on line 1"
 actual=$(< "$diagnostics")
