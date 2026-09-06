@@ -136,6 +136,12 @@ cat > "$wfroot/.wf/classified/no/no.pairs" <<'EOF'
 zeta,epsilon
 EOF
 
+# --wf and --wfroot always resolve a target, defaulting to "current", so every
+# workflow root needs one even when a test has nothing target-specific to say.
+target=$wfroot/.wf/best/s2/u-abc/m4/g4
+mkdir -p "$target"
+ln -s s2/u-abc/m4/g4 "$wfroot/.wf/best/current"
+
 expected_wf='2 alpha
 2 beta gamma
 1 delta'
@@ -181,11 +187,10 @@ if "$top_segments" -x "$ignore1" "$input" >/dev/null 2>&1; then
   fail "removed -x option succeeded"
 fi
 
-# A target artifact's own no.pairs joins the root's, inferred from the
-# directory the input file sits in. Its rejection is whole-row, so "delta"
-# goes with the "mu nu" it shares a line with.
-target=$wfroot/.wf/best/s2/u-abc/m4/g4
-mkdir -p "$target"
+# A target artifact's own no.pairs joins the root's; the target is the
+# selected one ("current", made above, points here), not inferred from the
+# input file. Its rejection is whole-row, so "delta" goes with the "mu nu" it
+# shares a line with.
 cat > "$target/dfs.seed" <<'EOF'
 9 alpha,beta gamma
 8 delta,mu nu
@@ -205,22 +210,11 @@ EOF
 actual=$("$top_segments" --wfroot "$wfroot" -y "$target/dfs.seed" 2>/dev/null)
 [[ $actual == "1 alpha" ]] || fail "target no.pairs is wrong: $actual"
 
-# Standard input names no target, so the same rows survive, with a warning
-# saying the filtering --wf was asked for did not all happen.
+# Standard input names no target of its own, but the selected target is
+# resolved regardless of the input, so its no.pairs is applied all the same.
 actual=$("$top_segments" --wfroot "$wfroot" -y - < "$target/dfs.seed" \
   2>/dev/null)
-[[ $actual == "$expected_untargeted" ]] ||
-  fail "stdin applied a target no.pairs: $actual"
-
-if ! "$top_segments" --wfroot "$wfroot" -y - < "$target/dfs.seed" 2>&1 \
-    >/dev/null | grep -q "no single input file"; then
-  fail "stdin did not warn that no target could be named"
-fi
-
-if ! "$top_segments" --wfroot "$wfroot" -y "$input" 2>&1 >/dev/null |
-    grep -q "no workflow target"; then
-  fail "a non-target input did not warn"
-fi
+[[ $actual == "1 alpha" ]] || fail "stdin did not apply the target no.pairs: $actual"
 
 # A results file kept outside the tree names its target instead, and the
 # name is read inward from both ends: the seed annotation in the middle is
@@ -247,13 +241,38 @@ actual=$("$top_segments" --wfroot "$wfroot" -y \
   "$results/dfs.s2.m4.x2.g4.1000000.u-abc" 2>/dev/null)
 [[ $actual == "1 alpha" ]] || fail "a results-dir no.pairs was read: $actual"
 
-# A name that parses but names a target that is not there is a misread, not
-# silently no exclusions.
+# A name that parses but names a target that is not there disagrees with the
+# selected target ("current", i.e. g4) and fails outright, rather than
+# silently applying no exclusions.
 cp "$target/dfs.seed" "$results/dfs.s2.m4.x2.g9.1000000.u-abc"
-if ! "$top_segments" --wfroot "$wfroot" -y \
-    "$results/dfs.s2.m4.x2.g9.1000000.u-abc" 2>&1 >/dev/null |
-    grep -q "no workflow target"; then
-  fail "an absent named target did not warn"
+mismatch_diagnostics=$test_dir/mismatch-diagnostics.txt
+if "$top_segments" --wfroot "$wfroot" -y \
+    "$results/dfs.s2.m4.x2.g9.1000000.u-abc" \
+    >/dev/null 2>"$mismatch_diagnostics"; then
+  fail "an absent named target did not fail"
 fi
+if ! grep -q \
+    'belongs to target "s2/u-abc/m4/g9", not the selected "s2/u-abc/m4/g4"' \
+    "$mismatch_diagnostics"; then
+  fail "mismatched target diagnostic is wrong: $(cat "$mismatch_diagnostics")"
+fi
+
+# -t/--target picks a different target explicitly, and the pick is announced.
+target2=$wfroot/.wf/best/s2/u-abc/m4/g5
+mkdir -p "$target2"
+cp "$target/dfs.seed" "$target2/dfs.seed"
+cat > "$target2/no.pairs" <<'EOF'
+beta,gamma
+EOF
+
+expected_target2='1 delta
+1 mu nu'
+target2_diagnostics=$test_dir/target2-diagnostics.txt
+actual=$("$top_segments" --wfroot "$wfroot" --target s2/u-abc/m4/g5 \
+  "$target2/dfs.seed" 2>"$target2_diagnostics")
+[[ $actual == "$expected_target2" ]] ||
+  fail "--target counts are wrong: $actual"
+grep -q "TARGET resolved to s2/u-abc/m4/g5" "$target2_diagnostics" ||
+  fail "--target resolution was not announced: $(cat "$target2_diagnostics")"
 
 echo PASS

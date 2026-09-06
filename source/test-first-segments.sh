@@ -134,6 +134,11 @@ cat > "$wfroot/.wf/classified/no/no.pairs" <<'EOF'
 beta,alpha
 EOF
 
+# --wf and --wfroot always resolve a target, defaulting to "current", so every
+# workflow root needs one even when a test has nothing target-specific to say.
+mkdir -p "$wfroot/.wf/best/s2/u-abc/m4/g4"
+ln -s s2/u-abc/m4/g4 "$wfroot/.wf/best/current"
+
 expected='delta,epsilon
 beta,gamma
 zeta,eta'
@@ -165,14 +170,16 @@ mkdir -p "$partial_wfroot/.wf/classified/yes"
 cat > "$partial_wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
 beta,alpha
 EOF
+mkdir -p "$partial_wfroot/.wf/best/s2/u-abc/m4/g4"
+ln -s s2/u-abc/m4/g4 "$partial_wfroot/.wf/best/current"
 diagnostics=$test_dir/wf-diagnostics.txt
 actual=$(WFROOT=$partial_wfroot "$first_segments" -n 2 --wf "$input" \
   2> "$diagnostics")
 expected='alpha,beta
 beta,gamma'
 [[ $actual == "$expected" ]] || fail "--wf loaded YES pairs: $actual"
-expected_diagnostics="first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
-first-segments: WARNING: no workflow target for \"$input\": not in ROOT/.wf/best/SENTENCE/LETTERS/mN/gN, and not named dfs.SENTENCE[.SEED].mN.x2.gN[.best].LIMIT.LETTERS; TARGET/no.pairs was not applied
+expected_diagnostics="first-segments: TARGET resolved to s2/u-abc/m4/g4
+first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
 first-segments: WARNING: dictionary \"$partial_wfroot/.wf/best/dict/words.big\" is not present
 found segment 2 on line 1"
 actual=$(< "$diagnostics")
@@ -197,6 +204,15 @@ if "$first_segments" --yes "$input" >/dev/null 2> "$diagnostics"; then
 fi
 if ! grep -q -- '--yes requires --wf or --wfroot' "$diagnostics"; then
   fail "--yes without --wf diagnostic is wrong"
+fi
+
+# -t naming a target that is not there at all is fatal, not a silent no-op.
+if WFROOT=$wfroot "$first_segments" -n 1 --wf -t missing "$input" \
+    >/dev/null 2> "$diagnostics"; then
+  fail "-t naming an absent target succeeded"
+fi
+if ! grep -q 'target "missing" is not a directory' "$diagnostics"; then
+  fail "-t naming an absent target diagnostic is wrong: $(cat "$diagnostics")"
 fi
 
 if "$first_segments" -x "$ignore1" "$input" >/dev/null 2>&1; then

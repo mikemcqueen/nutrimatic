@@ -102,13 +102,19 @@ dfs_class_list_lib = library(
   dependencies: thread_dep,
 )
 
+# Diagnostic output shared by the pair-selecting CLIs, so every warning and
+# resolution line looks the same.
+log_dep = declare_dependency(
+  sources: files('log.cpp'),
+)
+
 # Shared source dependency for small pair-selecting CLIs. Each consumer
 # compiles the option/loading helper directly; no separately linked library is
 # needed for this small interface.
 pair_exclusions_dep = declare_dependency(
   sources: files('pair-exclusions.cpp'),
   link_with: dfs_class_list_lib,
-  dependencies: thread_dep,
+  dependencies: [thread_dep, log_dep],
 )
 
 segment_output_dep = declare_dependency(

@@ -27,7 +27,7 @@ static void usage(FILE* fp, char const* program) {
       "          [-l] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
-      "          [--wf | --wfroot DIR] [-y]\n"
+      "          [--wf | --wfroot DIR] [-t TARGET] [-y]\n"
       "          [FILE ...]\n"
       "  count comma-delimited segments in dfs-anagrams output and print\n"
       "  \"count segment\" rows in descending count order\n"
@@ -46,15 +46,20 @@ static void usage(FILE* fp, char const* program) {
       "                      may be repeated\n"
       "  --wfroot DIR        implies -r DIR/%s; discards\n"
       "                      rows with any word not in DIR/%s;\n"
-      "                      also implies -r on the target FILE belongs to,\n"
-      "                      by its directory or by its name:\n"
+      "                      also implies -r on the selected target's\n"
       "                      DIR/%s\n"
       "  --wf                shortcut for --wfroot $WFROOT\n"
+      "  -t, --target TARGET with --wf or --wfroot, the target selected by\n"
+      "                      DIR/.wf/best/TARGET; defaults to %s; a FILE\n"
+      "                      naming a target of its own, by its directory\n"
+      "                      or by its name, must name that same target:\n"
+      "                      %s\n"
       "  -y, --yes           with --wf or --wfroot, ignore pairs in the\n"
       "                      selected root's %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
       WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME,
       WORKFLOW_YES_PAIRS_PATH);
 }
 
@@ -248,9 +253,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (filter_options.workflow_yes && !filter_options.workflow &&
-      filter_options.workflow_root.empty()) {
-    fputs("top-segments: --yes requires --wf or --wfroot\n", stderr);
+  if (!check_pair_filter_options(filter_options, "top-segments")) {
     usage(stderr, argv[0]);
     return 2;
   }

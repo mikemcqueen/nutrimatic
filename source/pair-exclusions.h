@@ -19,6 +19,9 @@ extern char const* const WORKFLOW_DICT_PATH;
 // path to open.
 extern char const* const WORKFLOW_TARGET_NO_PAIRS_PATH;
 
+// The target selected when -t/--target is not given.
+extern char const* const WORKFLOW_DEFAULT_TARGET;
+
 // How the workflow renders a dfs-anagrams results file kept outside the
 // tree. The bracketed parts are the ones that may be absent. Like the path
 // above this is a shape, shown when a name could not be read as one.
@@ -30,6 +33,10 @@ struct PairFilterOptions {
   bool workflow = false;
   std::string workflow_root;
   bool workflow_yes = false;
+  // The -t/--target value, or empty for WORKFLOW_DEFAULT_TARGET. Named
+  // rather than resolved here: what it addresses is known only once a
+  // workflow root is selected.
+  std::string target;
   // The one input file the tool is about to read, or empty when it will read
   // standard input or more than one file. Set by the tool once its arguments
   // are parsed, because only a single named file identifies a single target.
@@ -43,13 +50,19 @@ enum PairFilterOptionResult {
 };
 
 // Parses -i FILE, --ignore FILE, -r FILE, --reject FILE, --wf,
-// --wfroot DIR, and -y/--yes. Ignore and -y/--yes options are returned as
-// OTHER when their support flags are false. `index` points to the current
-// argument and advances over a consumed FILE or DIR. Errors are diagnosed
-// already.
+// --wfroot DIR, -t/--target TARGET, and -y/--yes. Ignore and -y/--yes
+// options are returned as OTHER when their support flags are false. `index`
+// points to the current argument and advances over a consumed FILE, DIR or
+// TARGET. Errors are diagnosed already.
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
     bool support_ignore, bool support_workflow_yes, PairFilterOptions* out);
+
+// Diagnoses the options that need a workflow root without one: -y/--yes and
+// -t/--target. Tools call this once their arguments are parsed, before
+// load_pair_filters().
+bool check_pair_filter_options(
+    PairFilterOptions const& options, char const* program);
 
 // Loads explicit ignore/reject files. With --wf or --wfroot, classified NO
 // pairs below the selected workflow root are rejected, the root's
@@ -59,11 +72,13 @@ PairFilterOptionResult parse_pair_filter_option(
 // dictionary to load at all, which warns. Explicit missing files and all
 // malformed or unreadable files are errors.
 //
-// A workflow root also rejects `options.input_path`'s own target no.pairs,
-// so that asking for the workflow's filtering gets all of it rather than the
-// root-level half. A target that cannot be identified warns, because the
-// request was for filtering that then did not happen; a target with no
-// no.pairs is silent, because having none is the ordinary case.
+// A workflow root also selects a target, .wf/best/ plus the -t/--target
+// name, and rejects that target's own no.pairs, so that asking for the
+// workflow's filtering gets all of it rather than the root-level half. The
+// selection is announced and has to name a target directory; when
+// `options.input_path` names a target of its own, by its directory or by its
+// name, the two have to be the same target. A target with no no.pairs is
+// silent, because having none is the ordinary case.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary);

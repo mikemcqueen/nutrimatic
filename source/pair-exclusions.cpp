@@ -10,12 +10,14 @@
 #include <vector>
 
 #include "dfs-cli-args.h"
+#include "log.h"
 
 char const* const WORKFLOW_NO_PAIRS_PATH = ".wf/classified/no/no.pairs";
 char const* const WORKFLOW_YES_PAIRS_PATH = ".wf/classified/yes/yes.pairs";
 char const* const WORKFLOW_DICT_PATH = ".wf/best/dict/words.big";
 char const* const WORKFLOW_TARGET_NO_PAIRS_PATH =
     ".wf/best/SENTENCE/LETTERS/mN/gN/no.pairs";
+char const* const WORKFLOW_DEFAULT_TARGET = "current";
 char const* const WORKFLOW_RESULTS_NAME =
     "dfs.SENTENCE[.SEED].mN.x2.gN[.best].LIMIT.LETTERS";
 
@@ -41,8 +43,7 @@ bool workflow_file_missing(
   if (stat(path.c_str(), &status) == 0 ||
       (errno != ENOENT && errno != ENOTDIR))
     return false;
-  fprintf(stderr, "%s: WARNING: %s \"%s\" is not present\n",
-      program, description, path.c_str());
+  warn(program, "%s \"%s\" is not present", description, path.c_str());
   return true;
 }
 
@@ -94,29 +95,41 @@ bool is_counted(std::string const& name, char letter) {
   return true;
 }
 
-// The target directory `input` is an artifact of, if it is one.
+// The name of the target `dir` is, when it is one: its path below `best`,
+// which is a target's shape when it has four components and the last two
+// are counted. Both paths are resolved already, so the name that comes out
+// is the canonical one, and the same target reached two ways gets the same
+// name.
+bool target_name_below_best(
+    std::string const& dir, std::string const& best, std::string* out) {
+  std::string prefix(best);
+  if (prefix.empty() || prefix.back() != '/') prefix.push_back('/');
+  if (dir.compare(0, prefix.size(), prefix) != 0) return false;
+
+  std::string const name = dir.substr(prefix.size());
+  std::vector<std::string> const parts = split(name, '/');
+  if (parts.size() != 4) return false;
+  if (!is_counted(parts[2], 'm') || !is_counted(parts[3], 'g')) return false;
+  *out = name;
+  return true;
+}
+
+// The target `input` is an artifact of, if it is one.
 //
 // A workflow artifact sits directly in a target directory, so the candidate
 // is just the file's own directory and the question is whether that
-// directory has a target's shape below the selected root: four components,
-// the last two counted. The dirname is taken lexically and only then
-// resolved, because an artifact may be a symlink to results kept elsewhere
-// -- what names the target is where the link sits, not where it points.
-// Both sides are resolved so a relative input and a relative root compare,
-// and so a symlinked .wf resolves the same way on each.
+// directory has a target's shape below the selected root. The dirname is
+// taken lexically and only then resolved, because an artifact may be a
+// symlink to results kept elsewhere -- what names the target is where the
+// link sits, not where it points. Both sides are resolved so a relative
+// input and a relative root compare, and so a symlinked .wf resolves the
+// same way on each.
 bool workflow_target_dir(
     std::string const& input, char const* wfroot, std::string* out) {
   std::string dir, best;
   if (!resolve(lexical_dirname(input), &dir)) return false;
   if (!resolve(workflow_path(wfroot, WORKFLOW_BEST_PATH), &best)) return false;
-  if (best.empty() || best.back() != '/') best.push_back('/');
-  if (dir.compare(0, best.size(), best) != 0) return false;
-
-  std::vector<std::string> const parts = split(dir.substr(best.size()), '/');
-  if (parts.size() != 4) return false;
-  if (!is_counted(parts[2], 'm') || !is_counted(parts[3], 'g')) return false;
-  *out = dir;
-  return true;
+  return target_name_below_best(dir, best, out);
 }
 
 // Whether `name` is a letter-set label: the bag form, a dash, its letters.
@@ -132,8 +145,8 @@ bool is_number(std::string const& name) {
   return true;
 }
 
-// The target directory `input` names, for a dfs-anagrams results file kept
-// outside the workflow tree.
+// The target `input` names, for a dfs-anagrams results file kept outside
+// the workflow tree.
 //
 // The workflow renders those names as
 // dfs.SENTENCE[.SEED].mN.x2.gN[.best].LIMIT.LETTERS, so every component of
@@ -142,8 +155,9 @@ bool is_number(std::string const& name) {
 // address is read inward from both ends and never straight through. The
 // directory the file is in says nothing here: results are kept wherever the
 // search was told to put them, so the target is rebuilt under the selected
-// root instead, and having to exist there is what makes a misread name a
-// warning rather than silently no exclusions.
+// root instead. A name that is there is canonicalised, so that it compares
+// equal to the selected target however either side was spelled; one that is
+// not is left as written, to be reported as the disagreement it is.
 bool workflow_target_name(
     std::string const& input, char const* wfroot, std::string* out) {
   std::vector<std::string> const parts =
@@ -164,10 +178,47 @@ bool workflow_target_name(
   // is left over between it and mN is the seed annotation, whatever it is.
   if (last < 2) return false;
 
-  std::string const target = workflow_path(wfroot, WORKFLOW_BEST_PATH) +
-      "/" + parts[1] + "/" + letter_set + "/" + universe + "/" + segments;
-  if (!is_directory(target)) return false;
-  *out = target;
+  std::string name =
+      parts[1] + "/" + letter_set + "/" + universe + "/" + segments;
+  std::string best, dir, canonical;
+  if (resolve(workflow_path(wfroot, WORKFLOW_BEST_PATH), &best) &&
+      resolve(best + "/" + name, &dir) && is_directory(dir) &&
+      target_name_below_best(dir, best, &canonical))
+    name = canonical;
+  *out = name;
+  return true;
+}
+
+// The target ROOT/.wf/best/NAME addresses, as the name of the directory it
+// resolves to. A symlink is the ordinary spelling -- "current" is one -- so
+// what the link points at is what the run is about, and that is the name
+// every later message and comparison uses.
+//
+// Nothing here is recoverable: the option asks for one particular target,
+// so any answer but a target directory is a run that would filter against
+// something other than what was asked for.
+bool resolve_target_name(
+    char const* wfroot, std::string const& name, char const* program,
+    std::string* out) {
+  std::string best;
+  if (!resolve(workflow_path(wfroot, WORKFLOW_BEST_PATH), &best)) {
+    fprintf(stderr, "%s: no \"%s\" below \"%s\"\n",
+        program, WORKFLOW_BEST_PATH, wfroot);
+    return false;
+  }
+
+  std::string dir;
+  if (!resolve(best + "/" + name, &dir) || !is_directory(dir)) {
+    fprintf(stderr, "%s: target \"%s\" is not a directory in \"%s\"\n",
+        program, name.c_str(), best.c_str());
+    return false;
+  }
+  if (!target_name_below_best(dir, best, out)) {
+    fprintf(stderr, "%s: target \"%s\" leads to \"%s\", which is not "
+        "ROOT/%s\n", program, name.c_str(), dir.c_str(),
+        WORKFLOW_TARGET_PATH);
+    return false;
+  }
   return true;
 }
 
@@ -193,43 +244,47 @@ bool workflow_target(
       : workflow_target_name(input, wfroot, out);
 }
 
-// Rejects the target no.pairs belonging to the file the tool will read.
+// Whether the file the tool will read agrees with the selected target.
 //
-// Never fatal on absence in either sense: a target that cannot be identified
-// warns and a target with no exclusions is silent, and both leave `rejected`
-// holding just the root-level set. A file that is there but unreadable or
-// malformed is an error like any other reject list.
-bool load_target_pair_file(
-    PairFilterOptions const& options, char const* wfroot, char const* program,
-    DfsPairSet* rejected) {
-  if (options.input_path.empty()) {
-    fprintf(stderr,
-        "%s: WARNING: no single input file to name a workflow target; "
-        "TARGET/%s was not applied\n", program, TARGET_NO_PAIRS_NAME);
+// Only a file that names a target of its own has anything to say, and when
+// it does the two names have to be the same one: neither is authoritative
+// enough to silently win, and a results file filtered against another
+// target's classification is what this is here to catch. Files that name no
+// target -- a listing, standard input -- say nothing and are not asked to.
+bool target_agrees_with_input(
+    PairFilterOptions const& options, char const* wfroot,
+    std::string const& target, char const* program) {
+  std::string named;
+  if (options.input_path.empty() ||
+      !workflow_target(options.input_path, wfroot, &named) ||
+      named == target)
     return true;
-  }
-  std::string target;
-  if (!workflow_target(options.input_path, wfroot, &target)) {
-    fprintf(stderr,
-        "%s: WARNING: no workflow target for \"%s\": not in "
-        "ROOT/%s, and not named %s; TARGET/%s was not applied\n",
-        program, options.input_path.c_str(), WORKFLOW_TARGET_PATH,
-        WORKFLOW_RESULTS_NAME, TARGET_NO_PAIRS_NAME);
-    return true;
-  }
+  fprintf(stderr,
+      "%s: \"%s\" belongs to target \"%s\", not the selected \"%s\"\n",
+      program, options.input_path.c_str(), named.c_str(), target.c_str());
+  return false;
+}
 
-  std::string const path = target + "/" + TARGET_NO_PAIRS_NAME;
+// Rejects the selected target's own no.pairs.
+//
+// Never fatal on absence: a target with no exclusions is the ordinary case
+// and says nothing, leaving `rejected` holding just the root-level set. A
+// file that is there but unreadable or malformed is an error like any other
+// reject list.
+bool load_target_pair_file(
+    char const* wfroot, std::string const& target, char const* program,
+    DfsPairSet* rejected) {
+  std::string const path = workflow_path(wfroot, WORKFLOW_BEST_PATH) + "/" +
+      target + "/" + TARGET_NO_PAIRS_NAME;
   struct stat status;
   if (stat(path.c_str(), &status) == 0)
     return load_pair_file(path.c_str(), "reject list", rejected, true, true);
-  // Having no exclusions is the ordinary case and says nothing, but a link
-  // with nothing under it is a tree to fix: targets keep this file as a link
-  // into the results it was written beside, and a stale one would read as
-  // the ordinary case and quietly filter nothing.
+  // A link with nothing under it is a tree to fix: targets keep this file as
+  // a link into the results it was written beside, and a stale one would
+  // read as the ordinary case and quietly filter nothing.
   if (lstat(path.c_str(), &status) == 0)
-    fprintf(stderr,
-        "%s: WARNING: \"%s\" leads nowhere; it was not applied\n",
-        program, path.c_str());
+    warn(program, "\"%s\" leads nowhere; it was not applied",
+        path.c_str());
   return true;
 }
 
@@ -270,6 +325,14 @@ PairFilterOptionResult parse_pair_filter_option(
     out->workflow_root = argv[*index];
     return PAIR_FILTER_OPTION_HANDLED;
   }
+  if (strcmp(option, "-t") == 0 || strcmp(option, "--target") == 0) {
+    if (++*index == argc || argv[*index][0] == '\0') {
+      fprintf(stderr, "%s: %s requires a nonempty target\n", program, option);
+      return PAIR_FILTER_OPTION_ERROR;
+    }
+    out->target = argv[*index];
+    return PAIR_FILTER_OPTION_HANDLED;
+  }
   if (support_workflow_yes &&
       (strcmp(option, "-y") == 0 || strcmp(option, "--yes") == 0)) {
     out->workflow_yes = true;
@@ -295,6 +358,20 @@ PairFilterOptionResult parse_pair_filter_option(
   return PAIR_FILTER_OPTION_HANDLED;
 }
 
+bool check_pair_filter_options(
+    PairFilterOptions const& options, char const* program) {
+  if (options.workflow || !options.workflow_root.empty()) return true;
+  if (options.workflow_yes) {
+    fprintf(stderr, "%s: --yes requires --wf or --wfroot\n", program);
+    return false;
+  }
+  if (!options.target.empty()) {
+    fprintf(stderr, "%s: --target requires --wf or --wfroot\n", program);
+    return false;
+  }
+  return true;
+}
+
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary) {
@@ -310,6 +387,16 @@ bool load_pair_filters(
     wfroot = options.workflow_root.c_str();
   }
 
+  std::string target;
+  if (wfroot != NULL) {
+    std::string const name =
+        options.target.empty() ? WORKFLOW_DEFAULT_TARGET : options.target;
+    if (!resolve_target_name(wfroot, name, program, &target)) return false;
+    if (!target_agrees_with_input(options, wfroot, target, program))
+      return false;
+    success(program, "TARGET resolved to %s", target.c_str());
+  }
+
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
     if (!load_pair_file(
             options.ignore_paths[i].c_str(), "ignore list", ignored,
@@ -323,7 +410,7 @@ bool load_pair_filters(
       return false;
   }
   if (wfroot == NULL) {
-    fprintf(stderr, "%s: WARNING: NO DICTIONARY SUPPLIED\n", program);
+    warn(program, "NO DICTIONARY SUPPLIED");
     return true;
   }
 
@@ -331,7 +418,7 @@ bool load_pair_filters(
           workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
           "reject list", rejected))
     return false;
-  if (!load_target_pair_file(options, wfroot, program, rejected))
+  if (!load_target_pair_file(wfroot, target, program, rejected))
     return false;
   if (options.workflow_yes) {
     if (!load_workflow_pair_file(

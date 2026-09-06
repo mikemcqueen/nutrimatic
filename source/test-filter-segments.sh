@@ -61,6 +61,12 @@ cat > "$wfroot/.wf/classified/no/no.pairs" <<'EOF'
 nu,mu
 EOF
 
+# --wf and --wfroot always resolve a target, defaulting to "current", so every
+# workflow root needs one even when a test has nothing target-specific to say.
+target=$wfroot/.wf/best/s2/u-abc/m4/g4
+mkdir -p "$target"
+ln -s s2/u-abc/m4/g4 "$wfroot/.wf/best/current"
+
 expected='8 delta epsilon,zeta eta'
 actual=$(WFROOT=$wfroot "$filter_segments" --wf -r "$reject" "$input")
 [[ $actual == "$expected" ]] || fail "--wf rejections are wrong: $actual"
@@ -110,11 +116,10 @@ if "$filter_segments" -n nope "$input" >/dev/null 2>&1; then
   fail "invalid -n succeeded"
 fi
 
-# The target a FILE is an artifact of contributes its own rejections, which
-# the pipeline relies on: filtering here is what lets a downstream tool read
-# standard input without needing a target of its own.
-target=$wfroot/.wf/best/s2/u-abc/m4/g4
-mkdir -p "$target"
+# The target a FILE is an artifact of, or the selected target when it names
+# none, contributes its own rejections, which the pipeline relies on:
+# filtering here is what lets a downstream tool read standard input without
+# needing a target of its own.
 cp "$input" "$target/dfs.seed"
 cat > "$target/no.pairs" <<'EOF'
 beta,alpha
@@ -124,9 +129,28 @@ expected='8 delta epsilon,zeta eta'
 actual=$(WFROOT=$wfroot "$filter_segments" --wf "$target/dfs.seed")
 [[ $actual == "$expected" ]] || fail "target no.pairs is wrong: $actual"
 
-expected='9 alpha beta,beta gamma
-8 delta epsilon,zeta eta'
 actual=$(WFROOT=$wfroot "$filter_segments" --wf < "$target/dfs.seed")
-[[ $actual == "$expected" ]] || fail "stdin applied a target no.pairs: $actual"
+[[ $actual == "$expected" ]] ||
+  fail "stdin did not apply the target no.pairs: $actual"
+
+diagnostics=$test_dir/diagnostics.txt
+
+# -t naming a directory under .wf/best that is not a target -- the shape
+# needs exactly four components below best, ending in mN/gN -- is fatal.
+if WFROOT=$wfroot "$filter_segments" --wf -t dict "$input" \
+    >/dev/null 2> "$diagnostics"; then
+  fail "-t on a non-target directory succeeded"
+fi
+if ! grep -q 'not ROOT/.wf/best/SENTENCE/LETTERS/mN/gN' "$diagnostics"; then
+  fail "-t on a non-target directory diagnostic is wrong: $(cat "$diagnostics")"
+fi
+
+# -t/--target only means something once a workflow root is selected.
+if "$filter_segments" -t current "$input" >/dev/null 2> "$diagnostics"; then
+  fail "-t without --wf or --wfroot succeeded"
+fi
+if ! grep -q -- '--target requires --wf or --wfroot' "$diagnostics"; then
+  fail "-t without --wf diagnostic is wrong"
+fi
 
 echo PASS

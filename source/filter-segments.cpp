@@ -13,20 +13,25 @@
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
       "usage: %s [-n N] [-r FILE | --reject FILE]...\n"
-      "          [--wf | --wfroot DIR] [FILE]\n"
+      "          [--wf | --wfroot DIR] [-t TARGET] [FILE]\n"
       "  print dfs-anagrams result lines that contain no rejected segment\n"
       "  -n N                 print at most N result lines\n"
       "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
       "                       may be repeated\n"
       "  --wfroot DIR         implies -r DIR/%s; discards\n"
       "                       rows with any word not in DIR/%s;\n"
-      "                       also implies -r on the target FILE belongs to,\n"
-      "                       by its directory or by its name:\n"
+      "                       also implies -r on the selected target's\n"
       "                       DIR/%s\n"
       "  --wf                 shortcut for --wfroot $WFROOT\n"
+      "  -t, --target TARGET  with --wf or --wfroot, the target selected by\n"
+      "                       DIR/.wf/best/TARGET; defaults to %s; FILE,\n"
+      "                       when it names a target of its own by its\n"
+      "                       directory or by its name, must name that same\n"
+      "                       target: %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH,
-      WORKFLOW_TARGET_NO_PAIRS_PATH);
+      WORKFLOW_TARGET_NO_PAIRS_PATH, WORKFLOW_DEFAULT_TARGET,
+      WORKFLOW_RESULTS_NAME);
 }
 
 static bool parse_limit(char const* text, uint64_t* limit) {
@@ -141,6 +146,11 @@ int main(int argc, char* argv[]) {
     } else {
       results_path = argv[i];
     }
+  }
+
+  if (!check_pair_filter_options(filter_options, "filter-segments")) {
+    usage(stderr, argv[0]);
+    return 2;
   }
 
   if (results_path != NULL && strcmp(results_path, "-") != 0)
