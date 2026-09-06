@@ -18,6 +18,12 @@ always /code-review (claude) or /review (codex) code before committing
 keep tests minimal -- smoke tests -- unless otherwise instructed.  I'm more interested
 in implementation than test coverage.
 
+use the latest Sonnet (Claude) or Terra (GPT) model for all test related activities: 
+ - evaluating test case coverage
+ - updating out of date tests
+ - adding new test cases
+ - test execution
+
 ## CONCURRENT SESSIONS
 
 There may be other instances of query-index or dfs-anagrams running. Check for
