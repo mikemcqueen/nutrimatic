@@ -19,15 +19,15 @@ bool parse_limit(char const* text, uint64_t* limit) {
 
 namespace {
 
-bool set_mode(
-    SegmentOutputMode mode, char const* program, SegmentOutputOptions* out) {
-  if (out->mode != SEGMENT_OUTPUT_SEGMENTS && out->mode != mode) {
+bool set_unit(
+    SegmentUnit unit, char const* program, SegmentOutputOptions* out) {
+  if (out->unit.has_value() && out->unit != unit) {
     fprintf(stderr,
         "%s: --pairs, --solo-words and --all-words are mutually exclusive\n",
         program);
     return false;
   }
-  out->mode = mode;
+  out->unit = unit;
   return true;
 }
 
@@ -38,15 +38,15 @@ SegmentOutputOptionResult parse_segment_output_option(
     SegmentOutputOptions* out) {
   char const* const option = argv[*index];
   if (strcmp(option, "--pairs") == 0) {
-    return set_mode(SEGMENT_OUTPUT_PAIRS, program, out)
+    return set_unit(SEGMENT_UNIT_PAIRS, program, out)
         ? SEGMENT_OUTPUT_OPTION_HANDLED : SEGMENT_OUTPUT_OPTION_ERROR;
   }
   if (strcmp(option, "--solo-words") == 0) {
-    return set_mode(SEGMENT_OUTPUT_SOLO_WORDS, program, out)
+    return set_unit(SEGMENT_UNIT_SOLO_WORD, program, out)
         ? SEGMENT_OUTPUT_OPTION_HANDLED : SEGMENT_OUTPUT_OPTION_ERROR;
   }
   if (strcmp(option, "--all-words") == 0) {
-    return set_mode(SEGMENT_OUTPUT_ALL_WORDS, program, out)
+    return set_unit(SEGMENT_UNIT_ALL_WORDS, program, out)
         ? SEGMENT_OUTPUT_OPTION_HANDLED : SEGMENT_OUTPUT_OPTION_ERROR;
   }
   if (strcmp(option, "-l") == 0 || strcmp(option, "--by-length") == 0) {

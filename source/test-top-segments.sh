@@ -142,23 +142,48 @@ target=$wfroot/.wf/best/s2/u-abc/m4/g4
 mkdir -p "$target"
 ln -s s2/u-abc/m4/g4 "$wfroot/.wf/best/current"
 
-expected_wf='2 alpha
-2 beta gamma
+workflow_input=$test_dir/workflow-results.txt
+cat > "$workflow_input" <<'EOF'
+9 alpha,beta gamma,theta iota
+8 beta gamma,delta
+EOF
+
+# With no selected unit, workflow mode defaults to pairs and ignores
+# classified YES pairs. Explicit units retain their normal filtering: they do
+# not add -y themselves.
+actual=$(WFROOT=$wfroot "$top_segments" --wf "$workflow_input")
+[[ $actual == 'theta,iota' ]] ||
+  fail "--wf did not default to --pairs -y: $actual"
+
+expected_wf_pairs='beta,gamma
+theta,iota'
+actual=$(WFROOT=$wfroot "$top_segments" --wf --pairs "$workflow_input")
+[[ $actual == "$expected_wf_pairs" ]] ||
+  fail "--wf --pairs unexpectedly enabled -y: $actual"
+
+expected_wf_solo='1 alpha
 1 delta'
-actual=$(WFROOT=$wfroot "$top_segments" --wf "$input")
-[[ $actual == "$expected_wf" ]] || fail "--wf counts are wrong: $actual"
+actual=$(WFROOT=$wfroot "$top_segments" --wf --solo-words "$workflow_input")
+[[ $actual == "$expected_wf_solo" ]] ||
+  fail "--wf --solo-words selected the wrong unit: $actual"
 
-expected_wf_yes='2 alpha
-1 delta'
-actual=$(WFROOT=$wfroot "$top_segments" --wf --yes "$input")
-[[ $actual == "$expected_wf_yes" ]] || fail "--wf --yes counts are wrong: $actual"
+expected_wf_all_words='2 beta
+2 gamma
+1 alpha
+1 delta
+1 iota
+1 theta'
+actual=$(WFROOT=$wfroot "$top_segments" --wf --all-words "$workflow_input")
+[[ $actual == "$expected_wf_all_words" ]] ||
+  fail "--wf --all-words unexpectedly enabled -y: $actual"
 
-actual=$(WFROOT=$wfroot "$top_segments" --wf -y "$input")
-[[ $actual == "$expected_wf_yes" ]] || fail "--wf -y counts are wrong: $actual"
+if "$top_segments" --pairs --solo-words "$input" >/dev/null 2>&1; then
+  fail "--pairs with --solo-words succeeded"
+fi
 
-actual=$(WFROOT=$test_dir/not-the-root \
-  "$top_segments" --wfroot "$wfroot" -y "$input")
-[[ $actual == "$expected_wf_yes" ]] || fail "--wfroot -y counts are wrong: $actual"
+if "$top_segments" --solo-words --all-words "$input" >/dev/null 2>&1; then
+  fail "--solo-words with --all-words succeeded"
+fi
 
 if "$top_segments" --wf --wfroot "$wfroot" "$input" \
     >/dev/null 2>&1; then
@@ -196,9 +221,7 @@ cat > "$target/dfs.seed" <<'EOF'
 8 delta,mu nu
 EOF
 
-expected_untargeted='1 alpha
-1 delta
-1 mu nu'
+expected_untargeted='mu,nu'
 actual=$("$top_segments" --wfroot "$wfroot" -y "$target/dfs.seed" 2>/dev/null)
 [[ $actual == "$expected_untargeted" ]] ||
   fail "absent target no.pairs changed the counts: $actual"
@@ -208,13 +231,13 @@ nu,mu
 EOF
 
 actual=$("$top_segments" --wfroot "$wfroot" -y "$target/dfs.seed" 2>/dev/null)
-[[ $actual == "1 alpha" ]] || fail "target no.pairs is wrong: $actual"
+[[ -z $actual ]] || fail "target no.pairs is wrong: $actual"
 
 # Standard input names no target of its own, but the selected target is
 # resolved regardless of the input, so its no.pairs is applied all the same.
 actual=$("$top_segments" --wfroot "$wfroot" -y - < "$target/dfs.seed" \
   2>/dev/null)
-[[ $actual == "1 alpha" ]] || fail "stdin did not apply the target no.pairs: $actual"
+[[ -z $actual ]] || fail "stdin did not apply the target no.pairs: $actual"
 
 # A results file kept outside the tree names its target instead, and the
 # name is read inward from both ends: the seed annotation in the middle is
@@ -229,7 +252,7 @@ for name in dfs.s2.idx2.85.15.m4.x2.g4.1000000.u-abc \
             dfs.s2.m4.x2.g4.1000000.u-abc; do
   cp "$target/dfs.seed" "$results/$name"
   actual=$("$top_segments" --wfroot "$wfroot" -y "$results/$name" 2>/dev/null)
-  [[ $actual == "1 alpha" ]] || fail "$name named no target: $actual"
+  [[ -z $actual ]] || fail "$name named no target: $actual"
 done
 
 # The directory a results file sits in says nothing, so a no.pairs kept
@@ -239,7 +262,7 @@ gamma,beta
 EOF
 actual=$("$top_segments" --wfroot "$wfroot" -y \
   "$results/dfs.s2.m4.x2.g4.1000000.u-abc" 2>/dev/null)
-[[ $actual == "1 alpha" ]] || fail "a results-dir no.pairs was read: $actual"
+[[ -z $actual ]] || fail "a results-dir no.pairs was read: $actual"
 
 # A name that parses but names a target that is not there is, with no -t,
 # the selected target itself -- so the failure is that target missing, not a
@@ -277,8 +300,7 @@ cat > "$target2/no.pairs" <<'EOF'
 beta,gamma
 EOF
 
-expected_target2='1 delta
-1 mu nu'
+expected_target2='mu,nu'
 target2_diagnostics=$test_dir/target2-diagnostics.txt
 actual=$("$top_segments" --wfroot "$wfroot" --target s2/u-abc/m4/g5 \
   "$target2/dfs.seed" 2>"$target2_diagnostics")

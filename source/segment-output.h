@@ -3,22 +3,22 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
 static uint64_t const DEFAULT_SEGMENT_OUTPUT_LIMIT = 1000;
 
-// What a printed row is: a segment of any width by default, a multi-word
-// segment, a single-word segment, or a word drawn from any segment.
-enum SegmentOutputMode {
-  SEGMENT_OUTPUT_SEGMENTS,
-  SEGMENT_OUTPUT_PAIRS,
-  SEGMENT_OUTPUT_SOLO_WORDS,
-  SEGMENT_OUTPUT_ALL_WORDS,
+// The unit selected for output. With no unit, tools operate on whole segments
+// of any width.
+enum SegmentUnit {
+  SEGMENT_UNIT_PAIRS,
+  SEGMENT_UNIT_SOLO_WORD,
+  SEGMENT_UNIT_ALL_WORDS,
 };
 
 struct SegmentOutputOptions {
-  SegmentOutputMode mode = SEGMENT_OUTPUT_SEGMENTS;
+  std::optional<SegmentUnit> unit;
   uint64_t limit = DEFAULT_SEGMENT_OUTPUT_LIMIT;
   bool by_length = false;
 };
@@ -36,7 +36,7 @@ bool parse_limit(char const* text, uint64_t* limit);
 
 // Parses --pairs, --solo-words, --all-words, -l/--by-length and -n N. `index`
 // points to the current argument and advances over a consumed N. The three
-// mode options are mutually exclusive, though repeating one is allowed. Errors
+// unit options are mutually exclusive, though repeating one is allowed. Errors
 // are diagnosed already.
 SegmentOutputOptionResult parse_segment_output_option(
     int argc, char* const argv[], int* index, char const* program,

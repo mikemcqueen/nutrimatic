@@ -48,7 +48,8 @@ static void usage(FILE* fp, char const* program) {
       "                      rows with any word not in DIR/%s;\n"
       "                      also implies -r on the selected target's\n"
       "                      DIR/%s\n"
-      "  --wf                shortcut for --wfroot $WFROOT\n"
+      "  --wf                shortcut for --wfroot $WFROOT; with no unit\n"
+      "                      option, --wf and --wfroot imply --pairs -y\n"
       "  -t, --target TARGET with --wf or --wfroot, the target selected by\n"
       "                      DIR/.wf/best/TARGET; defaults to the target a\n"
       "                      FILE names of its own, by its directory or by\n"
@@ -156,21 +157,21 @@ static bool print_counts(
     SegmentCounts const& counts, SegmentOutputOptions const& output_options,
     bool show_pair_counts) {
   SegmentCounts split;
-  if (output_options.mode == SEGMENT_OUTPUT_ALL_WORDS &&
+  if (output_options.unit == SEGMENT_UNIT_ALL_WORDS &&
       !split_counts(counts, &split))
     return false;
   SegmentCounts const& rows =
-      output_options.mode == SEGMENT_OUTPUT_ALL_WORDS ? split : counts;
+      output_options.unit == SEGMENT_UNIT_ALL_WORDS ? split : counts;
 
   std::vector<SegmentCounts::const_iterator> ordered;
   ordered.reserve(rows.size());
   uint64_t largest = 0;
   for (SegmentCounts::const_iterator entry = rows.begin();
        entry != rows.end(); ++entry) {
-    if (output_options.mode == SEGMENT_OUTPUT_PAIRS &&
+    if (output_options.unit == SEGMENT_UNIT_PAIRS &&
         !is_pair_segment(entry->first))
       continue;
-    if (output_options.mode == SEGMENT_OUTPUT_SOLO_WORDS &&
+    if (output_options.unit == SEGMENT_UNIT_SOLO_WORD &&
         !is_solo_segment(entry->first))
       continue;
     ordered.push_back(entry);
@@ -191,7 +192,7 @@ static bool print_counts(
 
   int const width = snprintf(NULL, 0, "%" PRIu64, largest);
   for (size_t i = 0; i < top; ++i) {
-    if (output_options.mode == SEGMENT_OUTPUT_PAIRS) {
+    if (output_options.unit == SEGMENT_UNIT_PAIRS) {
       std::string const pair = format_pair_segment(ordered[i]->first);
       if (show_pair_counts) {
         printf("%*" PRIu64 " %s\n",
@@ -257,7 +258,13 @@ int main(int argc, char* argv[]) {
     usage(stderr, argv[0]);
     return 2;
   }
-  if (show_pair_counts && output_options.mode != SEGMENT_OUTPUT_PAIRS) {
+  bool const workflow =
+      filter_options.workflow || !filter_options.workflow_root.empty();
+  if (workflow && !output_options.unit.has_value()) {
+    output_options.unit = SEGMENT_UNIT_PAIRS;
+    filter_options.workflow_yes = true;
+  }
+  if (show_pair_counts && output_options.unit != SEGMENT_UNIT_PAIRS) {
     fputs("top-segments: --counts requires --pairs\n", stderr);
     usage(stderr, argv[0]);
     return 2;
