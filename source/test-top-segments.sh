@@ -241,15 +241,27 @@ actual=$("$top_segments" --wfroot "$wfroot" -y \
   "$results/dfs.s2.m4.x2.g4.1000000.u-abc" 2>/dev/null)
 [[ $actual == "1 alpha" ]] || fail "a results-dir no.pairs was read: $actual"
 
-# A name that parses but names a target that is not there disagrees with the
-# selected target ("current", i.e. g4) and fails outright, rather than
-# silently applying no exclusions.
+# A name that parses but names a target that is not there is, with no -t,
+# the selected target itself -- so the failure is that target missing, not a
+# disagreement with some other selection.
 cp "$target/dfs.seed" "$results/dfs.s2.m4.x2.g9.1000000.u-abc"
 mismatch_diagnostics=$test_dir/mismatch-diagnostics.txt
 if "$top_segments" --wfroot "$wfroot" -y \
     "$results/dfs.s2.m4.x2.g9.1000000.u-abc" \
     >/dev/null 2>"$mismatch_diagnostics"; then
-  fail "an absent named target did not fail"
+  fail "an absent inferred target did not fail"
+fi
+if ! grep -q 'target "s2/u-abc/m4/g9" is not a directory' \
+    "$mismatch_diagnostics"; then
+  fail "absent inferred target diagnostic is wrong: $(cat "$mismatch_diagnostics")"
+fi
+
+# The disagreement case is still real once -t names a different, existing
+# target of its own: the two names are compared and neither wins silently.
+if "$top_segments" --wfroot "$wfroot" --target s2/u-abc/m4/g4 -y \
+    "$results/dfs.s2.m4.x2.g9.1000000.u-abc" \
+    >/dev/null 2>"$mismatch_diagnostics"; then
+  fail "a named target disagreeing with -t did not fail"
 fi
 if ! grep -q \
     'belongs to target "s2/u-abc/m4/g9", not the selected "s2/u-abc/m4/g4"' \
@@ -274,5 +286,20 @@ actual=$("$top_segments" --wfroot "$wfroot" --target s2/u-abc/m4/g5 \
   fail "--target counts are wrong: $actual"
 grep -q "TARGET resolved to s2/u-abc/m4/g5" "$target2_diagnostics" ||
   fail "--target resolution was not announced: $(cat "$target2_diagnostics")"
+
+# With no -t at all, the same g5 is picked up from the input instead: by
+# directory for a file kept in the tree, by name for one kept outside it.
+inferred_diagnostics=$test_dir/inferred-diagnostics.txt
+"$top_segments" --wfroot "$wfroot" -y "$target2/dfs.seed" \
+  >/dev/null 2>"$inferred_diagnostics"
+grep -q "TARGET resolved to s2/u-abc/m4/g5" "$inferred_diagnostics" ||
+  fail "target was not inferred from an in-tree path: $(cat "$inferred_diagnostics")"
+
+cp "$target2/dfs.seed" "$results/dfs.s2.m4.x2.g5.1000000.u-abc"
+"$top_segments" --wfroot "$wfroot" -y \
+  "$results/dfs.s2.m4.x2.g5.1000000.u-abc" \
+  >/dev/null 2>"$inferred_diagnostics"
+grep -q "TARGET resolved to s2/u-abc/m4/g5" "$inferred_diagnostics" ||
+  fail "target was not inferred from a results file name: $(cat "$inferred_diagnostics")"
 
 echo PASS

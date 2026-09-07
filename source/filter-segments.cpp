@@ -25,10 +25,10 @@ static void usage(FILE* fp, char const* program) {
       "                       DIR/%s\n"
       "  --wf                 shortcut for --wfroot $WFROOT\n"
       "  -t, --target TARGET  with --wf or --wfroot, the target selected by\n"
-      "                       DIR/.wf/best/TARGET; defaults to %s; FILE,\n"
-      "                       when it names a target of its own by its\n"
-      "                       directory or by its name, must name that same\n"
-      "                       target: %s\n"
+      "                       DIR/.wf/best/TARGET; defaults to the target\n"
+      "                       FILE names of its own, by its directory or by\n"
+      "                       its name, and otherwise to %s; an explicit\n"
+      "                       TARGET must be that same target: %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH,
       WORKFLOW_TARGET_NO_PAIRS_PATH, WORKFLOW_DEFAULT_TARGET,

@@ -244,6 +244,20 @@ bool workflow_target(
       : workflow_target_name(input, wfroot, out);
 }
 
+// The target to resolve when -t/--target was not given: the one the single
+// named input belongs to, when it names one, and otherwise the default
+// link. What comes out is still only a name -- a results file kept outside
+// the tree can name a target that has no directory -- so it goes through
+// resolve_target_name() like any other.
+std::string default_target_name(
+    PairFilterOptions const& options, char const* wfroot) {
+  std::string named;
+  if (!options.input_path.empty() &&
+      workflow_target(options.input_path, wfroot, &named))
+    return named;
+  return WORKFLOW_DEFAULT_TARGET;
+}
+
 // Whether the file the tool will read agrees with the selected target.
 //
 // Only a file that names a target of its own has anything to say, and when
@@ -389,8 +403,8 @@ bool load_pair_filters(
 
   std::string target;
   if (wfroot != NULL) {
-    std::string const name =
-        options.target.empty() ? WORKFLOW_DEFAULT_TARGET : options.target;
+    std::string const name = options.target.empty()
+        ? default_target_name(options, wfroot) : options.target;
     if (!resolve_target_name(wfroot, name, program, &target)) return false;
     if (!target_agrees_with_input(options, wfroot, target, program))
       return false;

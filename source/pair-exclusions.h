@@ -19,7 +19,8 @@ extern char const* const WORKFLOW_DICT_PATH;
 // path to open.
 extern char const* const WORKFLOW_TARGET_NO_PAIRS_PATH;
 
-// The target selected when -t/--target is not given.
+// The target selected when -t/--target is not given and the input names no
+// target of its own.
 extern char const* const WORKFLOW_DEFAULT_TARGET;
 
 // How the workflow renders a dfs-anagrams results file kept outside the
@@ -33,8 +34,8 @@ struct PairFilterOptions {
   bool workflow = false;
   std::string workflow_root;
   bool workflow_yes = false;
-  // The -t/--target value, or empty for WORKFLOW_DEFAULT_TARGET. Named
-  // rather than resolved here: what it addresses is known only once a
+  // The -t/--target value, or empty to take the target from `input_path`.
+  // Named rather than resolved here: what it addresses is known only once a
   // workflow root is selected.
   std::string target;
   // The one input file the tool is about to read, or empty when it will read
@@ -72,13 +73,15 @@ bool check_pair_filter_options(
 // dictionary to load at all, which warns. Explicit missing files and all
 // malformed or unreadable files are errors.
 //
-// A workflow root also selects a target, .wf/best/ plus the -t/--target
-// name, and rejects that target's own no.pairs, so that asking for the
-// workflow's filtering gets all of it rather than the root-level half. The
-// selection is announced and has to name a target directory; when
-// `options.input_path` names a target of its own, by its directory or by its
-// name, the two have to be the same target. A target with no no.pairs is
-// silent, because having none is the ordinary case.
+// A workflow root also selects a target, .wf/best/ plus a target name, and
+// rejects that target's own no.pairs, so that asking for the workflow's
+// filtering gets all of it rather than the root-level half. The name is the
+// -t/--target value; without one it is the target `options.input_path`
+// belongs to, by its directory or by its name, and WORKFLOW_DEFAULT_TARGET
+// only when the input names none. However it was arrived at, the selection
+// is announced and has to resolve to a target directory, and a named input
+// that disagrees with an explicit -t/--target is an error. A target with no
+// no.pairs is silent, because having none is the ordinary case.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary);
