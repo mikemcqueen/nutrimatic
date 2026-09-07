@@ -29,6 +29,11 @@ enum SegmentOutputOptionResult {
   SEGMENT_OUTPUT_OPTION_ERROR,
 };
 
+// Reads a -n N value: a non-negative integer, with 0 meaning no limit for
+// the tools that spell it that way. Shared so every -n takes the same
+// spellings. Nothing is diagnosed here; the caller names its own option.
+bool parse_limit(char const* text, uint64_t* limit);
+
 // Parses --pairs, --solo-words, --all-words, -l/--by-length and -n N. `index`
 // points to the current argument and advances over a consumed N. The three
 // mode options are mutually exclusive, though repeating one is allowed. Errors

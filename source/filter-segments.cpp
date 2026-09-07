@@ -9,6 +9,7 @@
 #include <string>
 
 #include "pair-exclusions.h"
+#include "segment-output.h"
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
@@ -32,16 +33,6 @@ static void usage(FILE* fp, char const* program) {
       program, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH,
       WORKFLOW_TARGET_NO_PAIRS_PATH, WORKFLOW_DEFAULT_TARGET,
       WORKFLOW_RESULTS_NAME);
-}
-
-static bool parse_limit(char const* text, uint64_t* limit) {
-  if (text[0] == '\0' || text[0] == '-') return false;
-  errno = 0;
-  char* end;
-  unsigned long long const parsed = strtoull(text, &end, 10);
-  if (errno == ERANGE || *end != '\0') return false;
-  *limit = parsed;
-  return true;
 }
 
 static bool filter_stream(

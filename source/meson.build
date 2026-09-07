@@ -169,7 +169,7 @@ first_segments = executable('first-segments', 'first-segments.cpp',
   install: true)
 
 filter_segments = executable('filter-segments', 'filter-segments.cpp',
-  dependencies: pair_exclusions_dep,
+  dependencies: [pair_exclusions_dep, segment_output_dep],
   install: true)
 
 # Keep the class-visitor logic in the hot caller rather than leaving it as a

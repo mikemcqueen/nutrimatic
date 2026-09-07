@@ -7,8 +7,6 @@
 
 #include <algorithm>
 
-namespace {
-
 bool parse_limit(char const* text, uint64_t* limit) {
   if (text[0] == '\0' || text[0] == '-') return false;
   errno = 0;
@@ -18,6 +16,8 @@ bool parse_limit(char const* text, uint64_t* limit) {
   *limit = parsed;
   return true;
 }
+
+namespace {
 
 bool set_mode(
     SegmentOutputMode mode, char const* program, SegmentOutputOptions* out) {
