@@ -180,7 +180,7 @@ beta,gamma'
 [[ $actual == "$expected" ]] || fail "--wf loaded YES pairs: $actual"
 expected_diagnostics="first-segments: TARGET resolved to s2/u-abc/m4/g4
 first-segments: WARNING: classified pair file \"$partial_wfroot/.wf/classified/no/no.pairs\" is not present
-first-segments: WARNING: dictionary \"$partial_wfroot/.wf/best/dict/words.big\" is not present
+first-segments: WARNING: dictionary \"$partial_wfroot/.wf/dict/words.filtered\" is not present
 found segment 2 on line 1"
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||

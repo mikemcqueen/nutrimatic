@@ -14,7 +14,7 @@
 
 char const* const WORKFLOW_NO_PAIRS_PATH = ".wf/classified/no/no.pairs";
 char const* const WORKFLOW_YES_PAIRS_PATH = ".wf/classified/yes/yes.pairs";
-char const* const WORKFLOW_DICT_PATH = ".wf/best/dict/words.big";
+char const* const WORKFLOW_DICT_PATH = ".wf/dict/words.filtered";
 char const* const WORKFLOW_TARGET_NO_PAIRS_PATH =
     ".wf/best/SENTENCE/LETTERS/mN/gN/no.pairs";
 char const* const WORKFLOW_DEFAULT_TARGET = "current";

@@ -66,7 +66,7 @@ bool check_pair_filter_options(
 
 // Loads explicit ignore/reject files. With --wf or --wfroot, classified NO
 // pairs below the selected workflow root are rejected, the root's
-// .wf/best/dict/words.big is loaded into `dictionary`, and with -y/--yes,
+// .wf/dict/words.filtered is loaded into `dictionary`, and with -y/--yes,
 // classified YES pairs are ignored. Missing workflow files warn and are
 // skipped, leaving `dictionary` empty. Without a workflow root there is no
 // dictionary to load at all, which warns. Explicit missing files and all

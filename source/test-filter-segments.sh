@@ -75,8 +75,8 @@ actual=$(WFROOT=$test_dir/not-the-root \
   "$filter_segments" --wfroot "$wfroot" -r "$reject" "$input")
 [[ $actual == "$expected" ]] || fail "--wfroot rejections are wrong: $actual"
 
-mkdir -p "$wfroot/.wf/best/dict"
-cat > "$wfroot/.wf/best/dict/words.big" <<'EOF'
+mkdir -p "$wfroot/.wf/dict"
+cat > "$wfroot/.wf/dict/words.filtered" <<'EOF'
 alpha
 beta
 gamma
@@ -137,7 +137,8 @@ diagnostics=$test_dir/diagnostics.txt
 
 # -t naming a directory under .wf/best that is not a target -- the shape
 # needs exactly four components below best, ending in mN/gN -- is fatal.
-if WFROOT=$wfroot "$filter_segments" --wf -t dict "$input" \
+mkdir -p "$wfroot/.wf/best/idx"
+if WFROOT=$wfroot "$filter_segments" --wf -t idx "$input" \
     >/dev/null 2> "$diagnostics"; then
   fail "-t on a non-target directory succeeded"
 fi
