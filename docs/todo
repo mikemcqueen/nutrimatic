@@ -1,4 +1,9 @@
-* don't show dense cache details if dense cache isn't chosen
+* top-segments -wf --solo-words [-w] results/sN/dfs.*.best.*
+  - should (optionally?) filter out TARGET/no.solo-words
+  - should (optionally?) filter out DICT/reviewed.words?
+  - should (always?) filter out DICT/no.words (which doesn't exist yet).
+
+* dfs-anagrams: don't show dense cache details if dense cache isn't chosen
 * -S 0 (auto) default (hardware threads)
 * --require-completable auto
 * -P 10000 default
