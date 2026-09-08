@@ -23,7 +23,8 @@ typedef std::unordered_map<std::string, SegmentStats> SegmentCounts;
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs [-c] | --solo-words | --all-words]\n"
+      "usage: %s [--pairs [-c] | --solo-words | --all-words |\n"
+      "          --pair-words [--unique]]\n"
       "          [-l] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
@@ -37,6 +38,9 @@ static void usage(FILE* fp, char const* program) {
       "  --solo-words        print only single-word segments\n"
       "  --all-words         count every word occurrence, splitting\n"
       "                      multi-word segments into their words\n"
+      "  --pair-words        count words occurring in multi-word segments\n"
+      "  --unique            with --pair-words, count each distinct\n"
+      "                      multi-word segment once\n"
       "  -l, --by-length     sort by descending non-space character length\n"
       "  -n N                print at most N rows; 0 prints all; defaults to "
       "%" PRIu64 "\n"
@@ -132,10 +136,22 @@ static bool count_stream(
   return true;
 }
 
-static bool split_counts(SegmentCounts const& counts, SegmentCounts* words) {
+static bool selected_segment(
+    SegmentSelection selection, std::string const& segment) {
+  if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
+  if (selection == SEGMENT_SELECTION_SOLO) return is_solo_segment(segment);
+  return true;
+}
+
+static bool split_counts(
+    SegmentCounts const& counts, SegmentSelection selection,
+    SegmentWeight weight, SegmentCounts* words) {
   for (SegmentCounts::const_iterator entry = counts.begin();
        entry != counts.end(); ++entry) {
+    if (!selected_segment(selection, entry->first)) continue;
     std::vector<std::string> const split = split_segment_words(entry->first);
+    uint64_t const increment = weight == SEGMENT_WEIGHT_UNIQUE
+        ? 1 : entry->second.count;
     for (size_t i = 0; i < split.size(); ++i) {
       SegmentCounts::iterator word = words->find(split[i]);
       if (word == words->end()) {
@@ -143,11 +159,11 @@ static bool split_counts(SegmentCounts const& counts, SegmentCounts* words) {
             split[i], SegmentStats{0, split[i].size()}).first;
       }
       if (word->second.count >
-          std::numeric_limits<uint64_t>::max() - entry->second.count) {
+          std::numeric_limits<uint64_t>::max() - increment) {
         fprintf(stderr, "top-segments: word count overflow\n");
         return false;
       }
-      word->second.count += entry->second.count;
+      word->second.count += increment;
     }
   }
   return true;
@@ -157,22 +173,20 @@ static bool print_counts(
     SegmentCounts const& counts, SegmentOutputOptions const& output_options,
     bool show_pair_counts) {
   SegmentCounts split;
-  if (output_options.unit == SEGMENT_UNIT_ALL_WORDS &&
-      !split_counts(counts, &split))
+  if (output_options.projection == SEGMENT_PROJECTION_WORDS &&
+      !split_counts(counts, output_options.selection, output_options.weight,
+          &split))
     return false;
   SegmentCounts const& rows =
-      output_options.unit == SEGMENT_UNIT_ALL_WORDS ? split : counts;
+      output_options.projection == SEGMENT_PROJECTION_WORDS ? split : counts;
 
   std::vector<SegmentCounts::const_iterator> ordered;
   ordered.reserve(rows.size());
   uint64_t largest = 0;
   for (SegmentCounts::const_iterator entry = rows.begin();
        entry != rows.end(); ++entry) {
-    if (output_options.unit == SEGMENT_UNIT_PAIRS &&
-        !is_pair_segment(entry->first))
-      continue;
-    if (output_options.unit == SEGMENT_UNIT_SOLO_WORD &&
-        !is_solo_segment(entry->first))
+    if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS &&
+        !selected_segment(output_options.selection, entry->first))
       continue;
     ordered.push_back(entry);
     largest = std::max(largest, entry->second.count);
@@ -192,7 +206,8 @@ static bool print_counts(
 
   int const width = snprintf(NULL, 0, "%" PRIu64, largest);
   for (size_t i = 0; i < top; ++i) {
-    if (output_options.unit == SEGMENT_UNIT_PAIRS) {
+    if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
+        output_options.projection == SEGMENT_PROJECTION_SEGMENTS) {
       std::string const pair = format_pair_segment(ordered[i]->first);
       if (show_pair_counts) {
         printf("%*" PRIu64 " %s\n",
@@ -218,6 +233,19 @@ int main(int argc, char* argv[]) {
     if (parse_options) {
       if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--counts") == 0) {
         show_pair_counts = true;
+        continue;
+      }
+      if (strcmp(argv[i], "--pair-words") == 0) {
+        if (!select_segment_output(
+                SEGMENT_SELECTION_PAIRS, SEGMENT_PROJECTION_WORDS,
+                "top-segments", &output_options)) {
+          usage(stderr, argv[0]);
+          return 2;
+        }
+        continue;
+      }
+      if (strcmp(argv[i], "--unique") == 0) {
+        output_options.weight = SEGMENT_WEIGHT_UNIQUE;
         continue;
       }
 
@@ -260,12 +288,24 @@ int main(int argc, char* argv[]) {
   }
   bool const workflow =
       filter_options.workflow || !filter_options.workflow_root.empty();
-  if (workflow && !output_options.unit.has_value()) {
-    output_options.unit = SEGMENT_UNIT_PAIRS;
+  if (workflow && !output_options.mode_explicit) {
+    output_options.selection = SEGMENT_SELECTION_PAIRS;
+    output_options.projection = SEGMENT_PROJECTION_SEGMENTS;
     filter_options.workflow_yes = true;
   }
-  if (show_pair_counts && output_options.unit != SEGMENT_UNIT_PAIRS) {
+  bool const pair_segments =
+      output_options.selection == SEGMENT_SELECTION_PAIRS &&
+      output_options.projection == SEGMENT_PROJECTION_SEGMENTS;
+  bool const pair_words =
+      output_options.selection == SEGMENT_SELECTION_PAIRS &&
+      output_options.projection == SEGMENT_PROJECTION_WORDS;
+  if (show_pair_counts && !pair_segments) {
     fputs("top-segments: --counts requires --pairs\n", stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
+  if (output_options.weight == SEGMENT_WEIGHT_UNIQUE && !pair_words) {
+    fputs("top-segments: --unique requires --pair-words\n", stderr);
     usage(stderr, argv[0]);
     return 2;
   }

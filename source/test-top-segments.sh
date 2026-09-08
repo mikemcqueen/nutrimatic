@@ -97,12 +97,45 @@ actual=$("$top_segments" --all-words "$input")
 [[ $actual == "$expected_all_words" ]] ||
   fail "--all-words output is wrong: $actual"
 
+pair_words_input=$test_dir/pair-words-results.txt
+cat > "$pair_words_input" <<'EOF'
+9 red fox,alpha
+8 red fox,beta
+7 red dog,gamma
+EOF
+
+expected_pair_words='3 red
+2 fox
+1 dog'
+actual=$("$top_segments" --pair-words "$pair_words_input")
+[[ $actual == "$expected_pair_words" ]] ||
+  fail "--pair-words output is wrong: $actual"
+
+expected_unique_pair_words='2 red
+1 dog
+1 fox'
+actual=$("$top_segments" --pair-words --unique "$pair_words_input")
+[[ $actual == "$expected_unique_pair_words" ]] ||
+  fail "--pair-words --unique output is wrong: $actual"
+
+actual=$("$top_segments" --unique --pair-words "$pair_words_input")
+[[ $actual == "$expected_unique_pair_words" ]] ||
+  fail "--unique --pair-words output is wrong: $actual"
+
 if "$top_segments" --pairs --all-words "$input" >/dev/null 2>&1; then
   fail "--pairs with --all-words succeeded"
 fi
 
 if "$top_segments" --counts "$input" >/dev/null 2>&1; then
   fail "--counts without --pairs succeeded"
+fi
+
+if "$top_segments" --unique "$input" >/dev/null 2>&1; then
+  fail "--unique without --pair-words succeeded"
+fi
+
+if "$top_segments" --pair-words --pairs "$input" >/dev/null 2>&1; then
+  fail "--pair-words with --pairs succeeded"
 fi
 
 ignore1=$test_dir/ignore1.pairs

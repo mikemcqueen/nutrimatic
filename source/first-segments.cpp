@@ -116,14 +116,14 @@ static bool find_segments(
     for (std::string const& segment : segments) {
       if (result.size() == output_options.limit) break;
       if (ignored.find(segment) != ignored.end()) continue;
-      if (output_options.unit == SEGMENT_UNIT_PAIRS &&
+      if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
           !is_pair_segment(segment))
         continue;
-      if (output_options.unit == SEGMENT_UNIT_SOLO_WORD &&
+      if (output_options.selection == SEGMENT_SELECTION_SOLO &&
           !is_solo_segment(segment))
         continue;
 
-      if (output_options.unit != SEGMENT_UNIT_ALL_WORDS) {
+      if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS) {
         if (found.insert(segment).second) {
           result.push_back(
               FoundSegment{segment, segment_nonspace_length(segment)});

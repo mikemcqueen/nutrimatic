@@ -3,22 +3,32 @@
 
 #include <stdint.h>
 
-#include <optional>
 #include <string>
 #include <vector>
 
 static uint64_t const DEFAULT_SEGMENT_OUTPUT_LIMIT = 1000;
 
-// The unit selected for output. With no unit, tools operate on whole segments
-// of any width.
-enum SegmentUnit {
-  SEGMENT_UNIT_PAIRS,
-  SEGMENT_UNIT_SOLO_WORD,
-  SEGMENT_UNIT_ALL_WORDS,
+enum SegmentSelection {
+  SEGMENT_SELECTION_ALL,
+  SEGMENT_SELECTION_PAIRS,
+  SEGMENT_SELECTION_SOLO,
+};
+
+enum SegmentProjection {
+  SEGMENT_PROJECTION_SEGMENTS,
+  SEGMENT_PROJECTION_WORDS,
+};
+
+enum SegmentWeight {
+  SEGMENT_WEIGHT_OCCURRENCES,
+  SEGMENT_WEIGHT_UNIQUE,
 };
 
 struct SegmentOutputOptions {
-  std::optional<SegmentUnit> unit;
+  SegmentSelection selection = SEGMENT_SELECTION_ALL;
+  SegmentProjection projection = SEGMENT_PROJECTION_SEGMENTS;
+  SegmentWeight weight = SEGMENT_WEIGHT_OCCURRENCES;
+  bool mode_explicit = false;
   uint64_t limit = DEFAULT_SEGMENT_OUTPUT_LIMIT;
   bool by_length = false;
 };
@@ -34,10 +44,16 @@ enum SegmentOutputOptionResult {
 // spellings. Nothing is diagnosed here; the caller names its own option.
 bool parse_limit(char const* text, uint64_t* limit);
 
+// Selects one combination of segment input and output projection. Repeating
+// the same combination is allowed; selecting a different one is an error.
+bool select_segment_output(
+    SegmentSelection selection, SegmentProjection projection,
+    char const* program, SegmentOutputOptions* out);
+
 // Parses --pairs, --solo-words, --all-words, -l/--by-length and -n N. `index`
 // points to the current argument and advances over a consumed N. The three
-// unit options are mutually exclusive, though repeating one is allowed. Errors
-// are diagnosed already.
+// output options are mutually exclusive, though repeating one is allowed.
+// Errors are diagnosed already.
 SegmentOutputOptionResult parse_segment_output_option(
     int argc, char* const argv[], int* index, char const* program,
     SegmentOutputOptions* out);
