@@ -164,6 +164,10 @@ top_segments = executable('top-segments', 'top-segments.cpp',
   dependencies: [pair_exclusions_dep, segment_output_dep],
   install: true)
 
+segment_stats = executable('segment-stats', 'segment-stats.cpp',
+  dependencies: segment_output_dep,
+  install: true)
+
 first_segments = executable('first-segments', 'first-segments.cpp',
   dependencies: [pair_exclusions_dep, segment_output_dep],
   install: true)
