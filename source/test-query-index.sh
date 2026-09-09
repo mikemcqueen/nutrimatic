@@ -295,6 +295,13 @@ assert_close "$(score_value 'gh ij' --pairs "$test_dir/pairs.txt" \
     --pair-bonus 1 -P 1)" 5 \
   "--pair-bonus should not apply to an unlisted phrase"
 
+# A pair list may also name one exact entry, which receives the pair bonus
+# without requiring a comma-separated partner.
+printf 'ab\n' > "$test_dir/single-word-pairs.txt"
+assert_close "$(score_value ab --pairs "$test_dir/single-word-pairs.txt" -P 1)" \
+  80000000 \
+  "--score should apply the pair bonus to a listed standalone word"
+
 "$query_index" "$synthetic_index" abcdef -m 1 -n 1 \
   --pairs "$test_dir/pairs.txt" \
   > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"

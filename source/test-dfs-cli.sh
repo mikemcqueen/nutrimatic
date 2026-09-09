@@ -210,7 +210,7 @@ cmp "$test_dir/all.stdout" "$test_dir/pair-list.stdout" ||
 printf 'ab,cd\ne-f,gh\nij,kl,mn\n' > "$test_dir/bad-pairs.txt"
 expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   --pairs "$test_dir/bad-pairs.txt"
-grep -q "^error: pair list \"$test_dir/bad-pairs.txt\" line 3: expected two comma-separated words$" \
+grep -q "^error: pair list \"$test_dir/bad-pairs.txt\" line 3: expected one word or two comma-separated words$" \
   "$test_dir/status.stderr" ||
   fail "the malformed pair-line diagnostic did not name the right line"
 expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \

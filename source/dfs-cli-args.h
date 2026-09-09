@@ -146,20 +146,20 @@ size_t resolve_preprocess_threads(int requested, size_t letter_count);
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
 
 // A pair list owns every loaded pair as both "left right" and "right left".
-// Every key holds exactly one space, so whole-entry membership implies a
-// two-word spelling.
+// When single words are allowed, each is owned as one key without a space.
 //
 // Loads a newline-delimited list of "word,word" pairs, applying
 // load_dictionary()'s cleanup to each field, and inserts both word orders.
+// When allow_single_words, a line without a comma is loaded as one key.
 // Lines containing '-' are skipped, or are an error when reject_hyphens: a
 // skipped line costs a bonus list nothing, but silently drops an entry a
 // caller meant to enforce. Unless quiet, reports the number of pairs read and
 // unique ordered keys loaded. Prints an error and returns false if the file
-// can't be opened or read, or if any surviving line does not hold exactly two
-// nonempty fields. `what` names the list in every diagnostic.
+// can't be opened or read, or if any surviving line does not hold an allowed
+// number of nonempty fields. `what` names the list in every diagnostic.
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
-    bool reject_hyphens);
+    bool reject_hyphens, bool allow_single_words = false);
 
 // Loads and combines exclusion lists in the same format from regular files and
 // at most one workflow root, which resolves to

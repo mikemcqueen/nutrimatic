@@ -244,7 +244,7 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
 
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
-    bool reject_hyphens) {
+    bool reject_hyphens, bool allow_single_words) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open %s \"%s\"\n", what, path);
@@ -267,18 +267,26 @@ bool load_pair_file(
     }
 
     size_t const comma = line.find(',');
+    bool const one_field =
+        allow_single_words && comma == std::string::npos;
     bool const two_fields =
         comma != std::string::npos &&
         line.find(',', comma + 1) == std::string::npos;
-    if (two_fields) {
+    if (one_field) {
+      clean_word(line.data(), line.data() + line.size(), &left);
+      right.clear();
+    } else if (two_fields) {
       clean_word(line.data(), line.data() + comma, &left);
       clean_word(line.data() + comma + 1, line.data() + line.size(), &right);
     }
-    if (!two_fields || left.empty() || right.empty()) {
+    if ((!one_field && !two_fields) || left.empty() ||
+        (two_fields && right.empty())) {
       fprintf(stderr,
-          "error: %s \"%s\" line %zu: "
-          "expected two comma-separated words\n",
-          what, path, line_number);
+          "error: %s \"%s\" line %zu: %s\n",
+          what, path, line_number,
+          allow_single_words
+              ? "expected one word or two comma-separated words"
+              : "expected two comma-separated words");
       return false;
     }
     loaded.push_back(std::make_pair(left, right));
@@ -291,8 +299,12 @@ bool load_pair_file(
 
   pairs->reserve(2 * loaded.size());
   for (size_t i = 0; i < loaded.size(); ++i) {
-    pairs->insert(loaded[i].first + " " + loaded[i].second);
-    pairs->insert(loaded[i].second + " " + loaded[i].first);
+    if (loaded[i].second.empty()) {
+      pairs->insert(loaded[i].first);
+    } else {
+      pairs->insert(loaded[i].first + " " + loaded[i].second);
+      pairs->insert(loaded[i].second + " " + loaded[i].first);
+    }
   }
   if (!quiet)
     dfs_diagnostic("%s: %zu pairs, %zu keys\n",

@@ -76,8 +76,8 @@ static void usage(char const* program) {
       "  --dict PATH filters entries to words in the dictionary\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
-      "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
-      " in either order\n"
+      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line;"
+      " pairs are matched in either order\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
       " external words; they consume no letters and matched partners are"
       " printed in parentheses\n"
@@ -527,7 +527,7 @@ static bool print_sequence_score(
 static bool load_pairs(Args const& args, DfsPairSet* pairs) {
   if (args.common.pair_file == NULL) return true;
   return load_pair_file(
-      args.common.pair_file, "pair list", pairs, true, false);
+      args.common.pair_file, "pair list", pairs, true, false, true);
 }
 
 int main(int argc, char* argv[]) {

@@ -81,10 +81,11 @@ static void usage(char const* program) {
       " only within one -g run\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
-      "  --pairs FILE loads word pairs, one \"word,word\" line each, matched"
-      " in either order\n"
-      "  --exclude-pairs FILE|WORKFLOW-DIR loads pairs in the same format and"
-      " drops every index entry spelled exactly like one, in either order, so"
+      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line;"
+      " pairs are matched in either order\n"
+      "  --exclude-pairs FILE|WORKFLOW-DIR loads word pairs, one"
+      " \"word,word\" line each, and drops every index entry spelled exactly"
+      " like one, in either order, so"
       " no result can contain it\n"
       "    may be repeated to combine inputs, but only one argument may be a"
       " directory\n"
@@ -294,7 +295,7 @@ int main(int argc, char* argv[]) {
   DfsPairSet pairs;
   if (args.common.pair_file != NULL) {
     if (!load_pair_file(
-            args.common.pair_file, "pair list", &pairs, false, false))
+            args.common.pair_file, "pair list", &pairs, false, false, true))
       return 1;
   } else
     args.common.pair_bonus = 0.0;

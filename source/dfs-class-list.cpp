@@ -278,7 +278,7 @@ class DfsExtractor {
     size_t const length = text.size() - 1;
     DFS_CHECK(length <= UINT8_MAX && word_count <= UINT8_MAX);
     uint16_t score_flags = 0;
-    if (pairs != NULL && word_count > 1) {
+    if (pairs != NULL) {
       text.pop_back();
       if (pairs->count(text) != 0)
         score_flags |= DFS_MEMBER_KNOWN_PAIR;
