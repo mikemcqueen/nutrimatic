@@ -81,8 +81,11 @@ static void usage(char const* program) {
       " only within one -g run\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 2; 0 means no limit\n"
-      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line;"
-      " pairs are matched in either order\n"
+      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line\n"
+      "    during extraction, a pair containing a word shorter than -m is"
+      " matched only in written order; other pairs match in either order\n"
+      "    every loaded entry must contain at least -m normalized non-space"
+      " characters in total\n"
       "  --exclude-pairs FILE|WORKFLOW-DIR loads word pairs, one"
       " \"word,word\" line each, and drops every index entry spelled exactly"
       " like one, in either order, so"
@@ -297,9 +300,11 @@ int main(int argc, char* argv[]) {
   }
 
   DfsPairSet pairs;
+  DfsPairSet exception_prefixes;
   if (args.common.pair_file != NULL) {
-    if (!load_pair_file(
-            args.common.pair_file, "pair list", &pairs, false, false, true))
+    if (!load_extraction_pair_file(
+            args.common.pair_file, "pair list", args.common.min_word_len,
+            &pairs, &exception_prefixes, false, false))
       return 1;
   } else
     args.common.pair_bonus = 0.0;
@@ -322,7 +327,17 @@ int main(int argc, char* argv[]) {
     snprintf(segments_note, sizeof segments_note, ", exactly %d segment%s",
              args.num_segments, args.num_segments == 1 ? "" : "s");
   }
-  if (args.max_combine_words > 0) {
+  bool const active_short_pair_exception =
+      !exception_prefixes.empty() &&
+      (args.common.max_extract_words <= 0 ||
+       args.common.max_extract_words >= 2);
+  if (active_short_pair_exception) {
+    dfs_diagnostic(
+        "%zu letters \"%s\", entries of %d+ letters, at most %d segment%s%s\n",
+        args.letters.size(), args.letters.c_str(), args.common.min_word_len,
+        args.max_combine_words, args.max_combine_words == 1 ? "" : "s",
+        segments_note);
+  } else if (args.max_combine_words > 0) {
     dfs_diagnostic(
         "%zu letters \"%s\", words of %d+, at most %d word%s%s\n",
         args.letters.size(), args.letters.c_str(), args.common.min_word_len,
@@ -352,6 +367,8 @@ int main(int argc, char* argv[]) {
                        dictionary_filter, args.common.max_extract_words,
                        &model,
                        args.common.pair_file != NULL ? &pairs : NULL,
+                       !exception_prefixes.empty()
+                           ? &exception_prefixes : NULL,
                        solo_words.get(),
                        !args.exclude_pair_files.empty()
                            ? &exclude_pairs : NULL);

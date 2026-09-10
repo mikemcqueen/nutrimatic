@@ -183,33 +183,48 @@ class SignatureTable {
   size_t classes;
 };
 
-// A zero request means "no cap", and a request can only tighten the bound the
-// bag and the minimum word length already impose.
+// A zero request means "no cap", and a request can only tighten the effective
+// derived bound.
 int capped_extract_words(int derived, int requested) {
   if (requested <= 0) return derived;
   return std::min(derived, requested);
 }
 
-// Production form of measure-f's Extractor. It follows only trie edges allowed
-// by the remaining bag and emits at every terminating space, continuing beyond
-// it when enough letters remain for another word.
+int effective_extract_words(size_t letters, int min_word_len,
+                            bool include_phrases,
+                            bool has_exception_prefixes,
+                            int requested) {
+  int derived = include_phrases ? int(letters) / min_word_len : 1;
+  if (include_phrases && has_exception_prefixes)
+    derived = std::max(derived, 2);
+  return capped_extract_words(derived, requested);
+}
+
+// Production form of measure-f's Extractor. It follows trie edges allowed by
+// the remaining bag, with narrow prefix-gated traversal for short-pair
+// exceptions, and emits each eligible entry at its terminating space.
 class DfsExtractor {
  public:
   DfsExtractor(IndexReader const* reader, std::string const& letters,
                int min_word_len, bool include_phrases,
                DfsDictionary const* dictionary, int requested_max_words,
-               DfsPairSet const* pairs, DfsSoloWords* solo_words,
-               DfsPairSet const* exclude_pairs):
+               DfsPairSet const* pairs,
+               DfsPairSet const* exception_prefixes,
+               DfsSoloWords* solo_words, DfsPairSet const* exclude_pairs):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
       reader(reader),
       min_len(std::max(min_word_len, 1)),
-      max_extract_words(capped_extract_words(
-          include_phrases ? int(letters.size()) / min_len : 1,
+      max_extract_words(effective_extract_words(
+          letters.size(), min_len, include_phrases,
+          exception_prefixes != NULL && !exception_prefixes->empty(),
           requested_max_words)),
       dictionary(dictionary),
       pairs(pairs),
+      exception_prefixes(exception_prefixes),
+      has_exception_prefixes(
+          exception_prefixes != NULL && !exception_prefixes->empty()),
       solo_words(solo_words),
       exclude_pairs(exclude_pairs),
       letters_left(int(letters.size())),
@@ -244,7 +259,8 @@ class DfsExtractor {
 
   void run() {
     text.clear();
-    walk(reader->root(), reader->count(), 0, 0, 0);
+    walk(reader->root(), reader->count(), 0, 0, 0,
+         /*requires_pair_match=*/false);
   }
 
   int64_t nodes_visited() const { return nodes; }
@@ -315,14 +331,23 @@ class DfsExtractor {
   }
 
   void walk(IndexReader::Node node, int64_t count, int word_len,
-            int words, size_t depth) {
+            int words, size_t depth, bool requires_pair_match) {
     ++nodes;
 
     IndexReader::CharSet allowed;
     allowed.clear();
     for (int ch = 0; ch < 256; ++ch)
       if (bag[size_t(ch)] > 0) allowed.set((unsigned char) ch);
-    if (word_len >= min_len) allowed.set(' ');
+    bool const ordinary_boundary = word_len >= min_len;
+    bool const has_room_for_next_word = words + 1 < max_extract_words;
+    bool const exception_prefix =
+        has_exception_prefixes && words == 0 && has_room_for_next_word &&
+        exception_prefixes->count(text) != 0;
+    bool const exact_short_pair =
+        has_exception_prefixes && words == 1 && !ordinary_boundary &&
+        pairs != NULL && pairs->count(text) != 0;
+    if (ordinary_boundary || exception_prefix || exact_short_pair)
+      allowed.set(' ');
 
     std::vector<IndexReader::Choice>& here = choices[depth];
     here.clear();
@@ -336,11 +361,30 @@ class DfsExtractor {
                 text.substr(text.size() - size_t(word_len),
                             size_t(word_len))) == dictionary->end())
           continue;
+
+        bool const needs_pair_match =
+            words > 0 && (requires_pair_match || !ordinary_boundary);
+        bool const exact_pair = needs_pair_match &&
+            (exact_short_pair ||
+             (pairs != NULL && pairs->count(text) != 0));
+        bool const can_emit = words == 0
+            ? ordinary_boundary
+            : (!requires_pair_match && ordinary_boundary) || exact_pair;
         text.push_back(' ');
-        emit(choice.count, words + 1, choice.next);
-        if (words + 1 < max_extract_words && letters_left >= min_len &&
-            choice.next != IndexReader::Node(-1))
-          walk(choice.next, choice.count, 0, words + 1, depth + 1);
+        if (can_emit) emit(choice.count, words + 1, choice.next);
+
+        bool const ordinary_continuation =
+            !requires_pair_match && ordinary_boundary &&
+            has_room_for_next_word && letters_left >= min_len;
+        bool const exceptional_continuation =
+            exception_prefix && !ordinary_continuation;
+        if ((ordinary_continuation || exceptional_continuation) &&
+            choice.next != IndexReader::Node(-1)) {
+          bool const next_requires_pair_match =
+              requires_pair_match || (words == 0 && !ordinary_boundary);
+          walk(choice.next, choice.count, 0, words + 1, depth + 1,
+               next_requires_pair_match);
+        }
         text.pop_back();
         continue;
       }
@@ -350,7 +394,8 @@ class DfsExtractor {
       --letters_left;
       signature += multiplier_by_char[ch];
       text.push_back(choice.ch);
-      walk(choice.next, choice.count, word_len + 1, words, depth + 1);
+      walk(choice.next, choice.count, word_len + 1, words, depth + 1,
+           requires_pair_match);
       text.pop_back();
       signature -= multiplier_by_char[ch];
       ++letters_left;
@@ -363,6 +408,8 @@ class DfsExtractor {
   int const max_extract_words;
   DfsDictionary const* const dictionary;
   DfsPairSet const* const pairs;
+  DfsPairSet const* const exception_prefixes;
+  bool const has_exception_prefixes;
   DfsSoloWords* const solo_words;
   DfsPairSet const* const exclude_pairs;
   std::array<int, 256> bag;
@@ -423,6 +470,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            int max_extract_words,
                            DfsScoreModel const* score_model,
                            DfsPairSet const* pairs,
+                           DfsPairSet const* exception_prefixes,
                            DfsSoloWords* solo_words,
                            DfsPairSet const* exclude_pairs):
     class_count(0),
@@ -452,7 +500,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
 
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
-      max_extract_words, pairs, solo_words, exclude_pairs);
+      max_extract_words, pairs, exception_prefixes, solo_words, exclude_pairs);
   extractor.run();
   if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();

@@ -247,6 +247,104 @@ grep -q "^error: can't open pair list \"$test_dir/missing-pairs.txt\"$" \
   fail "the missing pair-list diagnostic is unclear"
 expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs
 
+# A short component may bypass -m only as part of the exact pair in its
+# written orientation. The digit fixture is disjoint from the legacy output
+# cases above, and its total normalized length is at least four.
+printf '1,2345\n' > "$test_dir/short-first.pairs"
+printf '2345,1\n' > "$test_dir/short-last.pairs"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+  > "$test_dir/short-none.stdout" 2> "$test_dir/short-none.stderr"
+[[ ! -s "$test_dir/short-none.stdout" ]] ||
+  fail "a short pair was extracted without --pairs"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+  --pairs "$test_dir/short-first.pairs" --pair-bonus 0 \
+  > "$test_dir/short-first.stdout" 2> "$test_dir/short-first.stderr"
+grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
+  fail "a listed short-first pair was not extracted"
+! grep -q ' 2345 1$' "$test_dir/short-first.stdout" ||
+  fail "a short-first pair was matched in reverse"
+! grep -q ' 1$' "$test_dir/short-first.stdout" ||
+  fail "a short first word was emitted as a standalone entry"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 -g 1 \
+  --pairs "$test_dir/short-first.pairs" --pair-bonus 0 \
+  > "$test_dir/short-one-segment.stdout" \
+  2> "$test_dir/short-one-segment.stderr"
+grep -q ' 1 2345$' "$test_dir/short-one-segment.stdout" ||
+  fail "-g 1 did not retain a short-pair entry as one segment"
+grep -Eq "${diagnostic_prefix}"'5 letters "12345", entries of 4[+] letters, at most 1 segment, exactly 1 segment$' \
+  "$test_dir/short-one-segment.stderr" ||
+  fail "short-pair search header did not preserve the entry bound"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+  --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
+  > "$test_dir/short-last.stdout" 2> "$test_dir/short-last.stderr"
+grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
+  fail "a listed long-first short-last pair was not extracted"
+! grep -q ' 1 2345$' "$test_dir/short-last.stdout" ||
+  fail "a long-first short-last pair was matched in reverse"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 -x 1 \
+  --pairs "$test_dir/short-first.pairs" \
+  > "$test_dir/short-extract-one.stdout" \
+  2> "$test_dir/short-extract-one.stderr"
+[[ ! -s "$test_dir/short-extract-one.stdout" ]] ||
+  fail "-x 1 kept a short-pair exception"
+"$dfs_anagrams" "$index_file" 23456789 -m 4 -n 10 \
+  --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
+  > "$test_dir/short-shared-prefix.stdout" \
+  2> "$test_dir/short-shared-prefix.stderr"
+grep -q ' 2345 6789$' "$test_dir/short-shared-prefix.stdout" ||
+  fail "an ordinary phrase sharing an exception prefix was rejected"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+  --pairs "$test_dir/short-first.pairs" \
+  --exclude-pairs "$test_dir/short-first.pairs" \
+  > "$test_dir/short-excluded.stdout" \
+  2> "$test_dir/short-excluded.stderr"
+[[ ! -s "$test_dir/short-excluded.stdout" ]] ||
+  fail "--exclude-pairs did not reject a short-pair exception"
+printf '2345\n' > "$test_dir/short-dictionary"
+"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+  --pairs "$test_dir/short-first.pairs" --dict "$test_dir/short-dictionary" \
+  > "$test_dir/short-dictionary.stdout" \
+  2> "$test_dir/short-dictionary.stderr"
+[[ ! -s "$test_dir/short-dictionary.stdout" ]] ||
+  fail "dictionary filtering did not reject a short-pair component"
+
+# Pair membership remains directional for asserted solo-word edges. No index
+# phrase joins 6789 to 1, so only the oriented pair-file key can make the edge.
+printf '6789,1\n' > "$test_dir/solo-short-forward.pairs"
+printf '1,6789\n' > "$test_dir/solo-short-reverse.pairs"
+"$dfs_anagrams" "$index_file" 6789 -m 4 -n 10 \
+  --solo-words 1 --word-bonus 0 \
+  --pairs "$test_dir/solo-short-forward.pairs" \
+  > "$test_dir/solo-short-forward.stdout" \
+  2> "$test_dir/solo-short-forward.stderr"
+grep -q ' 6789 (1)$' "$test_dir/solo-short-forward.stdout" ||
+  fail "the oriented short-pair solo edge was not applied"
+"$dfs_anagrams" "$index_file" 6789 -m 4 -n 10 \
+  --solo-words 1 --word-bonus 0 \
+  --pairs "$test_dir/solo-short-reverse.pairs" \
+  > "$test_dir/solo-short-reverse.stdout" \
+  2> "$test_dir/solo-short-reverse.stderr"
+! grep -q ' 6789 (1)$' "$test_dir/solo-short-reverse.stdout" ||
+  fail "a reversed short-pair solo edge was applied"
+
+# Validation measures cleaned field characters, not the comma or formatting.
+printf '!b!e!, a!n!\n' > "$test_dir/normalized-valid.pairs"
+"$dfs_anagrams" "$index_file" abcd -m 4 -n 10 \
+  --pairs "$test_dir/normalized-valid.pairs" \
+  > /dev/null 2> "$test_dir/normalized-valid.stderr"
+printf '!b!e!, a!\n' > "$test_dir/normalized-short-pair.pairs"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 4 -n 10 \
+  --pairs "$test_dir/normalized-short-pair.pairs"
+grep -q "^error: pair list \"$test_dir/normalized-short-pair.pairs\" line 1: normalized entry has 3 non-space characters, fewer than -m 4$" \
+  "$test_dir/status.stderr" ||
+  fail "short normalized pair diagnostic is wrong"
+printf 'a!n!\n' > "$test_dir/normalized-short-word.pairs"
+expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 4 -n 10 \
+  --pairs "$test_dir/normalized-short-word.pairs"
+grep -q "^error: pair list \"$test_dir/normalized-short-word.pairs\" line 1: normalized entry has 2 non-space characters, fewer than -m 4$" \
+  "$test_dir/status.stderr" ||
+  fail "short normalized word diagnostic is wrong"
+
 # --exclude-pairs drops the whole "ab cd" index entry, in either written
 # order. The two-entry "ab,cd" answer survives: the exclusion is over index
 # entries, not over adjacency in a result.

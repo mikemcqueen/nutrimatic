@@ -16,6 +16,16 @@ int main(int argc, char* argv[]) {
 
   {
     IndexWriter writer(fp);
+    // Digits keep the short-word-pair fixture disjoint from the letter-based
+    // DFS and query-index smoke cases below. These cover a short first word,
+    // a short second word, a longer entry containing the asserted pair, and
+    // an ordinary phrase sharing an exceptional first-word prefix.
+    writer.next("1 ", 0, 1);
+    writer.next("1 2345 ", 0, 1);
+    writer.next("1 2345 67 ", 0, 1);
+    writer.next("2345 1 ", 0, 1);
+    writer.next("2345 6789 ", 0, 1);
+    writer.next("6789 ", 0, 1);
     writer.next("ab ", 0, 10);
     writer.next("ab cd ", 0, 70);
     writer.next("ba ", 0, 5);

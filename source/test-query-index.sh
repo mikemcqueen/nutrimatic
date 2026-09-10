@@ -100,13 +100,13 @@ grep -q -- '--score cannot be used with --near' \
 expect_near_failure 'f  gh' ij near-malformed-spacing
 expect_near_failure f iJ near-malformed-character
 
-# The synthetic corpus total is 1142. Each comma after the first divides by
+# The synthetic corpus total is 1148. Each comma after the first divides by
 # corpus_total * P; spaces inside an exact entry do not add a segment. An
 # entry counts what phase 1 counts, which is its whole trailing-space subtree:
 # "ab" is 80, its own 10 plus the 70 of "ab cd".
 default_two_entry_score=$(score_value 'ab,cd')
 assert_close "$default_two_entry_score" \
-  "$(awk 'BEGIN { print 80 * 7 / (1142 * 1000000) }')" \
+  "$(awk 'BEGIN { print 80 * 7 / (1148 * 1000000) }')" \
   "the default should preserve the production segment penalty"
 assert_close "$(score_value 'ab,cd' -P 1000000)" \
   "$default_two_entry_score" \
@@ -118,17 +118,17 @@ for penalty in 1 100 1000000; do
 done
 
 assert_close "$(score_value 'ab,cd' -P 100)" \
-  "$(awk 'BEGIN { print 80 * 7 / (1142 * 100) }')" \
+  "$(awk 'BEGIN { print 80 * 7 / (1148 * 100) }')" \
   "two entries should pay one segment penalty"
 assert_close "$(score_value 'ab,cd,ab' --segment-penalty 100)" \
-  "$(awk 'BEGIN { print 80 * 7 * 80 / (1142 * 100)^2 }')" \
+  "$(awk 'BEGIN { print 80 * 7 * 80 / (1148 * 100)^2 }')" \
   "three entries should pay two segment penalties"
 for penalty in 1 100 1000000; do
   assert_close "$(score_value 'ab cd' -P "$penalty")" 70 \
     "a multi-word entry should remain one segment at P=$penalty"
 done
 assert_close "$(score_value 'ab,ab')" \
-  "$(awk 'BEGIN { print 80 * 80 / (1142 * 1000000) }')" \
+  "$(awk 'BEGIN { print 80 * 80 / (1148 * 1000000) }')" \
   "repeated entries should contribute repeatedly"
 
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
@@ -144,7 +144,7 @@ expect_score_failure 'ab  cd' malformed-spacing
 assert_close "$(score_value 'ab cd' -P 1)" 70 \
   "a multi-word entry should score as its own count without a bonus"
 assert_close "$(score_value 'ab cd,ab' -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1142 }')" \
+  "$(awk 'BEGIN { print 70 * 80 / 1148 }')" \
   "word count should not affect any segment's score without a bonus"
 
 assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
@@ -152,7 +152,7 @@ assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
 assert_close "$(score_value ab --word-bonus 1)" 80 \
   "--word-bonus should not apply to a single-word segment"
 assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1142 * 1e6 }')" \
+  "$(awk 'BEGIN { print 70 * 80 / 1148 * 1e6 }')" \
   "a mixed sequence should bonus only its multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0
@@ -292,6 +292,46 @@ cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-x2.stdout" ||
   fail "-x 2 does not match the uncapped run filtered to two words"
 
 # An explicit zero pair bonus makes loading a pair list leave output unchanged.
+printf '1,2345\n' > "$test_dir/short-first.pairs"
+printf '2345,1\n' > "$test_dir/short-last.pairs"
+"$query_index" "$synthetic_index" 12345 -m 4 -n 10 \
+  > "$test_dir/short-none.stdout" 2> "$test_dir/short-none.stderr"
+! grep -q ' 1 2345$' "$test_dir/short-none.stdout" ||
+  fail "a short pair was extracted without --pairs"
+"$query_index" "$synthetic_index" 12345 -m 4 -n 10 \
+  --pairs "$test_dir/short-first.pairs" --pair-bonus 0 \
+  > "$test_dir/short-first.stdout" 2> "$test_dir/short-first.stderr"
+grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
+  fail "query-index did not extract a listed short-first pair"
+! grep -q ' 2345 1$' "$test_dir/short-first.stdout" ||
+  fail "query-index matched a short-first pair in reverse"
+"$query_index" "$synthetic_index" 12345 -m 4 -n 10 \
+  --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
+  > "$test_dir/short-last.stdout" 2> "$test_dir/short-last.stderr"
+grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
+  fail "query-index did not extract a listed long-first short-last pair"
+"$query_index" "$synthetic_index" 12345 -m 4 -n 10 -x 1 \
+  --pairs "$test_dir/short-first.pairs" \
+  > "$test_dir/short-extract-one.stdout" \
+  2> "$test_dir/short-extract-one.stderr"
+! grep -q ' 1 2345$' "$test_dir/short-extract-one.stdout" ||
+  fail "query-index -x 1 kept a short-pair exception"
+"$query_index" "$synthetic_index" 1234567 -m 4 -n 10 \
+  --pairs "$test_dir/short-first.pairs" \
+  > "$test_dir/short-longer.stdout" 2> "$test_dir/short-longer.stderr"
+! grep -q ' 1 2345 67$' "$test_dir/short-longer.stdout" ||
+  fail "a longer phrase containing a short pair was extracted"
+"$query_index" "$synthetic_index" 12345 -m 4 -n 10 --words-only \
+  --pairs "$test_dir/short-first.pairs" \
+  > "$test_dir/short-words-only.stdout" \
+  2> "$test_dir/short-words-only.stderr"
+! grep -q ' 1 2345$' "$test_dir/short-words-only.stdout" ||
+  fail "--words-only displayed a short-pair phrase"
+
+# --score remains symmetric and does not apply the extraction minimum.
+assert_close "$(score_value '2345 1' --pairs "$test_dir/short-first.pairs")" \
+  1000000 "--score did not retain symmetric short-pair matching"
+
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
 "$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
   --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
@@ -345,7 +385,7 @@ assert_close "$(score_value ba --solo-words dc --word-bonus 1 \
 # Both entries can reach cd, but the external word has capacity one.
 assert_close "$(score_value 'ab,ba' -P 1 --solo-words cd --word-bonus 1 \
     --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0)" \
-  "$(awk 'BEGIN { print 80 * 5 / 1142 * 1e6 }')" \
+  "$(awk 'BEGIN { print 80 * 5 / 1148 * 1e6 }')" \
   "one solo word was spent twice in --score"
 
 # wx prefers the high edge to ab but can reroute to yz; xy has only the high
@@ -354,7 +394,7 @@ assert_close "$(score_value 'ab,ba' -P 1 --solo-words cd --word-bonus 1 \
 reroute_score=$(score_value 'wx,xy' -P 1 --solo-words ab,yz \
   --word-bonus 1 --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1)
 assert_close "$reroute_score" \
-  "$(awk 'BEGIN { print 7 * 4 / 1142 * 1e18 }')" \
+  "$(awk 'BEGIN { print 7 * 4 / 1148 * 1e18 }')" \
   "solo assignment did not reroute to its maximum-score matching"
 
 "$query_index" "$synthetic_index" wxyz -m 2 -n 0 \

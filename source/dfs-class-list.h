@@ -22,15 +22,17 @@ class DfsScoreModel;
 // spellings with the same letter multiset into one class for the phase-2 DFS.
 static int const DFS_SYMBOL_COUNT = 36;
 
-// The widest bag phase 1 represents. A stored spelling is at most
-// letters + letters / min_word_len - 1 bytes, which at the worst case -m 1 is
-// 128 + 127 = 255 exactly, so this is what makes DfsPackedMember::text_length a
-// uint8_t; it also bounds key_length and word_count. Flat rather than
-// min_word_len-dependent so one number covers every -m.
+// The widest bag phase 1 represents. A stored spelling is at most letters plus
+// the effective extraction word capacity minus one bytes. Short-pair
+// exceptions can raise that capacity to two, while at the worst case -m 1 it
+// remains 128 words and 128 + 127 = 255 bytes exactly. This is what makes
+// DfsPackedMember::text_length a uint8_t; the bag cap also bounds key_length
+// and word_count. Flat rather than min_word_len-dependent so one number covers
+// every -m.
 static size_t const DFS_MAX_BAG_LETTERS = 128;
 
 typedef std::unordered_set<std::string> DfsDictionary;
-// Owns each loaded pair in both orders as one space-separated whole-entry key.
+// Owns normalized whole-entry keys. Extraction pair sets may be directional.
 typedef std::unordered_set<std::string> DfsPairSet;
 
 int dfs_symbol_index(unsigned char ch);
@@ -129,16 +131,19 @@ struct DfsSignatureDigit {
 class DfsClassList {
  public:
   // letters must contain only lowercase a-z and digits, and must be no longer
-  // than DFS_MAX_BAG_LETTERS. Phrases are extracted by default, up to the cap
-  // implied by min_word_len and the bag length. include_phrases=false exists
-  // for words-only validation against the phase-0 reference counts;
-  // dfs-anagrams leaves it at its production default. The optional dictionary
-  // is borrowed and restricts every emitted phrase word. max_extract_words
-  // caps the words in one extracted entry; 0 means no cap beyond the one the
-  // bag and min_word_len already imply. The optional score model selects the
-  // member ordering, and pairs marks entries that earn its pair bonus; member
-  // 0 is therefore the class's best member under the caller's admissible
-  // upper score. solo_words is mutable only while phase 1 registers profiles.
+  // than DFS_MAX_BAG_LETTERS. Phrases are extracted by default, up to the
+  // effective capacity derived from min_word_len, the bag length, and any
+  // short-pair exception prefixes. include_phrases=false exists for words-only
+  // validation against the phase-0 reference counts; dfs-anagrams leaves it at
+  // its production default. The optional dictionary is borrowed and restricts
+  // every emitted phrase word. max_extract_words caps the words in one
+  // extracted entry; 0 means no additional caller-requested cap. The optional
+  // score model selects the member ordering, and pairs marks entries that earn
+  // its pair bonus. exception_prefixes permits traversal to exact oriented
+  // pair entries containing a word shorter than min_word_len; both sets are
+  // borrowed. Member 0 is therefore the class's best member under the caller's
+  // admissible upper score. solo_words is mutable only while phase 1 registers
+  // profiles.
   // With no model that is raw count order. exclude_pairs drops any entry whose
   // whole spelling it holds, so no phase-2 result can contain one. The test is
   // whole-entry equality: a longer entry containing the pair anywhere is a
@@ -150,6 +155,7 @@ class DfsClassList {
                int max_extract_words = 0,
                DfsScoreModel const* score_model = NULL,
                DfsPairSet const* pairs = NULL,
+               DfsPairSet const* exception_prefixes = NULL,
                DfsSoloWords* solo_words = NULL,
                DfsPairSet const* exclude_pairs = NULL);
 

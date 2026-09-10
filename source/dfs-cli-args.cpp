@@ -14,7 +14,6 @@
 #include <fstream>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -248,16 +247,23 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   return true;
 }
 
-bool load_pair_file(
-    char const* path, char const* what, DfsPairSet* pairs, bool quiet,
-    bool reject_hyphens, bool allow_single_words) {
+namespace {
+
+struct LoadedPairRow {
+  std::string left;
+  std::string right;
+  size_t line_number;
+};
+
+bool load_pair_rows(
+    char const* path, char const* what, bool reject_hyphens,
+    bool allow_single_words, std::vector<LoadedPairRow>* loaded) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open %s \"%s\"\n", what, path);
     return false;
   }
 
-  std::vector<std::pair<std::string, std::string> > loaded;
   std::string line;
   std::string left;
   std::string right;
@@ -295,7 +301,8 @@ bool load_pair_file(
               : "expected two comma-separated words");
       return false;
     }
-    loaded.push_back(std::make_pair(left, right));
+    LoadedPairRow const row = { left, right, line_number };
+    loaded->push_back(row);
   }
 
   if (!input.eof()) {
@@ -303,13 +310,72 @@ bool load_pair_file(
     return false;
   }
 
-  pairs->reserve(2 * loaded.size());
+  return true;
+}
+
+}  // namespace
+
+bool load_pair_file(
+    char const* path, char const* what, DfsPairSet* pairs, bool quiet,
+    bool reject_hyphens, bool allow_single_words) {
+  std::vector<LoadedPairRow> loaded;
+  if (!load_pair_rows(path, what, reject_hyphens, allow_single_words, &loaded))
+    return false;
+
+  pairs->reserve(pairs->size() + 2 * loaded.size());
   for (size_t i = 0; i < loaded.size(); ++i) {
-    if (loaded[i].second.empty()) {
-      pairs->insert(loaded[i].first);
+    if (loaded[i].right.empty()) {
+      pairs->insert(loaded[i].left);
     } else {
-      pairs->insert(loaded[i].first + " " + loaded[i].second);
-      pairs->insert(loaded[i].second + " " + loaded[i].first);
+      pairs->insert(loaded[i].left + " " + loaded[i].right);
+      pairs->insert(loaded[i].right + " " + loaded[i].left);
+    }
+  }
+  if (!quiet)
+    dfs_diagnostic("%s: %zu pairs, %zu keys\n",
+                   what, loaded.size(), pairs->size());
+  return true;
+}
+
+bool load_extraction_pair_file(
+    char const* path, char const* what, int min_word_len,
+    DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
+    bool reject_hyphens) {
+  std::vector<LoadedPairRow> loaded;
+  if (!load_pair_rows(
+          path, what, reject_hyphens, /*allow_single_words=*/true, &loaded))
+    return false;
+
+  size_t const minimum = size_t(std::max(min_word_len, 0));
+  for (size_t i = 0; i < loaded.size(); ++i) {
+    size_t const normalized_length =
+        loaded[i].left.size() + loaded[i].right.size();
+    if (normalized_length < minimum) {
+      fprintf(stderr,
+          "error: %s \"%s\" line %zu: normalized entry has %zu non-space"
+          " characters, fewer than -m %d\n",
+          what, path, loaded[i].line_number, normalized_length,
+          min_word_len);
+      return false;
+    }
+  }
+
+  pairs->reserve(pairs->size() + 2 * loaded.size());
+  exception_prefixes->reserve(exception_prefixes->size() + loaded.size());
+  for (size_t i = 0; i < loaded.size(); ++i) {
+    LoadedPairRow const& row = loaded[i];
+    if (row.right.empty()) {
+      pairs->insert(row.left);
+      continue;
+    }
+
+    pairs->insert(row.left + " " + row.right);
+    bool const needs_exception =
+        row.left.size() < minimum || row.right.size() < minimum;
+    if (needs_exception) {
+      exception_prefixes->insert(row.left);
+    } else {
+      pairs->insert(row.right + " " + row.left);
     }
   }
   if (!quiet)

@@ -76,8 +76,13 @@ static void usage(char const* program) {
       "  --dict PATH filters entries to words in the dictionary\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
-      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line;"
-      " pairs are matched in either order\n"
+      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line\n"
+      "    during extraction, a pair containing a word shorter than -m is"
+      " matched only in written order; other pairs match in either order\n"
+      "    every loaded entry must contain at least -m normalized"
+      " non-space characters in total\n"
+      "    --score instead matches pairs in either order and does not apply"
+      " the extraction minimum\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
       " external words; they consume no letters and matched partners are"
       " printed in parentheses\n"
@@ -522,14 +527,6 @@ static bool print_sequence_score(
   return true;
 }
 
-// Loads --pairs when it was given. Both modes call this, so the option behaves
-// identically in each.
-static bool load_pairs(Args const& args, DfsPairSet* pairs) {
-  if (args.common.pair_file == NULL) return true;
-  return load_pair_file(
-      args.common.pair_file, "pair list", pairs, true, false, true);
-}
-
 int main(int argc, char* argv[]) {
   dfs_reset_diagnostic_clock();
   dfs_set_diagnostic_stream(stderr);
@@ -552,7 +549,17 @@ int main(int argc, char* argv[]) {
   if (args.near) return run_near_query(reader, args);
 
   DfsPairSet pairs;
-  if (!load_pairs(args, &pairs)) return 1;
+  DfsPairSet exception_prefixes;
+  if (args.common.pair_file != NULL) {
+    bool const loaded = args.score
+        ? load_pair_file(
+              args.common.pair_file, "pair list", &pairs,
+              true, false, true)
+        : load_extraction_pair_file(
+              args.common.pair_file, "pair list", args.common.min_word_len,
+              &pairs, &exception_prefixes, true, false);
+    if (!loaded) return 1;
+  }
   if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
@@ -592,6 +599,8 @@ int main(int argc, char* argv[]) {
                        args.common.max_extract_words,
                        &model,
                        args.common.pair_file != NULL ? &pairs : NULL,
+                       !exception_prefixes.empty()
+                           ? &exception_prefixes : NULL,
                        solo_words.get());
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",

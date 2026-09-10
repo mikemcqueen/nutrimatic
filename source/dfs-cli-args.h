@@ -149,8 +149,10 @@ size_t resolve_search_threads(int requested);
 // false if the file can't be opened or read.
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
 
-// A pair list owns every loaded pair as both "left right" and "right left".
-// When single words are allowed, each is owned as one key without a space.
+// A pair set owns normalized whole-entry keys. The general loader below owns
+// every two-word pair as both "left right" and "right left"; the extraction
+// loader may keep a short-word pair in only its written orientation. When
+// single words are allowed, each is owned as one key without a space.
 //
 // Loads a newline-delimited list of "word,word" pairs, applying
 // load_dictionary()'s cleanup to each field, and inserts both word orders.
@@ -164,6 +166,18 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary);
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words = false);
+
+// Loads an ordinary extraction bonus list after -m has been finalized.
+// Standalone words and pairs must contain at least min_word_len normalized
+// non-space characters in total. Pairs containing a word shorter than the
+// minimum are stored only in written order, and their first words are added to
+// exception_prefixes so phase 1 can reach the exact exceptional entry. Other
+// pairs retain the general loader's symmetric representation. Neither output
+// is modified unless the entire input parses and validates successfully.
+bool load_extraction_pair_file(
+    char const* path, char const* what, int min_word_len,
+    DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
+    bool reject_hyphens);
 
 // Loads and combines exclusion lists in the same format from regular files and
 // at most one workflow root, which resolves to
