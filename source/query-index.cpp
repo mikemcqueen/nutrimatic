@@ -95,7 +95,7 @@ static void usage(char const* program) {
       "  --require-completable drops classes whose removal leaves a\n"
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
       "    -m), using shared exact validation without a score cache\n"
-      "  -S, --search-threads defaults to 1\n",
+      "  -S, --search-threads defaults to 1; 0 uses hardware threads\n",
       program, program, program, DFS_DEFAULT_SEGMENT_PENALTY,
       DFS_WORD_BONUS_BASE, 0.0,
       DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS,
@@ -605,13 +605,15 @@ int main(int argc, char* argv[]) {
 
   std::vector<bool> completable(classes.classes().size(), true);
   if (args.require_completable) {
+    size_t const search_threads = resolve_search_threads(
+        args.common.search_threads);
     dfs_diagnostic(
-        "search threads %d cache 0 segment penalty %.17g\n",
-        args.common.search_threads, args.common.segment_penalty);
+        "search threads %zu cache 0 segment penalty %.17g\n",
+        search_threads, args.common.segment_penalty);
     DfsAnagramSearch search(
         &classes, args.letters, args.common.segment_penalty, reader.count(),
         /*score_cache_bytes=*/0, /*preprocess_threads=*/1,
-        size_t(args.common.search_threads), /*exact_segments=*/0,
+        search_threads, /*exact_segments=*/0,
         args.common.word_bonus, args.common.pair_bonus);
     DfsSearchStats stats;
     if (!search.find_completable_classes(
@@ -623,8 +625,8 @@ int main(int argc, char* argv[]) {
     if (run.search_threads > 1)
       dfs_diagnostic(
           "phase 2 exact validation parallelism: "
-          "%d requested, %zu used\n",
-          args.common.search_threads, run.search_threads);
+          "%zu requested, %zu used\n",
+          search_threads, run.search_threads);
     dfs_diagnostic(
         "phase 2 timing: %.1fs setup, %.1fs exact validation\n",
         run.setup_seconds, run.search_seconds);

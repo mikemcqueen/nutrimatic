@@ -65,6 +65,10 @@ assert_close() {
   -d 0 \
   > "$test_dir/depth-zero.stdout" 2> "$test_dir/depth-zero.stderr"
 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+  -S 0 \
+  > "$test_dir/search-thread-auto.stdout" \
+  2> "$test_dir/search-thread-auto.stderr"
+"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
   -S 1 \
   > "$test_dir/search-thread-one.stdout" \
   2> "$test_dir/search-thread-one.stderr"
@@ -84,6 +88,8 @@ cmp "$test_dir/all.stdout" "$test_dir/threaded.stdout" ||
   fail "threaded preprocessing changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/depth-zero.stdout" ||
   fail "--projection-depth changed stdout"
+cmp "$test_dir/all.stdout" "$test_dir/search-thread-auto.stdout" ||
+  fail "-S 0 changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/search-thread-one.stdout" ||
   fail "-S 1 changed stdout"
 cmp "$test_dir/all.stdout" "$test_dir/wide-progress-factor.stdout" ||
@@ -104,9 +110,14 @@ fi
 grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words$' \
   "$test_dir/all.stderr" ||
   fail "search header is missing from stderr"
-grep -Eq "${diagnostic_prefix}depth -1 top 10 threads 1 search threads 1 cache 64 segment penalty 1000000$" \
-  "$test_dir/all.stderr" ||
-  fail "resolved argument diagnostic is missing from stderr"
+default_search_threads=$(sed -n -E \
+  's/.*search threads ([1-9][0-9]*) cache 64 segment penalty 1000000$/\1/p' \
+  "$test_dir/all.stderr")
+auto_search_threads=$(sed -n -E \
+  's/.*search threads ([1-9][0-9]*) cache 64 segment penalty 1000000$/\1/p' \
+  "$test_dir/search-thread-auto.stderr")
+[[ -n $default_search_threads && "$default_search_threads" == "$auto_search_threads" ]] ||
+  fail "default and -S 0 did not resolve to the same positive thread count"
 grep -Eq "${diagnostic_prefix}phase 1 complete:" "$test_dir/all.stderr" ||
   fail "phase-1 statistics are missing from stderr"
 grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode projected dense \\(4-byte values, capacity [0-9]+, complete effective coverage\\)$" \
@@ -191,6 +202,22 @@ grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
   fail "--max-extract-words diagnostic is missing from stderr"
 
+"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 \
+  > "$test_dir/extract-default.stdout" 2> "$test_dir/extract-default.stderr"
+"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 -x 2 \
+  > "$test_dir/extract-default-two.stdout" \
+  2> "$test_dir/extract-default-two.stderr"
+"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 -x 0 \
+  > "$test_dir/extract-unlimited.stdout" \
+  2> "$test_dir/extract-unlimited.stderr"
+cmp "$test_dir/extract-default.stdout" "$test_dir/extract-default-two.stdout" ||
+  fail "default max extraction differs from -x 2"
+grep -q ' f gh ij$' "$test_dir/extract-unlimited.stdout" ||
+  fail "-x 0 did not retain the three-word index entry"
+if grep -q ' f gh ij$' "$test_dir/extract-default.stdout"; then
+  fail "default max extraction retained the three-word index entry"
+fi
+
 # The second line is the first one reversed, so its two insertions are the two
 # the first line already made: four insertions, two keys. Both reversal and
 # dedup show up in the reported key count. An explicit zero pair bonus makes
@@ -257,7 +284,7 @@ cmp "$test_dir/excluded.stdout" \
 
 # The test is whole-entry equality, so a longer entry holding the excluded
 # pair -- here at its end -- is a different spelling and is kept.
-"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 \
+"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 -x 0 \
   --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   > "$test_dir/exclude-prefix.stdout" 2> "$test_dir/exclude-prefix.stderr"
 grep -q ' f gh ij$' "$test_dir/exclude-prefix.stdout" ||
@@ -464,8 +491,6 @@ expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --cache-size nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --preprocess-threads nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
-  --search-threads 0
 expect_status 2 "$dfs_anagrams" "$index_file" abc \
   --search-threads nope
 expect_status 2 "$dfs_anagrams" "$index_file" abc \

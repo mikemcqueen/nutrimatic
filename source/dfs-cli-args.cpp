@@ -219,6 +219,12 @@ size_t resolve_preprocess_threads(int requested, size_t letter_count) {
       available, DFS_DEFAULT_MAX_PREPROCESS_THREADS));
 }
 
+size_t resolve_search_threads(int requested) {
+  if (requested != 0) return size_t(requested);
+  unsigned int const available = std::thread::hardware_concurrency();
+  return available == 0 ? 1 : size_t(available);
+}
+
 bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
@@ -405,10 +411,6 @@ DfsOptionResult dfs_parse_common_option(
       if (!parse_count(options->optarg, "--search-threads",
                        &out->search_threads))
         return DFS_OPTION_ERROR;
-      if (out->search_threads < 1) {
-        fputs("error: --search-threads must be at least 1\n", stderr);
-        return DFS_OPTION_ERROR;
-      }
       info.name = "--search-threads";
       break;
     case 'P':

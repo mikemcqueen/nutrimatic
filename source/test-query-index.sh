@@ -185,8 +185,24 @@ cmp "$test_dir/completable-off.stdout" \
 "$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable -S 2 \
   > "$test_dir/completable-on.stdout" 2> "$test_dir/completable-on.stderr"
+"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+  --require-completable \
+  > "$test_dir/completable-default.stdout" \
+  2> "$test_dir/completable-default.stderr"
+"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+  --require-completable -S 0 \
+  > "$test_dir/completable-auto.stdout" \
+  2> "$test_dir/completable-auto.stderr"
 [[ $(wc -l < "$test_dir/completable-on.stdout") -eq 3 ]] ||
   fail "--require-completable should drop the one dead-end class"
+cmp "$test_dir/completable-default.stdout" "$test_dir/completable-auto.stdout" ||
+  fail "-S 0 changed completable output"
+grep -q 'search threads 1 cache 0 segment penalty 1000000' \
+  "$test_dir/completable-default.stderr" ||
+  fail "query-index default search threads changed"
+grep -Eq 'search threads [1-9][0-9]* cache 0 segment penalty 1000000' \
+  "$test_dir/completable-auto.stderr" ||
+  fail "query-index -S 0 did not resolve to a positive thread count"
 grep -q ' xy$' "$test_dir/completable-on.stdout" &&
   fail "--require-completable kept the dead-end 'xy' class"
 grep -q ' wx$' "$test_dir/completable-on.stdout" ||

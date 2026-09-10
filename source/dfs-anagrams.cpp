@@ -80,7 +80,7 @@ static void usage(char const* program) {
       " divisor, so -P cannot change their order and scores are comparable"
       " only within one -g run\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
-      " entry; defaults to 0 (no limit)\n"
+      " entry; defaults to 2; 0 means no limit\n"
       "  --pairs FILE loads one \"word\" or \"word,word\" entry per line;"
       " pairs are matched in either order\n"
       "  --exclude-pairs FILE|WORKFLOW-DIR loads word pairs, one"
@@ -106,7 +106,7 @@ static void usage(char const* program) {
       "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
       "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
       " 1 disables it\n"
-      "  -S, --search-threads defaults to 1\n"
+      "  -S, --search-threads defaults to 0 (hardware threads)\n"
       "  -d, --projection-depth keeps this many rarest letter types exact in"
       " the projected cache; the default is the largest depth that fits -C\n"
       "  -P, --segment-penalty P divides the score by P for each selected"
@@ -155,6 +155,8 @@ static struct optparse_long const long_options[] = {
 static bool parse_args(char* argv[], Args* out) {
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
+  out->common.max_extract_words = 2;
+  out->common.search_threads = 0;
   out->exclude_pair_files.clear();
   out->num_segments = 0;
   out->progress_factor = 1;
@@ -279,10 +281,12 @@ int main(int argc, char* argv[]) {
 
   size_t const preprocess_threads = resolve_preprocess_threads(
       args.preprocess_threads, args.letters.size());
+  size_t const search_threads = resolve_search_threads(
+      args.common.search_threads);
   dfs_diagnostic(
-      "depth %d top %d threads %zu search threads %d cache %zu "
+      "depth %d top %d threads %zu search threads %zu cache %zu "
       "segment penalty %.17g\n",
-      args.exact_letters, args.common.top, preprocess_threads, args.common.search_threads,
+      args.exact_letters, args.common.top, preprocess_threads, search_threads,
       args.score_cache_bytes / DFS_MIB, args.common.segment_penalty);
 
   DfsDictionary dictionary;
@@ -365,7 +369,7 @@ int main(int argc, char* argv[]) {
   DfsAnagramSearch search(
       &classes, args.letters, args.common.segment_penalty, reader.count(),
       args.score_cache_bytes, preprocess_threads,
-      size_t(args.common.search_threads), size_t(args.num_segments),
+      search_threads, size_t(args.num_segments),
       args.common.word_bonus, args.common.pair_bonus);
   DfsTopN output(
       &classes, &model, size_t(args.common.top), solo_words.get());
@@ -402,9 +406,9 @@ int main(int argc, char* argv[]) {
   }
   if (stats.execution.search_threads > 1)
     dfs_diagnostic(
-        "phase 2 search parallelism: %d requested, %zu used, "
+        "phase 2 search parallelism: %zu requested, %zu used, "
         "%llu tasks\n",
-        args.common.search_threads, stats.execution.search_threads,
+        search_threads, stats.execution.search_threads,
         (unsigned long long) stats.execution.search_tasks);
   dfs_diagnostic(
       "phase 2 score cache: %zu bound entries, %zu bound bytes\n",

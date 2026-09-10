@@ -140,6 +140,10 @@ bool finalize_min_word_length(
 // available hardware concurrency capped at the shared production maximum.
 size_t resolve_preprocess_threads(int requested, size_t letter_count);
 
+// Resolves 0 (automatic) to the available hardware concurrency, using one
+// thread when the implementation cannot report it.
+size_t resolve_search_threads(int requested);
+
 // Loads a newline-delimited word list, lowercased, skipping lines containing
 // '-' and stripping characters outside a-z/0-9. Prints an error and returns
 // false if the file can't be opened or read.
