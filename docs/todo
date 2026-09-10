@@ -1,3 +1,9 @@
+* the "allow an s" excpetion to anagrams.  i'm not even sure how practical
+  this is. but i've been eliminating plurals from the dictionary with the
+  expectation that this will work. "easy enough" to grep all s-ending words
+  from dict-filter inputs and resubmit them for review i suppose. (will be
+  a little more involved than that - removing duplications from input sets).
+
 * top-segments -wf --solo-words [-w] results/sN/dfs.*.best.*
   - should (optionally?) filter out TARGET/no.solo-words
   - should (optionally?) filter out DICT/reviewed.words?
