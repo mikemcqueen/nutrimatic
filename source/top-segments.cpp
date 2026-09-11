@@ -21,6 +21,16 @@ struct SegmentStats {
 
 typedef std::unordered_map<std::string, SegmentStats> SegmentCounts;
 
+struct FilterStats {
+  uint64_t classified_no_lines = 0;
+  uint64_t target_no_lines = 0;
+  uint64_t explicit_reject_lines = 0;
+  uint64_t dictionary_lines = 0;
+  uint64_t classified_yes_instances = 0;
+  uint64_t explicit_ignore_instances = 0;
+  DfsPairSet classified_yes_pairs;
+};
+
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
       "usage: %s [--pairs [-c] | --solo-words | --all-words |\n"
@@ -68,9 +78,33 @@ static void usage(FILE* fp, char const* program) {
       WORKFLOW_YES_PAIRS_PATH);
 }
 
+static bool any_segment_in(
+    std::vector<std::string> const& segments, DfsPairSet const& pairs) {
+  for (std::string const& segment : segments)
+    if (pairs.find(segment) != pairs.end()) return true;
+  return false;
+}
+
+static bool any_segment_outside(
+    std::vector<std::string> const& segments,
+    DfsDictionary const& dictionary) {
+  for (std::string const& segment : segments)
+    if (!all_words_in_dict(dictionary, segment)) return true;
+  return false;
+}
+
+static std::string canonical_pair(std::string const& segment) {
+  size_t const space = segment.find(' ');
+  if (space == std::string::npos) return segment;
+  std::string const left = segment.substr(0, space);
+  std::string const right = segment.substr(space + 1);
+  return left < right ? segment : right + " " + left;
+}
+
 static bool count_stream(
     std::istream* input, char const* name, DfsPairSet const& ignored,
     DfsPairSet const& rejected, DfsDictionary const& dictionary,
+    PairFilterSources const& filter_sources, FilterStats* filter_stats,
     SegmentCounts* counts) {
   std::string line;
   uint64_t line_number = 0;
@@ -91,7 +125,6 @@ static bool count_stream(
     }
 
     std::vector<std::string> segments;
-    bool reject_line = false;
     size_t start = size_t(score_end - line.c_str()) + 1;
     while (true) {
       size_t const end = line.find(',', start);
@@ -103,19 +136,47 @@ static bool count_stream(
             name, line_number);
         return false;
       }
-
       segments.push_back(line.substr(start, length));
-      if (is_rejected_segment(rejected, segments.back()) ||
-          !all_words_in_dict(dictionary, segments.back()))
-        reject_line = true;
 
       if (end == std::string::npos) break;
       start = end + 1;
     }
 
-    if (reject_line) continue;
+    // Virtual filtering pipeline. The first matching rejection owns the row,
+    // so each rejected line contributes to exactly one summary counter.
+    // Workflow-wide NO is authoritative over target-local NO; explicit
+    // rejects and then the dictionary follow. Only surviving rows reach the
+    // per-segment ignore pipeline, where classified YES owns an overlap with
+    // an explicit ignore. Keeping this order visible is important because it
+    // defines diagnostic attribution even though set union would produce the
+    // same selected output.
+    if (any_segment_in(segments, filter_sources.classified_no)) {
+      ++filter_stats->classified_no_lines;
+      continue;
+    }
+    if (any_segment_in(segments, filter_sources.target_no)) {
+      ++filter_stats->target_no_lines;
+      continue;
+    }
+    if (any_segment_in(segments, rejected)) {
+      ++filter_stats->explicit_reject_lines;
+      continue;
+    }
+    if (any_segment_outside(segments, dictionary)) {
+      ++filter_stats->dictionary_lines;
+      continue;
+    }
     for (std::string const& segment : segments) {
-      if (ignored.find(segment) != ignored.end()) continue;
+      if (filter_sources.classified_yes.find(segment) !=
+          filter_sources.classified_yes.end()) {
+        ++filter_stats->classified_yes_instances;
+        filter_stats->classified_yes_pairs.insert(canonical_pair(segment));
+        continue;
+      }
+      if (ignored.find(segment) != ignored.end()) {
+        ++filter_stats->explicit_ignore_instances;
+        continue;
+      }
       SegmentCounts::iterator entry = counts->find(segment);
       if (entry == counts->end()) {
         entry = counts->emplace(
@@ -134,6 +195,56 @@ static bool count_stream(
     return false;
   }
   return true;
+}
+
+static void print_filter_summary(
+    FilterStats const& stats, PairFilterSources const& sources) {
+  if (stats.classified_no_lines != 0 || stats.target_no_lines != 0 ||
+      stats.explicit_reject_lines != 0 || stats.dictionary_lines != 0) {
+    fputs("top-segments: Filtered ", stderr);
+    bool first = true;
+    if (stats.classified_no_lines != 0) {
+      fprintf(stderr, "%" PRIu64 " lines from classified/no/no.pairs",
+          stats.classified_no_lines);
+      first = false;
+    }
+    if (stats.target_no_lines != 0) {
+      if (!first) fputs(", ", stderr);
+      fprintf(stderr, "%" PRIu64 " lines from %s/no.pairs",
+          stats.target_no_lines, sources.target.c_str());
+      first = false;
+    }
+    if (stats.explicit_reject_lines != 0) {
+      if (!first) fputs(", ", stderr);
+      fprintf(stderr, "%" PRIu64 " rejected explicitly",
+          stats.explicit_reject_lines);
+      first = false;
+    }
+    if (stats.dictionary_lines != 0) {
+      if (!first) fputs(", ", stderr);
+      fprintf(stderr, "%" PRIu64 " rejected by dictionary",
+          stats.dictionary_lines);
+    }
+    fputc('\n', stderr);
+  }
+
+  if (stats.classified_yes_instances != 0 ||
+      stats.explicit_ignore_instances != 0) {
+    fputs("top-segments: Ignored ", stderr);
+    bool first = true;
+    if (stats.classified_yes_instances != 0) {
+      fprintf(stderr,
+          "%" PRIu64 " instances of %zu pairs from classified/yes/yes.pairs",
+          stats.classified_yes_instances, stats.classified_yes_pairs.size());
+      first = false;
+    }
+    if (stats.explicit_ignore_instances != 0) {
+      if (!first) fputs(", ", stderr);
+      fprintf(stderr, "%" PRIu64 " ignored explicitly",
+          stats.explicit_ignore_instances);
+    }
+    fputc('\n', stderr);
+  }
 }
 
 static bool selected_segment(
@@ -318,19 +429,24 @@ int main(int argc, char* argv[]) {
   DfsPairSet ignored;
   DfsPairSet rejected;
   DfsDictionary dictionary;
+  PairFilterSources filter_sources;
   if (!load_pair_filters(
-          filter_options, "top-segments", &ignored, &rejected, &dictionary))
+          filter_options, "top-segments", &ignored, &rejected, &dictionary,
+          &filter_sources))
     return 1;
 
   SegmentCounts counts;
+  FilterStats filter_stats;
   if (paths.empty()) {
-    if (!count_stream(&std::cin, "-", ignored, rejected, dictionary, &counts))
+    if (!count_stream(&std::cin, "-", ignored, rejected, dictionary,
+            filter_sources, &filter_stats, &counts))
       return 1;
   } else {
     for (size_t i = 0; i < paths.size(); ++i) {
       if (strcmp(paths[i], "-") == 0) {
         if (!count_stream(
-                &std::cin, "-", ignored, rejected, dictionary, &counts))
+                &std::cin, "-", ignored, rejected, dictionary,
+                filter_sources, &filter_stats, &counts))
           return 1;
         continue;
       }
@@ -343,11 +459,13 @@ int main(int argc, char* argv[]) {
         return 1;
       }
       if (!count_stream(
-              &input, paths[i], ignored, rejected, dictionary, &counts))
+              &input, paths[i], ignored, rejected, dictionary,
+              filter_sources, &filter_stats, &counts))
         return 1;
     }
   }
 
+  print_filter_summary(filter_stats, filter_sources);
   return print_counts(
       counts, output_options, show_pair_counts)
       ? 0 : 1;

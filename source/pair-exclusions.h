@@ -44,6 +44,17 @@ struct PairFilterOptions {
   std::string input_path;
 };
 
+// The workflow-owned portions of the aggregate ignore and reject sets.
+// Callers that need to explain which layer acted may request these from
+// load_pair_filters(); ordinary filtering can continue to use the aggregate
+// sets alone.
+struct PairFilterSources {
+  DfsPairSet classified_yes;
+  DfsPairSet classified_no;
+  DfsPairSet target_no;
+  std::string target;
+};
+
 enum PairFilterOptionResult {
   PAIR_FILTER_OPTION_OTHER,
   PAIR_FILTER_OPTION_HANDLED,
@@ -84,7 +95,8 @@ bool check_pair_filter_options(
 // no.pairs is silent, because having none is the ordinary case.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
-    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary);
+    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
+    PairFilterSources* sources = NULL);
 
 inline bool is_rejected_segment(
     DfsPairSet const& rejected, std::string const& segment) {

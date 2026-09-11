@@ -287,12 +287,19 @@ bool target_agrees_with_input(
 // reject list.
 bool load_target_pair_file(
     char const* wfroot, std::string const& target, char const* program,
-    DfsPairSet* rejected) {
+    DfsPairSet* rejected, DfsPairSet* source) {
   std::string const path = workflow_path(wfroot, WORKFLOW_BEST_PATH) + "/" +
       target + "/" + TARGET_NO_PAIRS_NAME;
   struct stat status;
-  if (stat(path.c_str(), &status) == 0)
-    return load_pair_file(path.c_str(), "reject list", rejected, true, true);
+  if (stat(path.c_str(), &status) == 0) {
+    if (source == NULL)
+      return load_pair_file(
+          path.c_str(), "reject list", rejected, true, true);
+    if (!load_pair_file(path.c_str(), "reject list", source, true, true))
+      return false;
+    rejected->insert(source->begin(), source->end());
+    return true;
+  }
   // A link with nothing under it is a tree to fix: targets keep this file as
   // a link into the results it was written beside, and a stale one would
   // read as the ordinary case and quietly filter nothing.
@@ -304,10 +311,15 @@ bool load_target_pair_file(
 
 bool load_workflow_pair_file(
     std::string const& path, char const* program, char const* description,
-    DfsPairSet* pairs) {
+    DfsPairSet* pairs, DfsPairSet* source) {
   if (workflow_file_missing(path, program, "classified pair file"))
     return true;
-  return load_pair_file(path.c_str(), description, pairs, true, true);
+  if (source == NULL)
+    return load_pair_file(path.c_str(), description, pairs, true, true);
+  if (!load_pair_file(path.c_str(), description, source, true, true))
+    return false;
+  pairs->insert(source->begin(), source->end());
+  return true;
 }
 
 }  // namespace
@@ -388,7 +400,8 @@ bool check_pair_filter_options(
 
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
-    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary) {
+    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
+    PairFilterSources* sources) {
   char const* wfroot = NULL;
   if (options.workflow) {
     wfroot = getenv("WFROOT");
@@ -409,6 +422,7 @@ bool load_pair_filters(
     if (!target_agrees_with_input(options, wfroot, target, program))
       return false;
     success(program, "TARGET resolved to %s", target.c_str());
+    if (sources != NULL) sources->target = target;
   }
 
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
@@ -430,14 +444,17 @@ bool load_pair_filters(
 
   if (!load_workflow_pair_file(
           workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
-          "reject list", rejected))
+          "reject list", rejected,
+          sources == NULL ? NULL : &sources->classified_no))
     return false;
-  if (!load_target_pair_file(wfroot, target, program, rejected))
+  if (!load_target_pair_file(wfroot, target, program, rejected,
+          sources == NULL ? NULL : &sources->target_no))
     return false;
   if (options.workflow_yes) {
     if (!load_workflow_pair_file(
             workflow_path(wfroot, WORKFLOW_YES_PAIRS_PATH), program,
-            "ignore list", ignored))
+            "ignore list", ignored,
+            sources == NULL ? NULL : &sources->classified_yes))
       return false;
   }
 
