@@ -26,6 +26,11 @@ inline constexpr int DFS_OPT_WORD_BONUS = 302;
 inline constexpr int DFS_OPT_PAIR_BONUS = 303;
 inline constexpr int DFS_OPT_SOLO_WORDS = 304;
 inline constexpr int DFS_OPT_HIDE_SOLO_WORDS = 305;
+inline constexpr int DFS_OPT_SEED_PAIRS = 306;
+inline constexpr int DFS_OPT_YES_PAIRS = 307;
+inline constexpr int DFS_OPT_BEST_PAIRS = 308;
+inline constexpr int DFS_OPT_WF = 309;
+inline constexpr int DFS_OPT_WFROOT = 310;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -42,7 +47,13 @@ inline constexpr int DFS_OPT_HIDE_SOLO_WORDS = 305;
   { "word-bonus", DFS_OPT_WORD_BONUS, OPTPARSE_REQUIRED }, \
   { "pair-bonus", DFS_OPT_PAIR_BONUS, OPTPARSE_REQUIRED }, \
   { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED }, \
-  { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE }
+  { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE }, \
+  { "seed-pairs", DFS_OPT_SEED_PAIRS, OPTPARSE_REQUIRED }, \
+  { "yes-pairs", DFS_OPT_YES_PAIRS, OPTPARSE_REQUIRED }, \
+  { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED }, \
+  { "wf", DFS_OPT_WF, OPTPARSE_NONE }, \
+  { "wfroot", DFS_OPT_WFROOT, OPTPARSE_REQUIRED }, \
+  { "target", 't', OPTPARSE_REQUIRED }
 
 // What the shared options parsed into. `top` has no shared default because the
 // two CLIs disagree on it; each sets its own before the option loop.
@@ -55,8 +66,16 @@ struct DfsCommonArgs {
   int top = 0;
   int search_threads = 1;
   double segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
-  double word_bonus = 0.0;
+  double word_bonus = DFS_DEFAULT_WORD_BONUS;
   double pair_bonus = DFS_DEFAULT_PAIR_BONUS;
+  std::vector<std::string> seed_pair_files;
+  std::vector<std::string> yes_pair_files;
+  std::vector<std::string> best_pair_files;
+  bool workflow = false;
+  std::string workflow_root;
+  std::string target;
+  std::string workflow_index_file;
+  std::string workflow_dictionary_file;
   std::vector<std::string> solo_words;
   bool hide_solo_words = false;
   bool min_word_len_given = false;
@@ -82,6 +101,24 @@ struct DfsCommonOption {
 DfsOptionResult dfs_parse_common_option(
     int option, struct optparse* options, DfsCommonArgs* out,
     DfsCommonOption* which);
+
+// Resolves --wf/--wfroot defaults and pair sources after option parsing.
+// Workflow mode supplies a default index when `*index_file` is NULL, plus a
+// default dictionary and classified YES source. An explicit index is retained.
+// Workflow mode also requires either an explicit seed input or a target whose
+// sentence can identify exactly one sentence seed; a complete target
+// additionally supplies its optional best.pairs.
+bool finalize_dfs_workflow_args(
+    DfsCommonArgs* args, char const* program, char const** index_file);
+
+// Appends the workflow root's classified NO pairs, and the selected target's
+// own no.pairs, to `paths` for tools that exclude pairs. Either file is
+// skipped when it is absent, since a workflow need not have classified
+// anything NO yet. Without a workflow root nothing is appended. Call after
+// finalize_dfs_workflow_args(), which resolves the root and the target.
+bool collect_workflow_exclude_pair_files(
+    DfsCommonArgs const& args, char const* program,
+    std::vector<std::string>* paths);
 
 inline constexpr size_t DFS_DEFAULT_SCORE_CACHE_MIB = 64;
 inline constexpr unsigned int DFS_DEFAULT_MAX_PREPROCESS_THREADS = 20;
@@ -178,6 +215,14 @@ bool load_extraction_pair_file(
     char const* path, char const* what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
     bool reject_hyphens);
+
+// Loads the repeatable fixed-tier pair inputs. Duplicate and reversed keys
+// retain the strongest source. `score_mode` uses the symmetric score loader;
+// extraction mode preserves the short-word directional rules and accumulates
+// their exception prefixes.
+bool load_weighted_pair_files(
+    DfsCommonArgs const& args, bool score_mode, int min_word_len,
+    DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes);
 
 // Loads and combines exclusion lists in the same format from regular files and
 // at most one workflow root, which resolves to

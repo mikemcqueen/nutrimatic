@@ -12,24 +12,10 @@
 #include "dfs-cli-args.h"
 #include "log.h"
 
-char const* const WORKFLOW_NO_PAIRS_PATH = ".wf/classified/no/no.pairs";
-char const* const WORKFLOW_YES_PAIRS_PATH = ".wf/classified/yes/yes.pairs";
-char const* const WORKFLOW_DICT_PATH = ".wf/dict/words.filtered";
-char const* const WORKFLOW_TARGET_NO_PAIRS_PATH =
-    ".wf/best/SENTENCE/LETTERS/mN/gN/no.pairs";
-char const* const WORKFLOW_DEFAULT_TARGET = "current";
-char const* const WORKFLOW_RESULTS_NAME =
-    "dfs.SENTENCE[.SEED].mN.x2.gN[.best].LIMIT.LETTERS";
-
 namespace {
 
 // The two halves of WORKFLOW_TARGET_NO_PAIRS_PATH that are matched rather
 // than displayed: everything above a target, and the file inside one.
-char const* const WORKFLOW_DIR_NAME = ".wf";
-char const* const WORKFLOW_BEST_PATH = ".wf/best";
-char const* const WORKFLOW_TARGET_PATH = ".wf/best/SENTENCE/LETTERS/mN/gN";
-char const* const TARGET_NO_PAIRS_NAME = "no.pairs";
-
 std::string workflow_path(char const* root, char const* relative) {
   std::string path(root);
   if (!path.empty() && path.back() != '/') path.push_back('/');
@@ -226,7 +212,7 @@ bool resolve_target_name(
 bool under_workflow_dir(std::string const& path) {
   std::vector<std::string> const parts = split(path, '/');
   for (size_t i = 0; i < parts.size(); ++i)
-    if (parts[i] == WORKFLOW_DIR_NAME) return true;
+    if (parts[i] == WORKFLOW_DIR_PATH) return true;
   return false;
 }
 
@@ -289,7 +275,7 @@ bool load_target_pair_file(
     char const* wfroot, std::string const& target, char const* program,
     DfsPairSet* rejected, DfsPairSet* source) {
   std::string const path = workflow_path(wfroot, WORKFLOW_BEST_PATH) + "/" +
-      target + "/" + TARGET_NO_PAIRS_NAME;
+      target + "/" + WORKFLOW_TARGET_NO_PAIRS_NAME;
   struct stat status;
   if (stat(path.c_str(), &status) == 0) {
     if (source == NULL)

@@ -8,27 +8,7 @@
 #include <vector>
 
 #include "dfs-class-list.h"
-
-// Workflow-root-relative paths --wf and --wfroot resolve against. Shared so
-// the loader and every tool's help text name the same files.
-extern char const* const WORKFLOW_NO_PAIRS_PATH;
-extern char const* const WORKFLOW_YES_PAIRS_PATH;
-extern char const* const WORKFLOW_DICT_PATH;
-
-// Where a target's own exclusions sit, as help text and warnings spell it.
-// The capitalised components stand for one target's sentence, letter set,
-// minimum word length and segment count: this is a shape to match, not a
-// path to open.
-extern char const* const WORKFLOW_TARGET_NO_PAIRS_PATH;
-
-// The target selected when -t/--target is not given and the input names no
-// target of its own.
-extern char const* const WORKFLOW_DEFAULT_TARGET;
-
-// How the workflow renders a dfs-anagrams results file kept outside the
-// tree. The bracketed parts are the ones that may be absent. Like the path
-// above this is a shape, shown when a name could not be read as one.
-extern char const* const WORKFLOW_RESULTS_NAME;
+#include "workflow-paths.h"
 
 struct PairFilterOptions {
   std::vector<std::string> ignore_paths;

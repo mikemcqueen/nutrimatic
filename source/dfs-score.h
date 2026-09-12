@@ -12,11 +12,17 @@ inline constexpr double DFS_DEFAULT_SEGMENT_PENALTY = 1e6;
 inline constexpr double DFS_WORD_BONUS_BASE = 1e6;
 inline constexpr double DFS_PAIR_BONUS_BASE = 1e6;
 inline constexpr double DFS_DEFAULT_PAIR_BONUS = 1.0;
+inline constexpr double DFS_DEFAULT_WORD_BONUS = 1.0;
+inline constexpr double DFS_SEED_PAIR_BONUS = 1.0;
+inline constexpr double DFS_YES_PAIR_BONUS = 1.05;
+inline constexpr double DFS_BEST_PAIR_BONUS = 1.10;
+
+enum DfsPairBonusKind : uint8_t;
 
 // Shared log-space scoring for the dfs-anagrams family. A segment is one
 // selected index entry; spaces within an entry control its optional phrase
-// bonus, pair-list membership controls a second optional bonus, and appending
-// another entry pays one segment-boundary penalty.
+// bonus, pair-source membership controls a second optional bonus, and
+// appending another entry pays one segment-boundary penalty.
 //
 // The multi-word bonus is a statement of what the tool is for, not a
 // correction for anything measured. Multi-word entries are not rarer than
@@ -48,12 +54,17 @@ class DfsScoreModel {
   }
   double multi_word_log_bonus() const { return multi_word_log_bonus_; }
   double pair_log_bonus() const { return pair_log_bonus_; }
+  double pair_log_bonus(DfsPairBonusKind kind) const;
+  double member_pair_log_bonus(uint16_t score_flags) const;
   double displayed_score(double log_score) const;
 
  private:
   double segment_boundary_log_score_;
   double multi_word_log_bonus_;
   double pair_log_bonus_;
+  double seed_pair_log_bonus_;
+  double yes_pair_log_bonus_;
+  double best_pair_log_bonus_;
 };
 
 #endif

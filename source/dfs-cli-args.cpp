@@ -1,6 +1,7 @@
 #include "dfs-cli-args.h"
 
 #include "dfs-diagnostic.h"
+#include "workflow-paths.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -11,12 +12,15 @@
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace {
+
+namespace fs = std::filesystem;
 
 // One field's worth of load_dictionary()'s cleanup: lowercased, with every
 // character outside a-z/0-9 dropped.
@@ -30,6 +34,188 @@ void clean_word(char const* begin, char const* end, std::string* out) {
     else if ((ch >= 'a' && ch <= 'z') ||
              (ch >= '0' && ch <= '9'))
       out->push_back(char(ch));
+  }
+}
+
+bool is_counted_component(std::string const& value, char prefix) {
+  if (value.size() < 2 || value[0] != prefix ||
+      value[1] < '1' || value[1] > '9')
+    return false;
+  for (size_t i = 2; i < value.size(); ++i)
+    if (value[i] < '0' || value[i] > '9') return false;
+  return true;
+}
+
+bool parse_workflow_target(
+    std::string const& input, char const* program,
+    std::vector<std::string>* parts) {
+  if (input.empty()) return true;
+  size_t start = 0;
+  while (true) {
+    size_t const slash = input.find('/', start);
+    size_t const end = slash == std::string::npos ? input.size() : slash;
+    if (end == start || parts->size() == 4) {
+      fprintf(stderr, "%s: invalid --target \"%s\"\n",
+              program, input.c_str());
+      return false;
+    }
+    parts->push_back(input.substr(start, end - start));
+    if (slash == std::string::npos) break;
+    start = slash + 1;
+  }
+
+  if ((*parts)[0][0] == 'S') (*parts)[0][0] = 's';
+  bool valid = is_counted_component((*parts)[0], 's');
+  if (parts->size() >= 2) {
+    std::string const& letters = (*parts)[1];
+    valid = valid && letters.size() > 2 &&
+        (letters[0] == 'o' || letters[0] == 'u') && letters[1] == '-';
+    for (size_t i = 2; valid && i < letters.size(); ++i)
+      valid = letters[i] >= 'a' && letters[i] <= 'z';
+  }
+  if (parts->size() >= 3)
+    valid = valid && is_counted_component((*parts)[2], 'm');
+  if (parts->size() >= 4)
+    valid = valid && is_counted_component((*parts)[3], 'g');
+  if (!valid) {
+    fprintf(stderr,
+        "%s: invalid --target \"%s\"; expected a prefix of "
+        "sN/[ou]-letters/mN/gN\n",
+        program, input.c_str());
+    return false;
+  }
+  return true;
+}
+
+std::string join_path(std::vector<std::string> const& parts) {
+  std::string result;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i != 0) result.push_back('/');
+    result += parts[i];
+  }
+  return result;
+}
+
+bool seed_name_matches(std::string const& name, std::string const& universe) {
+  std::string const prefix = universe.empty()
+      ? "seed.m" : "seed." + universe;
+  if (name.compare(0, prefix.size(), prefix) != 0) return false;
+  size_t position = prefix.size();
+  if (universe.empty()) {
+    if (position == name.size() || name[position] < '1' ||
+        name[position] > '9')
+      return false;
+    while (position < name.size() && name[position] >= '0' &&
+           name[position] <= '9')
+      ++position;
+  }
+  if (name.compare(position, 6, ".pairs") == 0 &&
+      position + 6 == name.size())
+    return true;
+  return position < name.size() && name[position] == '.' &&
+      name.size() > position + 7 &&
+      name.compare(name.size() - 6, 6, ".pairs") == 0;
+}
+
+bool resolve_sentence_seed(
+    fs::path const& sentence_dir, std::string const& universe,
+    char const* program, std::string* out) {
+  std::error_code error;
+  if (!fs::is_directory(sentence_dir, error)) {
+    fprintf(stderr, "%s: workflow sentence \"%s\" is not a directory\n",
+            program, sentence_dir.c_str());
+    return false;
+  }
+  std::vector<fs::path> matches;
+  fs::directory_iterator it(sentence_dir, error);
+  fs::directory_iterator const end;
+  for (; !error && it != end; it.increment(error)) {
+    std::string const name = it->path().filename().string();
+    if (seed_name_matches(name, universe) &&
+        fs::is_regular_file(it->path(), error))
+      matches.push_back(it->path());
+  }
+  if (error) {
+    fprintf(stderr, "%s: can't inspect workflow sentence \"%s\": %s\n",
+            program, sentence_dir.c_str(), error.message().c_str());
+    return false;
+  }
+  std::sort(matches.begin(), matches.end());
+  if (matches.size() != 1) {
+    std::string const pattern = universe.empty()
+        ? "seed.m<N>[.*].pairs" : "seed." + universe + "[.*].pairs";
+    fprintf(stderr, "%s: expected exactly one %s in \"%s\", found %zu\n",
+            program, pattern.c_str(), sentence_dir.c_str(), matches.size());
+    return false;
+  }
+  *out = matches[0].string();
+  return true;
+}
+
+bool require_regular_file(
+    fs::path const& path, char const* program, char const* what) {
+  std::error_code error;
+  if (fs::is_regular_file(path, error)) return true;
+  fprintf(stderr, "%s: %s \"%s\" is not a regular file\n",
+          program, what, path.c_str());
+  return false;
+}
+
+// Appends an optional workflow pair file. A path that cannot be inspected,
+// or that is present as something other than a regular file, is an error.
+bool push_optional_pair_file(
+    fs::path const& path, char const* program, char const* what,
+    std::vector<std::string>* paths) {
+  std::error_code error;
+  fs::file_status const status = fs::symlink_status(path, error);
+  if (status.type() == fs::file_type::not_found) return true;
+  if (error) {
+    fprintf(stderr, "%s: can't inspect %s \"%s\": %s\n",
+            program, what, path.c_str(), error.message().c_str());
+    return false;
+  }
+  if (!require_regular_file(path, program, what)) return false;
+  paths->push_back(path.string());
+  return true;
+}
+
+bool canonical_target_below(
+    fs::path const& best, fs::path const& selected,
+    char const* program) {
+  std::error_code error;
+  fs::path const canonical_best = fs::canonical(best, error);
+  if (error) {
+    fprintf(stderr, "%s: can't resolve workflow best directory \"%s\": %s\n",
+            program, best.c_str(), error.message().c_str());
+    return false;
+  }
+  fs::path const canonical_selected = fs::canonical(selected, error);
+  if (error) {
+    fprintf(stderr, "%s: can't resolve workflow target \"%s\": %s\n",
+            program, selected.c_str(), error.message().c_str());
+    return false;
+  }
+  fs::path::const_iterator base = canonical_best.begin();
+  fs::path::const_iterator target = canonical_selected.begin();
+  for (; base != canonical_best.end() && target != canonical_selected.end();
+       ++base, ++target)
+    if (*base != *target) break;
+  if (base == canonical_best.end() && target != canonical_selected.end())
+    return true;
+  fprintf(stderr,
+      "%s: workflow target \"%s\" resolves outside \"%s\"\n",
+      program, selected.c_str(), canonical_best.c_str());
+  return false;
+}
+
+void merge_pair_tier(
+    DfsPairSet const& source, DfsPairBonusKind kind,
+    DfsPairBonusMap* destination) {
+  destination->reserve(destination->size() + source.size());
+  for (DfsPairSet::const_iterator it = source.begin();
+       it != source.end(); ++it) {
+    DfsPairBonusKind& saved = (*destination)[*it];
+    if (kind > saved) saved = kind;
   }
 }
 
@@ -384,12 +570,46 @@ bool load_extraction_pair_file(
   return true;
 }
 
+bool load_weighted_pair_files(
+    DfsCommonArgs const& args, bool score_mode, int min_word_len,
+    DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes) {
+  struct Source {
+    std::vector<std::string> const* paths;
+    char const* description;
+    DfsPairBonusKind kind;
+  };
+  Source const sources[] = {
+    { &args.seed_pair_files, "seed pair list", DFS_PAIR_BONUS_SEED },
+    { &args.yes_pair_files, "YES pair list", DFS_PAIR_BONUS_YES },
+    { &args.best_pair_files, "BEST pair list", DFS_PAIR_BONUS_BEST },
+  };
+  for (size_t source = 0;
+       source < sizeof(sources) / sizeof(sources[0]); ++source) {
+    for (size_t i = 0; i < sources[source].paths->size(); ++i) {
+      DfsPairSet loaded;
+      DfsPairSet prefixes;
+      char const* const path = (*sources[source].paths)[i].c_str();
+      bool const success = score_mode
+          ? load_pair_file(path, sources[source].description, &loaded,
+                           false, false, true)
+          : load_extraction_pair_file(
+                path, sources[source].description, min_word_len,
+                &loaded, &prefixes, false, false);
+      if (!success) return false;
+      merge_pair_tier(loaded, sources[source].kind, pairs);
+      exception_prefixes->insert(prefixes.begin(), prefixes.end());
+    }
+  }
+  return true;
+}
+
 static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
   struct stat status;
   if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
     return load_pair_file(path, "exclude list", pairs, false, true);
 
-  std::string const metadata = std::string(path) + "/.wf";
+  fs::path const root(path);
+  std::string const metadata = (root / WORKFLOW_DIR_PATH).string();
   struct stat metadata_status;
   if (stat(metadata.c_str(), &metadata_status) != 0) {
     // Anything but ENOENT means .wf may well be there and simply unreachable,
@@ -409,7 +629,7 @@ static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
         path, metadata.c_str());
     return false;
   }
-  std::string const resolved = metadata + "/classified/no/no.pairs";
+  std::string const resolved = (root / WORKFLOW_NO_PAIRS_PATH).string();
   return load_pair_file(resolved.c_str(), "exclude list", pairs, false, true);
 }
 
@@ -499,6 +719,58 @@ DfsOptionResult dfs_parse_common_option(
       info.name = "--pair-bonus";
       info.score_incompatible = false;
       break;
+    case DFS_OPT_SEED_PAIRS:
+      out->seed_pair_files.push_back(options->optarg);
+      info.name = "--seed-pairs";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_YES_PAIRS:
+      out->yes_pair_files.push_back(options->optarg);
+      info.name = "--yes-pairs";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_BEST_PAIRS:
+      out->best_pair_files.push_back(options->optarg);
+      info.name = "--best-pairs";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_WF:
+      if (out->workflow || !out->workflow_root.empty()) {
+        fputs("error: --wf and --wfroot may be specified only once\n",
+              stderr);
+        return DFS_OPTION_ERROR;
+      }
+      out->workflow = true;
+      info.name = "--wf";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_WFROOT:
+      if (out->workflow || !out->workflow_root.empty()) {
+        fputs("error: --wf and --wfroot may be specified only once\n",
+              stderr);
+        return DFS_OPTION_ERROR;
+      }
+      if (options->optarg[0] == '\0') {
+        fputs("error: --wfroot requires a nonempty directory\n", stderr);
+        return DFS_OPTION_ERROR;
+      }
+      out->workflow_root = options->optarg;
+      info.name = "--wfroot";
+      info.score_incompatible = false;
+      break;
+    case 't':
+      if (!out->target.empty()) {
+        fputs("error: --target may be specified only once\n", stderr);
+        return DFS_OPTION_ERROR;
+      }
+      if (options->optarg[0] == '\0') {
+        fputs("error: --target requires a nonempty target\n", stderr);
+        return DFS_OPTION_ERROR;
+      }
+      out->target = options->optarg;
+      info.name = "--target";
+      info.score_incompatible = false;
+      break;
     case DFS_OPT_SOLO_WORDS:
       if (!parse_solo_words(options->optarg, &out->solo_words))
         return DFS_OPTION_ERROR;
@@ -518,4 +790,116 @@ DfsOptionResult dfs_parse_common_option(
 
   if (which != NULL) *which = info;
   return DFS_OPTION_HANDLED;
+}
+
+bool finalize_dfs_workflow_args(
+    DfsCommonArgs* args, char const* program, char const** index_file) {
+  bool const weighted = !args->seed_pair_files.empty() ||
+      !args->yes_pair_files.empty() || !args->best_pair_files.empty();
+  if (args->pair_file != NULL &&
+      (weighted || args->workflow || !args->workflow_root.empty())) {
+    fputs("error: --pairs cannot be combined with --seed-pairs, "
+          "--yes-pairs, or --best-pairs\n", stderr);
+    return false;
+  }
+
+  if (args->workflow) {
+    char const* const root = getenv("WFROOT");
+    if (root == NULL || root[0] == '\0') {
+      fprintf(stderr, "%s: --wf requires WFROOT to be set and nonempty\n",
+              program);
+      return false;
+    }
+    args->workflow_root = root;
+  }
+  if (args->workflow_root.empty()) {
+    if (!args->target.empty()) {
+      fprintf(stderr, "%s: --target requires --wf or --wfroot\n", program);
+      return false;
+    }
+    return true;
+  }
+
+  fs::path const root(args->workflow_root);
+  std::error_code error;
+  if (!fs::is_directory(root / WORKFLOW_DIR_PATH, error)) {
+    fprintf(stderr, "%s: workflow root \"%s\" has no .wf directory\n",
+            program, root.c_str());
+    return false;
+  }
+
+  std::vector<std::string> target_parts;
+  if (!parse_workflow_target(args->target, program, &target_parts))
+    return false;
+  if (!target_parts.empty()) {
+    args->target = join_path(target_parts);
+    fs::path const selected = root / WORKFLOW_BEST_PATH / args->target;
+    if (!fs::is_directory(selected, error)) {
+      fprintf(stderr, "%s: workflow target \"%s\" is not a directory\n",
+              program, selected.c_str());
+      return false;
+    }
+    if (!canonical_target_below(
+            root / WORKFLOW_BEST_PATH, selected, program))
+      return false;
+  }
+
+  if (*index_file == NULL) {
+    args->workflow_index_file = (root / WORKFLOW_INDEX_PATH).string();
+    *index_file = args->workflow_index_file.c_str();
+  }
+  if (args->dictionary_file == NULL) {
+    args->workflow_dictionary_file =
+        (root / WORKFLOW_DICT_PATH).string();
+    args->dictionary_file = args->workflow_dictionary_file.c_str();
+  }
+
+  fs::path const yes = root / WORKFLOW_YES_PAIRS_PATH;
+  if (!require_regular_file(yes, program, "classified YES pair file"))
+    return false;
+  args->yes_pair_files.push_back(yes.string());
+
+  if (args->seed_pair_files.empty()) {
+    if (target_parts.empty()) {
+      fprintf(stderr,
+          "%s: workflow mode requires --target beginning with sN or an "
+          "explicit --seed-pairs\n",
+          program);
+      return false;
+    }
+    std::string seed;
+    std::string const universe = target_parts.size() >= 3
+        ? target_parts[2] : std::string();
+    if (!resolve_sentence_seed(
+            root / WORKFLOW_BEST_PATH / target_parts[0], universe,
+            program, &seed))
+      return false;
+    args->seed_pair_files.push_back(seed);
+  }
+
+  if (target_parts.size() == 4) {
+    fs::path const best = root / WORKFLOW_BEST_PATH / args->target /
+        WORKFLOW_TARGET_BEST_PAIRS_NAME;
+    if (!push_optional_pair_file(
+            best, program, "target BEST pair file", &args->best_pair_files))
+      return false;
+  }
+  return true;
+}
+
+bool collect_workflow_exclude_pair_files(
+    DfsCommonArgs const& args, char const* program,
+    std::vector<std::string>* paths) {
+  if (args.workflow_root.empty()) return true;
+
+  fs::path const root(args.workflow_root);
+  if (!push_optional_pair_file(
+          root / WORKFLOW_NO_PAIRS_PATH, program,
+          "classified NO pair file", paths))
+    return false;
+  if (args.target.empty()) return true;
+  return push_optional_pair_file(
+      root / WORKFLOW_BEST_PATH / args.target /
+          WORKFLOW_TARGET_NO_PAIRS_NAME, program,
+      "target NO pair file", paths);
 }

@@ -9,6 +9,7 @@
 #include "index.h"
 #include "optparse.h"
 #include "segment-report.h"
+#include "workflow-paths.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -56,10 +57,13 @@ static void report_segments(std::vector<DfsSpelling> const& results,
 
 static void usage(char const* program) {
   fprintf(stderr,
-      "usage: %s -i INDEX letters"
+      "usage: %s [-i INDEX] letters"
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
+      " [--seed-pairs FILE]... [--yes-pairs FILE]..."
+      " [--best-pairs FILE]..."
+      " [--wf|--wfroot DIR] [-t TARGET]"
       " [--exclude-pairs FILE|WORKFLOW-DIR]..."
       " [--solo-words WORD[,WORD...]]"
       " [--hide-solo-words]"
@@ -69,12 +73,14 @@ static void usage(char const* program) {
       " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
       " [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
-      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX\n"
+      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
+      " workflow mode defaults to DIR/%s; required otherwise\n"
       "  -u, --used-letters LETTERS subtracts letters already used from the"
       " input letters before searching\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 returns all results\n"
-      "  --dict PATH filters entries to words in the dictionary\n"
+      "  --dict PATH filters entries to words in the dictionary; workflow"
+      " mode defaults to DIR/%s\n"
       "  -g, --num-segments N returns only results using exactly N index"
       " entries; defaults to 0 (any number)\n"
       "    every result then carries the same (corpus-total * P)^(N-1)"
@@ -87,6 +93,20 @@ static void usage(char const* program) {
       " matched only in written order; other pairs match in either order\n"
       "    every loaded entry must contain at least -m normalized non-space"
       " characters in total\n"
+      "  --seed-pairs FILE, --yes-pairs FILE, and --best-pairs FILE load"
+      " fixed pair-bonus tiers %.2f, %.2f, and %.2f; each may be repeated\n"
+      "    duplicates and reversed pairs retain the strongest tier; these"
+      " options cannot be combined with legacy --pairs\n"
+      "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
+      " the nonempty WFROOT environment variable\n"
+      "    workflow mode loads DIR/%s as YES pairs and"
+      " requires either --seed-pairs or -t beginning with sN\n"
+      "    it also excludes DIR/%s, and a selected target's %s, as if each"
+      " were an --exclude-pairs file; either is"
+      " skipped when absent\n"
+      "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
+      " its sentence seed is auto-loaded, and a complete target also loads"
+      " its optional %s\n"
       "  --exclude-pairs FILE|WORKFLOW-DIR loads word pairs, one"
       " \"word,word\" line each, and drops every index entry spelled exactly"
       " like one, in either order, so"
@@ -96,14 +116,14 @@ static void usage(char const* program) {
       "    the test is whole-entry equality, so a longer entry containing the"
       " pair is kept; -x 2 is what confines entries to the two words this"
       " compares\n"
-      "    a directory resolves to DIR/.wf/classified/no/no.pairs and must"
+      "    a directory resolves to DIR/%s and must"
       " hold a .wf subdirectory\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
       " external words; they consume no letters and matched partners are"
       " printed in parentheses\n"
       "    a selected single-word entry earns --word-bonus when either"
       " phrase order is an aggregate index phrase or is asserted by"
-      " --pairs; an asserted pair also earns --pair-bonus\n"
+      " a pair input; an asserted pair also earns its source's pair bonus\n"
       "    each solo word can be used once per answer; both bonuses must be"
       " non-negative, and the aggregate phrase test matches phase 1\n"
       "  --hide-solo-words omits parenthesized solo partners from output\n"
@@ -118,7 +138,7 @@ static void usage(char const* program) {
       " %.0f\n"
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
-      " defaults to %.1f (no bonus)\n"
+      " defaults to %.1f\n"
       "    at N=1 a multi-word entry earns back the default -P it costs, so"
       " adding one as a further entry is free\n"
       "  --pair-bonus N multiplies each index entry found in --pairs by"
@@ -131,9 +151,14 @@ static void usage(char const* program) {
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
-      program, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
+      program, WORKFLOW_INDEX_PATH, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
+      WORKFLOW_DICT_PATH,
+      DFS_SEED_PAIR_BONUS, DFS_YES_PAIR_BONUS, DFS_BEST_PAIR_BONUS,
+      WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
+      WORKFLOW_TARGET_NO_PAIRS_NAME, WORKFLOW_TARGET_BEST_PAIRS_NAME,
+      WORKFLOW_NO_PAIRS_PATH,
       DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY,
-      DFS_WORD_BONUS_BASE, 0.0, DFS_PAIR_BONUS_BASE,
+      DFS_WORD_BONUS_BASE, DFS_DEFAULT_WORD_BONUS, DFS_PAIR_BONUS_BASE,
       DFS_DEFAULT_PAIR_BONUS);
 }
 
@@ -243,6 +268,12 @@ static bool parse_args(char* argv[], Args* out) {
   }
 
   if (!validate_solo_bonuses(out->common)) return false;
+  if (!finalize_dfs_workflow_args(
+          &out->common, argv[0], &out->index_file))
+    return false;
+  if (!collect_workflow_exclude_pair_files(
+          out->common, argv[0], &out->exclude_pair_files))
+    return false;
 
   if (out->weighted && !out->segments) {
     fputs("error: --weighted requires --segments\n", stderr);
@@ -304,6 +335,7 @@ int main(int argc, char* argv[]) {
   }
 
   DfsPairSet pairs;
+  DfsPairBonusMap weighted_pairs;
   DfsPairSet exception_prefixes;
   if (args.common.pair_file != NULL) {
     if (!load_extraction_pair_file(
@@ -312,6 +344,10 @@ int main(int argc, char* argv[]) {
       return 1;
   } else
     args.common.pair_bonus = 0.0;
+  if (!load_weighted_pair_files(
+          args.common, /*score_mode=*/false, args.common.min_word_len,
+          &weighted_pairs, &exception_prefixes))
+    return 1;
 
   DfsPairSet exclude_pairs;
   if (!load_exclude_pair_files(args.exclude_pair_files, &exclude_pairs))
@@ -363,14 +399,17 @@ int main(int argc, char* argv[]) {
       args.common.pair_bonus);
   std::unique_ptr<DfsSoloWords> solo_words;
   if (!args.common.solo_words.empty() &&
-      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0))
+      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
+       !weighted_pairs.empty()))
     solo_words.reset(new DfsSoloWords(
         &reader, args.common.solo_words,
-        args.common.pair_file != NULL ? &pairs : NULL, &model));
+        args.common.pair_file != NULL ? &pairs : NULL, &model,
+        !weighted_pairs.empty() ? &weighted_pairs : NULL));
   DfsClassList classes(&reader, args.letters, args.common.min_word_len, true,
                        dictionary_filter, args.common.max_extract_words,
                        &model,
                        args.common.pair_file != NULL ? &pairs : NULL,
+                       !weighted_pairs.empty() ? &weighted_pairs : NULL,
                        !exception_prefixes.empty()
                            ? &exception_prefixes : NULL,
                        solo_words.get(),

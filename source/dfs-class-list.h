@@ -138,9 +138,10 @@ class DfsClassList {
   // its production default. The optional dictionary is borrowed and restricts
   // every emitted phrase word. max_extract_words caps the words in one
   // extracted entry; 0 means no additional caller-requested cap. The optional
-  // score model selects the member ordering, and pairs marks entries that earn
-  // its pair bonus. exception_prefixes permits traversal to exact oriented
-  // pair entries containing a word shorter than min_word_len; both sets are
+  // score model selects the member ordering. `pairs` marks legacy entries that
+  // earn its configurable pair bonus; `weighted_pairs` assigns fixed seed,
+  // YES, or BEST tiers. exception_prefixes permits traversal to exact oriented
+  // pair entries containing a word shorter than min_word_len; every input is
   // borrowed. Member 0 is therefore the class's best member under the caller's
   // admissible upper score. solo_words is mutable only while phase 1 registers
   // profiles.
@@ -155,6 +156,7 @@ class DfsClassList {
                int max_extract_words = 0,
                DfsScoreModel const* score_model = NULL,
                DfsPairSet const* pairs = NULL,
+               DfsPairBonusMap const* weighted_pairs = NULL,
                DfsPairSet const* exception_prefixes = NULL,
                DfsSoloWords* solo_words = NULL,
                DfsPairSet const* exclude_pairs = NULL);

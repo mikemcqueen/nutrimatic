@@ -47,41 +47,41 @@ assert_close() {
 "$make_index" "$index_file"
 
 expect_status 2 "$dfs_anagrams" "$index_file" abcd
-grep -q '^usage: .* -i INDEX letters' "$test_dir/status.stderr" ||
+grep -q '^usage: .* \[-i INDEX\] letters' "$test_dir/status.stderr" ||
   fail "positional index rejection did not show the new synopsis"
 expect_status 2 "$dfs_anagrams" abcd
 
-"$dfs_anagrams" --idx "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" --idx "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1000000 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1000000 --word-bonus 0 \
   > "$test_dir/explicit-default.stdout" \
   2> "$test_dir/explicit-default.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   --cache-size 0 \
   --allow-cache-fallback \
   > "$test_dir/uncached.stdout" 2> "$test_dir/uncached.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   --preprocess-threads 1 \
   > "$test_dir/thread-one.stdout" 2> "$test_dir/thread-one.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   --preprocess-threads 4 \
   > "$test_dir/threaded.stdout" 2> "$test_dir/threaded.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   -d 0 \
   > "$test_dir/depth-zero.stdout" 2> "$test_dir/depth-zero.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   -S 0 \
   > "$test_dir/search-thread-auto.stdout" \
   2> "$test_dir/search-thread-auto.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   -S 1 \
   > "$test_dir/search-thread-one.stdout" \
   2> "$test_dir/search-thread-one.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   -p 2147483648 \
   > "$test_dir/wide-progress-factor.stdout" \
   2> "$test_dir/wide-progress-factor.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 0 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 0 --word-bonus 0 \
   > "$test_dir/unlimited.stdout" 2> "$test_dir/unlimited.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/explicit-default.stdout" ||
   fail "explicit default segment penalty changed stdout"
@@ -162,7 +162,7 @@ grep -Eq "${diagnostic_prefix}phase 2 complete: .* [0-9]+ retained$" \
   "$test_dir/all.stderr" ||
   fail "phase-2 completion statistics have the wrong format"
 
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 2 --word-bonus 0 \
   > "$test_dir/top.stdout" 2> "$test_dir/top.stderr"
 head -n 2 "$test_dir/all.stdout" > "$test_dir/expected-top.stdout"
 cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
@@ -171,10 +171,10 @@ cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
    $(wc -l < "$test_dir/top.stdout") ]] ||
   fail "-n 0 did not return more results than -n 2"
 
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1 --word-bonus 0 \
   > "$test_dir/penalty-one.stdout" \
   2> "$test_dir/penalty-one.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   --segment-penalty 1 --cache-size 0 --allow-cache-fallback \
   > "$test_dir/penalty-one-uncached.stdout" \
   2> "$test_dir/penalty-one-uncached.stderr"
@@ -195,9 +195,9 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
     "$test_dir/penalty-one.stdout")" 70 \
   "one-segment phrase should be invariant"
 
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --max-extract-words 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 --max-extract-words 2 \
   > "$test_dir/extract-two.stdout" 2> "$test_dir/extract-two.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -x 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -x 1 \
   > "$test_dir/extract-one.stdout" 2> "$test_dir/extract-one.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/extract-two.stdout" ||
   fail "-x 2 changed stdout where no entry holds three words"
@@ -229,7 +229,7 @@ fi
 # loading the scoring input alone leave output unchanged.
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
+  --pairs "$test_dir/pairs.txt" --word-bonus 0 --pair-bonus 0 \
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
 grep -Eq "${diagnostic_prefix}pair list: 2 pairs, 2 keys$" \
   "$test_dir/pair-list.stderr" ||
@@ -355,7 +355,7 @@ grep -q "^error: pair list \"$test_dir/normalized-short-word.pairs\" line 1: nor
 # entries, not over adjacency in a result.
 printf 'cd,ab\n' > "$test_dir/exclude.pairs"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/exclude.pairs" \
+  --word-bonus 0 --exclude-pairs "$test_dir/exclude.pairs" \
   > "$test_dir/excluded.stdout" 2> "$test_dir/excluded.stderr"
 grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys$" \
   "$test_dir/excluded.stderr" ||
@@ -457,13 +457,17 @@ assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/bonus-one.stdout")" \
   fail "--word-bonus 1 dropped the single word from the class"
 assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/bonus-one.stdout")" \
   1000 "--word-bonus 1 should leave the single word's score alone"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 \
+  > "$test_dir/bonus-default.stdout" 2> "$test_dir/bonus-default.stderr"
+cmp "$test_dir/bonus-one.stdout" "$test_dir/bonus-default.stdout" ||
+  fail "omitted --word-bonus did not match --word-bonus 1"
 
 # The same within-class promotion must work when only the selected pair earns
 # the bonus. This exercises pair lookup, score ordering, phase-2 bounds, and
 # phase-3 spelling deltas together.
 printf 'kl,mn\n' > "$test_dir/klmn-pairs.txt"
 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 \
-  --pairs "$test_dir/klmn-pairs.txt" \
+  --word-bonus 0 --pairs "$test_dir/klmn-pairs.txt" \
   > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"
 [[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/pair-bonus.stdout") \
    == "kl mn" ]] ||
@@ -474,6 +478,98 @@ assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   fail "--pair-bonus dropped the unlisted single word from the class"
 assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   1000 "--pair-bonus should leave the unlisted single word's score alone"
+
+# Fixed positive sources are repeatable and choose one maximum tier for both
+# orientations; exercise the DFS score path as well as query-index --score.
+printf 'kl,mn\n' > "$test_dir/weighted-seed.pairs"
+printf 'mn,kl\n' > "$test_dir/weighted-seed-reversed.pairs"
+printf 'mn,kl\n' > "$test_dir/weighted-yes.pairs"
+printf 'kl,mn\n' > "$test_dir/weighted-yes-reversed.pairs"
+printf 'kl,mn\n' > "$test_dir/weighted-best.pairs"
+printf 'mn,kl\n' > "$test_dir/weighted-best-reversed.pairs"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
+  --seed-pairs "$test_dir/weighted-seed.pairs" \
+  --seed-pairs "$test_dir/weighted-seed-reversed.pairs" \
+  --yes-pairs "$test_dir/weighted-yes.pairs" \
+  --yes-pairs "$test_dir/weighted-yes-reversed.pairs" \
+  --best-pairs "$test_dir/weighted-best.pairs" \
+  --best-pairs "$test_dir/weighted-best-reversed.pairs" \
+  > "$test_dir/weighted-pairs.stdout" \
+  2> "$test_dir/weighted-pairs.stderr"
+[[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/weighted-pairs.stdout") \
+   == "kl mn" ]] ||
+  fail "weighted pair tiers did not promote the paired DFS spelling"
+assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/weighted-pairs.stdout")" \
+  "$(awk 'BEGIN { print 5 * exp(log(1000000) * 1.10) }')" \
+  "repeated weighted pair sources did not retain the BEST tier"
+expect_status 2 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 \
+  --pairs "$test_dir/klmn-pairs.txt" \
+  --seed-pairs "$test_dir/weighted-seed.pairs"
+grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, or --best-pairs$' \
+  "$test_dir/status.stderr" ||
+  fail "legacy and fixed DFS pair inputs were not rejected together"
+
+# Workflow defaults use the filtered dictionary and layer sentence seed,
+# global YES, and a complete target's optional BEST pair file.
+workflow_root="$test_dir/workflow-positive"
+mkdir -p "$workflow_root/.wf/dict" \
+  "$workflow_root/.wf/classified/yes" \
+  "$workflow_root/.wf/best/idx" \
+  "$workflow_root/.wf/best/s1/o-klmn/m2/g1"
+cp "$index_file" "$workflow_root/.wf/best/idx/wiki-merged.2.index"
+printf 'kl\nmn\n' > "$workflow_root/.wf/dict/words.filtered"
+printf 'kl,mn\n' > "$workflow_root/.wf/classified/yes/yes.pairs"
+printf 'mn,kl\n' > "$workflow_root/.wf/best/s1/seed.m2.pairs"
+printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/o-klmn/m2/g1/best.pairs"
+"$dfs_anagrams" klmn -m 2 -n 2 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \
+  > "$test_dir/workflow-positive.stdout" \
+  2> "$test_dir/workflow-positive.stderr"
+[[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/workflow-positive.stdout") \
+   == "kl mn" ]] ||
+  fail "workflow default dictionary did not retain its allowed phrase"
+assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/workflow-positive.stdout")" \
+  "$(awk 'BEGIN { print 5 * exp(log(1000000) * 1.10) }')" \
+  "workflow target did not auto-load BEST pairs above seed and YES"
+WFROOT="$workflow_root" "$dfs_anagrams" klmn -m 2 -n 2 \
+  --word-bonus 0 --wf -t 'S1/o-klmn/m2/g1' \
+  > "$test_dir/workflow-alias.stdout" \
+  2> "$test_dir/workflow-alias.stderr"
+cmp "$test_dir/workflow-positive.stdout" "$test_dir/workflow-alias.stdout" ||
+  fail "--wf did not use WFROOT like --wfroot"
+rm "$workflow_root/.wf/best/idx/wiki-merged.2.index"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \
+  > "$test_dir/workflow-index-override.stdout" \
+  2> "$test_dir/workflow-index-override.stderr"
+cmp "$test_dir/workflow-positive.stdout" \
+    "$test_dir/workflow-index-override.stdout" ||
+  fail "explicit -i did not override a missing workflow index"
+expect_status 2 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 \
+  --wfroot "$workflow_root"
+grep -q 'workflow mode requires --target beginning with sN or an explicit --seed-pairs' \
+  "$test_dir/status.stderr" ||
+  fail "workflow seed requirement diagnostic is unclear"
+
+# Workflow mode excludes its own classified NO pairs and the selected target's
+# no.pairs without an explicit --exclude-pairs.
+mkdir -p "$workflow_root/.wf/classified/no"
+printf 'kl,mn\n' > "$workflow_root/.wf/classified/no/no.pairs"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \
+  > "$test_dir/workflow-negative.stdout" \
+  2> "$test_dir/workflow-negative.stderr"
+! grep -q 'kl mn' "$test_dir/workflow-negative.stdout" ||
+  fail "workflow mode kept a classified NO pair"
+rm "$workflow_root/.wf/classified/no/no.pairs"
+printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \
+  > "$test_dir/workflow-target-negative.stdout" \
+  2> "$test_dir/workflow-target-negative.stderr"
+! grep -q 'kl mn' "$test_dir/workflow-target-negative.stdout" ||
+  fail "workflow mode kept the target's own NO pair"
+rm "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"
 
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --solo-words cd --word-bonus 0 --pair-bonus 0 \
@@ -547,7 +643,8 @@ grep -Eq "${diagnostic_prefix}solo words: 2 profiles, 3 word edges, 2 pair edges
 # Every result line's entry list must be pasteable into "query-index --score"
 # and reproduce that line's own score.
 while read -r result_score result_entries; do
-  round_trip=$("$query_index" -i "$index_file" "$result_entries" --score |
+  round_trip=$("$query_index" -i "$index_file" "$result_entries" --score \
+    --word-bonus 0 |
     awk '{ print $1 }')
   assert_close "$round_trip" "$result_score" \
     "query-index --score disagrees on \"$result_entries\""
@@ -555,9 +652,9 @@ done < "$test_dir/all.stdout"
 
 # -g N keeps only N-entry results. "ab cd" wins the unconstrained search as one
 # contiguous phrase and absorbs its split form, so -g 2 is what exposes "ab,cd".
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -g 1 \
   > "$test_dir/one-segment.stdout" 2> "$test_dir/one-segment.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -g 2 \
   > "$test_dir/two-segment.stdout" 2> "$test_dir/two-segment.stderr"
 if grep -q ',' "$test_dir/one-segment.stdout"; then
   fail "-g 1 returned a multi-entry result"
@@ -575,7 +672,7 @@ grep -Eq "${diagnostic_prefix}"'.*, exactly 2 segments$' \
   fail "the search header did not pluralize the segment constraint"
 grep -q ' ab,cd$' "$test_dir/two-segment.stdout" ||
   fail "-g 2 did not expose the split form of the contiguous phrase"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 9 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -g 9 \
   > "$test_dir/unreachable-segment.stdout" \
   2> "$test_dir/unreachable-segment.stderr"
 [[ ! -s $test_dir/unreachable-segment.stdout ]] ||

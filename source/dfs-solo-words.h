@@ -6,6 +6,7 @@
 
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -18,11 +19,35 @@ enum DfsMemberScoreFlag {
   DFS_MEMBER_SOLO_PAIR_EDGE = 1 << 2,
 };
 
+// Fixed positive-pair sources. Legacy --pairs keeps its operator-selected
+// --pair-bonus, while the three workflow tiers use their calibrated bonuses.
+// The ordering is meaningful: duplicate weighted inputs retain the strongest
+// source by taking the maximum kind.
+enum DfsPairBonusKind : uint8_t {
+  DFS_PAIR_BONUS_NONE = 0,
+  DFS_PAIR_BONUS_LEGACY = 1,
+  DFS_PAIR_BONUS_SEED = 2,
+  DFS_PAIR_BONUS_YES = 3,
+  DFS_PAIR_BONUS_BEST = 4,
+};
+
+typedef std::unordered_map<std::string, DfsPairBonusKind> DfsPairBonusMap;
+
+inline constexpr int DFS_MEMBER_PAIR_KIND_SHIFT = 3;
+inline constexpr uint16_t DFS_MEMBER_PAIR_KIND_MASK = uint16_t(7) << 3;
+inline constexpr int DFS_MEMBER_SOLO_PAIR_KIND_SHIFT = 6;
+inline constexpr uint16_t DFS_MEMBER_SOLO_PAIR_KIND_MASK = uint16_t(7) << 6;
+
+uint16_t dfs_pair_bonus_score_flags(DfsPairBonusKind kind);
+DfsPairBonusKind dfs_member_pair_bonus_kind(uint16_t score_flags);
+DfsPairBonusKind dfs_member_solo_pair_bonus_kind(uint16_t score_flags);
+
 inline constexpr uint8_t DFS_NO_SOLO_WORD = UINT8_MAX;
 
 struct DfsSoloMasks {
   uint16_t word_mask = 0;
   uint16_t pair_mask = 0;
+  DfsPairBonusKind pair_kinds[16] = {};
 };
 
 uint16_t dfs_solo_score_flags(DfsSoloMasks masks);
@@ -35,7 +60,8 @@ class DfsSoloWords {
   DfsSoloWords(IndexReader const* reader,
                std::vector<std::string> const& words,
                std::unordered_set<std::string> const* pairs,
-               DfsScoreModel const* score_model);
+               DfsScoreModel const* score_model,
+               DfsPairBonusMap const* weighted_pairs = NULL);
 
   DfsSoloMasks resolve(
       std::string_view candidate,
@@ -74,6 +100,7 @@ class DfsSoloWords {
   IndexReader const* const reader;
   std::vector<std::string> const words;
   std::unordered_set<std::string> const* const pairs;
+  DfsPairBonusMap const* const weighted_pairs;
   bool const probe_word_edges;
   bool const probe_pair_edges;
   std::vector<SoloPosition> solo_positions;
@@ -102,6 +129,16 @@ DfsSoloMatching dfs_solo_exact_matching(
 double dfs_solo_score_correction(
     std::vector<DfsSoloMasks> const& profiles,
     double word_log_bonus, double pair_log_bonus,
+    std::vector<uint8_t>* solo_word_indexes = NULL);
+
+// Weighted-source forms used by production scoring. The scalar overloads
+// above remain the compact public surface for legacy callers and unit tests.
+DfsSoloMatching dfs_solo_exact_matching(
+    std::vector<DfsSoloMasks> const& profiles,
+    DfsScoreModel const& score_model);
+double dfs_solo_score_correction(
+    std::vector<DfsSoloMasks> const& profiles,
+    DfsScoreModel const& score_model,
     std::vector<uint8_t>* solo_word_indexes = NULL);
 
 #endif

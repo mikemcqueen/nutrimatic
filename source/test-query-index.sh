@@ -7,8 +7,7 @@ make_index=$2
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/nutrimatic-query-index.XXXXXX")
 
 cleanup() {
-  rm -f "$test_dir"/*
-  rmdir "$test_dir"
+  rm -rf "$test_dir"
 }
 trap cleanup EXIT
 
@@ -31,14 +30,15 @@ missing_index_status=$?
 set -e
 [[ $positional_index_status -eq 2 ]] ||
   fail "positional index should exit 2, got $positional_index_status"
-grep -q '^usage: .* -i INDEX letters' \
+grep -q '^usage: .* \[-i INDEX\] letters' \
   "$test_dir/positional-index.stderr" ||
   fail "positional index rejection did not show the new synopsis"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
 
 score_value() {
-  "$query_index" -i "$synthetic_index" "$1" --score "${@:2}" |
+  "$query_index" -i "$synthetic_index" "$1" --score "${@:2}" \
+      2> "$test_dir/score-value.stderr" |
     awk '{ print $1 }'
 }
 
@@ -141,7 +141,7 @@ assert_close "$(score_value 'ab,cd,ab' --segment-penalty 100)" \
   "$(awk 'BEGIN { print 80 * 7 * 80 / (1148 * 100)^2 }')" \
   "three entries should pay two segment penalties"
 for penalty in 1 100 1000000; do
-  assert_close "$(score_value 'ab cd' -P "$penalty")" 70 \
+  assert_close "$(score_value 'ab cd' -P "$penalty" --word-bonus 0)" 70 \
     "a multi-word entry should remain one segment at P=$penalty"
 done
 assert_close "$(score_value 'ab,ab')" \
@@ -158,19 +158,22 @@ expect_score_failure 'ab,,cd' empty-entry
 expect_score_failure a prefix-only
 expect_score_failure 'ab  cd' malformed-spacing
 
-assert_close "$(score_value 'ab cd' -P 1)" 70 \
-  "a multi-word entry should score as its own count without a bonus"
-assert_close "$(score_value 'ab cd,ab' -P 1)" \
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1)" 70 \
+  "a multi-word entry should score as its own count with an explicit zero bonus"
+assert_close "$(score_value 'ab cd,ab' --word-bonus 0 -P 1)" \
   "$(awk 'BEGIN { print 70 * 80 / 1148 }')" \
-  "word count should not affect any segment's score without a bonus"
+  "word count should not affect any segment's score with an explicit zero bonus"
 
-assert_close "$(score_value 'ab cd' --word-bonus 1 -P 1)" 70000000 \
-  "--word-bonus should retain its million-fold boost at P=1"
+assert_close "$(score_value 'ab cd' -P 1)" 70000000 \
+  "the default word bonus should be one"
+[[ "$(score_value 'ab cd' -P 1)" == \
+   "$(score_value 'ab cd' --word-bonus 1 -P 1)" ]] ||
+  fail "omitted --word-bonus did not match --word-bonus 1"
 assert_close "$(score_value ab --word-bonus 1)" 80 \
   "--word-bonus should not apply to a single-word segment"
-assert_close "$(score_value 'ab cd,ab' --word-bonus 1 -P 1)" \
+assert_close "$(score_value 'ab cd,ab' -P 1)" \
   "$(awk 'BEGIN { print 70 * 80 / 1148 * 1e6 }')" \
-  "a mixed sequence should bonus only its multi-word segment"
+  "the default should bonus only the multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
@@ -299,9 +302,11 @@ grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
 # -x caps the words in one extracted entry, so it can only remove entries a
 # capless run already found.
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
+  --word-bonus 0 \
   > "$test_dir/extract-uncapped.stdout" \
   2> "$test_dir/extract-uncapped.stderr"
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
+  --word-bonus 0 \
   > "$test_dir/extract-x2.stdout" 2> "$test_dir/extract-x2.stderr"
 awk '{ print }' "$test_dir/extract-uncapped.stdout" |
   awk 'gsub(/ /, " ") <= 2' > "$test_dir/extract-filtered.stdout"
@@ -346,26 +351,27 @@ grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
   fail "--words-only displayed a short-pair phrase"
 
 # --score remains symmetric and does not apply the extraction minimum.
-assert_close "$(score_value '2345 1' --pairs "$test_dir/short-first.pairs")" \
+assert_close "$(score_value '2345 1' --word-bonus 0 \
+    --pairs "$test_dir/short-first.pairs")" \
   1000000 "--score did not retain symmetric short-pair matching"
 
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
-  --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
+  --pairs "$test_dir/pairs.txt" --word-bonus 0 --pair-bonus 0 \
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
-! grep -q 'pair list:' "$test_dir/pair-list.stderr" ||
-  fail "pair-list loading unexpectedly wrote to stderr"
+grep -q 'pair list: 2 pairs, 2 keys$' "$test_dir/pair-list.stderr" ||
+  fail "the pair-list diagnostic did not report reversal and dedup"
 cmp "$test_dir/extract-uncapped.stdout" "$test_dir/pair-list.stdout" ||
   fail "a loaded pair list changed stdout at --pair-bonus 0"
 
 assert_close "$(score_value 'ab cd' --pairs "$test_dir/pairs.txt" \
-    -P 1)" 70000000 \
+    --word-bonus 0 -P 1)" 70000000 \
   "--score should apply the default pair bonus to a listed pair"
 assert_close "$(score_value 'ab cd' --pairs "$test_dir/pairs.txt" \
     --word-bonus 1 --pair-bonus 1 -P 1)" 70000000000000 \
   "word and pair bonuses should be additive in log space"
 assert_close "$(score_value 'gh ij' --pairs "$test_dir/pairs.txt" \
-    --pair-bonus 1 -P 1)" 5 \
+    --word-bonus 0 --pair-bonus 1 -P 1)" 5 \
   "--pair-bonus should not apply to an unlisted phrase"
 
 # A pair list may also name one exact entry, which receives the pair bonus
@@ -375,8 +381,97 @@ assert_close "$(score_value ab --pairs "$test_dir/single-word-pairs.txt" -P 1)" 
   80000000 \
   "--score should apply the pair bonus to a listed standalone word"
 
+# The fixed workflow tiers are repeatable, apply to either pair orientation,
+# and use the maximum tier rather than stacking overlapping evidence.
+printf 'ab,cd\n' > "$test_dir/seed-pairs.txt"
+printf 'cd,ab\n' > "$test_dir/seed-pairs-reversed.txt"
+printf 'cd,ab\n' > "$test_dir/yes-pairs.txt"
+printf 'ab,cd\n' > "$test_dir/yes-pairs-reversed.txt"
+printf 'ab,cd\n' > "$test_dir/best-pairs.txt"
+printf 'cd,ab\n' > "$test_dir/best-pairs-reversed.txt"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --seed-pairs "$test_dir/seed-pairs.txt" \
+    --seed-pairs "$test_dir/seed-pairs-reversed.txt")" \
+  70000000 "repeated seed inputs did not retain the 1.00 tier"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --seed-pairs "$test_dir/seed-pairs.txt" \
+    --yes-pairs "$test_dir/yes-pairs.txt" \
+    --yes-pairs "$test_dir/yes-pairs-reversed.txt")" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
+  "YES pairs did not override the seed tier"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --seed-pairs "$test_dir/seed-pairs.txt" \
+    --yes-pairs "$test_dir/yes-pairs.txt" \
+    --yes-pairs "$test_dir/yes-pairs-reversed.txt" \
+    --best-pairs "$test_dir/best-pairs.txt" \
+    --best-pairs "$test_dir/best-pairs-reversed.txt")" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.10) }')" \
+  "BEST pairs did not retain maximum precedence across reversed duplicates"
+expect_score_failure ab legacy-and-weighted --pairs "$test_dir/pairs.txt" \
+  --seed-pairs "$test_dir/seed-pairs.txt"
+grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, or --best-pairs$' \
+  "$test_dir/legacy-and-weighted.stderr" ||
+  fail "legacy and fixed pair inputs were not rejected together"
+
+# A small workflow root exercises the shared CLI resolver: default dictionary,
+# classified YES, sentence seed discovery, complete-target BEST promotion, and
+# the --wf environment alias.
+workflow_root="$test_dir/workflow"
+mkdir -p "$workflow_root/.wf/dict" \
+  "$workflow_root/.wf/classified/yes" \
+  "$workflow_root/.wf/best/idx" \
+  "$workflow_root/.wf/best/s1/o-abcd/m2/g1"
+cp "$synthetic_index" "$workflow_root/.wf/best/idx/wiki-merged.2.index"
+printf 'ab\ncd\n' > "$workflow_root/.wf/dict/words.filtered"
+printf 'ab,cd\n' > "$workflow_root/.wf/classified/yes/yes.pairs"
+printf 'gh,ij\n' > "$workflow_root/.wf/best/s1/seed.m2.pairs"
+printf 'ab,cd\n' > "$workflow_root/.wf/best/s1/o-abcd/m2/g1/best.pairs"
+assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" -t s1)" 5000000 \
+  "sentence target did not auto-load its seed pairs"
+full_target_score=$(score_value 'ab cd' --word-bonus 0 -P 1 \
+  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1')
+assert_close "$full_target_score" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.10) }')" \
+  "complete target did not promote its BEST pair above global YES"
+wf_alias_score=$(WFROOT="$workflow_root" score_value 'ab cd' \
+  --word-bonus 0 -P 1 --wf -t 'S1/o-abcd/m2/g1')
+assert_close "$wf_alias_score" "$full_target_score" \
+  "--wf did not resolve WFROOT like --wfroot"
+"$query_index" abcd -m 2 -n 10 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
+  > "$test_dir/workflow-default-dict.stdout" \
+  2> "$test_dir/workflow-default-dict.stderr"
+grep -q ' ab cd$' "$test_dir/workflow-default-dict.stdout" ||
+  fail "workflow default dictionary dropped an allowed phrase"
+! grep -q ' ab dc$' "$test_dir/workflow-default-dict.stdout" ||
+  fail "workflow default dictionary failed to filter an unavailable word"
+WFROOT="$workflow_root" "$query_index" abcd -m 2 -n 10 --word-bonus 0 \
+  --wf -t 'S1/o-abcd/m2/g1' \
+  > "$test_dir/workflow-index-alias.stdout" \
+  2> "$test_dir/workflow-index-alias.stderr"
+cmp "$test_dir/workflow-default-dict.stdout" \
+    "$test_dir/workflow-index-alias.stdout" ||
+  fail "--wf did not infer the workflow index like --wfroot"
+rm "$workflow_root/.wf/best/idx/wiki-merged.2.index"
+"$query_index" -i "$synthetic_index" abcd -m 2 -n 10 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
+  > "$test_dir/workflow-index-override.stdout" \
+  2> "$test_dir/workflow-index-override.stderr"
+cmp "$test_dir/workflow-default-dict.stdout" \
+    "$test_dir/workflow-index-override.stdout" ||
+  fail "explicit -i did not override a missing workflow index"
+expect_score_failure ab workflow-needs-seed --wfroot "$workflow_root"
+grep -q 'workflow mode requires --target beginning with sN or an explicit --seed-pairs' \
+  "$test_dir/workflow-needs-seed.stderr" ||
+  fail "workflow seed requirement diagnostic is unclear"
+assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" \
+    --seed-pairs "$workflow_root/.wf/best/s1/seed.m2.pairs")" \
+  5000000 "explicit --seed-pairs did not satisfy workflow mode"
+
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
-  --pairs "$test_dir/pairs.txt" \
+  --pairs "$test_dir/pairs.txt" --word-bonus 0 \
   > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"
 [[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/pair-bonus.stdout") \
    == "ab cd" ]] ||
@@ -458,7 +553,7 @@ expect_score_failure ab solo-negative-pair \
 
 # --csv keeps exactly the multi-word entries of an ordinary run, printed as
 # their words with the count column dropped.
-"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 --csv \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 --word-bonus 0 --csv \
   > "$test_dir/csv.stdout" 2> "$test_dir/csv.stderr"
 [[ -s "$test_dir/csv.stdout" ]] || fail "--csv printed nothing"
 grep -Ev '^[a-z0-9]+(,[a-z0-9]+)+$' "$test_dir/csv.stdout" &&
@@ -505,7 +600,7 @@ if [[ -z ${IDX:-} ]]; then
   exit 77
 fi
 
-"$query_index" -i "$IDX" penbuilt -n 5 \
+"$query_index" -i "$IDX" penbuilt -n 5 --word-bonus 0 \
   > "$test_dir/top5.stdout" 2> "$test_dir/top5.stderr"
 
 [[ $(wc -l < "$test_dir/top5.stdout") -eq 5 ]] ||
@@ -519,13 +614,13 @@ awk '{ print $1 }' "$test_dir/top5.stdout" > "$test_dir/counts"
 sort -rn -C "$test_dir/counts" ||
   fail "results are not sorted by descending count"
 
-"$query_index" -i "$IDX" penbuilt -n 2 \
+"$query_index" -i "$IDX" penbuilt -n 2 --word-bonus 0 \
   > "$test_dir/top2.stdout" 2> "$test_dir/top2.stderr"
 head -n 2 "$test_dir/top5.stdout" > "$test_dir/expected-top2.stdout"
 cmp "$test_dir/expected-top2.stdout" "$test_dir/top2.stdout" ||
   fail "--top did not retain the two highest-frequency entries"
 
-"$query_index" -i "$IDX" penbuilt -n 5 -w \
+"$query_index" -i "$IDX" penbuilt -n 5 -w --word-bonus 0 \
   > "$test_dir/words-only.stdout" 2> "$test_dir/words-only.stderr"
 if awk 'NF > 2 { exit 1 }' "$test_dir/words-only.stdout"; then :; else
   fail "--words-only emitted a multi-word phrase"

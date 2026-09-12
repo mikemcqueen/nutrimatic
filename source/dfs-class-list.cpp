@@ -209,6 +209,7 @@ class DfsExtractor {
                int min_word_len, bool include_phrases,
                DfsDictionary const* dictionary, int requested_max_words,
                DfsPairSet const* pairs,
+               DfsPairBonusMap const* weighted_pairs,
                DfsPairSet const* exception_prefixes,
                DfsSoloWords* solo_words, DfsPairSet const* exclude_pairs):
       text_arena(1),
@@ -222,6 +223,7 @@ class DfsExtractor {
           requested_max_words)),
       dictionary(dictionary),
       pairs(pairs),
+      weighted_pairs(weighted_pairs),
       exception_prefixes(exception_prefixes),
       has_exception_prefixes(
           exception_prefixes != NULL && !exception_prefixes->empty()),
@@ -273,6 +275,11 @@ class DfsExtractor {
   size_t entries;
 
  private:
+  bool has_positive_pair(std::string const& key) const {
+    return (pairs != NULL && pairs->count(key) != 0) ||
+        (weighted_pairs != NULL && weighted_pairs->count(key) != 0);
+  }
+
   void emit(int64_t count, int word_count,
             IndexReader::Node continuation) {
     if (exclude_pairs != NULL && word_count > 1) {
@@ -294,10 +301,16 @@ class DfsExtractor {
     size_t const length = text.size() - 1;
     DFS_CHECK(length <= UINT8_MAX && word_count <= UINT8_MAX);
     uint16_t score_flags = 0;
-    if (pairs != NULL) {
+    if (pairs != NULL || weighted_pairs != NULL) {
       text.pop_back();
-      if (pairs->count(text) != 0)
-        score_flags |= DFS_MEMBER_KNOWN_PAIR;
+      if (weighted_pairs != NULL) {
+        DfsPairBonusMap::const_iterator const found =
+            weighted_pairs->find(text);
+        if (found != weighted_pairs->end())
+          score_flags |= dfs_pair_bonus_score_flags(found->second);
+      }
+      if (score_flags == 0 && pairs != NULL && pairs->count(text) != 0)
+        score_flags |= dfs_pair_bonus_score_flags(DFS_PAIR_BONUS_LEGACY);
       text.push_back(' ');
     }
     if (solo_words != NULL && word_count == 1) {
@@ -345,7 +358,7 @@ class DfsExtractor {
         exception_prefixes->count(text) != 0;
     bool const exact_short_pair =
         has_exception_prefixes && words == 1 && !ordinary_boundary &&
-        pairs != NULL && pairs->count(text) != 0;
+        has_positive_pair(text);
     if (ordinary_boundary || exception_prefix || exact_short_pair)
       allowed.set(' ');
 
@@ -365,8 +378,7 @@ class DfsExtractor {
         bool const needs_pair_match =
             words > 0 && (requires_pair_match || !ordinary_boundary);
         bool const exact_pair = needs_pair_match &&
-            (exact_short_pair ||
-             (pairs != NULL && pairs->count(text) != 0));
+            (exact_short_pair || has_positive_pair(text));
         bool const can_emit = words == 0
             ? ordinary_boundary
             : (!requires_pair_match && ordinary_boundary) || exact_pair;
@@ -408,6 +420,7 @@ class DfsExtractor {
   int const max_extract_words;
   DfsDictionary const* const dictionary;
   DfsPairSet const* const pairs;
+  DfsPairBonusMap const* const weighted_pairs;
   DfsPairSet const* const exception_prefixes;
   bool const has_exception_prefixes;
   DfsSoloWords* const solo_words;
@@ -470,6 +483,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            int max_extract_words,
                            DfsScoreModel const* score_model,
                            DfsPairSet const* pairs,
+                           DfsPairBonusMap const* weighted_pairs,
                            DfsPairSet const* exception_prefixes,
                            DfsSoloWords* solo_words,
                            DfsPairSet const* exclude_pairs):
@@ -500,7 +514,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
 
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
-      max_extract_words, pairs, exception_prefixes, solo_words, exclude_pairs);
+      max_extract_words, pairs, weighted_pairs, exception_prefixes, solo_words,
+      exclude_pairs);
   extractor.run();
   if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();

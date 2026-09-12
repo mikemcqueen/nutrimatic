@@ -13,6 +13,7 @@
 #include "dfs-search.h"
 #include "index.h"
 #include "optparse.h"
+#include "workflow-paths.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -43,21 +44,29 @@ struct Args {
 
 static void usage(char const* program) {
   fprintf(stderr,
-      "usage: %s -i INDEX letters"
+      "usage: %s [-i INDEX] letters"
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N]"
       " [--solo-words WORD[,WORD...]]"
       " [--hide-solo-words]"
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
+      " [--seed-pairs FILE]... [--yes-pairs FILE]..."
+      " [--best-pairs FILE]..."
+      " [--wf|--wfroot DIR] [-t TARGET]"
       " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
-      "       %s -i INDEX sequence --score"
+      "       %s [-i INDEX] sequence --score"
       " [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N] [--pairs FILE]"
+      " [--seed-pairs FILE]... [--yes-pairs FILE]..."
+      " [--best-pairs FILE]..."
+      " [--wf|--wfroot DIR] [-t TARGET]"
       " [--solo-words WORD[,WORD...]]\n"
       "       %s -i INDEX input --near word [-n top]\n"
-      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX\n"
+      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
+      " workflow mode defaults to DIR/%s; required otherwise and with"
+      " --near\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
       "    entries and prints its DFS-model score\n"
       "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
@@ -69,12 +78,13 @@ static void usage(char const* program) {
       " %.0f\n"
       "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
       "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
-      " defaults to %.1f (no bonus)\n"
+      " defaults to %.1f\n"
       "  --pair-bonus N multiplies each index entry found in --pairs by"
       " %.0f^N; defaults to %.1f\n"
       "  -m defaults to %d; 0 for no minimum\n"
       "  -n defaults to %d; 0 for no limit\n"
-      "  --dict PATH filters entries to words in the dictionary\n"
+      "  --dict PATH filters entries to words in the dictionary; workflow"
+      " mode defaults to DIR/%s\n"
       "  -x, --max-extract-words N explores at most N words inside one index"
       " entry; defaults to 0 (no limit)\n"
       "  --pairs FILE loads one \"word\" or \"word,word\" entry per line\n"
@@ -84,12 +94,23 @@ static void usage(char const* program) {
       " non-space characters in total\n"
       "    --score instead matches pairs in either order and does not apply"
       " the extraction minimum\n"
+      "  --seed-pairs FILE, --yes-pairs FILE, and --best-pairs FILE load"
+      " fixed pair-bonus tiers %.2f, %.2f, and %.2f; each may be repeated\n"
+      "    duplicates and reversed pairs retain the strongest tier; these"
+      " options cannot be combined with legacy --pairs\n"
+      "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
+      " the nonempty WFROOT environment variable\n"
+      "    workflow mode loads DIR/%s as YES pairs and"
+      " requires either --seed-pairs or -t beginning with sN\n"
+      "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
+      " its sentence seed is auto-loaded, and a complete target also loads"
+      " its optional %s\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
       " external words; they consume no letters and matched partners are"
       " printed in parentheses\n"
       "    a selected single-word entry earns --word-bonus when either"
       " phrase order is an aggregate index phrase or is asserted by"
-      " --pairs; an asserted pair also earns --pair-bonus\n"
+      " a pair input; an asserted pair also earns its source's pair bonus\n"
       "    each solo word can be used once per row or --score sequence; both"
       " bonuses must be non-negative, and the aggregate phrase test matches"
       " phase 1\n"
@@ -102,10 +123,13 @@ static void usage(char const* program) {
       "    remainder phase 2 can't fully turn into an anagram (subject to\n"
       "    -m), using shared exact validation without a score cache\n"
       "  -S, --search-threads defaults to 1; 0 uses hardware threads\n",
-      program, program, program, DFS_DEFAULT_SEGMENT_PENALTY,
-      DFS_WORD_BONUS_BASE, 0.0,
+      program, program, program, WORKFLOW_INDEX_PATH,
+      DFS_DEFAULT_SEGMENT_PENALTY,
+      DFS_WORD_BONUS_BASE, DFS_DEFAULT_WORD_BONUS,
       DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS,
-      DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP);
+      DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP, WORKFLOW_DICT_PATH,
+      DFS_SEED_PAIR_BONUS, DFS_YES_PAIR_BONUS, DFS_BEST_PAIR_BONUS,
+      WORKFLOW_YES_PAIRS_PATH, WORKFLOW_TARGET_BEST_PAIRS_NAME);
 }
 
 static int const OPT_REQUIRE_COMPLETABLE = 256;
@@ -219,8 +243,7 @@ static bool parse_args(char* argv[], Args* out) {
     }
   }
   char const* letters = optparse_arg(&options);
-  if (out->index_file == NULL || letters == NULL ||
-      optparse_arg(&options) != NULL) {
+  if (letters == NULL || optparse_arg(&options) != NULL) {
     usage(argv[0]);
     return false;
   }
@@ -230,9 +253,21 @@ static bool parse_args(char* argv[], Args* out) {
               out->near_incompatible_option);
       return false;
     }
+    if (out->index_file == NULL) {
+      usage(argv[0]);
+      return false;
+    }
     out->near_input = letters;
     return validate_literal_entry(out->near_input) &&
         validate_literal_entry(out->near_target);
+  }
+
+  if (!finalize_dfs_workflow_args(
+          &out->common, argv[0], &out->index_file))
+    return false;
+  if (out->index_file == NULL) {
+    usage(argv[0]);
+    return false;
   }
 
   if (!validate_solo_bonuses(out->common)) return false;
@@ -274,16 +309,6 @@ static bool count_order(DfsPackedMember const& a, DfsPackedMember const& b) {
 
 static bool is_phrase(DfsPackedMember const& member) {
   return member.word_count > 1;
-}
-
-static bool has_word_bonus(DfsPackedMember const& member) {
-  return member.word_count > 1 ||
-      (member.score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0;
-}
-
-static bool has_pair_bonus(DfsPackedMember const& member) {
-  return (member.score_flags &
-          (DFS_MEMBER_KNOWN_PAIR | DFS_MEMBER_SOLO_PAIR_EDGE)) != 0;
 }
 
 // Rewriting this as count * exp(bonus) versus count would round differently
@@ -477,6 +502,7 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
 static bool print_sequence_score(
     IndexReader const& reader, Args const& args,
     std::vector<std::string> const& entries, DfsPairSet const& pairs,
+    DfsPairBonusMap const& weighted_pairs,
     DfsScoreModel const& model, DfsSoloWords const* solo_words) {
   std::vector<int64_t> counts;
   counts.reserve(entries.size());
@@ -505,8 +531,13 @@ static bool print_sequence_score(
   for (size_t i = 0; i < entries.size(); ++i) {
     bool const phrase = entries[i].find(' ') != std::string::npos;
     multi_word.push_back(phrase);
-    uint16_t flags = pairs.count(entries[i]) != 0
-        ? DFS_MEMBER_KNOWN_PAIR : 0;
+    uint16_t flags = 0;
+    DfsPairBonusMap::const_iterator const weighted =
+        weighted_pairs.find(entries[i]);
+    if (weighted != weighted_pairs.end())
+      flags |= dfs_pair_bonus_score_flags(weighted->second);
+    else if (pairs.count(entries[i]) != 0)
+      flags |= dfs_pair_bonus_score_flags(DFS_PAIR_BONUS_LEGACY);
     if (!phrase && solo_words != NULL) {
       DfsSoloMasks const profile = solo_words->resolve(entries[i]);
       flags |= dfs_solo_score_flags(profile);
@@ -521,8 +552,8 @@ static bool print_sequence_score(
     upper_log_score = model.append_log_score(
         upper_log_score, model.member_upper_log_score(
             counts[i], multi_word[i], score_flags[i]));
-  double const log_score = upper_log_score + dfs_solo_score_correction(
-      profiles, model.multi_word_log_bonus(), model.pair_log_bonus());
+  double const log_score = upper_log_score +
+      dfs_solo_score_correction(profiles, model);
   assert(log_score <= upper_log_score);
 
   printf("%#.4g %s\n", model.displayed_score(log_score),
@@ -552,17 +583,22 @@ int main(int argc, char* argv[]) {
   if (args.near) return run_near_query(reader, args);
 
   DfsPairSet pairs;
+  DfsPairBonusMap weighted_pairs;
   DfsPairSet exception_prefixes;
   if (args.common.pair_file != NULL) {
     bool const loaded = args.score
         ? load_pair_file(
               args.common.pair_file, "pair list", &pairs,
-              true, false, true)
+              false, false, true)
         : load_extraction_pair_file(
               args.common.pair_file, "pair list", args.common.min_word_len,
-              &pairs, &exception_prefixes, true, false);
+              &pairs, &exception_prefixes, false, false);
     if (!loaded) return 1;
   }
+  if (!load_weighted_pair_files(
+          args.common, args.score, args.common.min_word_len,
+          &weighted_pairs, &exception_prefixes))
+    return 1;
   if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
@@ -571,12 +607,15 @@ int main(int argc, char* argv[]) {
         args.common.pair_bonus);
     std::unique_ptr<DfsSoloWords> solo_words;
     if (!args.common.solo_words.empty() &&
-        (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0))
+        (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
+         !weighted_pairs.empty()))
       solo_words.reset(new DfsSoloWords(
           &reader, args.common.solo_words,
-          args.common.pair_file != NULL ? &pairs : NULL, &model));
+          args.common.pair_file != NULL ? &pairs : NULL, &model,
+          !weighted_pairs.empty() ? &weighted_pairs : NULL));
     return print_sequence_score(
-        reader, args, score_entries, pairs, model, solo_words.get()) ? 0 : 2;
+        reader, args, score_entries, pairs, weighted_pairs,
+        model, solo_words.get()) ? 0 : 2;
   }
 
   DfsDictionary dictionary;
@@ -591,10 +630,12 @@ int main(int argc, char* argv[]) {
       args.common.pair_bonus);
   std::unique_ptr<DfsSoloWords> solo_words;
   if (!args.common.solo_words.empty() &&
-      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0))
+      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
+       !weighted_pairs.empty()))
     solo_words.reset(new DfsSoloWords(
         &reader, args.common.solo_words,
-        args.common.pair_file != NULL ? &pairs : NULL, &model));
+        args.common.pair_file != NULL ? &pairs : NULL, &model,
+        !weighted_pairs.empty() ? &weighted_pairs : NULL));
   bool const include_phrases =
       args.require_completable || !args.words_only;
   DfsClassList classes(&reader, args.letters, args.common.min_word_len,
@@ -602,6 +643,7 @@ int main(int argc, char* argv[]) {
                        args.common.max_extract_words,
                        &model,
                        args.common.pair_file != NULL ? &pairs : NULL,
+                       !weighted_pairs.empty() ? &weighted_pairs : NULL,
                        !exception_prefixes.empty()
                            ? &exception_prefixes : NULL,
                        solo_words.get());
@@ -670,7 +712,7 @@ int main(int argc, char* argv[]) {
           1, solo_words->lookup(
                  std::string_view(row.text, row.text_length)));
       DfsSoloMatching const matching = dfs_solo_exact_matching(
-          profiles, model.multi_word_log_bonus(), model.pair_log_bonus());
+          profiles, model);
       if (matching.solo_word_indexes[0] != DFS_NO_SOLO_WORD)
         partner = solo_words->word(matching.solo_word_indexes[0]).c_str();
     }
@@ -679,7 +721,7 @@ int main(int argc, char* argv[]) {
         putchar(row.text[i] == ' ' ? ',' : row.text[i]);
       putchar('\n');
     } else if (args.common.word_bonus == 0.0 &&
-               args.common.pair_bonus == 0.0)
+               args.common.pair_bonus == 0.0 && weighted_pairs.empty())
       printf("%lld %.*s%s%s%s\n", (long long) row.count,
              int(row.text_length), row.text,
              partner != NULL ? " (" : "", partner != NULL ? partner : "",
@@ -693,45 +735,14 @@ int main(int argc, char* argv[]) {
              partner != NULL ? ")" : "");
   };
 
-  if (args.common.word_bonus == 0.0 && args.common.pair_bonus == 0.0) {
+  if (args.common.word_bonus == 0.0 && args.common.pair_bonus == 0.0 &&
+      weighted_pairs.empty()) {
     std::partial_sort(first, first + top, last, count_order);
     for (size_t i = 0; i < top; ++i) print_row(first[i]);
   } else {
-    // Both bonuses are constant within each of these groups, so count order
-    // is score order inside a group. Keep up to top candidates from each, then
-    // merge the three score-ordered runs.
-    DfsPackedMember* const pair_end =
-        std::partition(first, last, has_pair_bonus);
-    DfsPackedMember* const word_end =
-        std::partition(pair_end, last, has_word_bonus);
-    DfsPackedMember* const group_begin[3] = {
-      first, pair_end, word_end,
-    };
-    DfsPackedMember* const group_end[3] = {
-      pair_end, word_end, last,
-    };
-    size_t group_top[3];
-    for (size_t group = 0; group < 3; ++group) {
-      group_top[group] = std::min(
-          top, size_t(group_end[group] - group_begin[group]));
-      std::partial_sort(
-          group_begin[group], group_begin[group] + group_top[group],
-          group_end[group], count_order);
-    }
-
     ScoreOrder const order = { &model };
-    size_t position[3] = { 0, 0, 0 };
-    for (size_t printed = 0; printed < top; ++printed) {
-      int best = -1;
-      for (int group = 0; group < 3; ++group) {
-        if (position[group] == group_top[group]) continue;
-        if (best < 0 || order(group_begin[group][position[group]],
-                              group_begin[best][position[best]]))
-          best = group;
-      }
-      assert(best >= 0);
-      print_row(group_begin[best][position[best]++]);
-    }
+    std::partial_sort(first, first + top, last, order);
+    for (size_t i = 0; i < top; ++i) print_row(first[i]);
   }
   return 0;
 }

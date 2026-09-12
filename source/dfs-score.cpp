@@ -33,7 +33,10 @@ DfsScoreModel::DfsScoreModel(
     segment_boundary_log_score_(
         make_segment_boundary_log_score(segment_penalty, corpus_total)),
     multi_word_log_bonus_(make_multi_word_log_bonus(word_bonus)),
-    pair_log_bonus_(make_pair_log_bonus(pair_bonus)) { }
+    pair_log_bonus_(make_pair_log_bonus(pair_bonus)),
+    seed_pair_log_bonus_(make_pair_log_bonus(DFS_SEED_PAIR_BONUS)),
+    yes_pair_log_bonus_(make_pair_log_bonus(DFS_YES_PAIR_BONUS)),
+    best_pair_log_bonus_(make_pair_log_bonus(DFS_BEST_PAIR_BONUS)) { }
 
 double DfsScoreModel::segment_log_score(
     int64_t count, bool multi_word, bool known_pair) const {
@@ -41,6 +44,27 @@ double DfsScoreModel::segment_log_score(
   return log(double(count)) +
       (multi_word ? multi_word_log_bonus_ : 0.0) +
       (known_pair ? pair_log_bonus_ : 0.0);
+}
+
+double DfsScoreModel::pair_log_bonus(DfsPairBonusKind kind) const {
+  switch (kind) {
+    case DFS_PAIR_BONUS_NONE:
+      return 0.0;
+    case DFS_PAIR_BONUS_LEGACY:
+      return pair_log_bonus_;
+    case DFS_PAIR_BONUS_SEED:
+      return seed_pair_log_bonus_;
+    case DFS_PAIR_BONUS_YES:
+      return yes_pair_log_bonus_;
+    case DFS_PAIR_BONUS_BEST:
+      return best_pair_log_bonus_;
+  }
+  assert(false);
+  return 0.0;
+}
+
+double DfsScoreModel::member_pair_log_bonus(uint16_t score_flags) const {
+  return pair_log_bonus(dfs_member_pair_bonus_kind(score_flags));
 }
 
 double DfsScoreModel::first_segment_log_score(
@@ -63,7 +87,8 @@ double DfsScoreModel::append_log_score(
 double DfsScoreModel::solo_local_upper_log_bonus(
     uint16_t score_flags) const {
   if ((score_flags & DFS_MEMBER_SOLO_PAIR_EDGE) != 0)
-    return multi_word_log_bonus_ + pair_log_bonus_;
+    return multi_word_log_bonus_ +
+        pair_log_bonus(dfs_member_solo_pair_bonus_kind(score_flags));
   if ((score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0)
     return multi_word_log_bonus_;
   return 0.0;
@@ -73,7 +98,7 @@ double DfsScoreModel::member_upper_log_score(
     int64_t count, bool multi_word, uint16_t score_flags) const {
   return segment_log_score(
       count, multi_word,
-      (score_flags & DFS_MEMBER_KNOWN_PAIR) != 0) +
+      /*known_pair=*/false) + member_pair_log_bonus(score_flags) +
       solo_local_upper_log_bonus(score_flags);
 }
 

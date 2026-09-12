@@ -182,7 +182,8 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
         DfsSoloMasks const profile = solo_words->lookup(
             std::string_view(view.text, view.text_length));
         uint16_t const solo_flags = view.score_flags &
-            (DFS_MEMBER_SOLO_WORD_EDGE | DFS_MEMBER_SOLO_PAIR_EDGE);
+            (DFS_MEMBER_SOLO_WORD_EDGE | DFS_MEMBER_SOLO_PAIR_EDGE |
+             DFS_MEMBER_SOLO_PAIR_KIND_MASK);
         assert(dfs_solo_score_flags(profile) == solo_flags);
         (void) solo_flags;
         profiles.push_back(profile);
@@ -191,8 +192,7 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
     }
     std::vector<uint8_t> profile_matches;
     spelling.log_score = current.upper_log_score + dfs_solo_score_correction(
-        profiles, score_model->multi_word_log_bonus(),
-        score_model->pair_log_bonus(),
+        profiles, *score_model,
         solo_words != NULL ? &profile_matches : NULL);
     assert(spelling.log_score <= current.upper_log_score);
     if (std::find_if(profile_matches.begin(), profile_matches.end(),
