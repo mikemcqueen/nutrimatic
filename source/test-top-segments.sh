@@ -73,6 +73,104 @@ actual=$("$top_segments" --by-length "$input")
 actual=$("$top_segments" -l "$input")
 [[ $actual == "$expected_by_length" ]] || fail "-l output is wrong: $actual"
 
+# --elim partitions the surviving result lines for each exact candidate.  A
+# duplicate on one line increments occurrences twice but line support once.
+elim_input=$test_dir/elim-results.txt
+cat > "$elim_input" <<'EOF'
+9 pivot,common,repeat,repeat
+8 pivot,common,repeat
+7 pivot,common
+6 common,other
+5 common,other
+4 rare
+EOF
+
+elim_header='DECISION REQUIRE REJECT COUNT SEGMENT'
+expected_elim="$elim_header
+       3       3      3     3 pivot
+       2       4      2     3 repeat
+       2       4      2     2 other
+       1       1      5     5 common
+       1       5      1     1 rare"
+actual=$("$top_segments" --elim "$elim_input")
+[[ $actual == "$expected_elim" ]] ||
+  fail "--elim segment output is wrong: $actual"
+
+expected_elim_pairs="$elim_header
+       3       3      3     3 keep,together
+       1       1      5     5 common,pair"
+elim_pairs_input=$test_dir/elim-pairs-results.txt
+cat > "$elim_pairs_input" <<'EOF'
+9 keep together,common pair
+8 keep together,common pair
+7 keep together,common pair
+6 common pair,solo1
+5 common pair,solo2
+4 solo3
+EOF
+actual=$("$top_segments" --elim --pairs "$elim_pairs_input")
+[[ $actual == "$expected_elim_pairs" ]] ||
+  fail "--elim --pairs output is wrong: $actual"
+
+elim_words_input=$test_dir/elim-words-results.txt
+cat > "$elim_words_input" <<'EOF'
+9 ab cd,ef,ef
+8 ab gh,ef
+7 ij cd
+6 solo
+EOF
+
+expected_elim_words="$elim_header
+       2       2      2     3 ef
+       2       2      2     2 ab
+       2       2      2     2 cd
+       1       3      1     1 gh
+       1       3      1     1 ij
+       1       3      1     1 solo"
+actual=$("$top_segments" --elim --all-words "$elim_words_input")
+[[ $actual == "$expected_elim_words" ]] ||
+  fail "--elim --all-words output is wrong: $actual"
+
+elim_unique_input=$test_dir/elim-unique-results.txt
+cat > "$elim_unique_input" <<'EOF'
+9 red fox,red fox
+8 red fox
+7 red dog
+6 alpha
+EOF
+
+expected_elim_unique="$elim_header
+       2       2      2     1 fox
+       1       1      3     2 red
+       1       3      1     1 dog"
+actual=$("$top_segments" --elim --pair-words --unique "$elim_unique_input")
+[[ $actual == "$expected_elim_unique" ]] ||
+  fail "--elim --pair-words --unique output is wrong: $actual"
+
+elim_filter_input=$test_dir/elim-filter-results.txt
+cat > "$elim_filter_input" <<'EOF'
+9 keep one,alpha
+8 reject me,beta
+7 keep one,gamma
+EOF
+elim_reject=$test_dir/elim-reject.pairs
+cat > "$elim_reject" <<'EOF'
+reject,me
+EOF
+
+expected_elim_filtered="$elim_header
+       1       1      1     1 alpha
+       1       1      1     1 gamma
+       0       0      2     2 keep one"
+actual=$("$top_segments" --elim -r "$elim_reject" "$elim_filter_input" \
+  2>/dev/null)
+[[ $actual == "$expected_elim_filtered" ]] ||
+  fail "--elim counted a filtered result line: $actual"
+
+if "$top_segments" --elim --by-length "$elim_input" >/dev/null 2>&1; then
+  fail "--elim with --by-length succeeded"
+fi
+
 expected_longest_pairs='epsilon,zeta
 one,two,three'
 actual=$("$top_segments" --pairs --by-length -n 2 "$input")

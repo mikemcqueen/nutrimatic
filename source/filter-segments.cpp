@@ -16,9 +16,10 @@ static void usage(FILE* fp, char const* program) {
       "usage: %s [-n N] [-r FILE | --reject FILE]...\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [FILE]\n"
       "  print dfs-anagrams result lines that contain no rejected segment\n"
-      "  -n N                 print at most N result lines\n"
-      "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
-      "                       may be repeated\n"
+      "  -n N                 print at most N result lines\n",
+      program);
+  print_reject_option_help(fp, 23);
+  fprintf(fp,
       "  --wfroot DIR         implies -r DIR/%s; discards\n"
       "                       rows with any word not in DIR/%s;\n"
       "                       also implies -r on the selected target's\n"
@@ -30,9 +31,8 @@ static void usage(FILE* fp, char const* program) {
       "                       its name, and otherwise to %s; an explicit\n"
       "                       TARGET must be that same target: %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH,
-      WORKFLOW_TARGET_NO_PAIRS_PATH, WORKFLOW_DEFAULT_TARGET,
-      WORKFLOW_RESULTS_NAME);
+      WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME);
 }
 
 static bool filter_stream(

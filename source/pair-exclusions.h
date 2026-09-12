@@ -1,6 +1,8 @@
 #ifndef NUTRIMATIC_PAIR_EXCLUSIONS_H
 #define NUTRIMATIC_PAIR_EXCLUSIONS_H
 
+#include <stdio.h>
+
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -61,6 +63,11 @@ enum PairFilterOptionResult {
   PAIR_FILTER_OPTION_ERROR,
 };
 
+// Prints the shared -r/--reject detailed-help block. `description_column` is
+// the zero-based column at which option descriptions begin in the caller's
+// help text.
+void print_reject_option_help(FILE* fp, int description_column);
+
 // Parses -i FILE, --ignore FILE, -r FILE, --reject FILE, --wf,
 // --wfroot DIR, -t/--target TARGET, and -y/--yes. Ignore and -y/--yes
 // options are returned as OTHER when their support flags are false. `index`
@@ -76,8 +83,9 @@ PairFilterOptionResult parse_pair_filter_option(
 bool check_pair_filter_options(
     PairFilterOptions const& options, char const* program);
 
-// Loads explicit ignore/reject files. With --wf or --wfroot, classified NO
-// pairs below the selected workflow root are rejected, the root's
+// Loads explicit ignore/reject files. Explicit reject files may contain pairs
+// or standalone words; ignore files remain pair-only. With --wf or --wfroot,
+// classified NO pairs below the selected workflow root are rejected, the root's
 // .wf/dict/words.filtered is loaded into `dictionary`, and with -y/--yes,
 // classified YES pairs are ignored. Missing workflow files warn and are
 // skipped, leaving `dictionary` empty. Without a workflow root there is no
@@ -98,10 +106,10 @@ bool load_pair_filters(
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
     PairFilterSources* sources = NULL);
 
-inline bool is_rejected_segment(
-    DfsPairSet const& rejected, std::string const& segment) {
-  return rejected.find(segment) != rejected.end();
-}
+// Returns true when `segment` is an exact rejected pair or contains a
+// space-delimited word listed on its own in an explicit reject file.
+bool is_rejected_segment(
+    DfsPairSet const& rejected, std::string const& segment);
 
 // Returns true when `dictionary` is empty, or when every space-delimited word
 // of `segment` is in it. An empty dictionary is the no-workflow case, where

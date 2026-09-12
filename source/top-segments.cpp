@@ -9,14 +9,17 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
 struct SegmentStats {
-  uint64_t count;
-  size_t length;
+  uint64_t count = 0;
+  uint64_t line_count = 0;
+  uint64_t last_seen_row = 0;
+  size_t length = 0;
 };
 
 typedef std::unordered_map<std::string, SegmentStats> SegmentCounts;
@@ -35,7 +38,7 @@ static void usage(FILE* fp, char const* program) {
   fprintf(fp,
       "usage: %s [--pairs [-c] | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
-      "          [-l] [-n N]\n"
+      "          [-l | --elim] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [-y]\n"
@@ -52,12 +55,16 @@ static void usage(FILE* fp, char const* program) {
       "  --unique            with --pair-words, count each distinct\n"
       "                      multi-word segment once\n"
       "  -l, --by-length     sort by descending non-space character length\n"
+      "  --elim              sort by guaranteed result-line elimination and\n"
+      "                      print \"DECISION REQUIRE REJECT COUNT SEGMENT\"\n"
+      "                      rows\n"
       "  -n N                print at most N rows; 0 prints all; defaults to "
       "%" PRIu64 "\n"
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
-      "                      repeated\n"
-      "  -r, --reject FILE   discard rows containing pairs listed in FILE;\n"
-      "                      may be repeated\n"
+      "                      repeated\n",
+      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
+  print_reject_option_help(fp, 22);
+  fprintf(fp,
       "  --wfroot DIR        implies -r DIR/%s; discards\n"
       "                      rows with any word not in DIR/%s;\n"
       "                      also implies -r on the selected target's\n"
@@ -72,8 +79,7 @@ static void usage(FILE* fp, char const* program) {
       "  -y, --yes           with --wf or --wfroot, ignore pairs in the\n"
       "                      selected root's %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
-      WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
       WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME,
       WORKFLOW_YES_PAIRS_PATH);
 }
@@ -82,6 +88,14 @@ static bool any_segment_in(
     std::vector<std::string> const& segments, DfsPairSet const& pairs) {
   for (std::string const& segment : segments)
     if (pairs.find(segment) != pairs.end()) return true;
+  return false;
+}
+
+static bool any_rejected_segment(
+    std::vector<std::string> const& segments, DfsPairSet const& rejected) {
+  for (std::string const& segment : segments) {
+    if (is_rejected_segment(rejected, segment)) return true;
+  }
   return false;
 }
 
@@ -101,11 +115,47 @@ static std::string canonical_pair(std::string const& segment) {
   return left < right ? segment : right + " " + left;
 }
 
+static bool selected_segment(
+    SegmentSelection selection, std::string const& segment) {
+  if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
+  if (selection == SEGMENT_SELECTION_SOLO) return is_solo_segment(segment);
+  return true;
+}
+
+static bool count_candidate(
+    std::string const& candidate, uint64_t row, bool count_occurrence,
+    SegmentCounts* counts) {
+  SegmentCounts::iterator entry = counts->find(candidate);
+  if (entry == counts->end()) {
+    SegmentStats stats;
+    stats.length = segment_nonspace_length(candidate);
+    entry = counts->emplace(candidate, stats).first;
+  }
+  if (count_occurrence) {
+    if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
+      fputs("top-segments: segment count overflow\n", stderr);
+      return false;
+    }
+    ++entry->second.count;
+  }
+  if (entry->second.last_seen_row != row) {
+    if (entry->second.line_count == std::numeric_limits<uint64_t>::max()) {
+      fputs("top-segments: segment line count overflow\n", stderr);
+      return false;
+    }
+    ++entry->second.line_count;
+    entry->second.last_seen_row = row;
+  }
+  return true;
+}
+
 static bool count_stream(
     std::istream* input, char const* name, DfsPairSet const& ignored,
     DfsPairSet const& rejected, DfsDictionary const& dictionary,
     PairFilterSources const& filter_sources, FilterStats* filter_stats,
-    SegmentCounts* counts) {
+    SegmentOutputOptions const& output_options, bool elimination,
+    uint64_t* surviving_rows,
+    std::unordered_set<std::string>* unique_segments, SegmentCounts* counts) {
   std::string line;
   uint64_t line_number = 0;
   while (std::getline(*input, line)) {
@@ -158,13 +208,21 @@ static bool count_stream(
       ++filter_stats->target_no_lines;
       continue;
     }
-    if (any_segment_in(segments, rejected)) {
+    if (any_rejected_segment(segments, rejected)) {
       ++filter_stats->explicit_reject_lines;
       continue;
     }
     if (any_segment_outside(segments, dictionary)) {
       ++filter_stats->dictionary_lines;
       continue;
+    }
+    uint64_t row = 0;
+    if (elimination) {
+      if (*surviving_rows == std::numeric_limits<uint64_t>::max()) {
+        fputs("top-segments: result line count overflow\n", stderr);
+        return false;
+      }
+      row = ++*surviving_rows;
     }
     for (std::string const& segment : segments) {
       if (filter_sources.classified_yes.find(segment) !=
@@ -177,16 +235,34 @@ static bool count_stream(
         ++filter_stats->explicit_ignore_instances;
         continue;
       }
-      SegmentCounts::iterator entry = counts->find(segment);
-      if (entry == counts->end()) {
-        entry = counts->emplace(
-            segment, SegmentStats{0, segment_nonspace_length(segment)}).first;
+      if (!elimination) {
+        SegmentCounts::iterator entry = counts->find(segment);
+        if (entry == counts->end()) {
+          SegmentStats stats;
+          stats.length = segment_nonspace_length(segment);
+          entry = counts->emplace(segment, stats).first;
+        }
+        if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
+          fputs("top-segments: segment count overflow\n", stderr);
+          return false;
+        }
+        ++entry->second.count;
+        continue;
       }
-      if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
-        fprintf(stderr, "top-segments: segment count overflow\n");
-        return false;
+      if (!selected_segment(output_options.selection, segment)) continue;
+
+      if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS) {
+        if (!count_candidate(segment, row, true, counts)) return false;
+        continue;
       }
-      ++entry->second.count;
+
+      bool const count_occurrence =
+          output_options.weight == SEGMENT_WEIGHT_OCCURRENCES ||
+          unique_segments->insert(segment).second;
+      std::vector<std::string> const words = split_segment_words(segment);
+      for (std::string const& word : words)
+        if (!count_candidate(word, row, count_occurrence, counts))
+          return false;
     }
   }
 
@@ -247,13 +323,6 @@ static void print_filter_summary(
   }
 }
 
-static bool selected_segment(
-    SegmentSelection selection, std::string const& segment) {
-  if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
-  if (selection == SEGMENT_SELECTION_SOLO) return is_solo_segment(segment);
-  return true;
-}
-
 static bool split_counts(
     SegmentCounts const& counts, SegmentSelection selection,
     SegmentWeight weight, SegmentCounts* words) {
@@ -263,15 +332,16 @@ static bool split_counts(
     std::vector<std::string> const split = split_segment_words(entry->first);
     uint64_t const increment = weight == SEGMENT_WEIGHT_UNIQUE
         ? 1 : entry->second.count;
-    for (size_t i = 0; i < split.size(); ++i) {
-      SegmentCounts::iterator word = words->find(split[i]);
+    for (std::string const& value : split) {
+      SegmentCounts::iterator word = words->find(value);
       if (word == words->end()) {
-        word = words->emplace(
-            split[i], SegmentStats{0, split[i].size()}).first;
+        SegmentStats stats;
+        stats.length = value.size();
+        word = words->emplace(value, stats).first;
       }
       if (word->second.count >
           std::numeric_limits<uint64_t>::max() - increment) {
-        fprintf(stderr, "top-segments: word count overflow\n");
+        fputs("top-segments: word count overflow\n", stderr);
         return false;
       }
       word->second.count += increment;
@@ -282,18 +352,23 @@ static bool split_counts(
 
 static bool print_counts(
     SegmentCounts const& counts, SegmentOutputOptions const& output_options,
-    bool show_pair_counts) {
+    bool show_pair_counts, bool elimination, uint64_t surviving_rows) {
   SegmentCounts split;
-  if (output_options.projection == SEGMENT_PROJECTION_WORDS &&
+  if (!elimination &&
+      output_options.projection == SEGMENT_PROJECTION_WORDS &&
       !split_counts(counts, output_options.selection, output_options.weight,
           &split))
     return false;
-  SegmentCounts const& rows =
-      output_options.projection == SEGMENT_PROJECTION_WORDS ? split : counts;
+  SegmentCounts const& rows = !elimination &&
+          output_options.projection == SEGMENT_PROJECTION_WORDS
+      ? split : counts;
 
   std::vector<SegmentCounts::const_iterator> ordered;
   ordered.reserve(rows.size());
   uint64_t largest = 0;
+  uint64_t largest_decision_elim = 0;
+  uint64_t largest_require_elim = 0;
+  uint64_t largest_reject_elim = 0;
   for (SegmentCounts::const_iterator entry = rows.begin();
        entry != rows.end(); ++entry) {
     if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS &&
@@ -301,13 +376,28 @@ static bool print_counts(
       continue;
     ordered.push_back(entry);
     largest = std::max(largest, entry->second.count);
+    uint64_t const require_elim = surviving_rows - entry->second.line_count;
+    largest_decision_elim = std::max(largest_decision_elim,
+        std::min(entry->second.line_count, require_elim));
+    largest_require_elim = std::max(largest_require_elim, require_elim);
+    largest_reject_elim =
+        std::max(largest_reject_elim, entry->second.line_count);
   }
   size_t const top = output_options.limit != 0 &&
           output_options.limit < ordered.size()
       ? size_t(output_options.limit) : ordered.size();
   std::partial_sort(ordered.begin(), ordered.begin() + top, ordered.end(),
-    [&output_options](
+    [&output_options, elimination, surviving_rows](
         SegmentCounts::const_iterator a, SegmentCounts::const_iterator b) {
+      if (elimination) {
+        uint64_t const a_decision = std::min(a->second.line_count,
+            surviving_rows - a->second.line_count);
+        uint64_t const b_decision = std::min(b->second.line_count,
+            surviving_rows - b->second.line_count);
+        if (a_decision != b_decision) return a_decision > b_decision;
+        if (a->second.line_count != b->second.line_count)
+          return a->second.line_count > b->second.line_count;
+      }
       if (output_options.by_length && a->second.length != b->second.length)
         return a->second.length > b->second.length;
       if (a->second.count != b->second.count)
@@ -315,16 +405,45 @@ static bool print_counts(
       return a->first < b->first;
     });
 
-  int const width = snprintf(NULL, 0, "%" PRIu64, largest);
+  int width = snprintf(NULL, 0, "%" PRIu64, largest);
+  int decision_width =
+      snprintf(NULL, 0, "%" PRIu64, largest_decision_elim);
+  int require_width =
+      snprintf(NULL, 0, "%" PRIu64, largest_require_elim);
+  int reject_width =
+      snprintf(NULL, 0, "%" PRIu64, largest_reject_elim);
+  if (elimination) {
+    width = std::max(width, int(strlen("COUNT")));
+    decision_width = std::max(decision_width, int(strlen("DECISION")));
+    require_width = std::max(require_width, int(strlen("REQUIRE")));
+    reject_width = std::max(reject_width, int(strlen("REJECT")));
+    printf("%*s %*s %*s %*s %s\n",
+        decision_width, "DECISION", require_width, "REQUIRE",
+        reject_width, "REJECT", width, "COUNT", "SEGMENT");
+  }
   for (size_t i = 0; i < top; ++i) {
+    std::string const displayed =
+        output_options.selection == SEGMENT_SELECTION_PAIRS &&
+            output_options.projection == SEGMENT_PROJECTION_SEGMENTS
+        ? format_pair_segment(ordered[i]->first) : ordered[i]->first;
+    if (elimination) {
+      uint64_t const reject_elim = ordered[i]->second.line_count;
+      uint64_t const require_elim = surviving_rows - reject_elim;
+      uint64_t const decision_elim = std::min(reject_elim, require_elim);
+      printf("%*" PRIu64 " %*" PRIu64 " %*" PRIu64 " %*" PRIu64
+             " %s\n",
+          decision_width, decision_elim, require_width, require_elim,
+          reject_width, reject_elim, width, ordered[i]->second.count,
+          displayed.c_str());
+      continue;
+    }
     if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
         output_options.projection == SEGMENT_PROJECTION_SEGMENTS) {
-      std::string const pair = format_pair_segment(ordered[i]->first);
       if (show_pair_counts) {
         printf("%*" PRIu64 " %s\n",
-            width, ordered[i]->second.count, pair.c_str());
+            width, ordered[i]->second.count, displayed.c_str());
       } else {
-        printf("%s\n", pair.c_str());
+        printf("%s\n", displayed.c_str());
       }
     } else {
       printf("%*" PRIu64 " %s\n", width, ordered[i]->second.count,
@@ -339,6 +458,7 @@ int main(int argc, char* argv[]) {
   PairFilterOptions filter_options;
   bool parse_options = true;
   bool show_pair_counts = false;
+  bool elimination = false;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
@@ -357,6 +477,10 @@ int main(int argc, char* argv[]) {
       }
       if (strcmp(argv[i], "--unique") == 0) {
         output_options.weight = SEGMENT_WEIGHT_UNIQUE;
+        continue;
+      }
+      if (strcmp(argv[i], "--elim") == 0) {
+        elimination = true;
         continue;
       }
 
@@ -420,6 +544,12 @@ int main(int argc, char* argv[]) {
     usage(stderr, argv[0]);
     return 2;
   }
+  if (elimination && output_options.by_length) {
+    fputs("top-segments: --elim and --by-length are mutually exclusive\n",
+        stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
 
   // Only a single named file names a single target; several files may sit in
   // several, and standard input sits in none.
@@ -436,17 +566,21 @@ int main(int argc, char* argv[]) {
     return 1;
 
   SegmentCounts counts;
+  uint64_t surviving_rows = 0;
+  std::unordered_set<std::string> unique_segments;
   FilterStats filter_stats;
   if (paths.empty()) {
     if (!count_stream(&std::cin, "-", ignored, rejected, dictionary,
-            filter_sources, &filter_stats, &counts))
+            filter_sources, &filter_stats, output_options, elimination,
+            &surviving_rows, &unique_segments, &counts))
       return 1;
   } else {
     for (size_t i = 0; i < paths.size(); ++i) {
       if (strcmp(paths[i], "-") == 0) {
         if (!count_stream(
                 &std::cin, "-", ignored, rejected, dictionary,
-                filter_sources, &filter_stats, &counts))
+                filter_sources, &filter_stats, output_options, elimination,
+                &surviving_rows, &unique_segments, &counts))
           return 1;
         continue;
       }
@@ -460,13 +594,14 @@ int main(int argc, char* argv[]) {
       }
       if (!count_stream(
               &input, paths[i], ignored, rejected, dictionary,
-              filter_sources, &filter_stats, &counts))
+              filter_sources, &filter_stats, output_options, elimination,
+              &surviving_rows, &unique_segments, &counts))
         return 1;
     }
   }
 
   print_filter_summary(filter_stats, filter_sources);
   return print_counts(
-      counts, output_options, show_pair_counts)
+      counts, output_options, show_pair_counts, elimination, surviving_rows)
       ? 0 : 1;
 }

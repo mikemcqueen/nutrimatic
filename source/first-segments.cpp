@@ -37,9 +37,10 @@ static void usage(FILE* fp, char const* program) {
       "  -n N                 maximum number of segments to print; defaults\n"
       "                       to %" PRIu64 "\n"
       "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
-      "                       repeated\n"
-      "  -r, --reject FILE    discard rows containing pairs listed in FILE;\n"
-      "                       may be repeated\n"
+      "                       repeated\n",
+      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
+  print_reject_option_help(fp, 23);
+  fprintf(fp,
       "  --wfroot DIR         implies -r DIR/%s; discards\n"
       "                       rows with any word not in DIR/%s;\n"
       "                       also implies -r on the selected target's\n"
@@ -53,8 +54,7 @@ static void usage(FILE* fp, char const* program) {
       "  -y, --yes            with --wf or --wfroot, ignore pairs in the\n"
       "                       selected root's %s\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
-      program, DEFAULT_SEGMENT_OUTPUT_LIMIT, WORKFLOW_NO_PAIRS_PATH,
-      WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
       WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME,
       WORKFLOW_YES_PAIRS_PATH);
 }

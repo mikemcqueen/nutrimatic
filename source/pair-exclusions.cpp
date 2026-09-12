@@ -324,6 +324,19 @@ bool load_workflow_pair_file(
 
 }  // namespace
 
+void print_reject_option_help(FILE* fp, int description_column) {
+  static char const* const lines[] = {
+    "discard rows matching an entry listed in FILE;",
+    "entries are words or comma-separated pairs;",
+    "words match anywhere as whole words;",
+    "pairs match complete segments in either order;",
+    "may be repeated",
+  };
+  fprintf(fp, "%-*s%s\n", description_column, "  -r, --reject FILE", lines[0]);
+  for (size_t i = 1; i < sizeof(lines) / sizeof(lines[0]); ++i)
+    fprintf(fp, "%*s%s\n", description_column, "", lines[i]);
+}
+
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
     bool support_ignore, bool support_workflow_yes, PairFilterOptions* out) {
@@ -434,7 +447,7 @@ bool load_pair_filters(
   for (size_t i = 0; i < options.reject_paths.size(); ++i) {
     if (!load_pair_file(
             options.reject_paths[i].c_str(), "reject list", rejected,
-            true, true))
+            true, true, true))
       return false;
   }
   if (wfroot == NULL) {
@@ -461,6 +474,20 @@ bool load_pair_filters(
   std::string const dict_path = workflow_path(wfroot, WORKFLOW_DICT_PATH);
   if (workflow_file_missing(dict_path, program, "dictionary")) return true;
   return load_dictionary(dict_path.c_str(), dictionary);
+}
+
+bool is_rejected_segment(
+    DfsPairSet const& rejected, std::string const& segment) {
+  if (rejected.find(segment) != rejected.end()) return true;
+  size_t start = 0;
+  while (true) {
+    size_t const end = segment.find(' ', start);
+    std::string const word = end == std::string::npos
+        ? segment.substr(start) : segment.substr(start, end - start);
+    if (rejected.find(word) != rejected.end()) return true;
+    if (end == std::string::npos) return false;
+    start = end + 1;
+  }
 }
 
 bool all_words_in_dict(
