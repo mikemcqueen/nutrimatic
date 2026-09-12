@@ -831,6 +831,7 @@ bool finalize_dfs_workflow_args(
   std::vector<std::string> target_parts;
   if (!parse_workflow_target(args->target, program, &target_parts))
     return false;
+  args->target_complete = target_parts.size() == 4;
   if (!target_parts.empty()) {
     args->target = join_path(target_parts);
     fs::path const selected = root / WORKFLOW_BEST_PATH / args->target;
@@ -897,7 +898,7 @@ bool collect_workflow_exclude_pair_files(
           root / WORKFLOW_NO_PAIRS_PATH, program,
           "classified NO pair file", paths))
     return false;
-  if (args.target.empty()) return true;
+  if (!args.target_complete) return true;
   return push_optional_pair_file(
       root / WORKFLOW_BEST_PATH / args.target /
           WORKFLOW_TARGET_NO_PAIRS_NAME, program,

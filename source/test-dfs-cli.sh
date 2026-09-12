@@ -551,9 +551,17 @@ grep -q 'workflow mode requires --target beginning with sN or an explicit --seed
   "$test_dir/status.stderr" ||
   fail "workflow seed requirement diagnostic is unclear"
 
-# Workflow mode excludes its own classified NO pairs and the selected target's
-# no.pairs without an explicit --exclude-pairs.
+# Workflow mode excludes its own classified NO pairs and a complete selected
+# target's no.pairs without an explicit --exclude-pairs.
 mkdir -p "$workflow_root/.wf/classified/no"
+printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/no.pairs"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
+  --wfroot "$workflow_root" -t s1 \
+  > "$test_dir/workflow-abbreviated-negative.stdout" \
+  2> "$test_dir/workflow-abbreviated-negative.stderr"
+grep -q 'kl mn' "$test_dir/workflow-abbreviated-negative.stdout" ||
+  fail "workflow mode applied no.pairs from an abbreviated target"
+rm "$workflow_root/.wf/best/s1/no.pairs"
 printf 'kl,mn\n' > "$workflow_root/.wf/classified/no/no.pairs"
 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
   --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \

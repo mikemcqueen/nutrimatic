@@ -74,6 +74,7 @@ struct DfsCommonArgs {
   bool workflow = false;
   std::string workflow_root;
   std::string target;
+  bool target_complete = false;
   std::string workflow_index_file;
   std::string workflow_dictionary_file;
   std::vector<std::string> solo_words;
@@ -111,10 +112,11 @@ DfsOptionResult dfs_parse_common_option(
 bool finalize_dfs_workflow_args(
     DfsCommonArgs* args, char const* program, char const** index_file);
 
-// Appends the workflow root's classified NO pairs, and the selected target's
-// own no.pairs, to `paths` for tools that exclude pairs. Either file is
-// skipped when it is absent, since a workflow need not have classified
-// anything NO yet. Without a workflow root nothing is appended. Call after
+// Appends the workflow root's classified NO pairs, and a complete selected
+// target's own no.pairs, to `paths` for tools that exclude pairs. Either file
+// is skipped when it is absent, since a workflow need not have classified
+// anything NO yet. Abbreviated targets do not name a target-local no.pairs.
+// Without a workflow root nothing is appended. Call after
 // finalize_dfs_workflow_args(), which resolves the root and the target.
 bool collect_workflow_exclude_pair_files(
     DfsCommonArgs const& args, char const* program,

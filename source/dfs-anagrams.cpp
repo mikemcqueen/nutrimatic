@@ -101,7 +101,7 @@ static void usage(char const* program) {
       " the nonempty WFROOT environment variable\n"
       "    workflow mode loads DIR/%s as YES pairs and"
       " requires either --seed-pairs or -t beginning with sN\n"
-      "    it also excludes DIR/%s, and a selected target's %s, as if each"
+      "    it also excludes DIR/%s, and a complete target's %s, as if each"
       " were an --exclude-pairs file; either is"
       " skipped when absent\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
