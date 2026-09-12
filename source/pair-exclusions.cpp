@@ -350,6 +350,14 @@ PairFilterOptionResult parse_pair_filter_option(
     out->workflow_root = argv[*index];
     return PAIR_FILTER_OPTION_HANDLED;
   }
+  if (strcmp(option, "-d") == 0 || strcmp(option, "--dict") == 0) {
+    if (++*index == argc || argv[*index][0] == '\0') {
+      fprintf(stderr, "%s: %s requires a nonempty path\n", program, option);
+      return PAIR_FILTER_OPTION_ERROR;
+    }
+    out->dictionary_path = argv[*index];
+    return PAIR_FILTER_OPTION_HANDLED;
+  }
   if (strcmp(option, "-t") == 0 || strcmp(option, "--target") == 0) {
     if (++*index == argc || argv[*index][0] == '\0') {
       fprintf(stderr, "%s: %s requires a nonempty target\n", program, option);
@@ -436,27 +444,30 @@ bool load_pair_filters(
             true, true, true))
       return false;
   }
+  if (wfroot != NULL) {
+    if (!load_workflow_pair_file(
+            workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
+            "reject list", rejected,
+            sources == NULL ? NULL : &sources->classified_no))
+      return false;
+    if (!load_target_pair_file(wfroot, target, program, rejected,
+            sources == NULL ? NULL : &sources->target_no))
+      return false;
+    if (options.workflow_yes) {
+      if (!load_workflow_pair_file(
+              workflow_path(wfroot, WORKFLOW_YES_PAIRS_PATH), program,
+              "ignore list", ignored,
+              sources == NULL ? NULL : &sources->classified_yes))
+        return false;
+    }
+  }
+
+  if (!options.dictionary_path.empty())
+    return load_dictionary(options.dictionary_path.c_str(), dictionary);
   if (wfroot == NULL) {
     warn(program, "NO DICTIONARY SUPPLIED");
     return true;
   }
-
-  if (!load_workflow_pair_file(
-          workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
-          "reject list", rejected,
-          sources == NULL ? NULL : &sources->classified_no))
-    return false;
-  if (!load_target_pair_file(wfroot, target, program, rejected,
-          sources == NULL ? NULL : &sources->target_no))
-    return false;
-  if (options.workflow_yes) {
-    if (!load_workflow_pair_file(
-            workflow_path(wfroot, WORKFLOW_YES_PAIRS_PATH), program,
-            "ignore list", ignored,
-            sources == NULL ? NULL : &sources->classified_yes))
-      return false;
-  }
-
   std::string const dict_path = workflow_path(wfroot, WORKFLOW_DICT_PATH);
   if (workflow_file_missing(dict_path, program, "dictionary")) return true;
   return load_dictionary(dict_path.c_str(), dictionary);

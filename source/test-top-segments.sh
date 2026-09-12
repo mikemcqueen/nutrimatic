@@ -33,6 +33,19 @@ actual=$("$top_segments" "$input")
 actual=$("$top_segments" < "$input")
 [[ $actual == "$expected" ]] || fail "stdin counts are wrong: $actual"
 
+dictionary=$test_dir/dictionary.txt
+cat > "$dictionary" <<'EOF'
+alpha
+beta
+gamma
+EOF
+
+expected_dict='2 alpha
+1 beta gamma'
+actual=$("$top_segments" -d "$dictionary" "$input")
+[[ $actual == "$expected_dict" ]] ||
+  fail "standalone dictionary filtering is wrong: $actual"
+
 expected_pairs='beta,gamma
 epsilon,zeta
 one,two,three'
@@ -50,6 +63,15 @@ actual=$("$top_segments" --pairs --counts "$input")
 actual=$("$top_segments" --pairs -c "$input")
 [[ $actual == "$expected_pair_counts" ]] ||
   fail "-c pair count output is wrong: $actual"
+
+expected_no_counts='alpha
+beta gamma
+delta
+epsilon zeta
+one two three'
+actual=$("$top_segments" --no-counts "$input")
+[[ $actual == "$expected_no_counts" ]] ||
+  fail "--no-counts output is wrong: $actual"
 
 expected_top='3 alpha
 2 beta gamma'
@@ -182,6 +204,16 @@ expected_solo='3 alpha
 actual=$("$top_segments" --solo-words "$input")
 [[ $actual == "$expected_solo" ]] || fail "--solo-words output is wrong: $actual"
 
+expected_solo_no_counts='alpha
+delta'
+actual=$("$top_segments" --solo-words --no-counts "$input")
+[[ $actual == "$expected_solo_no_counts" ]] ||
+  fail "--solo-words --no-counts output is wrong: $actual"
+
+actual=$("$top_segments" --counts --solo-words "$input")
+[[ $actual == "$expected_solo" ]] ||
+  fail "--counts --solo-words output is wrong: $actual"
+
 expected_all_words='3 alpha
 2 beta
 2 delta
@@ -194,6 +226,19 @@ expected_all_words='3 alpha
 actual=$("$top_segments" --all-words "$input")
 [[ $actual == "$expected_all_words" ]] ||
   fail "--all-words output is wrong: $actual"
+
+expected_all_words_no_counts='alpha
+beta
+delta
+gamma
+epsilon
+one
+three
+two
+zeta'
+actual=$("$top_segments" --nc --all-words "$input")
+[[ $actual == "$expected_all_words_no_counts" ]] ||
+  fail "--nc --all-words output is wrong: $actual"
 
 pair_words_input=$test_dir/pair-words-results.txt
 cat > "$pair_words_input" <<'EOF'
@@ -224,8 +269,16 @@ if "$top_segments" --pairs --all-words "$input" >/dev/null 2>&1; then
   fail "--pairs with --all-words succeeded"
 fi
 
-if "$top_segments" --counts "$input" >/dev/null 2>&1; then
-  fail "--counts without --pairs succeeded"
+if "$top_segments" --counts --no-counts "$input" >/dev/null 2>&1; then
+  fail "--counts with --no-counts succeeded"
+fi
+
+if "$top_segments" --nc -c "$input" >/dev/null 2>&1; then
+  fail "--nc with -c succeeded"
+fi
+
+if "$top_segments" --elim --no-counts "$input" >/dev/null 2>&1; then
+  fail "--elim with --no-counts succeeded"
 fi
 
 if "$top_segments" --unique "$input" >/dev/null 2>&1; then

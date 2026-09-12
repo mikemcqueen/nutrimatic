@@ -58,6 +58,20 @@ beta,gamma'
 actual=$("$first_segments" -n 2 "$input" 2>/dev/null)
 [[ $actual == "$expected" ]] || fail "duplicate handling is wrong: $actual"
 
+dictionary=$test_dir/dictionary.txt
+cat > "$dictionary" <<'EOF'
+alpha
+beta
+gamma
+EOF
+
+expected='alpha,beta
+beta,gamma'
+actual=$(head -n 3 "$input" |
+  "$first_segments" --dict "$dictionary" -n 10 2>/dev/null)
+[[ $actual == "$expected" ]] ||
+  fail "standalone dictionary filtering is wrong: $actual"
+
 actual=$("$first_segments" -n 0 "$input" 2>/dev/null)
 [[ -z $actual ]] || fail "-n 0 produced output: $actual"
 

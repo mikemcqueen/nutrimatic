@@ -25,6 +25,7 @@ static void usage(FILE* fp, char const* program) {
       "          [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
+      "          [-d PATH]\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [-y]\n"
       "          [RESULTS]\n"
       "  print the first N distinct, non-ignored segments from valid\n"
@@ -41,9 +42,10 @@ static void usage(FILE* fp, char const* program) {
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(fp, 23);
   fprintf(fp,
-      "  --wfroot DIR         implies -r DIR/%s; discards\n"
-      "                       rows with any word not in DIR/%s;\n"
-      "                       also implies -r on the selected target's\n"
+      "  -d, --dict PATH      discard rows with any word not in PATH; with\n"
+      "                       --wf or --wfroot, defaults to DIR/%s\n"
+      "  --wfroot DIR         implies -r DIR/%s; also implies\n"
+      "                       -r on the selected target's\n"
       "                       DIR/%s\n"
       "  --wf                 shortcut for --wfroot $WFROOT\n"
       "  -t, --target TARGET  with --wf or --wfroot, the target selected by\n"
@@ -54,7 +56,7 @@ static void usage(FILE* fp, char const* program) {
       "  -y, --yes            with --wf or --wfroot, ignore pairs in the\n"
       "                       selected root's %s\n"
       "  with no RESULTS, or when RESULTS is -, read standard input\n",
-      WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_DICT_PATH, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
       WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME,
       WORKFLOW_YES_PAIRS_PATH);
 }

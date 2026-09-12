@@ -52,6 +52,18 @@ expected='8 delta epsilon,zeta eta
 actual=$("$filter_segments" -r "$reject" - < "$input")
 [[ $actual == "$expected" ]] || fail "explicit stdin is wrong: $actual"
 
+dictionary=$test_dir/dictionary.txt
+cat > "$dictionary" <<'EOF'
+alpha
+beta
+gamma
+EOF
+
+expected='9 alpha beta,beta gamma'
+actual=$("$filter_segments" -d "$dictionary" "$input")
+[[ $actual == "$expected" ]] ||
+  fail "standalone dictionary filtering is wrong: $actual"
+
 wfroot=$test_dir/wf
 mkdir -p "$wfroot/.wf/classified/yes" "$wfroot/.wf/classified/no"
 cat > "$wfroot/.wf/classified/yes/yes.pairs" <<'EOF'
@@ -91,6 +103,17 @@ expected='9 alpha beta,beta gamma
 actual=$(WFROOT=$wfroot "$filter_segments" --wf "$input")
 [[ $actual == "$expected" ]] || fail "--wf dictionary filtering is wrong: $actual"
 
+cat > "$dictionary" <<'EOF'
+theta
+iota
+kappa
+lambda
+EOF
+expected='7 theta iota,kappa lambda'
+actual=$(WFROOT=$wfroot \
+  "$filter_segments" --wf --dict "$dictionary" "$input")
+[[ $actual == "$expected" ]] || fail "--dict did not override workflow: $actual"
+
 if "$filter_segments" --wf --wfroot "$wfroot" "$input" \
     >/dev/null 2>&1; then
   fail "--wf with --wfroot succeeded"
@@ -114,6 +137,14 @@ fi
 
 if "$filter_segments" -n nope "$input" >/dev/null 2>&1; then
   fail "invalid -n succeeded"
+fi
+
+if "$filter_segments" --dict >/dev/null 2>&1; then
+  fail "--dict without a path succeeded"
+fi
+
+if "$filter_segments" --dict '' "$input" >/dev/null 2>&1; then
+  fail "--dict with an empty path succeeded"
 fi
 
 # The target a FILE is an artifact of, or the selected target when it names

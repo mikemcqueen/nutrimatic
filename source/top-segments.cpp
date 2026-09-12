@@ -36,18 +36,20 @@ struct FilterStats {
 
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
-      "usage: %s [--pairs [-c] | --solo-words | --all-words |\n"
+      "usage: %s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
-      "          [-l | --elim] [-n N]\n"
+      "          [-c | --no-counts] [-l | --elim] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
+      "          [-d PATH]\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [-y]\n"
       "          [FILE ...]\n"
       "  count comma-delimited segments in dfs-anagrams output and print\n"
-      "  \"count segment\" rows in descending count order\n"
+      "  results in descending count order\n"
       "  --pairs             print only multi-word segments as\n"
-      "                      comma-separated words, without counts\n"
-      "  -c, --counts        include counts with --pairs\n"
+      "                      comma-separated words\n"
+      "  -c, --counts        include counts; default except with --pairs\n"
+      "  --no-counts, --nc   omit counts; default with --pairs\n"
       "  --solo-words        print only single-word segments\n"
       "  --all-words         count every word occurrence, splitting\n"
       "                      multi-word segments into their words\n"
@@ -65,9 +67,10 @@ static void usage(FILE* fp, char const* program) {
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(fp, 22);
   fprintf(fp,
-      "  --wfroot DIR        implies -r DIR/%s; discards\n"
-      "                      rows with any word not in DIR/%s;\n"
-      "                      also implies -r on the selected target's\n"
+      "  -d, --dict PATH     discard rows with any word not in PATH; with\n"
+      "                      --wf or --wfroot, defaults to DIR/%s\n"
+      "  --wfroot DIR        implies -r DIR/%s; also implies\n"
+      "                      -r on the selected target's\n"
       "                      DIR/%s\n"
       "  --wf                shortcut for --wfroot $WFROOT; with no unit\n"
       "                      option, --wf and --wfroot imply --pairs -y\n"
@@ -79,7 +82,7 @@ static void usage(FILE* fp, char const* program) {
       "  -y, --yes           with --wf or --wfroot, ignore pairs in the\n"
       "                      selected root's %s\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      WORKFLOW_NO_PAIRS_PATH, WORKFLOW_DICT_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
+      WORKFLOW_DICT_PATH, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
       WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME,
       WORKFLOW_YES_PAIRS_PATH);
 }
@@ -352,7 +355,7 @@ static bool split_counts(
 
 static bool print_counts(
     SegmentCounts const& counts, SegmentOutputOptions const& output_options,
-    bool show_pair_counts, bool elimination, uint64_t surviving_rows) {
+    bool show_counts, bool elimination, uint64_t surviving_rows) {
   SegmentCounts split;
   if (!elimination &&
       output_options.projection == SEGMENT_PROJECTION_WORDS &&
@@ -437,17 +440,11 @@ static bool print_counts(
           displayed.c_str());
       continue;
     }
-    if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
-        output_options.projection == SEGMENT_PROJECTION_SEGMENTS) {
-      if (show_pair_counts) {
-        printf("%*" PRIu64 " %s\n",
-            width, ordered[i]->second.count, displayed.c_str());
-      } else {
-        printf("%s\n", displayed.c_str());
-      }
+    if (show_counts) {
+      printf("%*" PRIu64 " %s\n",
+          width, ordered[i]->second.count, displayed.c_str());
     } else {
-      printf("%*" PRIu64 " %s\n", width, ordered[i]->second.count,
-          ordered[i]->first.c_str());
+      printf("%s\n", displayed.c_str());
     }
   }
   return !ferror(stdout);
@@ -457,13 +454,19 @@ int main(int argc, char* argv[]) {
   std::vector<char const*> paths;
   PairFilterOptions filter_options;
   bool parse_options = true;
-  bool show_pair_counts = false;
+  bool force_counts = false;
+  bool suppress_counts = false;
   bool elimination = false;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--counts") == 0) {
-        show_pair_counts = true;
+        force_counts = true;
+        continue;
+      }
+      if (strcmp(argv[i], "--no-counts") == 0 ||
+          strcmp(argv[i], "--nc") == 0) {
+        suppress_counts = true;
         continue;
       }
       if (strcmp(argv[i], "--pair-words") == 0) {
@@ -534,11 +537,20 @@ int main(int argc, char* argv[]) {
   bool const pair_words =
       output_options.selection == SEGMENT_SELECTION_PAIRS &&
       output_options.projection == SEGMENT_PROJECTION_WORDS;
-  if (show_pair_counts && !pair_segments) {
-    fputs("top-segments: --counts requires --pairs\n", stderr);
+  if (force_counts && suppress_counts) {
+    fputs("top-segments: --counts and --no-counts are mutually exclusive\n",
+        stderr);
     usage(stderr, argv[0]);
     return 2;
   }
+  if (elimination && suppress_counts) {
+    fputs("top-segments: --elim and --no-counts are mutually exclusive\n",
+        stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
+  bool const show_counts = force_counts ||
+      (!suppress_counts && !pair_segments);
   if (output_options.weight == SEGMENT_WEIGHT_UNIQUE && !pair_words) {
     fputs("top-segments: --unique requires --pair-words\n", stderr);
     usage(stderr, argv[0]);
@@ -602,6 +614,6 @@ int main(int argc, char* argv[]) {
 
   print_filter_summary(filter_stats, filter_sources);
   return print_counts(
-      counts, output_options, show_pair_counts, elimination, surviving_rows)
+      counts, output_options, show_counts, elimination, surviving_rows)
       ? 0 : 1;
 }
