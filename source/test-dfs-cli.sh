@@ -46,37 +46,42 @@ assert_close() {
 
 "$make_index" "$index_file"
 
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 2 "$dfs_anagrams" "$index_file" abcd
+grep -q '^usage: .* -i INDEX letters' "$test_dir/status.stderr" ||
+  fail "positional index rejection did not show the new synopsis"
+expect_status 2 "$dfs_anagrams" abcd
+
+"$dfs_anagrams" --idx "$index_file" abcd -m 2 -n 10 \
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -P 1000000 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1000000 \
   > "$test_dir/explicit-default.stdout" \
   2> "$test_dir/explicit-default.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --cache-size 0 \
   --allow-cache-fallback \
   > "$test_dir/uncached.stdout" 2> "$test_dir/uncached.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --preprocess-threads 1 \
   > "$test_dir/thread-one.stdout" 2> "$test_dir/thread-one.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --preprocess-threads 4 \
   > "$test_dir/threaded.stdout" 2> "$test_dir/threaded.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   -d 0 \
   > "$test_dir/depth-zero.stdout" 2> "$test_dir/depth-zero.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   -S 0 \
   > "$test_dir/search-thread-auto.stdout" \
   2> "$test_dir/search-thread-auto.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   -S 1 \
   > "$test_dir/search-thread-one.stdout" \
   2> "$test_dir/search-thread-one.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   -p 2147483648 \
   > "$test_dir/wide-progress-factor.stdout" \
   2> "$test_dir/wide-progress-factor.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 0 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 0 \
   > "$test_dir/unlimited.stdout" 2> "$test_dir/unlimited.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/explicit-default.stdout" ||
   fail "explicit default segment penalty changed stdout"
@@ -157,7 +162,7 @@ grep -Eq "${diagnostic_prefix}phase 2 complete: .* [0-9]+ retained$" \
   "$test_dir/all.stderr" ||
   fail "phase-2 completion statistics have the wrong format"
 
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 2 \
   > "$test_dir/top.stdout" 2> "$test_dir/top.stderr"
 head -n 2 "$test_dir/all.stdout" > "$test_dir/expected-top.stdout"
 cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
@@ -166,10 +171,10 @@ cmp "$test_dir/expected-top.stdout" "$test_dir/top.stdout" ||
    $(wc -l < "$test_dir/top.stdout") ]] ||
   fail "-n 0 did not return more results than -n 2"
 
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -P 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1 \
   > "$test_dir/penalty-one.stdout" \
   2> "$test_dir/penalty-one.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --segment-penalty 1 --cache-size 0 --allow-cache-fallback \
   > "$test_dir/penalty-one-uncached.stdout" \
   2> "$test_dir/penalty-one-uncached.stderr"
@@ -190,9 +195,9 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
     "$test_dir/penalty-one.stdout")" 70 \
   "one-segment phrase should be invariant"
 
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --max-extract-words 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --max-extract-words 2 \
   > "$test_dir/extract-two.stdout" 2> "$test_dir/extract-two.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -x 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -x 1 \
   > "$test_dir/extract-one.stdout" 2> "$test_dir/extract-one.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/extract-two.stdout" ||
   fail "-x 2 changed stdout where no entry holds three words"
@@ -202,12 +207,12 @@ grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
   fail "--max-extract-words diagnostic is missing from stderr"
 
-"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 \
+"$dfs_anagrams" -i "$index_file" fghij -m 1 -n 10 \
   > "$test_dir/extract-default.stdout" 2> "$test_dir/extract-default.stderr"
-"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 -x 2 \
+"$dfs_anagrams" -i "$index_file" fghij -m 1 -n 10 -x 2 \
   > "$test_dir/extract-default-two.stdout" \
   2> "$test_dir/extract-default-two.stderr"
-"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 -x 0 \
+"$dfs_anagrams" -i "$index_file" fghij -m 1 -n 10 -x 0 \
   > "$test_dir/extract-unlimited.stdout" \
   2> "$test_dir/extract-unlimited.stderr"
 cmp "$test_dir/extract-default.stdout" "$test_dir/extract-default-two.stdout" ||
@@ -223,7 +228,7 @@ fi
 # dedup show up in the reported key count. An explicit zero pair bonus makes
 # loading the scoring input alone leave output unchanged.
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
 grep -Eq "${diagnostic_prefix}pair list: 2 pairs, 2 keys$" \
@@ -235,28 +240,28 @@ cmp "$test_dir/all.stdout" "$test_dir/pair-list.stdout" ||
 # A '-' line is skipped rather than counted, but still advances the line
 # number the next error reports.
 printf 'ab,cd\ne-f,gh\nij,kl,mn\n' > "$test_dir/bad-pairs.txt"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --pairs "$test_dir/bad-pairs.txt"
 grep -q "^error: pair list \"$test_dir/bad-pairs.txt\" line 3: expected one word or two comma-separated words$" \
   "$test_dir/status.stderr" ||
   fail "the malformed pair-line diagnostic did not name the right line"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --pairs "$test_dir/missing-pairs.txt"
 grep -q "^error: can't open pair list \"$test_dir/missing-pairs.txt\"$" \
   "$test_dir/status.stderr" ||
   fail "the missing pair-list diagnostic is unclear"
-expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 --pairs
+expect_status 2 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --pairs
 
 # A short component may bypass -m only as part of the exact pair in its
 # written orientation. The digit fixture is disjoint from the legacy output
 # cases above, and its total normalized length is at least four.
 printf '1,2345\n' > "$test_dir/short-first.pairs"
 printf '2345,1\n' > "$test_dir/short-last.pairs"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   > "$test_dir/short-none.stdout" 2> "$test_dir/short-none.stderr"
 [[ ! -s "$test_dir/short-none.stdout" ]] ||
   fail "a short pair was extracted without --pairs"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" --pair-bonus 0 \
   > "$test_dir/short-first.stdout" 2> "$test_dir/short-first.stderr"
 grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
@@ -265,7 +270,7 @@ grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
   fail "a short-first pair was matched in reverse"
 ! grep -q ' 1$' "$test_dir/short-first.stdout" ||
   fail "a short first word was emitted as a standalone entry"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 -g 1 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 -g 1 \
   --pairs "$test_dir/short-first.pairs" --pair-bonus 0 \
   > "$test_dir/short-one-segment.stdout" \
   2> "$test_dir/short-one-segment.stderr"
@@ -274,26 +279,26 @@ grep -q ' 1 2345$' "$test_dir/short-one-segment.stdout" ||
 grep -Eq "${diagnostic_prefix}"'5 letters "12345", entries of 4[+] letters, at most 1 segment, exactly 1 segment$' \
   "$test_dir/short-one-segment.stderr" ||
   fail "short-pair search header did not preserve the entry bound"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
   > "$test_dir/short-last.stdout" 2> "$test_dir/short-last.stderr"
 grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
   fail "a listed long-first short-last pair was not extracted"
 ! grep -q ' 1 2345$' "$test_dir/short-last.stdout" ||
   fail "a long-first short-last pair was matched in reverse"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 -x 1 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 -x 1 \
   --pairs "$test_dir/short-first.pairs" \
   > "$test_dir/short-extract-one.stdout" \
   2> "$test_dir/short-extract-one.stderr"
 [[ ! -s "$test_dir/short-extract-one.stdout" ]] ||
   fail "-x 1 kept a short-pair exception"
-"$dfs_anagrams" "$index_file" 23456789 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 23456789 -m 4 -n 10 \
   --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
   > "$test_dir/short-shared-prefix.stdout" \
   2> "$test_dir/short-shared-prefix.stderr"
 grep -q ' 2345 6789$' "$test_dir/short-shared-prefix.stdout" ||
   fail "an ordinary phrase sharing an exception prefix was rejected"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" \
   --exclude-pairs "$test_dir/short-first.pairs" \
   > "$test_dir/short-excluded.stdout" \
@@ -301,7 +306,7 @@ grep -q ' 2345 6789$' "$test_dir/short-shared-prefix.stdout" ||
 [[ ! -s "$test_dir/short-excluded.stdout" ]] ||
   fail "--exclude-pairs did not reject a short-pair exception"
 printf '2345\n' > "$test_dir/short-dictionary"
-"$dfs_anagrams" "$index_file" 12345 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" --dict "$test_dir/short-dictionary" \
   > "$test_dir/short-dictionary.stdout" \
   2> "$test_dir/short-dictionary.stderr"
@@ -312,14 +317,14 @@ printf '2345\n' > "$test_dir/short-dictionary"
 # phrase joins 6789 to 1, so only the oriented pair-file key can make the edge.
 printf '6789,1\n' > "$test_dir/solo-short-forward.pairs"
 printf '1,6789\n' > "$test_dir/solo-short-reverse.pairs"
-"$dfs_anagrams" "$index_file" 6789 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 6789 -m 4 -n 10 \
   --solo-words 1 --word-bonus 0 \
   --pairs "$test_dir/solo-short-forward.pairs" \
   > "$test_dir/solo-short-forward.stdout" \
   2> "$test_dir/solo-short-forward.stderr"
 grep -q ' 6789 (1)$' "$test_dir/solo-short-forward.stdout" ||
   fail "the oriented short-pair solo edge was not applied"
-"$dfs_anagrams" "$index_file" 6789 -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" 6789 -m 4 -n 10 \
   --solo-words 1 --word-bonus 0 \
   --pairs "$test_dir/solo-short-reverse.pairs" \
   > "$test_dir/solo-short-reverse.stdout" \
@@ -329,17 +334,17 @@ grep -q ' 6789 (1)$' "$test_dir/solo-short-forward.stdout" ||
 
 # Validation measures cleaned field characters, not the comma or formatting.
 printf '!b!e!, a!n!\n' > "$test_dir/normalized-valid.pairs"
-"$dfs_anagrams" "$index_file" abcd -m 4 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 4 -n 10 \
   --pairs "$test_dir/normalized-valid.pairs" \
   > /dev/null 2> "$test_dir/normalized-valid.stderr"
 printf '!b!e!, a!\n' > "$test_dir/normalized-short-pair.pairs"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 4 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 4 -n 10 \
   --pairs "$test_dir/normalized-short-pair.pairs"
 grep -q "^error: pair list \"$test_dir/normalized-short-pair.pairs\" line 1: normalized entry has 3 non-space characters, fewer than -m 4$" \
   "$test_dir/status.stderr" ||
   fail "short normalized pair diagnostic is wrong"
 printf 'a!n!\n' > "$test_dir/normalized-short-word.pairs"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 4 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 4 -n 10 \
   --pairs "$test_dir/normalized-short-word.pairs"
 grep -q "^error: pair list \"$test_dir/normalized-short-word.pairs\" line 1: normalized entry has 2 non-space characters, fewer than -m 4$" \
   "$test_dir/status.stderr" ||
@@ -349,7 +354,7 @@ grep -q "^error: pair list \"$test_dir/normalized-short-word.pairs\" line 1: nor
 # order. The two-entry "ab,cd" answer survives: the exclusion is over index
 # entries, not over adjacency in a result.
 printf 'cd,ab\n' > "$test_dir/exclude.pairs"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/exclude.pairs" \
   > "$test_dir/excluded.stdout" 2> "$test_dir/excluded.stderr"
 grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys$" \
@@ -364,14 +369,14 @@ grep -q ' ab,cd$' "$test_dir/excluded.stdout" ||
 
 # Repeated files are unioned rather than replacing an earlier option.
 printf 'gh,ij\n' > "$test_dir/exclude-ghij.pairs"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/exclude.pairs" \
   --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   > "$test_dir/excluded-multiple.stdout" \
   2> "$test_dir/excluded-multiple.stderr"
 cmp "$test_dir/excluded.stdout" "$test_dir/excluded-multiple.stdout" ||
   fail "repeated --exclude-pairs did not combine both files"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   --exclude-pairs "$test_dir/exclude.pairs" \
   > "$test_dir/excluded-multiple-reversed.stdout" \
@@ -382,7 +387,7 @@ cmp "$test_dir/excluded.stdout" \
 
 # The test is whole-entry equality, so a longer entry holding the excluded
 # pair -- here at its end -- is a different spelling and is kept.
-"$dfs_anagrams" "$index_file" fghij -m 1 -n 10 -x 0 \
+"$dfs_anagrams" -i "$index_file" fghij -m 1 -n 10 -x 0 \
   --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   > "$test_dir/exclude-prefix.stdout" 2> "$test_dir/exclude-prefix.stderr"
 grep -q ' f gh ij$' "$test_dir/exclude-prefix.stdout" ||
@@ -392,7 +397,7 @@ grep -q ' f gh ij$' "$test_dir/exclude-prefix.stdout" ||
 # is an error rather than an empty exclusion set.
 mkdir -p "$test_dir/wf/.wf/classified/no"
 cp "$test_dir/exclude.pairs" "$test_dir/wf/.wf/classified/no/no.pairs"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/exclude-ghij.pairs" \
   --exclude-pairs "$test_dir/wf" \
   > "$test_dir/exclude-wf.stdout" 2> "$test_dir/exclude-wf.stderr"
@@ -400,18 +405,18 @@ cmp "$test_dir/excluded.stdout" "$test_dir/exclude-wf.stdout" ||
   fail "a file and workflow root did not combine their exclusion sets"
 mkdir -p "$test_dir/wf2/.wf/classified/no"
 cp "$test_dir/exclude.pairs" "$test_dir/wf2/.wf/classified/no/no.pairs"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/wf" --exclude-pairs "$test_dir/wf2"
 grep -q '^error: only one --exclude-pairs argument may be a directory$' \
   "$test_dir/status.stderr" ||
   fail "multiple --exclude-pairs directories were not rejected clearly"
 mkdir -p "$test_dir/not-wf"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/not-wf"
 grep -q "^error: --exclude-pairs directory \"$test_dir/not-wf\" has no workflow metadata \"$test_dir/not-wf/.wf\"$" \
   "$test_dir/status.stderr" ||
   fail "the missing-workflow diagnostic did not name both paths"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/missing-exclude.pairs"
 grep -q "^error: can't open exclude list \"$test_dir/missing-exclude.pairs\"$" \
   "$test_dir/status.stderr" ||
@@ -420,13 +425,13 @@ grep -q "^error: can't open exclude list \"$test_dir/missing-exclude.pairs\"$" \
 # A '-' line is a skipped bonus but a dropped exclusion, so only the exclusion
 # list rejects it rather than quietly enforcing less than it was given.
 printf 'a-b,cd\n' > "$test_dir/hyphen.pairs"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --pairs "$test_dir/hyphen.pairs" --pair-bonus 0 \
   > /dev/null 2> "$test_dir/hyphen-bonus.stderr"
 grep -Eq "${diagnostic_prefix}pair list: 0 pairs, 0 keys$" \
   "$test_dir/hyphen-bonus.stderr" ||
   fail "a '-' line should still be skipped in a bonus list"
-expect_status 1 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --exclude-pairs "$test_dir/hyphen.pairs"
 grep -q "^error: exclude list \"$test_dir/hyphen.pairs\" line 1: '-' would silently skip this entry$" \
   "$test_dir/status.stderr" ||
@@ -435,9 +440,9 @@ grep -q "^error: exclude list \"$test_dir/hyphen.pairs\" line 1: '-' would silen
 # "klmn" (1000) and "kl mn" (5) are one anagram class, so the bonus has to
 # reorder within a class to promote the phrase, and the single word's own
 # score must not move with a bonus it never earned.
-"$dfs_anagrams" "$index_file" klmn -m 2 -n 5 --word-bonus 0 \
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 --word-bonus 0 \
   > "$test_dir/bonus-zero.stdout" 2> "$test_dir/bonus-zero.stderr"
-"$dfs_anagrams" "$index_file" klmn -m 2 -n 5 --word-bonus 1 \
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 --word-bonus 1 \
   > "$test_dir/bonus-one.stdout" 2> "$test_dir/bonus-one.stderr"
 [[ $(awk 'NR == 1 { print $2 }' "$test_dir/bonus-zero.stdout") == klmn ]] ||
   fail "--word-bonus 0 did not rank the more frequent single word first"
@@ -457,7 +462,7 @@ assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/bonus-one.stdout")" \
 # the bonus. This exercises pair lookup, score ordering, phase-2 bounds, and
 # phase-3 spelling deltas together.
 printf 'kl,mn\n' > "$test_dir/klmn-pairs.txt"
-"$dfs_anagrams" "$index_file" klmn -m 2 -n 5 \
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 \
   --pairs "$test_dir/klmn-pairs.txt" \
   > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"
 [[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/pair-bonus.stdout") \
@@ -470,7 +475,7 @@ assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
 assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   1000 "--pair-bonus should leave the unlisted single word's score alone"
 
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --solo-words cd --word-bonus 0 --pair-bonus 0 \
   > "$test_dir/solo-inert.stdout" 2> "$test_dir/solo-inert.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/solo-inert.stdout" ||
@@ -479,7 +484,7 @@ cmp "$test_dir/all.stdout" "$test_dir/solo-inert.stdout" ||
 # A pairs-only external edge promotes the split spelling above the contiguous
 # phrase even with a bounded top-N queue.
 printf 'ab,zz\n' > "$test_dir/solo-top-pairs.txt"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 1 -P 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 1 -P 1 \
   --solo-words zz --word-bonus 0 \
   --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 \
   > "$test_dir/solo-top.stdout" 2> "$test_dir/solo-top.stderr"
@@ -487,21 +492,21 @@ printf 'ab,zz\n' > "$test_dir/solo-top-pairs.txt"
    == "ab (zz),cd" ]] ||
   fail "solo-word upper bounds did not retain the bounded winner"
 solo_top_score=$(awk 'NR == 1 { print $1 }' "$test_dir/solo-top.stdout")
-solo_top_round_trip=$("$query_index" "$index_file" ab,cd --score -P 1 \
+solo_top_round_trip=$("$query_index" -i "$index_file" ab,cd --score -P 1 \
   --solo-words zz --word-bonus 0 \
   --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
 assert_close "$solo_top_score" "$solo_top_round_trip" \
   "DFS solo-word score did not round-trip through query-index --score"
 
 printf 'ba,cd\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
-"$dfs_anagrams" "$index_file" abba -m 2 -n 10 -P 1 \
+"$dfs_anagrams" -i "$index_file" abba -m 2 -n 10 -P 1 \
   --solo-words cd --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0 \
   > "$test_dir/solo-scarcity.stdout" 2> "$test_dir/solo-scarcity.stderr"
 scarce_score=$(awk '$0 ~ / ab,ba \(cd\)$/ { print $1 }' \
   "$test_dir/solo-scarcity.stdout")
 [[ -n $scarce_score ]] || fail "solo-word scarcity spelling is missing"
-scarce_round_trip=$("$query_index" "$index_file" ab,ba --score -P 1 \
+scarce_round_trip=$("$query_index" -i "$index_file" ab,ba --score -P 1 \
   --solo-words cd --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0 | awk '{ print $1 }')
 assert_close "$scarce_score" "$scarce_round_trip" \
@@ -509,7 +514,7 @@ assert_close "$scarce_score" "$scarce_round_trip" \
 
 # wx can reroute from its asserted ab edge to its aggregate yz edge, leaving
 # ab for xy. This is the non-greedy maximum-score assignment.
-"$dfs_anagrams" "$index_file" wxxy -m 2 -n 1 -P 1 \
+"$dfs_anagrams" -i "$index_file" wxxy -m 2 -n 1 -P 1 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
   > "$test_dir/solo-reroute.stdout" 2> "$test_dir/solo-reroute.stderr"
@@ -518,12 +523,12 @@ assert_close "$scarce_score" "$scarce_round_trip" \
   fail "solo-word assignment reroute lost the bounded DFS winner"
 reroute_score=$(awk 'NR == 1 { print $1 }' \
   "$test_dir/solo-reroute.stdout")
-reroute_round_trip=$("$query_index" "$index_file" wx,xy --score -P 1 \
+reroute_round_trip=$("$query_index" -i "$index_file" wx,xy --score -P 1 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
 assert_close "$reroute_score" "$reroute_round_trip" \
   "rerouted DFS score did not round-trip through query-index --score"
-"$dfs_anagrams" "$index_file" wxxy -m 2 -n 1 -P 1 \
+"$dfs_anagrams" -i "$index_file" wxxy -m 2 -n 1 -P 1 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
   --hide-solo-words \
@@ -542,7 +547,7 @@ grep -Eq "${diagnostic_prefix}solo words: 2 profiles, 3 word edges, 2 pair edges
 # Every result line's entry list must be pasteable into "query-index --score"
 # and reproduce that line's own score.
 while read -r result_score result_entries; do
-  round_trip=$("$query_index" "$index_file" "$result_entries" --score |
+  round_trip=$("$query_index" -i "$index_file" "$result_entries" --score |
     awk '{ print $1 }')
   assert_close "$round_trip" "$result_score" \
     "query-index --score disagrees on \"$result_entries\""
@@ -550,9 +555,9 @@ done < "$test_dir/all.stdout"
 
 # -g N keeps only N-entry results. "ab cd" wins the unconstrained search as one
 # contiguous phrase and absorbs its split form, so -g 2 is what exposes "ab,cd".
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -g 1 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
   > "$test_dir/one-segment.stdout" 2> "$test_dir/one-segment.stderr"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -g 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 2 \
   > "$test_dir/two-segment.stdout" 2> "$test_dir/two-segment.stderr"
 if grep -q ',' "$test_dir/one-segment.stdout"; then
   fail "-g 1 returned a multi-entry result"
@@ -570,45 +575,45 @@ grep -Eq "${diagnostic_prefix}"'.*, exactly 2 segments$' \
   fail "the search header did not pluralize the segment constraint"
 grep -q ' ab,cd$' "$test_dir/two-segment.stdout" ||
   fail "-g 2 did not expose the split form of the contiguous phrase"
-"$dfs_anagrams" "$index_file" abcd -m 2 -n 10 -g 9 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 9 \
   > "$test_dir/unreachable-segment.stdout" \
   2> "$test_dir/unreachable-segment.stderr"
 [[ ! -s $test_dir/unreachable-segment.stdout ]] ||
   fail "-g beyond the letters' segment limit returned results"
 
-"$dfs_anagrams" "$index_file" abcd -u ab -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" abcd -u ab -m 2 -n 10 \
   > "$test_dir/used.stdout" 2> "$test_dir/used.stderr"
-"$dfs_anagrams" "$index_file" cd -m 2 -n 10 \
+"$dfs_anagrams" -i "$index_file" cd -m 2 -n 10 \
   > "$test_dir/left.stdout" 2> "$test_dir/left.stderr"
 cmp "$test_dir/used.stdout" "$test_dir/left.stdout" ||
   fail "--used-letters differs from searching the remaining bag"
 
-expect_status 2 "$dfs_anagrams" "$index_file" 'ab!'
-expect_status 2 "$dfs_anagrams" "$index_file" abc -p 0
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" 'ab!'
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc -p 0
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --cache-size nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --preprocess-threads nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --search-threads nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --projection-depth nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --max-extract-words nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc -P 0
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
   "$test_dir/status.stderr" ||
   fail "zero segment-penalty diagnostic is unclear"
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --segment-penalty 0.5
-expect_status 2 "$dfs_anagrams" "$index_file" abc -P nope
-expect_status 2 "$dfs_anagrams" "$index_file" abc -P inf
-expect_status 2 "$dfs_anagrams" "$index_file" abc \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc -P nope
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc -P inf
+expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --solo-words ab --word-bonus -1
 grep -q '^error: --word-bonus must be non-negative with --solo-words$' \
   "$test_dir/status.stderr" ||
   fail "negative solo-word bonus diagnostic is unclear"
-expect_status 2 "$dfs_anagrams" "$index_file" abcd -m 2 -n 10 \
+expect_status 2 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --cache-size 0
 grep -q '^error: projected dense score table requires at least 1 MiB; supplied cache is 0 MiB$' \
   "$test_dir/status.stderr" ||
@@ -616,4 +621,4 @@ grep -q '^error: projected dense score table requires at least 1 MiB; supplied c
 grep -q '^       use -C 1 or --allow-cache-fallback$' \
   "$test_dir/status.stderr" ||
   fail "projected-cache recovery diagnostic is missing"
-expect_status 1 "$dfs_anagrams" "$test_dir/missing.index" abcd
+expect_status 1 "$dfs_anagrams" -i "$test_dir/missing.index" abcd

@@ -2,6 +2,8 @@
 #include "search.h"
 #include "expr.h"
 
+#include "test-temp-dir.h"
+
 #include "fst/concat.h"
 
 #include <algorithm>
@@ -13,12 +15,18 @@
 
 using namespace fst;
 
+static const char *IndexPath() {
+  static TestTempDir const dir("test-expr");
+  static std::string const path = dir.file("test-expr.index");
+  return path.c_str();
+}
+
 static void TestIndex(const char *expr, const char *yes, const char *no) {
   // Write index
 
-  FILE *fp = fopen("test-expr.index", "wb");
+  FILE *fp = fopen(IndexPath(), "wb");
   if (fp == NULL) {
-    fprintf(stderr, "FAIL: can't write test-expr.index\n");
+    fprintf(stderr, "FAIL: can't write %s\n", IndexPath());
     exit(1);
   }
 
@@ -44,9 +52,9 @@ static void TestIndex(const char *expr, const char *yes, const char *no) {
 
   // Read index
 
-  fp = fopen("test-expr.index", "rb");
+  fp = fopen(IndexPath(), "rb");
   if (fp == NULL) {
-    fprintf(stderr, "FAIL: can't open test-expr.index\n");
+    fprintf(stderr, "FAIL: can't open %s\n", IndexPath());
     exit(1);
   }
 
@@ -89,7 +97,6 @@ static void TestIndex(const char *expr, const char *yes, const char *no) {
   }
 
   fclose(fp);
-  remove("test-expr.index");
 }
 
 int main(int argc, char *argv[]) {

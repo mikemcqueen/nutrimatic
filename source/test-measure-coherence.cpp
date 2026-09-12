@@ -1,5 +1,6 @@
 #include "coherence-measure.h"
 #include "index.h"
+#include "test-temp-dir.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -133,13 +134,10 @@ static std::vector<std::string> base_args(
 }
 
 int main() {
-  char directory_template[] = "/tmp/test-measure-coherence.XXXXXX";
-  char* directory = mkdtemp(directory_template);
-  check(directory != NULL, "could not create fixture directory");
-  std::string const root(directory);
-  std::string const index = root + "/test.index";
-  std::string const text = root + "/input.txt";
-  std::string const dfs = root + "/input.dfs";
+  TestTempDir const root("measure-coherence");
+  std::string const index = root.file("test.index");
+  std::string const text = root.file("input.txt");
+  std::string const dfs = root.file("input.dfs");
   write_index(index);
 
   RunResult long_help = run({"measure-coherence", "--help"});
@@ -285,9 +283,5 @@ int main() {
   negative_top.push_back("-1");
   check(run(negative_top).status == 2, "negative top count is rejected");
 
-  unlink(index.c_str());
-  unlink(text.c_str());
-  unlink(dfs.c_str());
-  rmdir(root.c_str());
   return 0;
 }

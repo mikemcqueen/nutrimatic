@@ -43,7 +43,7 @@ struct Args {
 
 static void usage(char const* program) {
   fprintf(stderr,
-      "usage: %s input.index letters"
+      "usage: %s -i INDEX letters"
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N]"
       " [--solo-words WORD[,WORD...]]"
@@ -52,11 +52,12 @@ static void usage(char const* program) {
       " [-x max-extract-words] [--pairs FILE]"
       " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
-      "       %s input.index sequence --score"
+      "       %s -i INDEX sequence --score"
       " [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N] [--pairs FILE]"
       " [--solo-words WORD[,WORD...]]\n"
-      "       %s input.index input --near word [-n top]\n"
+      "       %s -i INDEX input --near word [-n top]\n"
+      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX\n"
       "  --score treats letters as a comma-separated sequence of exact index\n"
       "    entries and prints its DFS-model score\n"
       "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
@@ -114,6 +115,7 @@ static int const OPT_NEAR = 259;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
+  { "idx", 'i', OPTPARSE_REQUIRED },
   { "words-only", 'w', OPTPARSE_NONE },
   { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
@@ -154,6 +156,7 @@ static bool validate_literal_entry(std::string const& entry) {
 }
 
 static bool parse_args(char* argv[], Args* out) {
+  out->index_file = NULL;
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
   out->words_only = false;
@@ -182,6 +185,9 @@ static bool parse_args(char* argv[], Args* out) {
         break;
     }
     switch (opt) {
+      case 'i':
+        out->index_file = options.optarg;
+        break;
       case 'w':
         out->words_only = true;
         mark_score_incompatible(out, "--words-only");
@@ -212,15 +218,12 @@ static bool parse_args(char* argv[], Args* out) {
         return false;
     }
   }
-  char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
-  if (index_file == NULL || letters == NULL ||
+  if (out->index_file == NULL || letters == NULL ||
       optparse_arg(&options) != NULL) {
     usage(argv[0]);
     return false;
   }
-  out->index_file = index_file;
-
   if (out->near) {
     if (out->near_incompatible_option != NULL) {
       fprintf(stderr, "error: %s cannot be used with --near\n",

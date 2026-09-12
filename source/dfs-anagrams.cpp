@@ -56,7 +56,7 @@ static void report_segments(std::vector<DfsSpelling> const& results,
 
 static void usage(char const* program) {
   fprintf(stderr,
-      "usage: %s input.index letters"
+      "usage: %s -i INDEX letters"
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
@@ -69,6 +69,7 @@ static void usage(char const* program) {
       " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
       " [--segments] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
+      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX\n"
       "  -u, --used-letters LETTERS subtracts letters already used from the"
       " input letters before searching\n"
       "  -m defaults to %d; 0 for no minimum\n"
@@ -142,6 +143,7 @@ static int const OPT_EXCLUDE_PAIRS = 258;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
+  { "idx", 'i', OPTPARSE_REQUIRED },
   { "exclude-pairs", OPT_EXCLUDE_PAIRS, OPTPARSE_REQUIRED },
   { "num-segments", 'g', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
@@ -156,6 +158,7 @@ static struct optparse_long const long_options[] = {
 };
 
 static bool parse_args(char* argv[], Args* out) {
+  out->index_file = NULL;
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
   out->common.max_extract_words = 2;
@@ -185,6 +188,9 @@ static bool parse_args(char* argv[], Args* out) {
         break;
     }
     switch (opt) {
+      case 'i':
+        out->index_file = options.optarg;
+        break;
       case 'g':
         if (!parse_count(options.optarg, "--num-segments",
                          &out->num_segments))
@@ -243,9 +249,8 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
-  char const* index_file = optparse_arg(&options);
   char const* letters = optparse_arg(&options);
-  if (index_file == NULL || letters == NULL ||
+  if (out->index_file == NULL || letters == NULL ||
       optparse_arg(&options) != NULL) {
     usage(argv[0]);
     return false;
@@ -258,7 +263,6 @@ static bool parse_args(char* argv[], Args* out) {
                      &remove))
     return false;
 
-  out->index_file = index_file;
   if (!subtract_letters(bag, remove, &out->letters)) return false;
   if (!check_bag_length(out->letters)) return false;
 

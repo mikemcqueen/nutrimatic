@@ -20,8 +20,25 @@ fail() {
 synthetic_index="$test_dir/test.index"
 "$make_index" "$synthetic_index"
 
+set +e
+"$query_index" "$synthetic_index" abcd \
+  > "$test_dir/positional-index.stdout" \
+  2> "$test_dir/positional-index.stderr"
+positional_index_status=$?
+"$query_index" abcd \
+  > "$test_dir/missing-index.stdout" 2> "$test_dir/missing-index.stderr"
+missing_index_status=$?
+set -e
+[[ $positional_index_status -eq 2 ]] ||
+  fail "positional index should exit 2, got $positional_index_status"
+grep -q '^usage: .* -i INDEX letters' \
+  "$test_dir/positional-index.stderr" ||
+  fail "positional index rejection did not show the new synopsis"
+[[ $missing_index_status -eq 2 ]] ||
+  fail "missing -i should exit 2, got $missing_index_status"
+
 score_value() {
-  "$query_index" "$synthetic_index" "$1" --score "${@:2}" |
+  "$query_index" -i "$synthetic_index" "$1" --score "${@:2}" |
     awk '{ print $1 }'
 }
 
@@ -45,7 +62,7 @@ expect_score_failure() {
   local name=$2
   shift 2
   set +e
-  "$query_index" "$synthetic_index" "$sequence" --score "$@" \
+  "$query_index" -i "$synthetic_index" "$sequence" --score "$@" \
     > "$test_dir/$name.stdout" 2> "$test_dir/$name.stderr"
   local status=$?
   set -e
@@ -61,7 +78,7 @@ expect_near_failure() {
   local name=$3
   shift 3
   set +e
-  "$query_index" "$synthetic_index" "$input" --near "$target" "$@" \
+  "$query_index" -i "$synthetic_index" "$input" --near "$target" "$@" \
     > "$test_dir/$name.stdout" 2> "$test_dir/$name.stderr"
   local status=$?
   set -e
@@ -71,17 +88,17 @@ expect_near_failure() {
     fail "$name printed output before rejecting the query"
 }
 
-[[ "$("$query_index" "$synthetic_index" f --near ij)" == \
+[[ "$("$query_index" --idx "$synthetic_index" f --near ij)" == \
    "1 f gh ij" ]] ||
   fail "near query did not find the one-anchor intervening phrase"
-[[ "$("$query_index" "$synthetic_index" ij --near f)" == \
+[[ "$("$query_index" -i "$synthetic_index" ij --near f)" == \
    "1 f gh ij" ]] ||
   fail "near query did not search from the second argument's anchor"
-[[ -z $("$query_index" "$synthetic_index" gh --near ij) ]] ||
+[[ -z $("$query_index" -i "$synthetic_index" gh --near ij) ]] ||
   fail "near query printed an adjacent-only phrase"
-[[ -z $("$query_index" "$synthetic_index" ab --near cd) ]] ||
+[[ -z $("$query_index" -i "$synthetic_index" ab --near cd) ]] ||
   fail "near query with two anchors printed an unexpected phrase"
-[[ "$("$query_index" "$synthetic_index" f --near ij -n 1)" == \
+[[ "$("$query_index" -i "$synthetic_index" f --near ij -n 1)" == \
    "1 f gh ij" ]] ||
   fail "--top was not accepted in near mode"
 
@@ -171,25 +188,25 @@ grep -q -- '--top cannot be used with --score' \
 
 # "wx" and "yz" exactly tile each other's remainder of the "wxyz" bag; "xy"
 # leaves "wz" behind, which nothing in the synthetic index can complete.
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 10 \
   > "$test_dir/completable-off.stdout" 2> "$test_dir/completable-off.stderr"
 [[ $(wc -l < "$test_dir/completable-off.stdout") -eq 4 ]] ||
   fail "expected all four wxyz-bag entries without --require-completable"
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 -P 1 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 10 -P 1 \
   > "$test_dir/penalty-one-ranking.stdout" \
   2> "$test_dir/penalty-one-ranking.stderr"
 cmp "$test_dir/completable-off.stdout" \
     "$test_dir/penalty-one-ranking.stdout" ||
   fail "segment penalty changed ordinary one-entry ranking"
 
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable -S 2 \
   > "$test_dir/completable-on.stdout" 2> "$test_dir/completable-on.stderr"
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable \
   > "$test_dir/completable-default.stdout" \
   2> "$test_dir/completable-default.stderr"
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable -S 0 \
   > "$test_dir/completable-auto.stdout" \
   2> "$test_dir/completable-auto.stderr"
@@ -230,7 +247,7 @@ wide_exact_bag=
 for symbol in {a..z} {0..4}; do
   wide_exact_bag+="${symbol}${symbol}${symbol}"
 done
-"$query_index" "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
   --require-completable \
   > "$test_dir/exact-key-63-bit.stdout" \
   2> "$test_dir/exact-key-63-bit.stderr" ||
@@ -239,7 +256,7 @@ done
 # still fits in uint64_t, but packing its key with a verdict does not.
 wide_exact_bag+="55"
 set +e
-"$query_index" "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" "$wide_exact_bag" -m 2 -n 10 \
   --require-completable \
   > "$test_dir/exact-key-overflow.stdout" \
   2> "$test_dir/exact-key-overflow.stderr"
@@ -251,7 +268,7 @@ grep -q 'error: phase 2 exact memo key arithmetic overflowed 64 bits$' \
   "$test_dir/exact-key-overflow.stderr" ||
   fail "exact-key overflow diagnostic is missing"
 
-"$query_index" "$synthetic_index" wxyz -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 10 \
   --require-completable -S 2 -P 1 \
   > "$test_dir/completable-penalty-one.stdout" \
   2> "$test_dir/completable-penalty-one.stderr"
@@ -261,7 +278,7 @@ cmp "$test_dir/completable-on.stdout" \
 
 # Filtering is score-independent: the phrase-only completion of "f" stays
 # reachable regardless of how the surviving members are ranked for display.
-"$query_index" "$synthetic_index" fghij -m 1 -n 10 \
+"$query_index" -i "$synthetic_index" fghij -m 1 -n 10 \
   --words-only --require-completable \
   > "$test_dir/phrase-completion.stdout" \
   2> "$test_dir/phrase-completion.stderr"
@@ -270,7 +287,7 @@ grep -q ' f$' "$test_dir/phrase-completion.stdout" ||
 
 # Phrases remain available as completion classes under --words-only, but are
 # filtered from the displayed members.
-"$query_index" "$synthetic_index" qrstuv -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" qrstuv -m 2 -n 10 \
   --words-only --require-completable \
   > "$test_dir/words-completed-by-phrase.stdout" \
   2> "$test_dir/words-completed-by-phrase.stderr"
@@ -281,10 +298,10 @@ grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
 
 # -x caps the words in one extracted entry, so it can only remove entries a
 # capless run already found.
-"$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
   > "$test_dir/extract-uncapped.stdout" \
   2> "$test_dir/extract-uncapped.stderr"
-"$query_index" "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
   > "$test_dir/extract-x2.stdout" 2> "$test_dir/extract-x2.stderr"
 awk '{ print }' "$test_dir/extract-uncapped.stdout" |
   awk 'gsub(/ /, " ") <= 2' > "$test_dir/extract-filtered.stdout"
@@ -294,34 +311,34 @@ cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-x2.stdout" ||
 # An explicit zero pair bonus makes loading a pair list leave output unchanged.
 printf '1,2345\n' > "$test_dir/short-first.pairs"
 printf '2345,1\n' > "$test_dir/short-last.pairs"
-"$query_index" "$synthetic_index" 12345 -m 4 -n 10 \
+"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 \
   > "$test_dir/short-none.stdout" 2> "$test_dir/short-none.stderr"
 ! grep -q ' 1 2345$' "$test_dir/short-none.stdout" ||
   fail "a short pair was extracted without --pairs"
-"$query_index" "$synthetic_index" 12345 -m 4 -n 10 \
+"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" --pair-bonus 0 \
   > "$test_dir/short-first.stdout" 2> "$test_dir/short-first.stderr"
 grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
   fail "query-index did not extract a listed short-first pair"
 ! grep -q ' 2345 1$' "$test_dir/short-first.stdout" ||
   fail "query-index matched a short-first pair in reverse"
-"$query_index" "$synthetic_index" 12345 -m 4 -n 10 \
+"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
   > "$test_dir/short-last.stdout" 2> "$test_dir/short-last.stderr"
 grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
   fail "query-index did not extract a listed long-first short-last pair"
-"$query_index" "$synthetic_index" 12345 -m 4 -n 10 -x 1 \
+"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 -x 1 \
   --pairs "$test_dir/short-first.pairs" \
   > "$test_dir/short-extract-one.stdout" \
   2> "$test_dir/short-extract-one.stderr"
 ! grep -q ' 1 2345$' "$test_dir/short-extract-one.stdout" ||
   fail "query-index -x 1 kept a short-pair exception"
-"$query_index" "$synthetic_index" 1234567 -m 4 -n 10 \
+"$query_index" -i "$synthetic_index" 1234567 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" \
   > "$test_dir/short-longer.stdout" 2> "$test_dir/short-longer.stderr"
 ! grep -q ' 1 2345 67$' "$test_dir/short-longer.stdout" ||
   fail "a longer phrase containing a short pair was extracted"
-"$query_index" "$synthetic_index" 12345 -m 4 -n 10 --words-only \
+"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 --words-only \
   --pairs "$test_dir/short-first.pairs" \
   > "$test_dir/short-words-only.stdout" \
   2> "$test_dir/short-words-only.stderr"
@@ -333,7 +350,7 @@ assert_close "$(score_value '2345 1' --pairs "$test_dir/short-first.pairs")" \
   1000000 "--score did not retain symmetric short-pair matching"
 
 printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
-"$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
   --pairs "$test_dir/pairs.txt" --pair-bonus 0 \
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
 ! grep -q 'pair list:' "$test_dir/pair-list.stderr" ||
@@ -358,7 +375,7 @@ assert_close "$(score_value ab --pairs "$test_dir/single-word-pairs.txt" -P 1)" 
   80000000 \
   "--score should apply the pair bonus to a listed standalone word"
 
-"$query_index" "$synthetic_index" abcdef -m 1 -n 1 \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
   --pairs "$test_dir/pairs.txt" \
   > "$test_dir/pair-bonus.stdout" 2> "$test_dir/pair-bonus.stderr"
 [[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/pair-bonus.stdout") \
@@ -397,11 +414,11 @@ assert_close "$reroute_score" \
   "$(awk 'BEGIN { print 7 * 4 / 1148 * 1e18 }')" \
   "solo assignment did not reroute to its maximum-score matching"
 
-"$query_index" "$synthetic_index" wxyz -m 2 -n 0 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 0 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
   > "$test_dir/solo-unlimited.stdout" 2> "$test_dir/solo-unlimited.stderr"
-"$query_index" "$synthetic_index" wxyz -m 2 -n 2 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 2 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
   > "$test_dir/solo-top2.stdout" 2> "$test_dir/solo-top2.stderr"
@@ -412,7 +429,7 @@ cmp "$test_dir/solo-expected-top2.stdout" "$test_dir/solo-top2.stdout" ||
 grep -q ' wx (ab)$' "$test_dir/solo-unlimited.stdout" ||
   fail "ordinary output did not show wx's selected solo partner"
 
-"$query_index" "$synthetic_index" wxyz -m 2 -n 0 \
+"$query_index" -i "$synthetic_index" wxyz -m 2 -n 0 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
   --hide-solo-words \
@@ -422,7 +439,7 @@ grep -q ' wx$' "$test_dir/solo-hidden.stdout" ||
 grep -q '(' "$test_dir/solo-hidden.stdout" &&
   fail "--hide-solo-words left a partner annotation"
 
-"$query_index" "$synthetic_index" abcdef -m 1 -n 0 \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
   --solo-words ab --word-bonus 0 --pair-bonus 0 \
   > "$test_dir/solo-inert.stdout" 2> "$test_dir/solo-inert.stderr"
 cmp "$test_dir/extract-uncapped.stdout" "$test_dir/solo-inert.stdout" ||
@@ -441,7 +458,7 @@ expect_score_failure ab solo-negative-pair \
 
 # --csv keeps exactly the multi-word entries of an ordinary run, printed as
 # their words with the count column dropped.
-"$query_index" "$synthetic_index" abcdef -m 1 -n 0 --csv \
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 --csv \
   > "$test_dir/csv.stdout" 2> "$test_dir/csv.stderr"
 [[ -s "$test_dir/csv.stdout" ]] || fail "--csv printed nothing"
 grep -Ev '^[a-z0-9]+(,[a-z0-9]+)+$' "$test_dir/csv.stdout" &&
@@ -452,7 +469,7 @@ cmp "$test_dir/csv-expected.stdout" "$test_dir/csv.stdout" ||
   fail "--csv does not match the ordinary run's multi-word entries"
 
 set +e
-"$query_index" "$synthetic_index" abcdef --csv -w \
+"$query_index" -i "$synthetic_index" abcdef --csv -w \
   > "$test_dir/csv-words-only.stdout" 2> "$test_dir/csv-words-only.stderr"
 status=$?
 set -e
@@ -468,7 +485,7 @@ grep -q -- '--max-extract-words cannot be used with --score' \
   fail "-x should be rejected with --score"
 
 printf 'qr\nst\nuv\n' > "$test_dir/dictionary-all"
-"$query_index" "$synthetic_index" qrstuv -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" qrstuv -m 2 -n 10 \
   --words-only --require-completable --dict "$test_dir/dictionary-all" \
   > "$test_dir/dictionary-all.stdout" \
   2> "$test_dir/dictionary-all.stderr"
@@ -476,7 +493,7 @@ grep -q ' uv$' "$test_dir/dictionary-all.stdout" ||
   fail "dictionary filtering dropped an allowed candidate or completion"
 
 printf 'qr\nuv\n' > "$test_dir/dictionary-no-st"
-"$query_index" "$synthetic_index" qrstuv -m 2 -n 10 \
+"$query_index" -i "$synthetic_index" qrstuv -m 2 -n 10 \
   --words-only --require-completable --dict "$test_dir/dictionary-no-st" \
   > "$test_dir/dictionary-no-st.stdout" \
   2> "$test_dir/dictionary-no-st.stderr"
@@ -488,7 +505,7 @@ if [[ -z ${IDX:-} ]]; then
   exit 77
 fi
 
-"$query_index" "$IDX" penbuilt -n 5 \
+"$query_index" -i "$IDX" penbuilt -n 5 \
   > "$test_dir/top5.stdout" 2> "$test_dir/top5.stderr"
 
 [[ $(wc -l < "$test_dir/top5.stdout") -eq 5 ]] ||
@@ -502,26 +519,26 @@ awk '{ print $1 }' "$test_dir/top5.stdout" > "$test_dir/counts"
 sort -rn -C "$test_dir/counts" ||
   fail "results are not sorted by descending count"
 
-"$query_index" "$IDX" penbuilt -n 2 \
+"$query_index" -i "$IDX" penbuilt -n 2 \
   > "$test_dir/top2.stdout" 2> "$test_dir/top2.stderr"
 head -n 2 "$test_dir/top5.stdout" > "$test_dir/expected-top2.stdout"
 cmp "$test_dir/expected-top2.stdout" "$test_dir/top2.stdout" ||
   fail "--top did not retain the two highest-frequency entries"
 
-"$query_index" "$IDX" penbuilt -n 5 -w \
+"$query_index" -i "$IDX" penbuilt -n 5 -w \
   > "$test_dir/words-only.stdout" 2> "$test_dir/words-only.stderr"
 if awk 'NF > 2 { exit 1 }' "$test_dir/words-only.stdout"; then :; else
   fail "--words-only emitted a multi-word phrase"
 fi
 
 set +e
-"$query_index" "$IDX" 'ab!' > /dev/null 2>&1
+"$query_index" -i "$IDX" 'ab!' > /dev/null 2>&1
 status=$?
 set -e
 [[ $status -eq 2 ]] || fail "bad letters should exit 2, got $status"
 
 set +e
-"$query_index" "$IDX" penbuilt -m nope > /dev/null 2>&1
+"$query_index" -i "$IDX" penbuilt -m nope > /dev/null 2>&1
 status=$?
 set -e
 [[ $status -eq 2 ]] || fail "bad -m should exit 2, got $status"

@@ -329,6 +329,11 @@ foreach p : ['find-phone-words']
   executable(p, p + '.cpp', link_with: [search_lib, index_lib], install: true)
 endforeach
 
-foreach p : ['find-expr', 'test-expr']
-  executable(p, p + '.cpp', link_with: [expr_lib, search_lib, index_lib], dependencies: fst_dep, install: true)
-endforeach
+executable('find-expr', 'find-expr.cpp',
+  link_with: [expr_lib, search_lib, index_lib],
+  dependencies: fst_dep, install: true)
+
+test_expr = executable('test-expr', 'test-expr.cpp',
+  link_with: [expr_lib, search_lib, index_lib],
+  dependencies: fst_dep, install: false)
+test('expr', test_expr)
