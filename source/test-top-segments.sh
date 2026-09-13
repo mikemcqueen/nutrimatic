@@ -311,6 +311,109 @@ expected_rejected='1 alpha
 actual=$("$top_segments" -r "$ignore1" "$input")
 [[ $actual == "$expected_rejected" ]] || fail "rejected rows were counted: $actual"
 
+allow_input=$test_dir/allow-results.txt
+cat > "$allow_input" <<'EOF'
+9 alpha beta,solo
+8 delta epsilon,zeta eta
+7 solo,alpha beta
+6 solo2
+5 alpha beta,unlisted pair
+4 one two three,solo3
+EOF
+allow1=$test_dir/allow1.pairs
+cat > "$allow1" <<'EOF'
+beta,alpha
+epsilon,delta
+EOF
+allow2=$test_dir/allow2.pairs
+cat > "$allow2" <<'EOF'
+eta,zeta
+EOF
+allow_dictionary=$test_dir/allow-dictionary.txt
+cat > "$allow_dictionary" <<'EOF'
+alpha
+beta
+delta
+epsilon
+eta
+one
+pair
+solo
+solo2
+solo3
+three
+two
+unlisted
+zeta
+EOF
+allow_diagnostics=$test_dir/allow-diagnostics.txt
+
+expected_allowed='2 alpha beta
+2 solo
+1 delta epsilon
+1 solo2
+1 zeta eta'
+actual=$("$top_segments" -a "$allow1" --allow-pairs "$allow2" \
+  -d "$allow_dictionary" "$allow_input" 2> "$allow_diagnostics")
+[[ $actual == "$expected_allowed" ]] ||
+  fail "allowlist counts are wrong: $actual"
+[[ $(cat "$allow_diagnostics") == \
+    'top-segments: Filtered 2 outside --allow-pairs' ]] ||
+  fail "allowlist summary is wrong: $(cat "$allow_diagnostics")"
+
+expected_allow_elim="$elim_header
+       2       2      2     2 alpha beta
+       2       2      2     2 solo
+       1       3      1     1 delta epsilon
+       1       3      1     1 solo2
+       1       3      1     1 zeta eta"
+actual=$("$top_segments" --elim -a "$allow1" -a "$allow2" \
+  -d "$allow_dictionary" "$allow_input" 2>/dev/null)
+[[ $actual == "$expected_allow_elim" ]] ||
+  fail "--elim counted rows outside the allowlist: $actual"
+
+empty_allow=$test_dir/empty-allow.pairs
+: > "$empty_allow"
+actual=$("$top_segments" -a "$empty_allow" -d "$allow_dictionary" \
+  "$allow_input" 2>/dev/null)
+[[ $actual == '1 solo2' ]] || fail "empty allowlist is wrong: $actual"
+
+malformed_allow=$test_dir/malformed-allow.pairs
+cat > "$malformed_allow" <<'EOF'
+one,two,three
+EOF
+if "$top_segments" -a "$malformed_allow" "$allow_input" \
+    >/dev/null 2>&1; then
+  fail "malformed allowlist entry succeeded"
+fi
+
+precedence_input=$test_dir/allow-precedence-results.txt
+cat > "$precedence_input" <<'EOF'
+3 reject me,unlisted pair,badword
+2 unlisted pair,badword
+1 allowed pair,badword
+EOF
+precedence_reject=$test_dir/allow-precedence-reject.pairs
+cat > "$precedence_reject" <<'EOF'
+reject,me
+EOF
+precedence_allow=$test_dir/allow-precedence-allow.pairs
+cat > "$precedence_allow" <<'EOF'
+allowed,pair
+EOF
+precedence_dictionary=$test_dir/allow-precedence-dictionary.txt
+cat > "$precedence_dictionary" <<'EOF'
+allowed
+pair
+EOF
+actual=$("$top_segments" -r "$precedence_reject" -a "$precedence_allow" \
+  -d "$precedence_dictionary" "$precedence_input" \
+  2> "$allow_diagnostics")
+[[ -z $actual ]] || fail "allowlist precedence produced output: $actual"
+expected_precedence_summary='top-segments: Filtered 1 rejected explicitly, 1 outside --allow-pairs, 1 rejected by dictionary'
+[[ $(cat "$allow_diagnostics") == "$expected_precedence_summary" ]] ||
+  fail "allowlist precedence is wrong: $(cat "$allow_diagnostics")"
+
 wfroot=$test_dir/wf
 mkdir -p "$wfroot/.wf/classified/yes" "$wfroot/.wf/classified/no"
 cat > "$wfroot/.wf/classified/yes/yes.pairs" <<'EOF'

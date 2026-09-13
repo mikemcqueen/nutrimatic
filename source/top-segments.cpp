@@ -28,6 +28,7 @@ struct FilterStats {
   uint64_t classified_no_lines = 0;
   uint64_t target_no_lines = 0;
   uint64_t explicit_reject_lines = 0;
+  uint64_t allow_lines = 0;
   uint64_t dictionary_lines = 0;
   uint64_t classified_yes_instances = 0;
   uint64_t explicit_ignore_instances = 0;
@@ -41,6 +42,7 @@ static void usage(FILE* fp, char const* program) {
       "          [-c | --no-counts] [-l | --elim] [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
+      "          [-a FILE]...\n"
       "          [-d PATH]\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [-y]\n"
       "          [FILE ...]\n"
@@ -66,6 +68,7 @@ static void usage(FILE* fp, char const* program) {
       "                      repeated\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(fp, 22);
+  print_allow_pairs_option_help(fp, 22);
   fprintf(fp,
       "  -d, --dict PATH     discard rows with any word not in PATH; with\n"
       "                      --wf or --wfroot, defaults to DIR/%s\n"
@@ -107,6 +110,14 @@ static bool any_segment_outside(
     DfsDictionary const& dictionary) {
   for (std::string const& segment : segments)
     if (!all_words_in_dict(dictionary, segment)) return true;
+  return false;
+}
+
+static bool any_segment_disallowed(
+    std::vector<std::string> const& segments,
+    std::optional<DfsPairSet> const& allowed) {
+  for (std::string const& segment : segments)
+    if (!is_allowed_segment(allowed, segment)) return true;
   return false;
 }
 
@@ -154,7 +165,8 @@ static bool count_candidate(
 
 static bool count_stream(
     std::istream* input, char const* name, DfsPairSet const& ignored,
-    DfsPairSet const& rejected, DfsDictionary const& dictionary,
+    DfsPairSet const& rejected, std::optional<DfsPairSet> const& allowed,
+    DfsDictionary const& dictionary,
     PairFilterSources const& filter_sources, FilterStats* filter_stats,
     SegmentOutputOptions const& output_options, bool elimination,
     uint64_t* surviving_rows,
@@ -198,11 +210,11 @@ static bool count_stream(
     // Virtual filtering pipeline. The first matching rejection owns the row,
     // so each rejected line contributes to exactly one summary counter.
     // Workflow-wide NO is authoritative over target-local NO; explicit
-    // rejects and then the dictionary follow. Only surviving rows reach the
-    // per-segment ignore pipeline, where classified YES owns an overlap with
-    // an explicit ignore. Keeping this order visible is important because it
-    // defines diagnostic attribution even though set union would produce the
-    // same selected output.
+    // rejects, the explicit allowlist, and then the dictionary follow. Only
+    // surviving rows reach the per-segment ignore pipeline, where classified
+    // YES owns an overlap with an explicit ignore. Keeping this order visible
+    // is important because it defines diagnostic attribution even though set
+    // union would produce the same selected output.
     if (any_segment_in(segments, filter_sources.classified_no)) {
       ++filter_stats->classified_no_lines;
       continue;
@@ -213,6 +225,10 @@ static bool count_stream(
     }
     if (any_rejected_segment(segments, rejected)) {
       ++filter_stats->explicit_reject_lines;
+      continue;
+    }
+    if (any_segment_disallowed(segments, allowed)) {
+      ++filter_stats->allow_lines;
       continue;
     }
     if (any_segment_outside(segments, dictionary)) {
@@ -279,7 +295,8 @@ static bool count_stream(
 static void print_filter_summary(
     FilterStats const& stats, PairFilterSources const& sources) {
   if (stats.classified_no_lines != 0 || stats.target_no_lines != 0 ||
-      stats.explicit_reject_lines != 0 || stats.dictionary_lines != 0) {
+      stats.explicit_reject_lines != 0 || stats.allow_lines != 0 ||
+      stats.dictionary_lines != 0) {
     fputs("top-segments: Filtered ", stderr);
     bool first = true;
     if (stats.classified_no_lines != 0) {
@@ -297,6 +314,12 @@ static void print_filter_summary(
       if (!first) fputs(", ", stderr);
       fprintf(stderr, "%" PRIu64 " rejected explicitly",
           stats.explicit_reject_lines);
+      first = false;
+    }
+    if (stats.allow_lines != 0) {
+      if (!first) fputs(", ", stderr);
+      fprintf(stderr, "%" PRIu64 " outside --allow-pairs",
+          stats.allow_lines);
       first = false;
     }
     if (stats.dictionary_lines != 0) {
@@ -488,7 +511,7 @@ int main(int argc, char* argv[]) {
       }
 
       PairFilterOptionResult const filter_result = parse_pair_filter_option(
-          argc, argv, &i, "top-segments", true, true, &filter_options);
+          argc, argv, &i, "top-segments", true, true, &filter_options, true);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
         usage(stderr, argv[0]);
         return 2;
@@ -571,10 +594,11 @@ int main(int argc, char* argv[]) {
   DfsPairSet ignored;
   DfsPairSet rejected;
   DfsDictionary dictionary;
+  std::optional<DfsPairSet> allowed;
   PairFilterSources filter_sources;
   if (!load_pair_filters(
           filter_options, "top-segments", &ignored, &rejected, &dictionary,
-          &filter_sources))
+          &allowed, &filter_sources))
     return 1;
 
   SegmentCounts counts;
@@ -582,7 +606,7 @@ int main(int argc, char* argv[]) {
   std::unordered_set<std::string> unique_segments;
   FilterStats filter_stats;
   if (paths.empty()) {
-    if (!count_stream(&std::cin, "-", ignored, rejected, dictionary,
+    if (!count_stream(&std::cin, "-", ignored, rejected, allowed, dictionary,
             filter_sources, &filter_stats, output_options, elimination,
             &surviving_rows, &unique_segments, &counts))
       return 1;
@@ -590,7 +614,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < paths.size(); ++i) {
       if (strcmp(paths[i], "-") == 0) {
         if (!count_stream(
-                &std::cin, "-", ignored, rejected, dictionary,
+                &std::cin, "-", ignored, rejected, allowed, dictionary,
                 filter_sources, &filter_stats, output_options, elimination,
                 &surviving_rows, &unique_segments, &counts))
           return 1;
@@ -605,7 +629,7 @@ int main(int argc, char* argv[]) {
         return 1;
       }
       if (!count_stream(
-              &input, paths[i], ignored, rejected, dictionary,
+              &input, paths[i], ignored, rejected, allowed, dictionary,
               filter_sources, &filter_stats, output_options, elimination,
               &surviving_rows, &unique_segments, &counts))
         return 1;

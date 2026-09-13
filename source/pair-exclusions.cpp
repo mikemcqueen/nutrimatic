@@ -323,9 +323,23 @@ void print_reject_option_help(FILE* fp, int description_column) {
     fprintf(fp, "%*s%s\n", description_column, "", lines[i]);
 }
 
+void print_allow_pairs_option_help(FILE* fp, int description_column) {
+  static char const* const lines[] = {
+    "keep rows only when every multi-word segment is",
+    "listed in FILE; comma-separated pairs are loaded;",
+    "standalone entries are ignored and counted;",
+    "pairs match complete segments in either order;",
+    "solo-word segments remain unrestricted; may be repeated",
+  };
+  fputs("  -a, --allow-pairs FILE\n", fp);
+  for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); ++i)
+    fprintf(fp, "%*s%s\n", description_column, "", lines[i]);
+}
+
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
-    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out) {
+    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out,
+    bool support_allow) {
   char const* const option = argv[*index];
   if (strcmp(option, "--wf") == 0) {
     if (!out->workflow_root.empty()) {
@@ -373,7 +387,10 @@ PairFilterOptionResult parse_pair_filter_option(
   }
 
   std::vector<std::string>* paths;
-  if (support_ignore &&
+  if (support_allow &&
+      (strcmp(option, "-a") == 0 || strcmp(option, "--allow-pairs") == 0)) {
+    paths = &out->allow_paths;
+  } else if (support_ignore &&
       (strcmp(option, "-i") == 0 || strcmp(option, "--ignore") == 0)) {
     paths = &out->ignore_paths;
   } else if (strcmp(option, "-r") == 0 ||
@@ -408,6 +425,7 @@ bool check_pair_filter_options(
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
+    std::optional<DfsPairSet>* allowed,
     PairFilterSources* sources) {
   char const* wfroot = NULL;
   if (options.workflow) {
@@ -432,6 +450,23 @@ bool load_pair_filters(
     if (sources != NULL) sources->target = target;
   }
 
+  if (allowed != NULL) {
+    allowed->reset();
+    if (!options.allow_paths.empty()) {
+      size_t ignored_non_pairs = 0;
+      allowed->emplace();
+      for (size_t i = 0; i < options.allow_paths.size(); ++i) {
+        if (!load_pair_file_ignoring_single_words(
+                options.allow_paths[i].c_str(), "allow list",
+                &allowed->value(), &ignored_non_pairs))
+          return false;
+      }
+      if (ignored_non_pairs != 0)
+        fprintf(stderr,
+            "%s: ignored %zu non-pairs in --allow-pairs file(s)\n",
+            program, ignored_non_pairs);
+    }
+  }
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
     if (!load_pair_file(
             options.ignore_paths[i].c_str(), "ignore list", ignored,
@@ -485,6 +520,13 @@ bool is_rejected_segment(
     if (end == std::string::npos) return false;
     start = end + 1;
   }
+}
+
+bool is_allowed_segment(
+    std::optional<DfsPairSet> const& allowed, std::string const& segment) {
+  if (segment.find(' ') == std::string::npos || !allowed.has_value())
+    return true;
+  return allowed->find(segment) != allowed->end();
 }
 
 bool all_words_in_dict(

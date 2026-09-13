@@ -443,7 +443,9 @@ struct LoadedPairRow {
 
 bool load_pair_rows(
     char const* path, char const* what, bool reject_hyphens,
-    bool allow_single_words, std::vector<LoadedPairRow>* loaded) {
+    bool allow_single_words, bool ignore_single_words,
+    size_t* ignored_single_word_count,
+    std::vector<LoadedPairRow>* loaded) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open %s \"%s\"\n", what, path);
@@ -456,6 +458,11 @@ bool load_pair_rows(
   size_t line_number = 0;
   while (std::getline(input, line)) {
     ++line_number;
+    size_t const comma = line.find(',');
+    if (ignore_single_words && comma == std::string::npos && !line.empty()) {
+      ++*ignored_single_word_count;
+      continue;
+    }
     if (line.find('-') != std::string::npos) {
       if (!reject_hyphens) continue;
       fprintf(stderr,
@@ -464,7 +471,6 @@ bool load_pair_rows(
       return false;
     }
 
-    size_t const comma = line.find(',');
     bool const one_field =
         allow_single_words && comma == std::string::npos;
     bool const two_fields =
@@ -506,7 +512,9 @@ bool load_pair_file(
     bool reject_hyphens, bool allow_single_words,
     char const* diagnostic_source) {
   std::vector<LoadedPairRow> loaded;
-  if (!load_pair_rows(path, what, reject_hyphens, allow_single_words, &loaded))
+  if (!load_pair_rows(
+          path, what, reject_hyphens, allow_single_words,
+          /*ignore_single_words=*/false, NULL, &loaded))
     return false;
 
   pairs->reserve(pairs->size() + 2 * loaded.size());
@@ -529,13 +537,32 @@ bool load_pair_file(
   return true;
 }
 
+bool load_pair_file_ignoring_single_words(
+    char const* path, char const* what, DfsPairSet* pairs,
+    size_t* ignored_single_words) {
+  std::vector<LoadedPairRow> loaded;
+  if (!load_pair_rows(
+          path, what, /*reject_hyphens=*/true,
+          /*allow_single_words=*/true, /*ignore_single_words=*/true,
+          ignored_single_words, &loaded))
+    return false;
+
+  pairs->reserve(pairs->size() + 2 * loaded.size());
+  for (size_t i = 0; i < loaded.size(); ++i) {
+    pairs->insert(loaded[i].left + " " + loaded[i].right);
+    pairs->insert(loaded[i].right + " " + loaded[i].left);
+  }
+  return true;
+}
+
 bool load_extraction_pair_file(
     char const* path, char const* what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
     bool reject_hyphens) {
   std::vector<LoadedPairRow> loaded;
   if (!load_pair_rows(
-          path, what, reject_hyphens, /*allow_single_words=*/true, &loaded))
+          path, what, reject_hyphens, /*allow_single_words=*/true,
+          /*ignore_single_words=*/false, NULL, &loaded))
     return false;
 
   size_t const minimum = size_t(std::max(min_word_len, 0));

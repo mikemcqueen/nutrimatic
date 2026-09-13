@@ -208,6 +208,12 @@ bool load_pair_file(
     bool reject_hyphens, bool allow_single_words = false,
     char const* diagnostic_source = NULL);
 
+// As load_pair_file(), but accepts standalone entries only to discard them.
+// Adds their number to `ignored_single_words`; pairs are loaded normally.
+bool load_pair_file_ignoring_single_words(
+    char const* path, char const* what, DfsPairSet* pairs,
+    size_t* ignored_single_words);
+
 // Loads an ordinary extraction bonus list after -m has been finalized.
 // Standalone words and pairs must contain at least min_word_len normalized
 // non-space characters in total. Pairs containing a word shorter than the

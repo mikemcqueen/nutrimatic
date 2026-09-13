@@ -14,12 +14,14 @@
 static void usage(FILE* fp, char const* program) {
   fprintf(fp,
       "usage: %s [-n N] [-r FILE | --reject FILE]...\n"
+      "          [-a FILE]...\n"
       "          [-d PATH]\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [FILE]\n"
       "  print dfs-anagrams result lines that contain no rejected segment\n"
       "  -n N                 print at most N result lines\n",
       program);
   print_reject_option_help(fp, 23);
+  print_allow_pairs_option_help(fp, 23);
   fprintf(fp,
       "  -d, --dict PATH      discard rows with any word not in PATH; with\n"
       "                       --wf or --wfroot, defaults to DIR/%s\n"
@@ -39,6 +41,7 @@ static void usage(FILE* fp, char const* program) {
 
 static bool filter_stream(
     std::istream* input, char const* name, DfsPairSet const& rejected,
+    std::optional<DfsPairSet> const& allowed,
     DfsDictionary const& dictionary, bool have_limit, uint64_t limit) {
   std::string line;
   uint64_t line_number = 0;
@@ -75,6 +78,7 @@ static bool filter_stream(
 
       std::string const segment = line.substr(start, length);
       if (is_rejected_segment(rejected, segment) ||
+          !is_allowed_segment(allowed, segment) ||
           !all_words_in_dict(dictionary, segment))
         include = false;
 
@@ -105,7 +109,8 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const result = parse_pair_filter_option(
-          argc, argv, &i, "filter-segments", false, false, &filter_options);
+          argc, argv, &i, "filter-segments", false, false, &filter_options,
+          true);
       if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(stderr, argv[0]);
         return 2;
@@ -152,13 +157,16 @@ int main(int argc, char* argv[]) {
   DfsPairSet ignored;
   DfsPairSet rejected;
   DfsDictionary dictionary;
+  std::optional<DfsPairSet> allowed;
   if (!load_pair_filters(
-          filter_options, "filter-segments", &ignored, &rejected, &dictionary))
+          filter_options, "filter-segments", &ignored, &rejected, &dictionary,
+          &allowed))
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
     return filter_stream(
-        &std::cin, "-", rejected, dictionary, have_limit, limit) ? 0 : 1;
+        &std::cin, "-", rejected, allowed, dictionary, have_limit, limit)
+        ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
@@ -168,5 +176,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   return filter_stream(
-      &input, results_path, rejected, dictionary, have_limit, limit) ? 0 : 1;
+      &input, results_path, rejected, allowed, dictionary, have_limit, limit)
+      ? 0 : 1;
 }

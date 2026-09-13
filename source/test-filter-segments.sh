@@ -52,6 +52,55 @@ expected='8 delta epsilon,zeta eta
 actual=$("$filter_segments" -r "$reject" - < "$input")
 [[ $actual == "$expected" ]] || fail "explicit stdin is wrong: $actual"
 
+allow_input=$test_dir/allow-results.txt
+cat > "$allow_input" <<'EOF'
+9 alpha beta,solo
+8 delta epsilon,zeta eta
+7 solo,alpha beta
+6 solo2
+5 alpha beta,unlisted pair
+4 one two three,solo3
+EOF
+allow1=$test_dir/allow1.pairs
+cat > "$allow1" <<'EOF'
+beta,alpha
+solo-entry
+epsilon,delta
+EOF
+allow2=$test_dir/allow2.pairs
+cat > "$allow2" <<'EOF'
+another-solo
+eta,zeta
+last-solo
+EOF
+allow_diagnostics=$test_dir/allow-diagnostics.txt
+
+expected_allowed='9 alpha beta,solo
+8 delta epsilon,zeta eta
+7 solo,alpha beta
+6 solo2'
+actual=$("$filter_segments" -a "$allow1" --allow-pairs "$allow2" \
+  "$allow_input" 2> "$allow_diagnostics")
+[[ $actual == "$expected_allowed" ]] ||
+  fail "allowlist filtering is wrong: $actual"
+[[ $(head -n 1 "$allow_diagnostics") == \
+    'filter-segments: ignored 3 non-pairs in --allow-pairs file(s)' ]] ||
+  fail "allowlist diagnostic is wrong: $(cat "$allow_diagnostics")"
+
+empty_allow=$test_dir/empty-allow.pairs
+: > "$empty_allow"
+actual=$("$filter_segments" -a "$empty_allow" "$allow_input")
+[[ $actual == '6 solo2' ]] || fail "empty allowlist is wrong: $actual"
+
+malformed_allow=$test_dir/malformed-allow.pairs
+cat > "$malformed_allow" <<'EOF'
+one,two,three
+EOF
+if "$filter_segments" -a "$malformed_allow" "$allow_input" \
+    >/dev/null 2>&1; then
+  fail "malformed allowlist entry succeeded"
+fi
+
 dictionary=$test_dir/dictionary.txt
 cat > "$dictionary" <<'EOF'
 alpha

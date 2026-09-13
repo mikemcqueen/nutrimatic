@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "workflow-paths.h"
 
 struct PairFilterOptions {
+  std::vector<std::string> allow_paths;
   std::vector<std::string> ignore_paths;
   std::vector<std::string> reject_paths;
   std::string dictionary_path;
@@ -49,14 +51,18 @@ enum PairFilterOptionResult {
 // help text.
 void print_reject_option_help(FILE* fp, int description_column);
 
-// Parses -i FILE, --ignore FILE, -r FILE, --reject FILE, -d/--dict PATH,
-// --wf, --wfroot DIR, -t/--target TARGET, and -y/--yes. Ignore and -y/--yes
-// options are returned as OTHER when their support flags are false. `index`
-// points to the current argument and advances over a consumed FILE, DIR or
-// TARGET. Errors are diagnosed already.
+// Prints the shared -a/--allow-pairs detailed-help block.
+void print_allow_pairs_option_help(FILE* fp, int description_column);
+
+// Parses -a/--allow-pairs FILE, -i/--ignore FILE, -r/--reject FILE,
+// -d/--dict PATH, --wf, --wfroot DIR, -t/--target TARGET, and -y/--yes.
+// Allow, ignore, and -y/--yes options are returned as OTHER when their
+// support flags are false. `index` points to the current argument and advances
+// over a consumed FILE, DIR or TARGET. Errors are diagnosed already.
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
-    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out);
+    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out,
+    bool support_allow = false);
 
 // Diagnoses the options that need a workflow root without one: -y/--yes and
 // -t/--target. Tools call this once their arguments are parsed, before
@@ -64,15 +70,18 @@ PairFilterOptionResult parse_pair_filter_option(
 bool check_pair_filter_options(
     PairFilterOptions const& options, char const* program);
 
-// Loads explicit ignore/reject files. Explicit reject files may contain pairs
-// or standalone words; ignore files remain pair-only. With --wf or --wfroot,
-// classified NO pairs below the selected workflow root are rejected, and with
-// -y/--yes, classified YES pairs are ignored. -d/--dict selects the dictionary
-// whether or not there is a workflow root; otherwise workflow mode defaults to
-// the root's .wf/dict/words.filtered. A missing inferred workflow dictionary
-// warns and leaves `dictionary` empty. Without either a workflow root or an
-// explicit dictionary there is no dictionary to load, which warns. Explicit
-// missing files and all malformed or unreadable files are errors.
+// Loads explicit allow/ignore/reject files. Allow files load pairs while
+// ignoring and counting standalone entries; ignore files are pair-only;
+// explicit reject files may also contain standalone words. When no allow file
+// was supplied, `allowed` is nullopt; supplying one or more files containing no
+// pairs leaves it as an active empty set. With --wf or --wfroot, classified NO
+// pairs below the selected workflow root are rejected, and with -y/--yes,
+// classified YES pairs are ignored. -d/--dict selects the dictionary whether
+// or not there is a workflow root; otherwise workflow mode defaults to the
+// root's .wf/dict/words.filtered. A missing inferred workflow dictionary warns
+// and leaves `dictionary` empty. Without either a workflow root or an explicit
+// dictionary there is no dictionary to load, which warns. Explicit missing
+// files and all malformed or unreadable files are errors.
 //
 // A workflow root also selects a target, .wf/best/ plus a target name, and
 // rejects that target's own no.pairs, so that asking for the workflow's
@@ -86,12 +95,20 @@ bool check_pair_filter_options(
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
     DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
+    std::optional<DfsPairSet>* allowed = NULL,
     PairFilterSources* sources = NULL);
 
 // Returns true when `segment` is an exact rejected pair or contains a
 // space-delimited word listed on its own in an explicit reject file.
 bool is_rejected_segment(
     DfsPairSet const& rejected, std::string const& segment);
+
+// Returns true for every solo-word segment. A multi-word segment is allowed
+// only when no allowlist policy is active or its complete text is in the
+// bidirectional pair set. In particular, active policies reject segments of
+// three or more words because pair files cannot represent them.
+bool is_allowed_segment(
+    std::optional<DfsPairSet> const& allowed, std::string const& segment);
 
 // Returns true when `dictionary` is empty, or when every space-delimited word
 // of `segment` is in it. An empty dictionary means there is nothing to check
