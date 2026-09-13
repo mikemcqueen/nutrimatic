@@ -503,7 +503,8 @@ bool load_pair_rows(
 
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
-    bool reject_hyphens, bool allow_single_words) {
+    bool reject_hyphens, bool allow_single_words,
+    char const* diagnostic_source) {
   std::vector<LoadedPairRow> loaded;
   if (!load_pair_rows(path, what, reject_hyphens, allow_single_words, &loaded))
     return false;
@@ -517,9 +518,14 @@ bool load_pair_file(
       pairs->insert(loaded[i].right + " " + loaded[i].left);
     }
   }
-  if (!quiet)
-    dfs_diagnostic("%s: %zu pairs, %zu keys\n",
-                   what, loaded.size(), pairs->size());
+  if (!quiet) {
+    if (diagnostic_source == NULL)
+      dfs_diagnostic("%s: %zu pairs, %zu keys\n",
+                     what, loaded.size(), pairs->size());
+    else
+      dfs_diagnostic("%s: %zu pairs, %zu keys from %s\n",
+                     what, loaded.size(), pairs->size(), diagnostic_source);
+  }
   return true;
 }
 
@@ -603,10 +609,22 @@ bool load_weighted_pair_files(
   return true;
 }
 
+static std::string exclude_diagnostic_source(char const* path) {
+  std::string const source(path);
+  size_t const wf = source.find(".wf/");
+  if (wf != std::string::npos &&
+      (wf == 0 || source[wf - 1] == '/'))
+    return source.substr(wf + 4);
+  return source;
+}
+
 static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
   struct stat status;
-  if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
-    return load_pair_file(path, "exclude list", pairs, false, true);
+  if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode)) {
+    std::string const source = exclude_diagnostic_source(path);
+    return load_pair_file(
+        path, "exclude list", pairs, false, true, false, source.c_str());
+  }
 
   fs::path const root(path);
   std::string const metadata = (root / WORKFLOW_DIR_PATH).string();
@@ -630,7 +648,10 @@ static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
     return false;
   }
   std::string const resolved = (root / WORKFLOW_NO_PAIRS_PATH).string();
-  return load_pair_file(resolved.c_str(), "exclude list", pairs, false, true);
+  std::string const source = exclude_diagnostic_source(resolved.c_str());
+  return load_pair_file(
+      resolved.c_str(), "exclude list", pairs, false, true, false,
+      source.c_str());
 }
 
 bool load_exclude_pair_files(

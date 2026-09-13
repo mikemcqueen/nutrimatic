@@ -357,7 +357,7 @@ printf 'cd,ab\n' > "$test_dir/exclude.pairs"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
   --word-bonus 0 --exclude-pairs "$test_dir/exclude.pairs" \
   > "$test_dir/excluded.stdout" 2> "$test_dir/excluded.stderr"
-grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys$" \
+grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys from $test_dir/exclude.pairs$" \
   "$test_dir/excluded.stderr" ||
   fail "the exclude-list diagnostic is missing from stderr"
 grep -q '^70\.00 ab cd$' "$test_dir/all.stdout" ||
@@ -577,6 +577,10 @@ printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"
   2> "$test_dir/workflow-target-negative.stderr"
 ! grep -q 'kl mn' "$test_dir/workflow-target-negative.stdout" ||
   fail "workflow mode kept the target's own NO pair"
+grep -Fq \
+  'exclude list: 1 pairs, 2 keys from best/s1/o-klmn/m2/g1/no.pairs' \
+  "$test_dir/workflow-target-negative.stderr" ||
+  fail "workflow target NO diagnostic did not identify its source"
 rm "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"
 
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \

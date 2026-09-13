@@ -199,12 +199,14 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary);
 // Lines containing '-' are skipped, or are an error when reject_hyphens: a
 // skipped line costs a bonus list nothing, but silently drops an entry a
 // caller meant to enforce. Unless quiet, reports the number of pairs read and
-// unique ordered keys loaded. Prints an error and returns false if the file
-// can't be opened or read, or if any surviving line does not hold an allowed
-// number of nonempty fields. `what` names the list in every diagnostic.
+// unique ordered keys loaded. When diagnostic_source is non-NULL, appends it
+// to that summary. Prints an error and returns false if the file can't be
+// opened or read, or if any surviving line does not hold an allowed number of
+// nonempty fields. `what` names the list in every diagnostic.
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
-    bool reject_hyphens, bool allow_single_words = false);
+    bool reject_hyphens, bool allow_single_words = false,
+    char const* diagnostic_source = NULL);
 
 // Loads an ordinary extraction bonus list after -m has been finalized.
 // Standalone words and pairs must contain at least min_word_len normalized
