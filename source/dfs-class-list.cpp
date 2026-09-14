@@ -211,10 +211,12 @@ class DfsExtractor {
                DfsPairSet const* pairs,
                DfsPairBonusMap const* weighted_pairs,
                DfsPairSet const* exception_prefixes,
-               DfsSoloWords* solo_words, DfsPairSet const* exclude_pairs):
+               DfsSoloWords* solo_words, DfsPairSet const* exclude_pairs,
+               DfsExternalPairPolicy external_pair_policy):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
+      synthetic_external_pairs(0),
       reader(reader),
       min_len(std::max(min_word_len, 1)),
       max_extract_words(effective_extract_words(
@@ -229,6 +231,7 @@ class DfsExtractor {
           exception_prefixes != NULL && !exception_prefixes->empty()),
       solo_words(solo_words),
       exclude_pairs(exclude_pairs),
+      external_pair_policy(external_pair_policy),
       letters_left(int(letters.size())),
       nodes(0),
       signature(0) {
@@ -263,6 +266,8 @@ class DfsExtractor {
     text.clear();
     walk(reader->root(), reader->count(), 0, 0, 0,
          /*requires_pair_match=*/false);
+    if (external_pair_policy == DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING)
+      synthesize_missing_external_pairs();
   }
 
   int64_t nodes_visited() const { return nodes; }
@@ -273,11 +278,67 @@ class DfsExtractor {
   ChunkedArena text_arena;
   ChunkedArena member_arena;
   size_t entries;
+  size_t synthetic_external_pairs;
 
  private:
   bool has_positive_pair(std::string const& key) const {
     return (pairs != NULL && pairs->count(key) != 0) ||
         (weighted_pairs != NULL && weighted_pairs->count(key) != 0);
+  }
+
+  bool synthetic_pair_signature(
+      std::string const& key, uint64_t* result) const {
+    size_t const space = key.find(' ');
+    if (space == std::string::npos || space == 0 || space + 1 == key.size() ||
+        key.find(' ', space + 1) != std::string::npos)
+      return false;
+    if (max_extract_words < 2) return false;
+    if (exclude_pairs != NULL && exclude_pairs->count(key) != 0) return false;
+
+    std::array<int, 256> remaining = bag;
+    uint64_t key_signature = 0;
+    for (size_t i = 0; i < key.size(); ++i) {
+      unsigned char const ch = (unsigned char) key[i];
+      if (ch == ' ') continue;
+      if (remaining[ch] == 0) return false;
+      --remaining[ch];
+      key_signature += multiplier_by_char[ch];
+    }
+    if (dictionary != NULL &&
+        (dictionary->count(key.substr(0, space)) == 0 ||
+         dictionary->count(key.substr(space + 1)) == 0))
+      return false;
+    *result = key_signature;
+    return true;
+  }
+
+  void synthesize_missing_external_pair(std::string const& key) {
+    uint64_t key_signature;
+    if (!synthetic_pair_signature(key, &key_signature)) return;
+    int64_t indexed_count;
+    if (reader->aggregate_entry_count(key, &indexed_count)) return;
+
+    text = key;
+    text.push_back(' ');
+    signature = key_signature;
+    emit(/*count=*/1, /*word_count=*/2, IndexReader::Node(-1));
+    signature = 0;
+    text.clear();
+    ++synthetic_external_pairs;
+  }
+
+  void synthesize_missing_external_pairs() {
+    if (weighted_pairs != NULL) {
+      for (DfsPairBonusMap::const_iterator it = weighted_pairs->begin();
+           it != weighted_pairs->end(); ++it)
+        synthesize_missing_external_pair(it->first);
+    }
+    if (pairs != NULL) {
+      for (DfsPairSet::const_iterator it = pairs->begin();
+           it != pairs->end(); ++it)
+        if (weighted_pairs == NULL || weighted_pairs->count(*it) == 0)
+          synthesize_missing_external_pair(*it);
+    }
   }
 
   void emit(int64_t count, int word_count,
@@ -425,6 +486,7 @@ class DfsExtractor {
   bool const has_exception_prefixes;
   DfsSoloWords* const solo_words;
   DfsPairSet const* const exclude_pairs;
+  DfsExternalPairPolicy const external_pair_policy;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
   int letters_left;
@@ -486,10 +548,12 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            DfsPairBonusMap const* weighted_pairs,
                            DfsPairSet const* exception_prefixes,
                            DfsSoloWords* solo_words,
-                           DfsPairSet const* exclude_pairs):
+                           DfsPairSet const* exclude_pairs,
+                           DfsExternalPairPolicy external_pair_policy):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
+    synthetic_external_pairs(0),
     nodes(0),
     grouping_dropped(false) {
   static_assert(sizeof(DfsClassRecord) == 24,
@@ -515,10 +579,11 @@ DfsClassList::DfsClassList(IndexReader const* reader,
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
       max_extract_words, pairs, weighted_pairs, exception_prefixes, solo_words,
-      exclude_pairs);
+      exclude_pairs, external_pair_policy);
   extractor.run();
   if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();
+  synthetic_external_pairs = extractor.synthetic_external_pairs;
   signature_digits = std::move(extractor.digits);
   text_chunks = std::move(extractor.text_arena.storage());
 

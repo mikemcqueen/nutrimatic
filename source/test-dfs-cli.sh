@@ -237,6 +237,88 @@ grep -Eq "${diagnostic_prefix}pair list: 2 pairs, 2 keys$" \
 cmp "$test_dir/all.stdout" "$test_dir/pair-list.stdout" ||
   fail "a loaded pair list changed stdout at --pair-bonus 0"
 
+# Positive pair evidence can contribute a missing two-word index entry. "ba"
+# and "dc" are indexed separately, but neither oriented phrase is indexed.
+printf 'ba,dc\n' > "$test_dir/missing-index-pair.pairs"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
+  --word-bonus 0 \
+  > "$test_dir/missing-index-none.stdout" \
+  2> "$test_dir/missing-index-none.stderr"
+! grep -Eq ' (ba dc|dc ba)$' "$test_dir/missing-index-none.stdout" ||
+  fail "a missing pair appeared without positive pair evidence"
+grep -Eq \
+  "${diagnostic_prefix}phase 1 external pairs: 0 synthetic entries$" \
+  "$test_dir/missing-index-none.stderr" ||
+  fail "the zero external-pair diagnostic is missing"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
+  --word-bonus 0 --pairs "$test_dir/missing-index-pair.pairs" \
+  > "$test_dir/missing-index-legacy.stdout" \
+  2> "$test_dir/missing-index-legacy.stderr"
+[[ $(grep -c ' ba dc$' "$test_dir/missing-index-legacy.stdout") -eq 1 ]] ||
+  fail "legacy --pairs did not expose the missing pair"
+assert_close "$(awk '$2 == "ba" && $3 == "dc" { print $1 }' \
+    "$test_dir/missing-index-legacy.stdout")" \
+  1000000 "synthetic legacy pair did not use count 1 and its pair bonus"
+grep -Eq \
+  "${diagnostic_prefix}phase 1 external pairs: 2 synthetic entries$" \
+  "$test_dir/missing-index-legacy.stderr" ||
+  fail "both eligible orientations were not synthesized"
+printf 'zz\n' > "$test_dir/missing-index-standalone.pairs"
+"$dfs_anagrams" -i "$index_file" zz -m 2 -n 10 \
+  --pairs "$test_dir/missing-index-standalone.pairs" \
+  > "$test_dir/missing-index-standalone.stdout" \
+  2> "$test_dir/missing-index-standalone.stderr"
+[[ ! -s "$test_dir/missing-index-standalone.stdout" ]] ||
+  fail "a standalone positive entry was synthesized"
+grep -Eq \
+  "${diagnostic_prefix}phase 1 external pairs: 0 synthetic entries$" \
+  "$test_dir/missing-index-standalone.stderr" ||
+  fail "a standalone positive entry was counted as synthetic"
+
+# Repeated fixed-tier sources retain the strongest tier for synthetic entries.
+printf 'ba,dc\n' > "$test_dir/missing-index-seed.pairs"
+printf 'dc,ba\n' > "$test_dir/missing-index-best.pairs"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
+  --word-bonus 0 \
+  --seed-pairs "$test_dir/missing-index-seed.pairs" \
+  --best-pairs "$test_dir/missing-index-best.pairs" \
+  > "$test_dir/missing-index-weighted.stdout" \
+  2> "$test_dir/missing-index-weighted.stderr"
+assert_close "$(awk '$2 == "ba" && $3 == "dc" { print $1 }' \
+    "$test_dir/missing-index-weighted.stdout")" \
+  "$(awk 'BEGIN { print exp(log(1000000) * 1.10) }')" \
+  "synthetic weighted pair did not retain the BEST tier"
+
+# Existing phase-one eligibility gates apply before an absent pair is probed.
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
+  --pairs "$test_dir/missing-index-pair.pairs" \
+  --exclude-pairs "$test_dir/missing-index-pair.pairs" \
+  > "$test_dir/missing-index-excluded.stdout" \
+  2> "$test_dir/missing-index-excluded.stderr"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 -x 1 \
+  --pairs "$test_dir/missing-index-pair.pairs" \
+  > "$test_dir/missing-index-x1.stdout" \
+  2> "$test_dir/missing-index-x1.stderr"
+"$dfs_anagrams" -i "$index_file" abce -m 2 -n 10 -g 1 \
+  --pairs "$test_dir/missing-index-pair.pairs" \
+  > "$test_dir/missing-index-bag.stdout" \
+  2> "$test_dir/missing-index-bag.stderr"
+printf 'ba\n' > "$test_dir/missing-index-dictionary"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
+  --pairs "$test_dir/missing-index-pair.pairs" \
+  --dict "$test_dir/missing-index-dictionary" \
+  > "$test_dir/missing-index-dictionary.stdout" \
+  2> "$test_dir/missing-index-dictionary.stderr"
+for eligibility in excluded x1 bag dictionary; do
+  ! grep -Eq ' (ba dc|dc ba)$' \
+      "$test_dir/missing-index-$eligibility.stdout" ||
+    fail "$eligibility eligibility check kept a synthetic external pair"
+  grep -Eq \
+    "${diagnostic_prefix}phase 1 external pairs: 0 synthetic entries$" \
+    "$test_dir/missing-index-$eligibility.stderr" ||
+    fail "$eligibility eligibility check reported a synthetic entry"
+done
+
 # A '-' line is skipped rather than counted, but still advances the line
 # number the next error reports.
 printf 'ab,cd\ne-f,gh\nij,kl,mn\n' > "$test_dir/bad-pairs.txt"
@@ -286,6 +368,19 @@ grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
   fail "a listed long-first short-last pair was not extracted"
 ! grep -q ' 1 2345$' "$test_dir/short-last.stdout" ||
   fail "a long-first short-last pair was matched in reverse"
+printf '1,6789\n' > "$test_dir/missing-short-first.pairs"
+"$dfs_anagrams" -i "$index_file" 16789 -m 4 -n 10 -g 1 \
+  --pairs "$test_dir/missing-short-first.pairs" --pair-bonus 0 \
+  > "$test_dir/missing-short-first.stdout" \
+  2> "$test_dir/missing-short-first.stderr"
+grep -q ' 1 6789$' "$test_dir/missing-short-first.stdout" ||
+  fail "a missing directional short pair was not synthesized"
+! grep -q ' 6789 1$' "$test_dir/missing-short-first.stdout" ||
+  fail "a missing directional short pair was synthesized in reverse"
+grep -Eq \
+  "${diagnostic_prefix}phase 1 external pairs: 1 synthetic entries$" \
+  "$test_dir/missing-short-first.stderr" ||
+  fail "the directional short pair did not add one synthetic orientation"
 "$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 -x 1 \
   --pairs "$test_dir/short-first.pairs" \
   > "$test_dir/short-extract-one.stdout" \
@@ -462,6 +557,21 @@ assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/bonus-one.stdout")" \
 cmp "$test_dir/bonus-one.stdout" "$test_dir/bonus-default.stdout" ||
   fail "omitted --word-bonus did not match --word-bonus 1"
 
+# --show-bonus adds exactly one aligned marker per selected entry without
+# changing the ordinary output contract. A phrase receives W, while separate
+# ordinary entries retain one '-' marker each.
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --show-bonus \
+  > "$test_dir/show-bonus.stdout" 2> "$test_dir/show-bonus.stderr"
+grep -q ' W ab cd$' "$test_dir/show-bonus.stdout" ||
+  fail "--show-bonus did not mark a multi-word entry"
+grep -q ' -,- ab,dc$' "$test_dir/show-bonus.stdout" ||
+  fail "--show-bonus did not preserve one marker per ordinary segment"
+if awk 'NF < 3 { exit 1 }' "$test_dir/show-bonus.stdout"; then
+  :
+else
+  fail "--show-bonus did not add a separate marker column"
+fi
+
 # The same within-class promotion must work when only the selected pair earns
 # the bonus. This exercises pair lookup, score ordering, phase-2 bounds, and
 # phase-3 spelling deltas together.
@@ -474,6 +584,8 @@ printf 'kl,mn\n' > "$test_dir/klmn-pairs.txt"
   fail "the default pair bonus did not promote the listed pair within its class"
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   5000000 "the default pair bonus should multiply the listed pair by one million"
+[[ $(grep -c ' kl mn$' "$test_dir/pair-bonus.stdout") -eq 1 ]] ||
+  fail "an indexed listed pair was duplicated or dropped"
 [[ $(awk 'NR == 2 { print $2 }' "$test_dir/pair-bonus.stdout") == klmn ]] ||
   fail "--pair-bonus dropped the unlisted single word from the class"
 assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/pair-bonus.stdout")" \
@@ -502,6 +614,38 @@ printf 'mn,kl\n' > "$test_dir/weighted-best-reversed.pairs"
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/weighted-pairs.stdout")" \
   "$(awk 'BEGIN { print 5 * exp(log(1000000) * 1.10) }')" \
   "repeated weighted pair sources did not retain the BEST tier"
+
+# Standalone fixed-tier entries cover every source marker in one search. "ab"
+# occurs in both SEED and BEST, so the displayed B also proves that only the
+# strongest tier survives overlap.
+printf 'ab\ndc\n' > "$test_dir/show-seed.pairs"
+printf 'cd\n' > "$test_dir/show-yes.pairs"
+printf 'ab\nba\n' > "$test_dir/show-best.pairs"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -P 1 \
+  --word-bonus 0 --show-bonus \
+  --seed-pairs "$test_dir/show-seed.pairs" \
+  --yes-pairs "$test_dir/show-yes.pairs" \
+  --best-pairs "$test_dir/show-best.pairs" \
+  > "$test_dir/show-fixed.stdout" 2> "$test_dir/show-fixed.stderr"
+grep -q ' B,Y ab,cd$' "$test_dir/show-fixed.stdout" ||
+  fail "--show-bonus did not render BEST and YES in segment order"
+grep -q ' B,S ba,dc$' "$test_dir/show-fixed.stdout" ||
+  fail "--show-bonus did not render BEST and SEED in segment order"
+
+# Legacy pair markers describe an applied nonzero term. Explicit zero removes
+# P even though the selected phrase remains a member of the input pair file.
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 --word-bonus 0 \
+  --pairs "$test_dir/klmn-pairs.txt" --show-bonus \
+  > "$test_dir/show-legacy.stdout" 2> "$test_dir/show-legacy.stderr"
+grep -q ' P kl mn$' "$test_dir/show-legacy.stdout" ||
+  fail "--show-bonus did not render the legacy pair marker"
+"$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 --word-bonus 0 \
+  --pairs "$test_dir/klmn-pairs.txt" --pair-bonus 0 --show-bonus \
+  > "$test_dir/show-legacy-zero.stdout" \
+  2> "$test_dir/show-legacy-zero.stderr"
+grep -q ' - kl mn$' "$test_dir/show-legacy-zero.stdout" ||
+  fail "--pair-bonus 0 did not suppress the legacy pair marker"
+
 expect_status 2 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 \
   --pairs "$test_dir/klmn-pairs.txt" \
   --seed-pairs "$test_dir/weighted-seed.pairs"
@@ -648,6 +792,19 @@ assert_close "$reroute_score" "$reroute_round_trip" \
 assert_close "$(awk 'NR == 1 { print $1 }' \
     "$test_dir/solo-reroute-hidden.stdout")" "$reroute_score" \
   "--hide-solo-words changed the DFS score"
+
+# Bonus metadata follows the selected matching, not the strongest possible
+# edge stored in a member's upper-bound flags. wx is rerouted to the ordinary
+# yz edge (W), while xy keeps the asserted YES edge to ab (WY). Hiding the
+# partners does not hide bonuses that remain part of the score.
+"$dfs_anagrams" -i "$index_file" wxxy -m 2 -n 1 -P 1 \
+  --solo-words ab,yz --word-bonus 1 \
+  --yes-pairs "$test_dir/solo-pairs.txt" \
+  --hide-solo-words --show-bonus \
+  > "$test_dir/show-solo-hidden.stdout" \
+  2> "$test_dir/show-solo-hidden.stderr"
+grep -q ' W,WY wx,xy$' "$test_dir/show-solo-hidden.stdout" ||
+  fail "--show-bonus did not follow the selected hidden solo-word edges"
 grep -Eq "${diagnostic_prefix}solo words: 2 profiles, 3 word edges, 2 pair edges$" \
   "$test_dir/solo-reroute.stderr" ||
   fail "solo profile and edge diagnostics are missing"
@@ -709,6 +866,11 @@ expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --projection-depth nope
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --max-extract-words nope
+expect_status 2 "$dfs_anagrams" -i "$index_file" abcd \
+  --show-bonus --segments
+grep -q '^error: --show-bonus cannot be combined with --segments$' \
+  "$test_dir/status.stderr" ||
+  fail "--show-bonus and --segments were not rejected clearly"
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
   "$test_dir/status.stderr" ||

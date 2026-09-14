@@ -82,6 +82,13 @@ enum DfsMemberFilter {
   DFS_RETAIN_PHRASES,
 };
 
+// Whether positive pair inputs only annotate index-backed entries or may also
+// contribute eligible two-word entries that the index does not contain.
+enum DfsExternalPairPolicy {
+  DFS_EXTERNAL_PAIRS_INDEX_ONLY,
+  DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING,
+};
+
 struct DfsMemberSpan {
   DfsPackedMember* data;
   size_t count;
@@ -142,9 +149,10 @@ class DfsClassList {
   // earn its configurable pair bonus; `weighted_pairs` assigns fixed seed,
   // YES, or BEST tiers. exception_prefixes permits traversal to exact oriented
   // pair entries containing a word shorter than min_word_len; every input is
-  // borrowed. Member 0 is therefore the class's best member under the caller's
-  // admissible upper score. solo_words is mutable only while phase 1 registers
-  // profiles.
+  // borrowed. external_pair_policy optionally admits otherwise eligible
+  // two-word positive keys absent from the index with corpus count 1. Member 0
+  // is therefore the class's best member under the caller's admissible upper
+  // score. solo_words is mutable only while phase 1 registers profiles.
   // With no model that is raw count order. exclude_pairs drops any entry whose
   // whole spelling it holds, so no phase-2 result can contain one. The test is
   // whole-entry equality: a longer entry containing the pair anywhere is a
@@ -159,13 +167,18 @@ class DfsClassList {
                DfsPairBonusMap const* weighted_pairs = NULL,
                DfsPairSet const* exception_prefixes = NULL,
                DfsSoloWords* solo_words = NULL,
-               DfsPairSet const* exclude_pairs = NULL);
+               DfsPairSet const* exclude_pairs = NULL,
+               DfsExternalPairPolicy external_pair_policy =
+                   DFS_EXTERNAL_PAIRS_INDEX_ONLY);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };
     return span;
   }
   size_t entry_count() const { return entries; }
+  size_t synthetic_external_pair_count() const {
+    return synthetic_external_pairs;
+  }
   int64_t nodes_visited() const { return nodes; }
   int min_word_length() const { return minimum_word_len; }
 
@@ -234,6 +247,7 @@ class DfsClassList {
   std::array<size_t, DFS_SYMBOL_COUNT + 1> bucket_starts;
   int minimum_word_len;
   size_t entries;
+  size_t synthetic_external_pairs;
   int64_t nodes;
   bool grouping_dropped;
 };

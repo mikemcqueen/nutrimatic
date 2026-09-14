@@ -26,7 +26,15 @@ struct DfsSpelling {
   // Aligned with segment_lengths when any external partner was selected.
   // Multi-word and unmatched entries contain DFS_NO_SOLO_WORD.
   std::vector<uint8_t> solo_word_indexes;
+  // Aligned with segment_lengths only when bonus annotation was requested.
+  // The low bit records the word bonus; the remaining bits encode at most one
+  // DfsPairBonusKind.
+  std::vector<uint8_t> segment_bonus_flags;
 };
+
+inline constexpr uint8_t DFS_SEGMENT_WORD_BONUS = 1 << 0;
+inline constexpr int DFS_SEGMENT_PAIR_BONUS_SHIFT = 1;
+inline constexpr uint8_t DFS_SEGMENT_PAIR_BONUS_MASK = uint8_t(7) << 1;
 
 // Rewrites a spelling's text with a comma between index entries, leaving the
 // spaces inside an entry alone. Without solo_words the result is exactly the
@@ -34,6 +42,10 @@ struct DfsSpelling {
 // external partners are appended as human-readable parenthetical annotations.
 std::string dfs_spelling_entry_list(
     DfsSpelling const& spelling, DfsSoloWords const* solo_words = NULL);
+
+// Renders one W-then-pair-source token per segment, using "-" for a segment
+// with no active bonus. segment_bonus_flags must be populated and aligned.
+std::string dfs_spelling_bonus_list(DfsSpelling const& spelling);
 
 // The dedup table's payload. The map key (not duplicated here) is the
 // word-set key. When the result limit is nonzero, heap_pos is this entry's
@@ -43,6 +55,7 @@ struct RetainedSpelling {
   std::string text;
   std::vector<uint8_t> segment_lengths;
   std::vector<uint8_t> solo_word_indexes;
+  std::vector<uint8_t> segment_bonus_flags;
   double log_score;
   size_t heap_pos;
 };
@@ -69,9 +82,11 @@ class DfsTopN: public DfsSolutionSink {
   // The model must be the one phase 2 scored with: a spelling's score is its
   // solution's upper score adjusted by the upper-score difference between
   // each chosen member and its class's member 0. solo_words supplies the exact
-  // profiles used to correct a concrete spelling before retention.
+  // profiles used to correct a concrete spelling before retention. Bonus
+  // metadata is retained only when retain_segment_bonuses is true.
   DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
-          size_t limit, DfsSoloWords const* solo_words = NULL);
+          size_t limit, DfsSoloWords const* solo_words = NULL,
+          bool retain_segment_bonuses = false);
 
   void emit(std::vector<size_t> const& class_indexes,
             double representative_upper_log_score);
@@ -100,6 +115,7 @@ class DfsTopN: public DfsSolutionSink {
   DfsScoreModel const* const score_model;
   DfsSoloWords const* const solo_words;
   size_t const result_limit;
+  bool const retain_segment_bonuses;
   size_t expanded;
 
   RetainedMap retained;

@@ -41,6 +41,56 @@ std::string dfs_spelling_entry_list(
   return list;
 }
 
+static DfsPairBonusKind segment_pair_bonus_kind(uint8_t flags) {
+  uint8_t const encoded =
+      (flags & DFS_SEGMENT_PAIR_BONUS_MASK) >>
+      DFS_SEGMENT_PAIR_BONUS_SHIFT;
+  assert(encoded <= DFS_PAIR_BONUS_BEST);
+  return DfsPairBonusKind(encoded);
+}
+
+static void set_segment_pair_bonus(
+    uint8_t* flags, DfsPairBonusKind kind) {
+  assert(flags != NULL);
+  assert(kind >= DFS_PAIR_BONUS_NONE && kind <= DFS_PAIR_BONUS_BEST);
+  *flags &= ~DFS_SEGMENT_PAIR_BONUS_MASK;
+  *flags |= uint8_t(kind) << DFS_SEGMENT_PAIR_BONUS_SHIFT;
+}
+
+std::string dfs_spelling_bonus_list(DfsSpelling const& spelling) {
+  assert(spelling.segment_bonus_flags.size() ==
+         spelling.segment_lengths.size());
+  std::string list;
+  list.reserve(spelling.segment_bonus_flags.size() * 3);
+  for (size_t i = 0; i < spelling.segment_bonus_flags.size(); ++i) {
+    if (i != 0) list.push_back(',');
+    uint8_t const flags = spelling.segment_bonus_flags[i];
+    assert((flags & ~(DFS_SEGMENT_WORD_BONUS |
+                      DFS_SEGMENT_PAIR_BONUS_MASK)) == 0);
+    if ((flags & DFS_SEGMENT_WORD_BONUS) != 0) list.push_back('W');
+    switch (segment_pair_bonus_kind(flags)) {
+      case DFS_PAIR_BONUS_NONE:
+        break;
+      case DFS_PAIR_BONUS_LEGACY:
+        list.push_back('P');
+        break;
+      case DFS_PAIR_BONUS_SEED:
+        list.push_back('S');
+        break;
+      case DFS_PAIR_BONUS_YES:
+        list.push_back('Y');
+        break;
+      case DFS_PAIR_BONUS_BEST:
+        list.push_back('B');
+        break;
+      default:
+        assert(false);
+    }
+    if (flags == 0) list.push_back('-');
+  }
+  return list;
+}
+
 static std::string make_word_set_key(std::string const& text) {
   std::vector<std::string> words;
   for (size_t i = 0; i < text.size(); ) {
@@ -95,11 +145,13 @@ static double spelling_upper_log_score(
 }
 
 DfsTopN::DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
-                 size_t limit, DfsSoloWords const* solo_words):
+                 size_t limit, DfsSoloWords const* solo_words,
+                 bool retain_segment_bonuses):
     class_list(classes),
     score_model(model),
     solo_words(solo_words),
     result_limit(limit),
+    retain_segment_bonuses(retain_segment_bonuses),
     expanded(0),
     published_floor_bits(0),
     published_full(false),
@@ -165,6 +217,8 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 
     DfsSpelling spelling;
     spelling.segment_lengths.reserve(class_indexes.size());
+    if (retain_segment_bonuses)
+      spelling.segment_bonus_flags.reserve(class_indexes.size());
     std::vector<DfsSoloMasks> profiles;
     std::vector<size_t> profile_segments;
     if (solo_words != NULL) {
@@ -177,6 +231,17 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
       if (!spelling.text.empty()) spelling.text.push_back(' ');
       spelling.text.append(view.text, view.text_length);
       spelling.segment_lengths.push_back(uint8_t(view.text_length));
+      if (retain_segment_bonuses) {
+        uint8_t bonus_flags = 0;
+        if (view.word_count > 1 &&
+            score_model->multi_word_log_bonus() != 0.0)
+          bonus_flags |= DFS_SEGMENT_WORD_BONUS;
+        DfsPairBonusKind const pair_kind =
+            dfs_member_pair_bonus_kind(view.score_flags);
+        if (score_model->pair_log_bonus(pair_kind) != 0.0)
+          set_segment_pair_bonus(&bonus_flags, pair_kind);
+        spelling.segment_bonus_flags.push_back(bonus_flags);
+      }
       if (solo_words != NULL && view.word_count == 1 &&
           (view.score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0) {
         DfsSoloMasks const profile = solo_words->lookup(
@@ -195,6 +260,19 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
         profiles, *score_model,
         solo_words != NULL ? &profile_matches : NULL);
     assert(spelling.log_score <= current.upper_log_score);
+    if (retain_segment_bonuses) {
+      for (size_t i = 0; i < profile_matches.size(); ++i) {
+        uint8_t const match = profile_matches[i];
+        if (match == DFS_NO_SOLO_WORD) continue;
+        uint8_t& bonus_flags =
+            spelling.segment_bonus_flags[profile_segments[i]];
+        if (score_model->multi_word_log_bonus() != 0.0)
+          bonus_flags |= DFS_SEGMENT_WORD_BONUS;
+        DfsPairBonusKind const pair_kind = profiles[i].pair_kinds[match];
+        if (score_model->pair_log_bonus(pair_kind) != 0.0)
+          set_segment_pair_bonus(&bonus_flags, pair_kind);
+      }
+    }
     if (std::find_if(profile_matches.begin(), profile_matches.end(),
                      [](uint8_t match) {
                        return match != DFS_NO_SOLO_WORD;
@@ -270,6 +348,8 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     found->second.segment_lengths = std::move(spelling.segment_lengths);
     found->second.solo_word_indexes =
         std::move(spelling.solo_word_indexes);
+    found->second.segment_bonus_flags =
+        std::move(spelling.segment_bonus_flags);
     found->second.log_score = spelling.log_score;
     if (result_limit != 0) {
       size_t const position = found->second.heap_pos;
@@ -285,6 +365,7 @@ bool DfsTopN::offer(DfsSpelling spelling) {
     value.text = std::move(spelling.text);
     value.segment_lengths = std::move(spelling.segment_lengths);
     value.solo_word_indexes = std::move(spelling.solo_word_indexes);
+    value.segment_bonus_flags = std::move(spelling.segment_bonus_flags);
     value.log_score = spelling.log_score;
     value.heap_pos = position;
     std::pair<RetainedMap::iterator, bool> const inserted =
@@ -309,6 +390,8 @@ bool DfsTopN::offer(DfsSpelling spelling) {
   node.mapped().text = std::move(spelling.text);
   node.mapped().segment_lengths = std::move(spelling.segment_lengths);
   node.mapped().solo_word_indexes = std::move(spelling.solo_word_indexes);
+  node.mapped().segment_bonus_flags =
+      std::move(spelling.segment_bonus_flags);
   node.mapped().log_score = spelling.log_score;
   node.mapped().heap_pos = 0;
   RetainedMap::insert_return_type const reinserted =
@@ -367,6 +450,8 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
       spelling.segment_lengths = std::move(entry->second.segment_lengths);
       spelling.solo_word_indexes =
           std::move(entry->second.solo_word_indexes);
+      spelling.segment_bonus_flags =
+          std::move(entry->second.segment_bonus_flags);
       spelling.word_set_key = entry->first;
       results.push_back(std::move(spelling));
     }

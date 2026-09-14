@@ -34,6 +34,7 @@ struct Args {
   int exact_letters;
   bool allow_cache_fallback;
   bool segments;
+  bool show_bonus;
   bool weighted;
   bool verbose;
 };
@@ -71,7 +72,7 @@ static void usage(char const* program) {
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
       " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
-      " [--segments] [--weighted]"
+      " [--segments] [--show-bonus] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
       " workflow mode defaults to DIR/%s; required otherwise\n"
@@ -93,6 +94,9 @@ static void usage(char const* program) {
       " matched only in written order; other pairs match in either order\n"
       "    every loaded entry must contain at least -m normalized non-space"
       " characters in total\n"
+      "    eligible listed pairs absent from the index are admitted with"
+      " corpus count 1; standalone entries are not\n"
+      "    dictionary, bag, -m, -x, and exclusion rules still apply\n"
       "  --seed-pairs FILE, --yes-pairs FILE, and --best-pairs FILE load"
       " fixed pair-bonus tiers %.2f, %.2f, and %.2f; each may be repeated\n"
       "    duplicates and reversed pairs retain the strongest tier; these"
@@ -146,6 +150,9 @@ static void usage(char const* program) {
       "  --segments prints the index entries used by the results instead of"
       " the results, as best-score, result-count and text, by descending"
       " best score\n"
+      "  --show-bonus adds one marker per segment between the score and"
+      " anagram: W for word bonus, P for legacy pair bonus, S/Y/B for fixed"
+      " pair tiers, and - for none; cannot be combined with --segments\n"
       "  --weighted sorts and reports each segment by best-score times"
       " result-count instead of best score alone; requires --segments\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
@@ -165,6 +172,7 @@ static void usage(char const* program) {
 static int const OPT_SEGMENTS = 256;
 static int const OPT_WEIGHTED = 257;
 static int const OPT_EXCLUDE_PAIRS = 258;
+static int const OPT_SHOW_BONUS = 259;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -176,6 +184,7 @@ static struct optparse_long const long_options[] = {
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
   { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
+  { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
@@ -196,6 +205,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->exact_letters = -1;
   out->allow_cache_fallback = false;
   out->segments = false;
+  out->show_bonus = false;
   out->weighted = false;
   out->verbose = false;
 
@@ -251,6 +261,9 @@ static bool parse_args(char* argv[], Args* out) {
       case OPT_SEGMENTS:
         out->segments = true;
         break;
+      case OPT_SHOW_BONUS:
+        out->show_bonus = true;
+        break;
       case OPT_WEIGHTED:
         out->weighted = true;
         break;
@@ -277,6 +290,10 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (out->weighted && !out->segments) {
     fputs("error: --weighted requires --segments\n", stderr);
+    return false;
+  }
+  if (out->show_bonus && out->segments) {
+    fputs("error: --show-bonus cannot be combined with --segments\n", stderr);
     return false;
   }
 
@@ -414,7 +431,11 @@ int main(int argc, char* argv[]) {
                            ? &exception_prefixes : NULL,
                        solo_words.get(),
                        !args.exclude_pair_files.empty()
-                           ? &exclude_pairs : NULL);
+                           ? &exclude_pairs : NULL,
+                       DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING);
+  dfs_diagnostic(
+      "phase 1 external pairs: %zu synthetic entries\n",
+      classes.synthetic_external_pair_count());
   dfs_diagnostic(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       classes.entry_count(), classes.classes().size(),
@@ -432,7 +453,8 @@ int main(int argc, char* argv[]) {
       search_threads, size_t(args.num_segments),
       args.common.word_bonus, args.common.pair_bonus);
   DfsTopN output(
-      &classes, &model, size_t(args.common.top), solo_words.get());
+      &classes, &model, size_t(args.common.top), solo_words.get(),
+      args.show_bonus);
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,
@@ -485,11 +507,19 @@ int main(int argc, char* argv[]) {
   if (args.segments) {
     report_segments(results, args.weighted);
   } else {
-    for (size_t i = 0; i < results.size(); ++i)
-      printf("%#.4g %s\n", exp(results[i].log_score),
-             dfs_spelling_entry_list(
-                 results[i], args.common.hide_solo_words
-                     ? NULL : solo_words.get()).c_str());
+    for (size_t i = 0; i < results.size(); ++i) {
+      if (args.show_bonus)
+        printf("%#.4g %s %s\n", exp(results[i].log_score),
+               dfs_spelling_bonus_list(results[i]).c_str(),
+               dfs_spelling_entry_list(
+                   results[i], args.common.hide_solo_words
+                       ? NULL : solo_words.get()).c_str());
+      else
+        printf("%#.4g %s\n", exp(results[i].log_score),
+               dfs_spelling_entry_list(
+                   results[i], args.common.hide_solo_words
+                       ? NULL : solo_words.get()).c_str());
+    }
   }
   return 0;
 }
