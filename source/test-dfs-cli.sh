@@ -286,8 +286,8 @@ printf 'dc,ba\n' > "$test_dir/missing-index-best.pairs"
   2> "$test_dir/missing-index-weighted.stderr"
 assert_close "$(awk '$2 == "ba" && $3 == "dc" { print $1 }' \
     "$test_dir/missing-index-weighted.stdout")" \
-  "$(awk 'BEGIN { print exp(log(1000000) * 1.10) }')" \
-  "synthetic weighted pair did not retain the BEST tier"
+  1000000 \
+  "one-segment weighted pair did not use the final BEST exponent"
 
 # Existing phase-one eligibility gates apply before an absent pair is probed.
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
@@ -554,13 +554,14 @@ assert_close "$(awk 'NR == 2 { print $1 }' "$test_dir/bonus-one.stdout")" \
   1000 "--word-bonus 1 should leave the single word's score alone"
 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 5 \
   > "$test_dir/bonus-default.stdout" 2> "$test_dir/bonus-default.stderr"
-cmp "$test_dir/bonus-one.stdout" "$test_dir/bonus-default.stdout" ||
-  fail "omitted --word-bonus did not match --word-bonus 1"
+cmp "$test_dir/bonus-zero.stdout" "$test_dir/bonus-default.stdout" ||
+  fail "omitted --word-bonus did not match --word-bonus 0"
 
 # --show-bonus adds exactly one aligned marker per selected entry without
 # changing the ordinary output contract. A phrase receives W, while separate
 # ordinary entries retain one '-' marker each.
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --show-bonus \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 1 \
+  --show-bonus \
   > "$test_dir/show-bonus.stdout" 2> "$test_dir/show-bonus.stderr"
 grep -q ' W ab cd$' "$test_dir/show-bonus.stdout" ||
   fail "--show-bonus did not mark a multi-word entry"
@@ -612,8 +613,29 @@ printf 'mn,kl\n' > "$test_dir/weighted-best-reversed.pairs"
    == "kl mn" ]] ||
   fail "weighted pair tiers did not promote the paired DFS spelling"
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/weighted-pairs.stdout")" \
-  "$(awk 'BEGIN { print 5 * exp(log(1000000) * 1.10) }')" \
-  "repeated weighted pair sources did not retain the BEST tier"
+  "$(awk 'BEGIN { print 5 * exp(log(1000000) * 4) }')" \
+  "weighted pair without -g did not retain the fixed BEST tier"
+
+# The exact-result DFS score agrees with query-index for each cumulative BEST
+# exponent in a four-segment result.
+dynamic_best="$test_dir/dynamic-best.pairs"
+: > "$dynamic_best"
+dynamic_words=(ab cd uv wx)
+for ((i = 0; i < 4; ++i)); do
+  printf '%s\n' "${dynamic_words[$i]}" >> "$dynamic_best"
+  "$dfs_anagrams" -i "$index_file" abcduvwx -m 2 -g 4 -n 1 \
+    -P 1 --word-bonus 0 --best-pairs "$dynamic_best" \
+    > "$test_dir/dynamic-best.stdout" \
+    2> "$test_dir/dynamic-best.stderr"
+  dynamic_query=$(
+    "$query_index" -i "$index_file" 'ab,cd,uv,wx' --score \
+      -P 1 --word-bonus 0 --best-pairs "$dynamic_best" \
+      2> "$test_dir/dynamic-best-query.stderr" | awk '{ print $1 }'
+  )
+  assert_close "$(awk 'NR == 1 { print $1 }' \
+      "$test_dir/dynamic-best.stdout")" "$dynamic_query" \
+    "four-segment DFS and query-index BEST scores disagree"
+done
 
 # Standalone fixed-tier entries cover every source marker in one search. "ab"
 # occurs in both SEED and BEST, so the displayed B also proves that only the
@@ -673,8 +695,8 @@ printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/o-klmn/m2/g1/best.pairs"
    == "kl mn" ]] ||
   fail "workflow default dictionary did not retain its allowed phrase"
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/workflow-positive.stdout")" \
-  "$(awk 'BEGIN { print 5 * exp(log(1000000) * 1.10) }')" \
-  "workflow target did not auto-load BEST pairs above seed and YES"
+  "$(awk 'BEGIN { print 5 * exp(log(1000000) * 4) }')" \
+  "workflow target without -g did not retain the fixed BEST tier"
 WFROOT="$workflow_root" "$dfs_anagrams" klmn -m 2 -n 2 \
   --word-bonus 0 --wf -t 'S1/o-klmn/m2/g1' \
   > "$test_dir/workflow-alias.stdout" \
@@ -749,6 +771,27 @@ solo_top_round_trip=$("$query_index" -i "$index_file" ab,cd --score -P 1 \
   --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
 assert_close "$solo_top_score" "$solo_top_round_trip" \
   "DFS solo-word score did not round-trip through query-index --score"
+
+# Direct and selected solo BEST sources mark and score one result segment once.
+printf 'ab\nab,zz\n' > "$test_dir/solo-best-overlap.pairs"
+"$dfs_anagrams" -i "$index_file" ab -m 2 -g 1 -n 1 -P 1 \
+  --solo-words zz --word-bonus 0 --show-bonus \
+  --best-pairs "$test_dir/solo-best-overlap.pairs" \
+  > "$test_dir/solo-best-overlap.stdout" \
+  2> "$test_dir/solo-best-overlap.stderr"
+grep -q ' B ab (zz)$' "$test_dir/solo-best-overlap.stdout" ||
+  fail "direct and solo BEST overlap did not render one B marker"
+overlap_score=$(awk 'NR == 1 { print $1 }' \
+  "$test_dir/solo-best-overlap.stdout")
+assert_close "$overlap_score" 80000000 \
+  "direct and solo BEST overlap was scored more than once"
+overlap_round_trip=$(
+  "$query_index" -i "$index_file" ab --score -P 1 \
+    --solo-words zz --word-bonus 0 \
+    --best-pairs "$test_dir/solo-best-overlap.pairs" | awk '{ print $1 }'
+)
+assert_close "$overlap_score" "$overlap_round_trip" \
+  "overlapping BEST score did not round-trip through query-index"
 
 printf 'ba,cd\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
 "$dfs_anagrams" -i "$index_file" abba -m 2 -n 10 -P 1 \

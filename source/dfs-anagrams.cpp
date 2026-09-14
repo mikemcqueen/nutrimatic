@@ -97,8 +97,11 @@ static void usage(char const* program) {
       "    eligible listed pairs absent from the index are admitted with"
       " corpus count 1; standalone entries are not\n"
       "    dictionary, bag, -m, -x, and exclusion rules still apply\n"
-      "  --seed-pairs FILE, --yes-pairs FILE, and --best-pairs FILE load"
-      " fixed pair-bonus tiers %.2f, %.2f, and %.2f; each may be repeated\n"
+      "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
+      " %.2f and %.2f; --best-pairs FILE marks BEST entries\n"
+      "    with -g N, BEST-marked segments receive descending exponents from"
+      " N through 1, counted once per segment; without -g the exponent"
+      " remains fixed at %.2f; each option may be repeated\n"
       "    duplicates and reversed pairs retain the strongest tier; these"
       " options cannot be combined with legacy --pairs\n"
       "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
@@ -151,8 +154,8 @@ static void usage(char const* program) {
       " the results, as best-score, result-count and text, by descending"
       " best score\n"
       "  --show-bonus adds one marker per segment between the score and"
-      " anagram: W for word bonus, P for legacy pair bonus, S/Y/B for fixed"
-      " pair tiers, and - for none; cannot be combined with --segments\n"
+      " anagram: W for word bonus, P for legacy pair bonus, S/Y/B for pair"
+      " sources, and - for none; cannot be combined with --segments\n"
       "  --weighted sorts and reports each segment by best-score times"
       " result-count instead of best score alone; requires --segments\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
@@ -411,9 +414,12 @@ int main(int argc, char* argv[]) {
                    args.common.max_extract_words == 1 ? "" : "s");
 
   IndexReader reader(fp);
+  DfsBestBonusPolicy const best_bonus = args.num_segments > 0
+      ? DfsBestBonusPolicy::descending(size_t(args.num_segments))
+      : DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS);
   DfsScoreModel const model(
       args.common.segment_penalty, reader.count(), args.common.word_bonus,
-      args.common.pair_bonus);
+      args.common.pair_bonus, best_bonus);
   std::unique_ptr<DfsSoloWords> solo_words;
   if (!args.common.solo_words.empty() &&
       (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
@@ -451,7 +457,7 @@ int main(int argc, char* argv[]) {
       &classes, args.letters, args.common.segment_penalty, reader.count(),
       args.score_cache_bytes, preprocess_threads,
       search_threads, size_t(args.num_segments),
-      args.common.word_bonus, args.common.pair_bonus);
+      args.common.word_bonus, args.common.pair_bonus, best_bonus);
   DfsTopN output(
       &classes, &model, size_t(args.common.top), solo_words.get(),
       args.show_bonus);

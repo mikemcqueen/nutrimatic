@@ -605,6 +605,53 @@ static void search_output_integration_test() {
   fclose(fp);
 }
 
+static void descending_expansion_test() {
+  FILE* fp = tmpfile();
+  check(fp != NULL, "could not create descending expansion index");
+  {
+    IndexWriter writer(fp);
+    writer.next("ab ", 0, 1);
+    writer.next("ba ", 0, INT64_C(1000000000));
+    writer.next("cd ", 0, 1);
+    writer.next(NULL, 0, 0);
+  }
+  fflush(fp);
+  rewind(fp);
+
+  {
+    IndexReader reader(fp);
+    DfsPairBonusMap weighted_pairs;
+    weighted_pairs["ab"] = DFS_PAIR_BONUS_BEST;
+    weighted_pairs["cd"] = DFS_PAIR_BONUS_BEST;
+    DfsBestBonusPolicy const policy = DfsBestBonusPolicy::descending(2);
+    DfsScoreModel const model(
+        DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0, 0.0, policy);
+    DfsClassList classes(
+        &reader, "abcd", 2, false, NULL, 0, &model, NULL,
+        &weighted_pairs);
+    std::vector<size_t> path = {
+      find_class(classes, "ab"), find_class(classes, "cd"),
+    };
+    DfsMemberView const first = classes.member(path[0], 0);
+    DfsMemberView const second = classes.member(path[1], 0);
+    double const representative = model.append_log_score(
+        model.member_upper_log_score(
+            first.count, false, first.score_flags),
+        model.member_upper_log_score(
+            second.count, false, second.score_flags));
+
+    DfsTopN output(&classes, &model, 1);
+    output.emit(path, representative);
+    std::vector<DfsSpelling> const results = output.take_sorted_results();
+    check(results.size() == 1 && results[0].word_set_key == "ba cd",
+          "corrected expansion missed the lower-upper-score top result");
+    check(output.spellings_expanded() == 2,
+          "corrected floor pruned a still-competitive spelling");
+  }
+
+  fclose(fp);
+}
+
 static void entry_list_test() {
   DfsSpelling spelling;
   spelling.text = "ab cd ef gh";
@@ -630,5 +677,6 @@ int main() {
   repeated_class_test();
   large_repeated_class_test();
   search_output_integration_test();
+  descending_expansion_test();
   return 0;
 }

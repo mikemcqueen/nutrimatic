@@ -164,16 +164,16 @@ assert_close "$(score_value 'ab cd,ab' --word-bonus 0 -P 1)" \
   "$(awk 'BEGIN { print 70 * 80 / 1148 }')" \
   "word count should not affect any segment's score with an explicit zero bonus"
 
-assert_close "$(score_value 'ab cd' -P 1)" 70000000 \
-  "the default word bonus should be one"
+assert_close "$(score_value 'ab cd' -P 1)" 70 \
+  "the default word bonus should be zero"
 [[ "$(score_value 'ab cd' -P 1)" == \
-   "$(score_value 'ab cd' --word-bonus 1 -P 1)" ]] ||
-  fail "omitted --word-bonus did not match --word-bonus 1"
+   "$(score_value 'ab cd' --word-bonus 0 -P 1)" ]] ||
+  fail "omitted --word-bonus did not match --word-bonus 0"
 assert_close "$(score_value ab --word-bonus 1)" 80 \
   "--word-bonus should not apply to a single-word segment"
 assert_close "$(score_value 'ab cd,ab' -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1148 * 1e6 }')" \
-  "the default should bonus only the multi-word segment"
+  "$(awk 'BEGIN { print 70 * 80 / 1148 }')" \
+  "the default should not bonus the multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
@@ -405,8 +405,25 @@ assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
     --yes-pairs "$test_dir/yes-pairs-reversed.txt" \
     --best-pairs "$test_dir/best-pairs.txt" \
     --best-pairs "$test_dir/best-pairs-reversed.txt")" \
-  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.10) }')" \
-  "BEST pairs did not retain maximum precedence across reversed duplicates"
+  70000000 \
+  "one-entry BEST score did not use the final exponent"
+
+# Exact four-entry sequences use cumulative BEST exponents 4, 7, 9, and 10.
+dynamic_best="$test_dir/dynamic-best.pairs"
+: > "$dynamic_best"
+dynamic_base=$(score_value 'ab,cd,uv,wx' --word-bonus 0 -P 1)
+dynamic_words=(ab cd uv wx)
+dynamic_exponents=(4 7 9 10)
+for ((i = 0; i < 4; ++i)); do
+  printf '%s\n' "${dynamic_words[$i]}" >> "$dynamic_best"
+  dynamic_score=$(score_value 'ab,cd,uv,wx' --word-bonus 0 -P 1 \
+    --best-pairs "$dynamic_best")
+  dynamic_expected=$(awk -v score="$dynamic_base" \
+    -v exponent="${dynamic_exponents[$i]}" \
+    'BEGIN { print score * exp(log(1000000) * exponent) }')
+  assert_close "$dynamic_score" "$dynamic_expected" \
+    "four-entry cumulative BEST exponent ${dynamic_exponents[$i]} is wrong"
+done
 expect_score_failure ab legacy-and-weighted --pairs "$test_dir/pairs.txt" \
   --seed-pairs "$test_dir/seed-pairs.txt"
 grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, or --best-pairs$' \
@@ -432,8 +449,8 @@ assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
 full_target_score=$(score_value 'ab cd' --word-bonus 0 -P 1 \
   --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1')
 assert_close "$full_target_score" \
-  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.10) }')" \
-  "complete target did not promote its BEST pair above global YES"
+  70000000 \
+  "complete target did not score its one BEST entry exactly"
 wf_alias_score=$(WFROOT="$workflow_root" score_value 'ab cd' \
   --word-bonus 0 -P 1 --wf -t 'S1/o-abcd/m2/g1')
 assert_close "$wf_alias_score" "$full_target_score" \

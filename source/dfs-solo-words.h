@@ -117,6 +117,12 @@ struct DfsSoloMatching {
   std::vector<uint8_t> solo_word_indexes;
 };
 
+struct DfsExactResultMatching {
+  double correction = 0.0;
+  size_t best_segment_count = 0;
+  std::vector<uint8_t> solo_word_indexes;
+};
+
 // Pure graph routines. The exact bonus maximizes over every matching
 // cardinality, so zero-weight ordinary edges never displace positive pair
 // edges. The correction is conservatively rounded and is always non-positive.
@@ -140,5 +146,14 @@ double dfs_solo_score_correction(
     std::vector<DfsSoloMasks> const& profiles,
     DfsScoreModel const& score_model,
     std::vector<uint8_t>* solo_word_indexes = NULL);
+
+// Resolves the exact solo assignment and BEST result-level correction. The
+// direct marker vector is profile-aligned, while direct_best_segments also
+// includes directly marked segments without a solo profile.
+DfsExactResultMatching dfs_exact_result_matching(
+    std::vector<DfsSoloMasks> const& profiles,
+    std::vector<bool> const& profile_direct_best,
+    size_t direct_best_segments,
+    DfsScoreModel const& score_model);
 
 #endif

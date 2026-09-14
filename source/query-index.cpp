@@ -94,8 +94,11 @@ static void usage(char const* program) {
       " non-space characters in total\n"
       "    --score instead matches pairs in either order and does not apply"
       " the extraction minimum\n"
-      "  --seed-pairs FILE, --yes-pairs FILE, and --best-pairs FILE load"
-      " fixed pair-bonus tiers %.2f, %.2f, and %.2f; each may be repeated\n"
+      "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
+      " %.2f and %.2f; --best-pairs FILE marks BEST entries\n"
+      "    --score uses the sequence entry count N and descending BEST"
+      " exponents from N through 1, counted once per entry; ordinary listing"
+      " keeps the fixed %.2f exponent; each option may be repeated\n"
       "    duplicates and reversed pairs retain the strongest tier; these"
       " options cannot be combined with legacy --pairs\n"
       "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
@@ -525,6 +528,8 @@ static bool print_sequence_score(
   std::vector<bool> multi_word;
   std::vector<uint16_t> score_flags;
   std::vector<DfsSoloMasks> profiles;
+  std::vector<bool> profile_direct_best;
+  size_t direct_best_segments = 0;
   multi_word.reserve(entries.size());
   score_flags.reserve(entries.size());
   profiles.reserve(entries.size());
@@ -538,10 +543,16 @@ static bool print_sequence_score(
       flags |= dfs_pair_bonus_score_flags(weighted->second);
     else if (pairs.count(entries[i]) != 0)
       flags |= dfs_pair_bonus_score_flags(DFS_PAIR_BONUS_LEGACY);
+    bool const direct_best =
+        dfs_member_pair_bonus_kind(flags) == DFS_PAIR_BONUS_BEST;
+    if (direct_best) ++direct_best_segments;
     if (!phrase && solo_words != NULL) {
       DfsSoloMasks const profile = solo_words->resolve(entries[i]);
       flags |= dfs_solo_score_flags(profile);
-      if (profile.word_mask != 0) profiles.push_back(profile);
+      if (profile.word_mask != 0) {
+        profiles.push_back(profile);
+        profile_direct_best.push_back(direct_best);
+      }
     }
     score_flags.push_back(flags);
   }
@@ -552,8 +563,9 @@ static bool print_sequence_score(
     upper_log_score = model.append_log_score(
         upper_log_score, model.member_upper_log_score(
             counts[i], multi_word[i], score_flags[i]));
-  double const log_score = upper_log_score +
-      dfs_solo_score_correction(profiles, model);
+  DfsExactResultMatching const exact = dfs_exact_result_matching(
+      profiles, profile_direct_best, direct_best_segments, model);
+  double const log_score = upper_log_score + exact.correction;
   assert(log_score <= upper_log_score);
 
   printf("%#.4g %s\n", model.displayed_score(log_score),
@@ -604,7 +616,8 @@ int main(int argc, char* argv[]) {
   if (args.score) {
     DfsScoreModel const model(
         args.common.segment_penalty, reader.count(), args.common.word_bonus,
-        args.common.pair_bonus);
+        args.common.pair_bonus,
+        DfsBestBonusPolicy::descending(score_entries.size()));
     std::unique_ptr<DfsSoloWords> solo_words;
     if (!args.common.solo_words.empty() &&
         (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||

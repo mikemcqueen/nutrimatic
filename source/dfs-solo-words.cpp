@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,6 +26,15 @@ long double model_pair_bonus(DfsPairBonusKind kind, void const* context) {
   DfsScoreModel const* const model =
       static_cast<DfsScoreModel const*>(context);
   return static_cast<long double>(model->pair_log_bonus(kind));
+}
+
+long double model_pair_mathematical_upper(
+    DfsPairBonusKind kind, void const* context) {
+  DfsScoreModel const* const model =
+      static_cast<DfsScoreModel const*>(context);
+  return kind == DFS_PAIR_BONUS_BEST
+      ? model->local_best_upper_log_bonus()
+      : static_cast<long double>(model->pair_log_bonus(kind));
 }
 
 DfsPairBonusKind pair_kind(DfsSoloMasks const& masks, int index) {
@@ -250,6 +260,152 @@ double score_correction(
   assert(rounded <= 0.0);
   assert(static_cast<long double>(rounded) <= correction);
   return rounded;
+}
+
+struct DescendingState {
+  long double bonus;
+  int pair_edges;
+  uint32_t previous_key;
+  uint8_t match;
+};
+
+uint32_t descending_key(uint16_t used_words, size_t extra_best) {
+  assert(extra_best <= 16);
+  return uint32_t(used_words) | (uint32_t(extra_best) << 16);
+}
+
+size_t descending_extra_best(uint32_t key) {
+  return size_t(key >> 16);
+}
+
+void retain_better(
+    std::map<uint32_t, DescendingState>* states, uint32_t key,
+    DescendingState const& candidate) {
+  std::pair<std::map<uint32_t, DescendingState>::iterator, bool> inserted =
+      states->emplace(key, candidate);
+  if (inserted.second) return;
+  DescendingState& current = inserted.first->second;
+  if (candidate.bonus > current.bonus ||
+      (candidate.bonus == current.bonus &&
+       candidate.pair_edges > current.pair_edges))
+    current = candidate;
+}
+
+double round_correction_down(long double correction) {
+  if (correction > 0.0L) correction = 0.0L;
+  double rounded = static_cast<double>(correction);
+  if (static_cast<long double>(rounded) > correction)
+    rounded = nextafter(rounded, -HUGE_VAL);
+  if (rounded > 0.0) rounded = 0.0;
+  assert(rounded <= 0.0);
+  assert(static_cast<long double>(rounded) <= correction);
+  return rounded;
+}
+
+DfsExactResultMatching descending_exact_matching(
+    std::vector<DfsSoloMasks> const& profiles,
+    std::vector<bool> const& profile_direct_best,
+    size_t direct_best_segments,
+    DfsScoreModel const& model) {
+  assert(model.descending_best_bonus());
+  assert(profile_direct_best.size() == profiles.size());
+  assert(direct_best_segments <= model.exact_segments());
+
+  typedef std::map<uint32_t, DescendingState> StateMap;
+  std::vector<StateMap> layers(profiles.size() + 1);
+  layers[0].emplace(
+      descending_key(0, 0),
+      DescendingState{0.0L, 0, 0, DFS_NO_SOLO_WORD});
+  long double const word_bonus = model.multi_word_log_bonus();
+
+  for (size_t profile_index = 0;
+       profile_index < profiles.size(); ++profile_index) {
+    DfsSoloMasks const& profile = profiles[profile_index];
+    assert((profile.pair_mask & ~profile.word_mask) == 0);
+    StateMap const& previous = layers[profile_index];
+    StateMap& next = layers[profile_index + 1];
+    for (StateMap::const_iterator state = previous.begin();
+         state != previous.end(); ++state) {
+      DescendingState unmatched = state->second;
+      unmatched.previous_key = state->first;
+      unmatched.match = DFS_NO_SOLO_WORD;
+      retain_better(&next, state->first, unmatched);
+
+      uint16_t const used_words = uint16_t(state->first);
+      size_t const extra_best = descending_extra_best(state->first);
+      for (int solo = 0; solo < 16; ++solo) {
+        uint16_t const bit = uint16_t(1) << solo;
+        if ((profile.word_mask & bit) == 0 ||
+            (used_words & bit) != 0)
+          continue;
+        DfsPairBonusKind const kind = pair_kind(profile, solo);
+        size_t const next_extra = extra_best +
+            (kind == DFS_PAIR_BONUS_BEST &&
+             !profile_direct_best[profile_index] ? 1 : 0);
+        if (direct_best_segments + next_extra > model.exact_segments())
+          continue;
+        DescendingState selected = state->second;
+        selected.bonus += word_bonus;
+        if (kind != DFS_PAIR_BONUS_BEST)
+          selected.bonus += model.pair_log_bonus(kind);
+        if (kind != DFS_PAIR_BONUS_NONE) ++selected.pair_edges;
+        selected.previous_key = state->first;
+        selected.match = uint8_t(solo);
+        retain_better(
+            &next, descending_key(used_words | bit, next_extra), selected);
+      }
+    }
+  }
+
+  StateMap const& final_states = layers.back();
+  assert(!final_states.empty());
+  StateMap::const_iterator best = final_states.end();
+  long double best_bonus = -std::numeric_limits<long double>::infinity();
+  int best_pair_edges = -1;
+  for (StateMap::const_iterator state = final_states.begin();
+       state != final_states.end(); ++state) {
+    size_t const best_segments = direct_best_segments +
+        descending_extra_best(state->first);
+    long double const bonus = state->second.bonus +
+        model.exact_best_log_bonus(best_segments);
+    if (bonus > best_bonus ||
+        (bonus == best_bonus && state->second.pair_edges > best_pair_edges)) {
+      best = state;
+      best_bonus = bonus;
+      best_pair_edges = state->second.pair_edges;
+    }
+  }
+  assert(best != final_states.end());
+
+  DfsExactResultMatching result;
+  result.best_segment_count = direct_best_segments +
+      descending_extra_best(best->first);
+  result.solo_word_indexes.assign(profiles.size(), DFS_NO_SOLO_WORD);
+  uint32_t key = best->first;
+  for (size_t layer = profiles.size(); layer > 0; --layer) {
+    StateMap::const_iterator const state = layers[layer].find(key);
+    assert(state != layers[layer].end());
+    result.solo_word_indexes[layer - 1] = state->second.match;
+    key = state->second.previous_key;
+  }
+
+  long double mathematical_upper =
+      static_cast<long double>(direct_best_segments) *
+      model.local_best_upper_log_bonus();
+  long double pending_upper =
+      static_cast<long double>(direct_best_segments) *
+      model.pair_log_bonus(DFS_PAIR_BONUS_BEST);
+  for (size_t i = 0; i < profiles.size(); ++i) {
+    mathematical_upper += local_upper(
+        profiles[i], word_bonus, model_pair_mathematical_upper, &model);
+    pending_upper += rounded_local_upper(
+        profiles[i], model.multi_word_log_bonus(),
+        model_pair_bonus, &model);
+  }
+  assert(best_bonus <= mathematical_upper);
+  result.correction = round_correction_down(best_bonus - pending_upper);
+  assert(result.correction <= 0.0);
+  return result;
 }
 
 }  // namespace
@@ -485,4 +641,28 @@ double dfs_solo_score_correction(
   return score_correction(
       profiles, score_model.multi_word_log_bonus(),
       model_pair_bonus, &score_model, solo_word_indexes);
+}
+
+DfsExactResultMatching dfs_exact_result_matching(
+    std::vector<DfsSoloMasks> const& profiles,
+    std::vector<bool> const& profile_direct_best,
+    size_t direct_best_segments,
+    DfsScoreModel const& score_model) {
+  assert(profile_direct_best.size() == profiles.size());
+  if (score_model.descending_best_bonus())
+    return descending_exact_matching(
+        profiles, profile_direct_best, direct_best_segments, score_model);
+
+  DfsExactResultMatching result;
+  result.correction = dfs_solo_score_correction(
+      profiles, score_model, &result.solo_word_indexes);
+  result.best_segment_count = direct_best_segments;
+  for (size_t i = 0; i < profiles.size(); ++i) {
+    uint8_t const match = result.solo_word_indexes[i];
+    if (match != DFS_NO_SOLO_WORD &&
+        pair_kind(profiles[i], match) == DFS_PAIR_BONUS_BEST &&
+        !profile_direct_best[i])
+      ++result.best_segment_count;
+  }
+  return result;
 }

@@ -32,6 +32,15 @@ static DfsSoloMasks masks(uint16_t words, uint16_t pairs = 0) {
   return result;
 }
 
+static DfsSoloMasks weighted_masks(
+    uint16_t words, DfsPairBonusKind first,
+    DfsPairBonusKind second = DFS_PAIR_BONUS_NONE) {
+  DfsSoloMasks result = masks(words, words);
+  result.pair_kinds[0] = first;
+  result.pair_kinds[1] = second;
+  return result;
+}
+
 static void profile_resolution_test() {
   FILE* fp = tmpfile();
   check(fp != NULL, "could not create profile index");
@@ -168,8 +177,69 @@ static void matching_test() {
         "positive pending-term rounding artifact was not clamped");
 }
 
+static void descending_best_test() {
+  long double const base = logl(DFS_PAIR_BONUS_BASE);
+  DfsScoreModel const fixed(1.0, 1, 0.0);
+  check_close(
+      fixed.exact_best_log_bonus(2),
+      2.0L * DFS_BEST_PAIR_BONUS * base,
+      "fixed BEST policy changed its cumulative score");
+
+  DfsScoreModel const descending(
+      1.0, 1, 0.0, 0.0, DfsBestBonusPolicy::descending(4));
+  long double const expected[] = { 0.0L, 4.0L, 7.0L, 9.0L, 10.0L };
+  for (size_t best = 0; best <= 4; ++best)
+    check_close(
+        descending.exact_best_log_bonus(best), expected[best] * base,
+        "descending BEST cumulative exponent is wrong");
+
+  DfsScoreModel const one(
+      1.0, 1, 0.0, 0.0, DfsBestBonusPolicy::descending(1));
+  DfsExactResultMatching const one_direct = dfs_exact_result_matching(
+      std::vector<DfsSoloMasks>(), std::vector<bool>(), 1, one);
+  check(one_direct.correction <= 0.0,
+        "N=1 BEST correction improved the local upper score");
+  check_close(
+      one_direct.correction,
+      (1.0L - DFS_YES_PAIR_BONUS) * base,
+      "N=1 BEST correction did not remove the 1.05 upper bound");
+
+  std::vector<DfsSoloMasks> one_best_edge = {
+    weighted_masks(0x1, DFS_PAIR_BONUS_BEST),
+  };
+  DfsExactResultMatching const selected_best = dfs_exact_result_matching(
+      one_best_edge, std::vector<bool>(1, false), 0, descending);
+  check(selected_best.best_segment_count == 1 &&
+            selected_best.solo_word_indexes[0] == 0,
+        "selected solo BEST edge did not mark its segment");
+
+  DfsExactResultMatching const overlapping_best =
+      dfs_exact_result_matching(
+          one_best_edge, std::vector<bool>(1, true), 1, descending);
+  check(overlapping_best.best_segment_count == 1 &&
+            overlapping_best.solo_word_indexes[0] == 0,
+        "direct and solo BEST sources counted one segment twice");
+
+  std::vector<DfsSoloMasks> best_or_yes = {
+    weighted_masks(0x3, DFS_PAIR_BONUS_BEST, DFS_PAIR_BONUS_YES),
+  };
+  DfsScoreModel const two(
+      1.0, 1, 0.0, 0.0, DfsBestBonusPolicy::descending(2));
+  DfsExactResultMatching const late_choice = dfs_exact_result_matching(
+      best_or_yes, std::vector<bool>(1, false), 1, two);
+  check(late_choice.best_segment_count == 1 &&
+            late_choice.solo_word_indexes[0] == 1,
+        "fixed YES did not defeat the final marginal BEST edge");
+
+  DfsExactResultMatching const fixed_choice = dfs_exact_result_matching(
+      best_or_yes, std::vector<bool>(1, false), 0, fixed);
+  check(fixed_choice.solo_word_indexes[0] == 0,
+        "fixed-policy matching stopped preferring BEST");
+}
+
 int main() {
   profile_resolution_test();
   matching_test();
+  descending_best_test();
   return 0;
 }

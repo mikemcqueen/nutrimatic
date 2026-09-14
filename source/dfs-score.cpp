@@ -5,6 +5,8 @@
 #include <assert.h>
 #include <math.h>
 
+#include <algorithm>
+
 namespace {
 
 double make_segment_boundary_log_score(
@@ -27,16 +29,58 @@ double make_pair_log_bonus(double pair_bonus) {
 
 }  // namespace
 
+DfsBestBonusPolicy::DfsBestBonusPolicy(
+    DfsBestBonusMode mode, double fixed_exponent, size_t exact_segments):
+    mode_(mode),
+    fixed_exponent_(fixed_exponent),
+    exact_segments_(exact_segments) { }
+
+DfsBestBonusPolicy DfsBestBonusPolicy::fixed(double exponent) {
+  assert(isfinite(exponent));
+  return DfsBestBonusPolicy(DFS_BEST_BONUS_FIXED, exponent, 0);
+}
+
+DfsBestBonusPolicy DfsBestBonusPolicy::descending(size_t exact_segments) {
+  assert(exact_segments > 0);
+  return DfsBestBonusPolicy(
+      DFS_BEST_BONUS_DESCENDING, 0.0, exact_segments);
+}
+
+double DfsBestBonusPolicy::local_upper_exponent(
+    double non_best_upper) const {
+  assert(isfinite(non_best_upper));
+  if (!is_descending()) return fixed_exponent_;
+  assert(exact_segments_ > 0);
+  return std::max(double(exact_segments_), non_best_upper);
+}
+
+long double DfsBestBonusPolicy::cumulative_exponent(
+    size_t best_segments) const {
+  if (!is_descending())
+    return static_cast<long double>(best_segments) * fixed_exponent_;
+  assert(exact_segments_ > 0);
+  assert(best_segments <= exact_segments_);
+  long double const n = static_cast<long double>(exact_segments_);
+  long double const k = static_cast<long double>(best_segments);
+  long double const exponent = k * n - k * (k - 1.0L) / 2.0L;
+  assert(isfinite(exponent));
+  return exponent;
+}
+
 DfsScoreModel::DfsScoreModel(
     double segment_penalty, int64_t corpus_total, double word_bonus,
-    double pair_bonus):
+    double pair_bonus, DfsBestBonusPolicy best_bonus):
     segment_boundary_log_score_(
         make_segment_boundary_log_score(segment_penalty, corpus_total)),
     multi_word_log_bonus_(make_multi_word_log_bonus(word_bonus)),
     pair_log_bonus_(make_pair_log_bonus(pair_bonus)),
     seed_pair_log_bonus_(make_pair_log_bonus(DFS_SEED_PAIR_BONUS)),
     yes_pair_log_bonus_(make_pair_log_bonus(DFS_YES_PAIR_BONUS)),
-    best_pair_log_bonus_(make_pair_log_bonus(DFS_BEST_PAIR_BONUS)) { }
+    best_pair_exponent_(best_bonus.local_upper_exponent(
+        std::max(std::max(pair_bonus, DFS_SEED_PAIR_BONUS),
+                 DFS_YES_PAIR_BONUS))),
+    best_pair_log_bonus_(make_pair_log_bonus(best_pair_exponent_)),
+    best_bonus_policy_(best_bonus) { }
 
 double DfsScoreModel::segment_log_score(
     int64_t count, bool multi_word, bool known_pair) const {
@@ -65,6 +109,19 @@ double DfsScoreModel::pair_log_bonus(DfsPairBonusKind kind) const {
 
 double DfsScoreModel::member_pair_log_bonus(uint16_t score_flags) const {
   return pair_log_bonus(dfs_member_pair_bonus_kind(score_flags));
+}
+
+long double DfsScoreModel::exact_best_log_bonus(
+    size_t best_segments) const {
+  return best_bonus_policy_.cumulative_exponent(best_segments) *
+      logl(static_cast<long double>(DFS_PAIR_BONUS_BASE));
+}
+
+long double DfsScoreModel::local_best_upper_log_bonus() const {
+  return std::max(
+      static_cast<long double>(best_pair_log_bonus_),
+      static_cast<long double>(best_pair_exponent_) *
+          logl(static_cast<long double>(DFS_PAIR_BONUS_BASE)));
 }
 
 double DfsScoreModel::first_segment_log_score(

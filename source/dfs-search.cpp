@@ -180,10 +180,12 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    size_t search_threads,
                                    size_t exact_segments,
                                    double word_bonus,
-                                   double pair_bonus):
+                                   double pair_bonus,
+                                   DfsBestBonusPolicy best_bonus):
     class_list(classes),
     letters(letters),
-    score_model(segment_penalty, corpus_total, word_bonus, pair_bonus),
+    score_model(
+        segment_penalty, corpus_total, word_bonus, pair_bonus, best_bonus),
     segment_boundary_log_score(
         score_model.segment_boundary_log_score()),
     exact_segments(exact_segments),

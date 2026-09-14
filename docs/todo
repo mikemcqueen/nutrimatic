@@ -16,3 +16,8 @@
 * filter index entries containing configurable "skip words" during phase 1,
   especially `the`
 * add -d/--dict option to top-segments, first-segments, filter-segments
+* dfs-anagrams --wf -t FULLY-SCOPED-TARGET should infer -u from the target;
+  currently it must still be supplied explicitly
+* decide the BEST-pair bonus for dfs-anagrams invocations without -g; the
+  dynamic scheme in plans/dynamic-best-bonus.md deliberately uses N from
+  -g N and leaves the unbounded-search behavior unchanged for now
