@@ -3,6 +3,7 @@
 #include "dfs-diagnostic.h"
 #include "workflow-paths.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -841,7 +843,8 @@ DfsOptionResult dfs_parse_common_option(
 }
 
 bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file) {
+    DfsCommonArgs* args, char const* program, char const** index_file,
+    bool add_target_best_pairs) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
   if (args->pair_file != NULL &&
@@ -926,7 +929,7 @@ bool finalize_dfs_workflow_args(
     args->seed_pair_files.push_back(seed);
   }
 
-  if (target_parts.size() == 4) {
+  if (target_parts.size() == 4 && add_target_best_pairs) {
     fs::path const best = root / WORKFLOW_BEST_PATH / args->target /
         WORKFLOW_TARGET_BEST_PAIRS_NAME;
     if (!push_optional_pair_file(
@@ -934,6 +937,74 @@ bool finalize_dfs_workflow_args(
       return false;
   }
   return true;
+}
+
+bool load_dfs_workflow_target_settings(
+    DfsCommonArgs const& args, char const* program,
+    DfsWorkflowTargetSettings* out) {
+  if (args.workflow_root.empty() || !args.target_complete) {
+    fprintf(stderr,
+        "%s: requires a fully scoped sN/[ou]-letters/mN/gN target\n",
+        program);
+    return false;
+  }
+
+  std::vector<std::string> parts;
+  size_t start = 0;
+  while (start <= args.target.size()) {
+    size_t const slash = args.target.find('/', start);
+    parts.push_back(args.target.substr(
+        start, slash == std::string::npos
+            ? std::string::npos : slash - start));
+    if (slash == std::string::npos) break;
+    start = slash + 1;
+  }
+  assert(parts.size() == 4);
+
+  fs::path const letters_path =
+      fs::path(args.workflow_root) / WORKFLOW_BEST_PATH / parts[0] / "letters";
+  if (!require_regular_file(
+          letters_path, program, "workflow sentence letters file"))
+    return false;
+  std::ifstream input(letters_path, std::ios::binary);
+  if (!input.is_open()) {
+    fprintf(stderr, "%s: can't open workflow sentence letters \"%s\"\n",
+            program, letters_path.c_str());
+    return false;
+  }
+  std::string sentence(
+      (std::istreambuf_iterator<char>(input)),
+      std::istreambuf_iterator<char>());
+  if (input.bad()) {
+    fprintf(stderr, "%s: can't read workflow sentence letters \"%s\"\n",
+            program, letters_path.c_str());
+    return false;
+  }
+  while (!sentence.empty() &&
+         (sentence.back() == '\n' || sentence.back() == '\r'))
+    sentence.pop_back();
+
+  std::string sentence_bag;
+  std::string named_bag;
+  if (!clean_letters(
+          sentence.c_str(), "workflow sentence letters", &sentence_bag) ||
+      !clean_letters(
+          parts[1].c_str() + 2, "workflow target letters", &named_bag))
+    return false;
+  if (parts[1][0] == 'o') {
+    std::string unused;
+    if (!subtract_letters(sentence_bag, named_bag, &unused)) return false;
+    out->letters = named_bag;
+  } else if (!subtract_letters(sentence_bag, named_bag, &out->letters)) {
+    return false;
+  }
+  if (!check_bag_length(out->letters)) return false;
+  return parse_count(
+             parts[2].c_str() + 1, "target minimum word length",
+             &out->min_word_len) &&
+      parse_count(
+             parts[3].c_str() + 1, "target segment count",
+             &out->num_segments);
 }
 
 bool collect_workflow_exclude_pair_files(

@@ -145,6 +145,95 @@ static double spelling_upper_log_score(
   return score;
 }
 
+DfsSpelling dfs_build_spelling(
+    DfsClassList const& classes, DfsScoreModel const& model,
+    DfsSoloWords const* solo_words,
+    std::vector<size_t> const& class_indexes,
+    std::vector<size_t> const& member_indexes,
+    double representative_upper_log_score,
+    bool retain_segment_bonuses) {
+  assert(class_indexes.size() == member_indexes.size());
+  DfsSpelling spelling;
+  spelling.segment_lengths.reserve(class_indexes.size());
+  if (retain_segment_bonuses)
+    spelling.segment_bonus_flags.reserve(class_indexes.size());
+  std::vector<DfsSoloMasks> profiles;
+  std::vector<size_t> profile_segments;
+  std::vector<bool> profile_direct_best;
+  size_t direct_best_segments = 0;
+  if (solo_words != NULL) {
+    profiles.reserve(class_indexes.size());
+    profile_segments.reserve(class_indexes.size());
+    profile_direct_best.reserve(class_indexes.size());
+  }
+  for (size_t i = 0; i < class_indexes.size(); ++i) {
+    DfsMemberView const view =
+        classes.member(class_indexes[i], member_indexes[i]);
+    if (!spelling.text.empty()) spelling.text.push_back(' ');
+    spelling.text.append(view.text, view.text_length);
+    spelling.segment_lengths.push_back(uint8_t(view.text_length));
+    DfsPairBonusKind const direct_pair_kind =
+        dfs_member_pair_bonus_kind(view.score_flags);
+    if (direct_pair_kind == DFS_PAIR_BONUS_BEST)
+      ++direct_best_segments;
+    if (retain_segment_bonuses) {
+      uint8_t bonus_flags = 0;
+      if (view.word_count > 1 && model.multi_word_log_bonus() != 0.0)
+        bonus_flags |= DFS_SEGMENT_WORD_BONUS;
+      if (model.pair_log_bonus(direct_pair_kind) != 0.0)
+        set_segment_pair_bonus(&bonus_flags, direct_pair_kind);
+      spelling.segment_bonus_flags.push_back(bonus_flags);
+    }
+    if (solo_words != NULL && view.word_count == 1 &&
+        (view.score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0) {
+      DfsSoloMasks const profile = solo_words->lookup(
+          std::string_view(view.text, view.text_length));
+      uint16_t const solo_flags = view.score_flags &
+          (DFS_MEMBER_SOLO_WORD_EDGE | DFS_MEMBER_SOLO_PAIR_EDGE |
+           DFS_MEMBER_SOLO_PAIR_KIND_MASK);
+      assert(dfs_solo_score_flags(profile) == solo_flags);
+      (void) solo_flags;
+      profiles.push_back(profile);
+      profile_segments.push_back(i);
+      profile_direct_best.push_back(
+          direct_pair_kind == DFS_PAIR_BONUS_BEST);
+    }
+  }
+  DfsExactResultMatching exact = dfs_exact_result_matching(
+      profiles, profile_direct_best, direct_best_segments, model);
+  std::vector<uint8_t>& profile_matches = exact.solo_word_indexes;
+  spelling.log_score = spelling_upper_log_score(
+      classes, model, class_indexes, member_indexes,
+      representative_upper_log_score) + exact.correction;
+  if (retain_segment_bonuses) {
+    for (size_t i = 0; i < profile_matches.size(); ++i) {
+      uint8_t const match = profile_matches[i];
+      if (match == DFS_NO_SOLO_WORD) continue;
+      uint8_t& bonus_flags =
+          spelling.segment_bonus_flags[profile_segments[i]];
+      if (model.multi_word_log_bonus() != 0.0)
+        bonus_flags |= DFS_SEGMENT_WORD_BONUS;
+      DfsPairBonusKind pair_kind = profiles[i].pair_kinds[match];
+      if (pair_kind == DFS_PAIR_BONUS_NONE &&
+          (profiles[i].pair_mask & (uint16_t(1) << match)) != 0)
+        pair_kind = DFS_PAIR_BONUS_LEGACY;
+      if (model.pair_log_bonus(pair_kind) != 0.0)
+        set_segment_pair_bonus(&bonus_flags, pair_kind);
+    }
+  }
+  if (std::find_if(profile_matches.begin(), profile_matches.end(),
+                   [](uint8_t match) {
+                     return match != DFS_NO_SOLO_WORD;
+                   }) != profile_matches.end()) {
+    spelling.solo_word_indexes.assign(
+        spelling.segment_lengths.size(), DFS_NO_SOLO_WORD);
+    for (size_t i = 0; i < profile_matches.size(); ++i)
+      spelling.solo_word_indexes[profile_segments[i]] = profile_matches[i];
+  }
+  spelling.word_set_key = make_word_set_key(spelling.text);
+  return spelling;
+}
+
 DfsTopN::DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
                  size_t limit, DfsSoloWords const* solo_words,
                  bool retain_segment_bonuses):
@@ -216,84 +305,11 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
     if (score_floor(&published) && current.upper_log_score <= published) break;
     pending.pop();
 
-    DfsSpelling spelling;
-    spelling.segment_lengths.reserve(class_indexes.size());
-    if (retain_segment_bonuses)
-      spelling.segment_bonus_flags.reserve(class_indexes.size());
-    std::vector<DfsSoloMasks> profiles;
-    std::vector<size_t> profile_segments;
-    std::vector<bool> profile_direct_best;
-    size_t direct_best_segments = 0;
-    if (solo_words != NULL) {
-      profiles.reserve(class_indexes.size());
-      profile_segments.reserve(class_indexes.size());
-      profile_direct_best.reserve(class_indexes.size());
-    }
-    for (size_t i = 0; i < class_indexes.size(); ++i) {
-      DfsMemberView const view = class_list->member(
-          class_indexes[i], current.member_indexes[i]);
-      if (!spelling.text.empty()) spelling.text.push_back(' ');
-      spelling.text.append(view.text, view.text_length);
-      spelling.segment_lengths.push_back(uint8_t(view.text_length));
-      DfsPairBonusKind const direct_pair_kind =
-          dfs_member_pair_bonus_kind(view.score_flags);
-      if (direct_pair_kind == DFS_PAIR_BONUS_BEST)
-        ++direct_best_segments;
-      if (retain_segment_bonuses) {
-        uint8_t bonus_flags = 0;
-        if (view.word_count > 1 &&
-            score_model->multi_word_log_bonus() != 0.0)
-          bonus_flags |= DFS_SEGMENT_WORD_BONUS;
-        if (score_model->pair_log_bonus(direct_pair_kind) != 0.0)
-          set_segment_pair_bonus(&bonus_flags, direct_pair_kind);
-        spelling.segment_bonus_flags.push_back(bonus_flags);
-      }
-      if (solo_words != NULL && view.word_count == 1 &&
-          (view.score_flags & DFS_MEMBER_SOLO_WORD_EDGE) != 0) {
-        DfsSoloMasks const profile = solo_words->lookup(
-            std::string_view(view.text, view.text_length));
-        uint16_t const solo_flags = view.score_flags &
-            (DFS_MEMBER_SOLO_WORD_EDGE | DFS_MEMBER_SOLO_PAIR_EDGE |
-             DFS_MEMBER_SOLO_PAIR_KIND_MASK);
-        assert(dfs_solo_score_flags(profile) == solo_flags);
-        (void) solo_flags;
-        profiles.push_back(profile);
-        profile_segments.push_back(i);
-        profile_direct_best.push_back(
-            direct_pair_kind == DFS_PAIR_BONUS_BEST);
-      }
-    }
-    DfsExactResultMatching exact = dfs_exact_result_matching(
-        profiles, profile_direct_best, direct_best_segments, *score_model);
-    std::vector<uint8_t>& profile_matches = exact.solo_word_indexes;
-    spelling.log_score = current.upper_log_score + exact.correction;
+    DfsSpelling spelling = dfs_build_spelling(
+        *class_list, *score_model, solo_words, class_indexes,
+        current.member_indexes, representative_upper_log_score,
+        retain_segment_bonuses);
     assert(spelling.log_score <= current.upper_log_score);
-    if (retain_segment_bonuses) {
-      for (size_t i = 0; i < profile_matches.size(); ++i) {
-        uint8_t const match = profile_matches[i];
-        if (match == DFS_NO_SOLO_WORD) continue;
-        uint8_t& bonus_flags =
-            spelling.segment_bonus_flags[profile_segments[i]];
-        if (score_model->multi_word_log_bonus() != 0.0)
-          bonus_flags |= DFS_SEGMENT_WORD_BONUS;
-        DfsPairBonusKind pair_kind = profiles[i].pair_kinds[match];
-        if (pair_kind == DFS_PAIR_BONUS_NONE &&
-            (profiles[i].pair_mask & (uint16_t(1) << match)) != 0)
-          pair_kind = DFS_PAIR_BONUS_LEGACY;
-        if (score_model->pair_log_bonus(pair_kind) != 0.0)
-          set_segment_pair_bonus(&bonus_flags, pair_kind);
-      }
-    }
-    if (std::find_if(profile_matches.begin(), profile_matches.end(),
-                     [](uint8_t match) {
-                       return match != DFS_NO_SOLO_WORD;
-                     }) != profile_matches.end()) {
-      spelling.solo_word_indexes.assign(
-          spelling.segment_lengths.size(), DFS_NO_SOLO_WORD);
-      for (size_t i = 0; i < profile_matches.size(); ++i)
-        spelling.solo_word_indexes[profile_segments[i]] = profile_matches[i];
-    }
-    spelling.word_set_key = make_word_set_key(spelling.text);
     {
       std::lock_guard<std::mutex> const guard(heap_mutex);
       // The published floor may have strengthened while this spelling was
@@ -469,12 +485,28 @@ std::vector<DfsSpelling> DfsTopN::take_sorted_results() {
     std::vector<HeapSlot>().swap(heap);
     RetainedMap().swap(retained);
   }
-  std::sort(results.begin(), results.end(),
-            [](DfsSpelling const& a, DfsSpelling const& b) {
-    if (a.log_score != b.log_score) return a.log_score > b.log_score;
-    if (a.word_set_key != b.word_set_key)
-      return a.word_set_key < b.word_set_key;
-    return a.text < b.text;
-  });
+  std::sort(results.begin(), results.end(), dfs_spelling_better);
   return results;
+}
+
+bool dfs_spelling_better(DfsSpelling const& a, DfsSpelling const& b) {
+  if (a.log_score != b.log_score) return a.log_score > b.log_score;
+  if (a.word_set_key != b.word_set_key)
+    return a.word_set_key < b.word_set_key;
+  return a.text < b.text;
+}
+
+bool dfs_print_results(
+    FILE* output, std::vector<DfsSpelling> const& results,
+    bool show_bonus, DfsSoloWords const* solo_words) {
+  for (size_t i = 0; i < results.size(); ++i) {
+    int const written = show_bonus
+        ? fprintf(output, "%#.4g %s %s\n", exp(results[i].log_score),
+                  dfs_spelling_bonus_list(results[i]).c_str(),
+                  dfs_spelling_entry_list(results[i], solo_words).c_str())
+        : fprintf(output, "%#.4g %s\n", exp(results[i].log_score),
+                  dfs_spelling_entry_list(results[i], solo_words).c_str());
+    if (written < 0) return false;
+  }
+  return fflush(output) == 0;
 }

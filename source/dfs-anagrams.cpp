@@ -1,9 +1,7 @@
-#include "dfs-class-list.h"
+#include "dfs-class-list-build.h"
 #include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
-#include "dfs-score.h"
-#include "dfs-solo-words.h"
 #include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
@@ -15,7 +13,6 @@
 #include <stdio.h>
 
 #include <algorithm>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -285,7 +282,8 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (!validate_solo_bonuses(out->common)) return false;
   if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file))
+          &out->common, argv[0], &out->index_file,
+          /*add_target_best_pairs=*/true))
     return false;
   if (!collect_workflow_exclude_pair_files(
           out->common, argv[0], &out->exclude_pair_files))
@@ -336,6 +334,7 @@ int main(int argc, char* argv[]) {
 
   Args args;
   if (!parse_args(argv, &args)) return 2;
+  if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   size_t const preprocess_threads = resolve_preprocess_threads(
       args.preprocess_threads, args.letters.size());
@@ -347,37 +346,18 @@ int main(int argc, char* argv[]) {
       args.exact_letters, args.common.top, preprocess_threads, search_threads,
       args.score_cache_bytes / DFS_MIB, args.common.segment_penalty);
 
-  DfsDictionary dictionary;
-  DfsDictionary const* dictionary_filter = NULL;
-  if (args.common.dictionary_file != NULL) {
-    if (!load_dictionary(args.common.dictionary_file, &dictionary)) return 1;
-    dictionary_filter = &dictionary;
-  }
-
-  DfsPairSet pairs;
-  DfsPairBonusMap weighted_pairs;
-  DfsPairSet exception_prefixes;
-  if (args.common.pair_file != NULL) {
-    if (!load_extraction_pair_file(
-            args.common.pair_file, "pair list", args.common.min_word_len,
-            &pairs, &exception_prefixes, false, false))
-      return 1;
-  } else
-    args.common.pair_bonus = 0.0;
-  if (!load_weighted_pair_files(
-          args.common, /*score_mode=*/false, args.common.min_word_len,
-          &weighted_pairs, &exception_prefixes))
-    return 1;
-
-  DfsPairSet exclude_pairs;
-  if (!load_exclude_pair_files(args.exclude_pair_files, &exclude_pairs))
-    return 1;
-
   FILE* fp = fopen(args.index_file, "rb");
   if (fp == NULL) {
     fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
     return 1;
   }
+
+  IndexReader reader(fp);
+  DfsPreparedClassList prepared;
+  if (!prepare_dfs_class_list(
+          &reader, args.letters, args.common, args.exclude_pair_files,
+          size_t(args.num_segments), &prepared))
+    return 1;
 
   // Both headers carry the segment constraint, since -g is independent of
   // whether a minimum word length narrowed the search.
@@ -388,7 +368,7 @@ int main(int argc, char* argv[]) {
              args.num_segments, args.num_segments == 1 ? "" : "s");
   }
   bool const active_short_pair_exception =
-      !exception_prefixes.empty() &&
+      !prepared.exception_prefixes.empty() &&
       (args.common.max_extract_words <= 0 ||
        args.common.max_extract_words >= 2);
   if (active_short_pair_exception) {
@@ -413,53 +393,17 @@ int main(int argc, char* argv[]) {
                    args.common.max_extract_words,
                    args.common.max_extract_words == 1 ? "" : "s");
 
-  IndexReader reader(fp);
-  DfsBestBonusPolicy const best_bonus = args.num_segments > 0
-      ? DfsBestBonusPolicy::descending(size_t(args.num_segments))
-      : DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS);
-  DfsScoreModel const model(
-      args.common.segment_penalty, reader.count(), args.common.word_bonus,
-      args.common.pair_bonus, best_bonus);
-  std::unique_ptr<DfsSoloWords> solo_words;
-  if (!args.common.solo_words.empty() &&
-      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
-       !weighted_pairs.empty()))
-    solo_words.reset(new DfsSoloWords(
-        &reader, args.common.solo_words,
-        args.common.pair_file != NULL ? &pairs : NULL, &model,
-        !weighted_pairs.empty() ? &weighted_pairs : NULL));
-  DfsClassList classes(&reader, args.letters, args.common.min_word_len, true,
-                       dictionary_filter, args.common.max_extract_words,
-                       &model,
-                       args.common.pair_file != NULL ? &pairs : NULL,
-                       !weighted_pairs.empty() ? &weighted_pairs : NULL,
-                       !exception_prefixes.empty()
-                           ? &exception_prefixes : NULL,
-                       solo_words.get(),
-                       !args.exclude_pair_files.empty()
-                           ? &exclude_pairs : NULL,
-                       DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING);
-  dfs_diagnostic(
-      "phase 1 external pairs: %zu synthetic entries\n",
-      classes.synthetic_external_pair_count());
-  dfs_diagnostic(
-      "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
-      classes.entry_count(), classes.classes().size(),
-      (long long) classes.nodes_visited());
-  if (solo_words != NULL)
-    dfs_diagnostic(
-        "solo words: %zu profiles, %zu word edges, %zu pair edges\n",
-        solo_words->profile_count(), solo_words->word_edge_count(),
-        solo_words->pair_edge_count());
-  fflush(stderr);
-
+  DfsBestBonusPolicy const best_bonus =
+      dfs_best_bonus_policy(size_t(args.num_segments));
   DfsAnagramSearch search(
-      &classes, args.letters, args.common.segment_penalty, reader.count(),
+      prepared.classes.get(), args.letters, args.common.segment_penalty,
+      reader.count(),
       args.score_cache_bytes, preprocess_threads,
       search_threads, size_t(args.num_segments),
       args.common.word_bonus, args.common.pair_bonus, best_bonus);
   DfsTopN output(
-      &classes, &model, size_t(args.common.top), solo_words.get(),
+      prepared.classes.get(), prepared.model.get(), size_t(args.common.top),
+      prepared.solo_words.get(),
       args.show_bonus);
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
@@ -513,19 +457,11 @@ int main(int argc, char* argv[]) {
   if (args.segments) {
     report_segments(results, args.weighted);
   } else {
-    for (size_t i = 0; i < results.size(); ++i) {
-      if (args.show_bonus)
-        printf("%#.4g %s %s\n", exp(results[i].log_score),
-               dfs_spelling_bonus_list(results[i]).c_str(),
-               dfs_spelling_entry_list(
-                   results[i], args.common.hide_solo_words
-                       ? NULL : solo_words.get()).c_str());
-      else
-        printf("%#.4g %s\n", exp(results[i].log_score),
-               dfs_spelling_entry_list(
-                   results[i], args.common.hide_solo_words
-                       ? NULL : solo_words.get()).c_str());
-    }
+    if (!dfs_print_results(
+            stdout, results, args.show_bonus,
+            args.common.hide_solo_words
+                ? NULL : prepared.solo_words.get()))
+      return 1;
   }
   return 0;
 }

@@ -266,7 +266,8 @@ static bool parse_args(char* argv[], Args* out) {
   }
 
   if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file))
+          &out->common, argv[0], &out->index_file,
+          /*add_target_best_pairs=*/true))
     return false;
   if (out->index_file == NULL) {
     usage(argv[0]);

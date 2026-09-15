@@ -108,9 +108,25 @@ DfsOptionResult dfs_parse_common_option(
 // default dictionary and classified YES source. An explicit index is retained.
 // Workflow mode also requires either an explicit seed input or a target whose
 // sentence can identify exactly one sentence seed; a complete target
-// additionally supplies its optional best.pairs.
+// additionally supplies its optional best.pairs when add_target_best_pairs is
+// true. Passing false lets a caller replace that source with explicit inputs.
 bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file);
+    DfsCommonArgs* args, char const* program, char const** index_file,
+    bool add_target_best_pairs);
+
+struct DfsWorkflowTargetSettings {
+  std::string letters;
+  int min_word_len;
+  int num_segments;
+};
+
+// Reads and derives the generator inputs encoded by a complete workflow
+// target. The sentence bag comes from ROOT/.wf/best/sN/letters; o- selects
+// the target label's letters and u- subtracts them. Call after
+// finalize_dfs_workflow_args().
+bool load_dfs_workflow_target_settings(
+    DfsCommonArgs const& args, char const* program,
+    DfsWorkflowTargetSettings* out);
 
 // Appends the workflow root's classified NO pairs, and a complete selected
 // target's own no.pairs, to `paths` for tools that exclude pairs. Either file

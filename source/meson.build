@@ -88,6 +88,7 @@ dfs_class_list_lib = library(
   'dfs-class-list',
   [
     'dfs-class-list.cpp',
+    'dfs-class-list-build.cpp',
     'dfs-cli-args.cpp',
     'dfs-diagnostic.cpp',
     'dfs-score.cpp',
@@ -154,6 +155,11 @@ dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib,
               segment_report_lib],
   dependencies: thread_dep,
+  install: true)
+
+rerank_anagrams = executable('rerank-anagrams', 'rerank-anagrams.cpp',
+  link_with: [optparse_lib, dfs_class_list_lib, index_lib],
+  dependencies: [thread_dep, pair_exclusions_dep],
   install: true)
 
 weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
@@ -286,6 +292,16 @@ test(
     dfs_anagrams,
     make_dfs_test_index,
     query_index,
+  ],
+)
+test(
+  'rerank-anagrams',
+  bash,
+  args: [
+    files('test-rerank-anagrams.sh'),
+    rerank_anagrams,
+    dfs_anagrams,
+    make_dfs_test_index,
   ],
 )
 test(

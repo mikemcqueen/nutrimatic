@@ -2,6 +2,7 @@
 #define NUTRIMATIC_DFS_OUTPUT_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include <atomic>
 #include <mutex>
@@ -46,6 +47,25 @@ std::string dfs_spelling_entry_list(
 // Renders one W-then-pair-source token per segment, using "-" for a segment
 // with no active bonus. segment_bonus_flags must be populated and aligned.
 std::string dfs_spelling_bonus_list(DfsSpelling const& spelling);
+
+// Constructs and exactly scores one concrete spelling from a class path.
+// The representative is the member-0 path score, accumulated in path order.
+DfsSpelling dfs_build_spelling(
+    DfsClassList const& classes, DfsScoreModel const& model,
+    DfsSoloWords const* solo_words,
+    std::vector<size_t> const& class_indexes,
+    std::vector<size_t> const& member_indexes,
+    double representative_upper_log_score,
+    bool retain_segment_bonuses);
+
+// The deterministic descending order used for dfs-anagrams output.
+bool dfs_spelling_better(DfsSpelling const& a, DfsSpelling const& b);
+
+// Prints ordinary or bonus-annotated DFS rows with the established score
+// formatting contract.
+bool dfs_print_results(
+    FILE* output, std::vector<DfsSpelling> const& results,
+    bool show_bonus, DfsSoloWords const* solo_words = NULL);
 
 // The dedup table's payload. The map key (not duplicated here) is the
 // word-set key. When the result limit is nonzero, heap_pos is this entry's
