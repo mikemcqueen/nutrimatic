@@ -60,7 +60,7 @@ static void usage(char const* program) {
       " [-g num-segments] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
       " [--seed-pairs FILE]... [--yes-pairs FILE]..."
-      " [--best-pairs FILE]..."
+      " [--best-pairs FILE] [--more-best-pairs FILE]..."
       " [--wf|--wfroot DIR] [-t TARGET]"
       " [--exclude-pairs FILE|WORKFLOW-DIR]..."
       " [--solo-words WORD[,WORD...]]"
@@ -95,10 +95,12 @@ static void usage(char const* program) {
       " corpus count 1; standalone entries are not\n"
       "    dictionary, bag, -m, -x, and exclusion rules still apply\n"
       "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
-      " %.2f and %.2f; --best-pairs FILE marks BEST entries\n"
+      " %.2f and %.2f; --best-pairs FILE and --more-best-pairs FILE mark"
+      " BEST entries\n"
       "    with -g N, BEST-marked segments receive descending exponents from"
       " N through 1, counted once per segment; without -g the exponent"
-      " remains fixed at %.2f; each option may be repeated\n"
+      " remains fixed at %.2f; each option except --best-pairs may be"
+      " repeated\n"
       "    duplicates and reversed pairs retain the strongest tier; these"
       " options cannot be combined with legacy --pairs\n"
       "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
@@ -110,7 +112,7 @@ static void usage(char const* program) {
       " skipped when absent\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
       " its sentence seed is auto-loaded, and a complete target also loads"
-      " its optional %s\n"
+      " its optional %s unless --best-pairs replaces it\n"
       "  --exclude-pairs FILE|WORKFLOW-DIR loads word pairs, one"
       " \"word,word\" line each, and drops every index entry spelled exactly"
       " like one, in either order, so"
@@ -282,8 +284,7 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (!validate_solo_bonuses(out->common)) return false;
   if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file,
-          /*add_target_best_pairs=*/true))
+          &out->common, argv[0], &out->index_file))
     return false;
   if (!collect_workflow_exclude_pair_files(
           out->common, argv[0], &out->exclude_pair_files))

@@ -780,8 +780,18 @@ DfsOptionResult dfs_parse_common_option(
       info.score_incompatible = false;
       break;
     case DFS_OPT_BEST_PAIRS:
+      if (out->best_pairs_given) {
+        fputs("error: --best-pairs may be specified only once\n", stderr);
+        return DFS_OPTION_ERROR;
+      }
+      out->best_pairs_given = true;
       out->best_pair_files.push_back(options->optarg);
       info.name = "--best-pairs";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_MORE_BEST_PAIRS:
+      out->best_pair_files.push_back(options->optarg);
+      info.name = "--more-best-pairs";
       info.score_incompatible = false;
       break;
     case DFS_OPT_WF:
@@ -843,14 +853,13 @@ DfsOptionResult dfs_parse_common_option(
 }
 
 bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file,
-    bool add_target_best_pairs) {
+    DfsCommonArgs* args, char const* program, char const** index_file) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
   if (args->pair_file != NULL &&
       (weighted || args->workflow || !args->workflow_root.empty())) {
     fputs("error: --pairs cannot be combined with --seed-pairs, "
-          "--yes-pairs, or --best-pairs\n", stderr);
+          "--yes-pairs, --best-pairs, or --more-best-pairs\n", stderr);
     return false;
   }
 
@@ -929,7 +938,7 @@ bool finalize_dfs_workflow_args(
     args->seed_pair_files.push_back(seed);
   }
 
-  if (target_parts.size() == 4 && add_target_best_pairs) {
+  if (target_parts.size() == 4 && !args->best_pairs_given) {
     fs::path const best = root / WORKFLOW_BEST_PATH / args->target /
         WORKFLOW_TARGET_BEST_PAIRS_NAME;
     if (!push_optional_pair_file(

@@ -606,7 +606,7 @@ printf 'mn,kl\n' > "$test_dir/weighted-best-reversed.pairs"
   --yes-pairs "$test_dir/weighted-yes.pairs" \
   --yes-pairs "$test_dir/weighted-yes-reversed.pairs" \
   --best-pairs "$test_dir/weighted-best.pairs" \
-  --best-pairs "$test_dir/weighted-best-reversed.pairs" \
+  --more-best-pairs "$test_dir/weighted-best-reversed.pairs" \
   > "$test_dir/weighted-pairs.stdout" \
   2> "$test_dir/weighted-pairs.stderr"
 [[ $(awk 'NR == 1 { print $2 " " $3 }' "$test_dir/weighted-pairs.stdout") \
@@ -671,7 +671,7 @@ grep -q ' - kl mn$' "$test_dir/show-legacy-zero.stdout" ||
 expect_status 2 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 \
   --pairs "$test_dir/klmn-pairs.txt" \
   --seed-pairs "$test_dir/weighted-seed.pairs"
-grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, or --best-pairs$' \
+grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, --best-pairs, or --more-best-pairs$' \
   "$test_dir/status.stderr" ||
   fail "legacy and fixed DFS pair inputs were not rejected together"
 

@@ -404,7 +404,7 @@ assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
     --yes-pairs "$test_dir/yes-pairs.txt" \
     --yes-pairs "$test_dir/yes-pairs-reversed.txt" \
     --best-pairs "$test_dir/best-pairs.txt" \
-    --best-pairs "$test_dir/best-pairs-reversed.txt")" \
+    --more-best-pairs "$test_dir/best-pairs-reversed.txt")" \
   70000000 \
   "one-entry BEST score did not use the final exponent"
 
@@ -426,7 +426,7 @@ for ((i = 0; i < 4; ++i)); do
 done
 expect_score_failure ab legacy-and-weighted --pairs "$test_dir/pairs.txt" \
   --seed-pairs "$test_dir/seed-pairs.txt"
-grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, or --best-pairs$' \
+grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, --best-pairs, or --more-best-pairs$' \
   "$test_dir/legacy-and-weighted.stderr" ||
   fail "legacy and fixed pair inputs were not rejected together"
 
@@ -451,6 +451,23 @@ full_target_score=$(score_value 'ab cd' --word-bonus 0 -P 1 \
 assert_close "$full_target_score" \
   70000000 \
   "complete target did not score its one BEST entry exactly"
+printf 'gh,ij\n' > "$test_dir/replacement-best.pairs"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
+    --best-pairs "$test_dir/replacement-best.pairs")" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
+  "--best-pairs did not replace the complete target's best.pairs"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
+    --more-best-pairs "$test_dir/replacement-best.pairs")" \
+  "$full_target_score" \
+  "--more-best-pairs did not keep the complete target's best.pairs"
+expect_score_failure ab repeated-best-pairs \
+  --best-pairs "$test_dir/best-pairs.txt" \
+  --best-pairs "$test_dir/best-pairs-reversed.txt"
+grep -q '^error: --best-pairs may be specified only once$' \
+  "$test_dir/repeated-best-pairs.stderr" ||
+  fail "repeated --best-pairs was not rejected"
 wf_alias_score=$(WFROOT="$workflow_root" score_value 'ab cd' \
   --word-bonus 0 -P 1 --wf -t 'S1/o-abcd/m2/g1')
 assert_close "$wf_alias_score" "$full_target_score" \

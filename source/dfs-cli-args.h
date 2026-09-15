@@ -31,6 +31,7 @@ inline constexpr int DFS_OPT_YES_PAIRS = 307;
 inline constexpr int DFS_OPT_BEST_PAIRS = 308;
 inline constexpr int DFS_OPT_WF = 309;
 inline constexpr int DFS_OPT_WFROOT = 310;
+inline constexpr int DFS_OPT_MORE_BEST_PAIRS = 311;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -51,6 +52,7 @@ inline constexpr int DFS_OPT_WFROOT = 310;
   { "seed-pairs", DFS_OPT_SEED_PAIRS, OPTPARSE_REQUIRED }, \
   { "yes-pairs", DFS_OPT_YES_PAIRS, OPTPARSE_REQUIRED }, \
   { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED }, \
+  { "more-best-pairs", DFS_OPT_MORE_BEST_PAIRS, OPTPARSE_REQUIRED }, \
   { "wf", DFS_OPT_WF, OPTPARSE_NONE }, \
   { "wfroot", DFS_OPT_WFROOT, OPTPARSE_REQUIRED }, \
   { "target", 't', OPTPARSE_REQUIRED }
@@ -71,6 +73,7 @@ struct DfsCommonArgs {
   std::vector<std::string> seed_pair_files;
   std::vector<std::string> yes_pair_files;
   std::vector<std::string> best_pair_files;
+  bool best_pairs_given = false;
   bool workflow = false;
   std::string workflow_root;
   std::string target;
@@ -108,11 +111,9 @@ DfsOptionResult dfs_parse_common_option(
 // default dictionary and classified YES source. An explicit index is retained.
 // Workflow mode also requires either an explicit seed input or a target whose
 // sentence can identify exactly one sentence seed; a complete target
-// additionally supplies its optional best.pairs when add_target_best_pairs is
-// true. Passing false lets a caller replace that source with explicit inputs.
+// additionally supplies its optional best.pairs unless --best-pairs replaced it.
 bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file,
-    bool add_target_best_pairs);
+    DfsCommonArgs* args, char const* program, char const** index_file);
 
 struct DfsWorkflowTargetSettings {
   std::string letters;

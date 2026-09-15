@@ -43,14 +43,16 @@ typedef std::unordered_map<std::string, MemberAddress> MemberIndex;
 void usage(FILE* output, char const* program) {
   fprintf(output,
       "usage: %s (--wf | --wfroot DIR) -t FULL-TARGET"
-      " [-r FILE]... [--best-pairs FILE]... [--show-bonus] [FILE]\n"
+      " [-r FILE]... [--best-pairs FILE] [--more-best-pairs FILE]..."
+      " [--show-bonus] [FILE]\n"
       "  revalidate, rescore, and sort an ordinary dfs-anagrams result file\n"
       "  --wf                 use the nonempty WFROOT environment variable\n"
       "  --wfroot DIR         use DIR as the workflow root\n"
       "  -t, --target TARGET  require sN/[ou]-letters/mN/gN and derive the\n"
       "                       working bag, minimum, and segment count\n"
-      "  --best-pairs FILE    replace the target's implicit best.pairs; may\n"
-      "                       be repeated to merge replacement files\n"
+      "  --best-pairs FILE    replace the target's implicit best.pairs\n"
+      "  --more-best-pairs FILE\n"
+      "                       add BEST pairs; may be repeated\n"
       "  -r, --reject FILE    reject rows containing a listed word or exact\n"
       "                       bidirectional pair; may be repeated\n"
       "  --show-bonus         add the aligned S/Y/B/- marker column\n"
@@ -65,6 +67,7 @@ struct optparse_long const long_options[] = {
   { "wfroot", DFS_OPT_WFROOT, OPTPARSE_REQUIRED },
   { "target", 't', OPTPARSE_REQUIRED },
   { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED },
+  { "more-best-pairs", DFS_OPT_MORE_BEST_PAIRS, OPTPARSE_REQUIRED },
   { "reject", 'r', OPTPARSE_REQUIRED },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -119,9 +122,8 @@ bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
-  bool const implicit_best = out->common.best_pair_files.empty();
   if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file, implicit_best))
+          &out->common, argv[0], &out->index_file))
     return false;
   DfsWorkflowTargetSettings target;
   if (!load_dfs_workflow_target_settings(

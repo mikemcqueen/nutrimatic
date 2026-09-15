@@ -52,7 +52,7 @@ static void usage(char const* program) {
       " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
       " [-x max-extract-words] [--pairs FILE]"
       " [--seed-pairs FILE]... [--yes-pairs FILE]..."
-      " [--best-pairs FILE]..."
+      " [--best-pairs FILE] [--more-best-pairs FILE]..."
       " [--wf|--wfroot DIR] [-t TARGET]"
       " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
@@ -60,7 +60,7 @@ static void usage(char const* program) {
       " [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N] [--pairs FILE]"
       " [--seed-pairs FILE]... [--yes-pairs FILE]..."
-      " [--best-pairs FILE]..."
+      " [--best-pairs FILE] [--more-best-pairs FILE]..."
       " [--wf|--wfroot DIR] [-t TARGET]"
       " [--solo-words WORD[,WORD...]]\n"
       "       %s -i INDEX input --near word [-n top]\n"
@@ -95,10 +95,12 @@ static void usage(char const* program) {
       "    --score instead matches pairs in either order and does not apply"
       " the extraction minimum\n"
       "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
-      " %.2f and %.2f; --best-pairs FILE marks BEST entries\n"
+      " %.2f and %.2f; --best-pairs FILE and --more-best-pairs FILE mark"
+      " BEST entries\n"
       "    --score uses the sequence entry count N and descending BEST"
       " exponents from N through 1, counted once per entry; ordinary listing"
-      " keeps the fixed %.2f exponent; each option may be repeated\n"
+      " keeps the fixed %.2f exponent; each option except --best-pairs may"
+      " be repeated\n"
       "    duplicates and reversed pairs retain the strongest tier; these"
       " options cannot be combined with legacy --pairs\n"
       "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
@@ -107,7 +109,7 @@ static void usage(char const* program) {
       " requires either --seed-pairs or -t beginning with sN\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
       " its sentence seed is auto-loaded, and a complete target also loads"
-      " its optional %s\n"
+      " its optional %s unless --best-pairs replaces it\n"
       "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
       " external words; they consume no letters and matched partners are"
       " printed in parentheses\n"
@@ -266,8 +268,7 @@ static bool parse_args(char* argv[], Args* out) {
   }
 
   if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file,
-          /*add_target_best_pairs=*/true))
+          &out->common, argv[0], &out->index_file))
     return false;
   if (out->index_file == NULL) {
     usage(argv[0]);
