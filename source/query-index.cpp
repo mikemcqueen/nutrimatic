@@ -46,7 +46,7 @@ struct Args {
 };
 
 static void usage(char const* program) {
-  fprintf(stderr,
+  fprintf(stdout,
       "usage: %s [-i INDEX] letters"
       " [--score] [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N]"
@@ -115,6 +115,8 @@ static void usage(char const* program) {
       " requires either --seed-pairs or -t beginning with sN\n"
       "    it also excludes DIR/%s, and a complete target's %s, when those"
       " files exist\n"
+      "    BEST pair words missing from the dictionary are added to it,"
+      " with a stderr notice for each\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
       " its sentence seed is auto-loaded, and a complete target also loads"
       " its optional %s unless --best-pairs replaces it\n"

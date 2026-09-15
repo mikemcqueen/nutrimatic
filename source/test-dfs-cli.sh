@@ -47,7 +47,7 @@ assert_close() {
 "$make_index" "$index_file"
 
 expect_status 2 "$dfs_anagrams" "$index_file" abcd
-grep -q '^usage: .* \[-i INDEX\] letters' "$test_dir/status.stderr" ||
+grep -q '^usage: .* \[-i INDEX\] letters' "$test_dir/status.stdout" ||
   fail "positional index rejection did not show the new synopsis"
 expect_status 2 "$dfs_anagrams" abcd
 
@@ -309,6 +309,9 @@ printf 'ba\n' > "$test_dir/missing-index-dictionary"
   --dict "$test_dir/missing-index-dictionary" \
   > "$test_dir/missing-index-dictionary.stdout" \
   2> "$test_dir/missing-index-dictionary.stderr"
+grep -q 'WARNING: ba,dc dropped because dc is not in dictionary$' \
+  "$test_dir/missing-index-dictionary.stderr" ||
+  fail "a dictionary-dropped external pair was not reported"
 for eligibility in excluded x1 bag dictionary; do
   ! grep -Eq ' (ba dc|dc ba)$' \
       "$test_dir/missing-index-$eligibility.stdout" ||
@@ -705,6 +708,18 @@ WFROOT="$workflow_root" "$dfs_anagrams" klmn -m 2 -n 2 \
   2> "$test_dir/workflow-alias.stderr"
 cmp "$test_dir/workflow-positive.stdout" "$test_dir/workflow-alias.stdout" ||
   fail "--wf did not use WFROOT like --wfroot"
+printf 'kl\n' > "$test_dir/workflow-kl-dictionary"
+"$dfs_anagrams" klmn -m 2 -n 2 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \
+  --dict "$test_dir/workflow-kl-dictionary" \
+  > "$test_dir/workflow-best-dictionary.stdout" \
+  2> "$test_dir/workflow-best-dictionary.stderr"
+grep -q 'added mn to dictionary from BEST pairs$' \
+  "$test_dir/workflow-best-dictionary.stderr" ||
+  fail "workflow BEST word missing from dictionary was not reported"
+cmp "$test_dir/workflow-positive.stdout" \
+    "$test_dir/workflow-best-dictionary.stdout" ||
+  fail "workflow BEST word missing from dictionary was not added"
 rm "$workflow_root/.wf/best/idx/wiki-merged.2.index"
 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
   --wfroot "$workflow_root" -t 's1/o-klmn/m2/g1' \

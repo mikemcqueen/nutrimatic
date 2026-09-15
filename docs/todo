@@ -1,3 +1,6 @@
+* manual reviews:
+  - tmp/s7.g6.nytt.bad
+
 * the "allow an s" excpetion to anagrams.  i'm not even sure how practical
   this is. but i've been eliminating plurals from the dictionary with the
   expectation that this will work. "easy enough" to grep all s-ending words

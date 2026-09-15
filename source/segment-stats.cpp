@@ -28,8 +28,8 @@ struct Stats {
   std::vector<size_t> unique_words_by_length;
 };
 
-static void usage(FILE* fp, char const* program) {
-  fprintf(fp,
+static void usage(char const* program) {
+  fprintf(stdout,
       "usage: %s [FILE]\n"
       "  calculate segment and word statistics for dfs-anagrams output\n"
       "  with no FILE, or when FILE is -, read standard input\n",
@@ -211,15 +211,15 @@ int main(int argc, char* argv[]) {
     } else if (parse_options &&
                (strcmp(argv[i], "-h") == 0 ||
                 strcmp(argv[i], "--help") == 0)) {
-      usage(stdout, argv[0]);
+      usage(argv[0]);
       return 0;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "segment-stats: unknown option \"%s\"\n", argv[i]);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else if (input_path != NULL) {
       fputs("segment-stats: at most one FILE may be given\n", stderr);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else {
       input_path = argv[i];

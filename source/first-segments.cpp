@@ -18,8 +18,8 @@ struct FoundSegment {
   size_t length;
 };
 
-static void usage(FILE* fp, char const* program) {
-  fprintf(fp,
+static void usage(char const* program) {
+  fprintf(stdout,
       "usage: %s [--pairs | --solo-words | --all-words]\n"
       "          [-l]\n"
       "          [-n N]\n"
@@ -40,8 +40,8 @@ static void usage(FILE* fp, char const* program) {
       "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
       "                       repeated\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
-  print_reject_option_help(fp, 23);
-  fprintf(fp,
+  print_reject_option_help(stdout, 23);
+  fprintf(stdout,
       "  -d, --dict PATH      discard rows with any word not in PATH; with\n"
       "                       --wf or --wfroot, defaults to DIR/%s\n"
       "  --wfroot DIR         implies -r DIR/%s; also implies\n"
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
       PairFilterOptionResult const result = parse_pair_filter_option(
           argc, argv, &i, "first-segments", true, true, &filter_options);
       if (result == PAIR_FILTER_OPTION_ERROR) {
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return 2;
       }
       if (result == PAIR_FILTER_OPTION_HANDLED) continue;
@@ -176,7 +176,7 @@ int main(int argc, char* argv[]) {
           parse_segment_output_option(
               argc, argv, &i, "first-segments", &output_options);
       if (output_result == SEGMENT_OUTPUT_OPTION_ERROR) {
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return 2;
       }
       if (output_result == SEGMENT_OUTPUT_OPTION_HANDLED) continue;
@@ -187,15 +187,15 @@ int main(int argc, char* argv[]) {
     } else if (parse_options &&
                (strcmp(argv[i], "-h") == 0 ||
                 strcmp(argv[i], "--help") == 0)) {
-      usage(stdout, argv[0]);
+      usage(argv[0]);
       return 0;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "first-segments: unknown option \"%s\"\n", argv[i]);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else if (results_path != NULL) {
       fputs("first-segments: at most one RESULTS file may be given\n", stderr);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else {
       results_path = argv[i];
@@ -203,7 +203,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (!check_pair_filter_options(filter_options, "first-segments")) {
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
 

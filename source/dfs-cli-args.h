@@ -231,6 +231,14 @@ bool load_pair_file_ignoring_single_words(
     char const* path, char const* what, DfsPairSet* pairs,
     size_t* ignored_single_words);
 
+// One normalized pair-file row in written order. right is empty for a
+// standalone word; line_number is 1-based.
+struct DfsPairRow {
+  std::string left;
+  std::string right;
+  size_t line_number;
+};
+
 // Loads an ordinary extraction bonus list after -m has been finalized.
 // Standalone words and pairs must contain at least min_word_len normalized
 // non-space characters in total. Pairs containing a word shorter than the
@@ -241,15 +249,20 @@ bool load_pair_file_ignoring_single_words(
 bool load_extraction_pair_file(
     char const* path, char const* what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
-    bool reject_hyphens);
+    bool reject_hyphens, std::vector<DfsPairRow>* rows = NULL);
 
 // Loads the repeatable fixed-tier pair inputs. Duplicate and reversed keys
 // retain the strongest source. `score_mode` uses the symmetric score loader;
 // extraction mode preserves the short-word directional rules and accumulates
-// their exception prefixes.
+// their exception prefixes. In extraction mode, non-NULL rows receives every
+// YES file's rows and non-NULL best_rows every BEST file's rows, as
+// load_extraction_pair_file() reports them. Seed rows are currently turned off
+// due to excessive occurrences of non-dictionary words.
 bool load_weighted_pair_files(
     DfsCommonArgs const& args, bool score_mode, int min_word_len,
-    DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes);
+    DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes,
+    std::vector<DfsPairRow>* rows = NULL,
+    std::vector<DfsPairRow>* best_rows = NULL);
 
 // Loads and combines exclusion lists in the same format from regular files and
 // at most one workflow root, which resolves to

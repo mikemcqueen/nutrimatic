@@ -54,7 +54,7 @@ static void report_segments(std::vector<DfsSpelling> const& results,
 }
 
 static void usage(char const* program) {
-  fprintf(stderr,
+  fprintf(stdout,
       "usage: %s [-i INDEX] letters"
       " [-u used-letters] [--dict PATH] [-m min-word-length]"
       " [-g num-segments] [-n top]"
@@ -110,6 +110,8 @@ static void usage(char const* program) {
       "    it also excludes DIR/%s, and a complete target's %s, as if each"
       " were an --exclude-pairs file; either is"
       " skipped when absent\n"
+      "    BEST pair words missing from the dictionary are added to it,"
+      " with a stderr notice for each\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
       " its sentence seed is auto-loaded, and a complete target also loads"
       " its optional %s unless --best-pairs replaces it\n"

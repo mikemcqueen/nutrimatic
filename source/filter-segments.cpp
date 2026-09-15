@@ -11,8 +11,8 @@
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
-static void usage(FILE* fp, char const* program) {
-  fprintf(fp,
+static void usage(char const* program) {
+  fprintf(stdout,
       "usage: %s [-n N] [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
       "          [-d PATH]\n"
@@ -20,9 +20,9 @@ static void usage(FILE* fp, char const* program) {
       "  print dfs-anagrams result lines that contain no rejected segment\n"
       "  -n N                 print at most N result lines\n",
       program);
-  print_reject_option_help(fp, 23);
-  print_allow_pairs_option_help(fp, 23);
-  fprintf(fp,
+  print_reject_option_help(stdout, 23);
+  print_allow_pairs_option_help(stdout, 23);
+  fprintf(stdout,
       "  -d, --dict PATH      discard rows with any word not in PATH; with\n"
       "                       --wf or --wfroot, defaults to DIR/%s\n"
       "  --wfroot DIR         implies -r DIR/%s; also implies\n"
@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
           argc, argv, &i, "filter-segments", false, false, &filter_options,
           true);
       if (result == PAIR_FILTER_OPTION_ERROR) {
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return 2;
       }
       if (result == PAIR_FILTER_OPTION_HANDLED) continue;
@@ -123,23 +123,23 @@ int main(int argc, char* argv[]) {
     } else if (parse_options &&
                (strcmp(argv[i], "-h") == 0 ||
                 strcmp(argv[i], "--help") == 0)) {
-      usage(stdout, argv[0]);
+      usage(argv[0]);
       return 0;
     } else if (parse_options && strcmp(argv[i], "-n") == 0) {
       if (++i == argc || !parse_limit(argv[i], &limit)) {
         fputs("filter-segments: -n requires a non-negative integer\n",
             stderr);
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return 2;
       }
       have_limit = true;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "filter-segments: unknown option \"%s\"\n", argv[i]);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else if (results_path != NULL) {
       fputs("filter-segments: at most one FILE may be specified\n", stderr);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else {
       results_path = argv[i];
@@ -147,7 +147,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (!check_pair_filter_options(filter_options, "filter-segments")) {
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
 

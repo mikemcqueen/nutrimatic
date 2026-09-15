@@ -31,7 +31,7 @@ set -e
 [[ $positional_index_status -eq 2 ]] ||
   fail "positional index should exit 2, got $positional_index_status"
 grep -q '^usage: .* \[-i INDEX\] letters' \
-  "$test_dir/positional-index.stderr" ||
+  "$test_dir/positional-index.stdout" ||
   fail "positional index rejection did not show the new synopsis"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
@@ -69,6 +69,7 @@ expect_score_failure() {
   [[ $status -eq 2 ]] ||
     fail "$name should exit 2, got $status"
   [[ ! -s "$test_dir/$name.stdout" ]] ||
+    grep -q "^usage: " "$test_dir/$name.stdout" ||
     fail "$name printed output before rejecting the sequence"
 }
 
@@ -85,6 +86,7 @@ expect_near_failure() {
   [[ $status -eq 2 ]] ||
     fail "$name should exit 2, got $status"
   [[ ! -s "$test_dir/$name.stdout" ]] ||
+    grep -q "^usage: " "$test_dir/$name.stdout" ||
     fail "$name printed output before rejecting the query"
 }
 

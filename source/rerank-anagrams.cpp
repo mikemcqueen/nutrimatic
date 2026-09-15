@@ -32,8 +32,8 @@ struct Args {
   bool show_bonus = false;
 };
 
-void usage(FILE* output, char const* program) {
-  fprintf(output,
+void usage(char const* program) {
+  fprintf(stdout,
       "usage: %s (--wf | --wfroot DIR) -t FULL-TARGET"
       " [-r FILE]... [--best-pairs FILE] [--more-best-pairs FILE]..."
       " [--show-bonus] [FILE]\n"
@@ -91,7 +91,7 @@ bool parse_args(char* argv[], Args* out) {
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return false;
     }
   }
@@ -99,18 +99,18 @@ bool parse_args(char* argv[], Args* out) {
   out->results_file = optparse_arg(&options);
   if (optparse_arg(&options) != NULL) {
     fputs("rerank-anagrams: at most one FILE may be specified\n", stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return false;
   }
   if (!out->common.workflow && out->common.workflow_root.empty()) {
     fputs("rerank-anagrams: requires exactly one of --wf or --wfroot\n",
           stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return false;
   }
   if (out->common.target.empty()) {
     fputs("rerank-anagrams: requires -t FULL-TARGET\n", stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return false;
   }
 

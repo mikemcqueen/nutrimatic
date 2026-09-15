@@ -30,7 +30,12 @@ DfsBestBonusPolicy dfs_best_bonus_policy(size_t exact_segments);
 
 // Builds the shared dfs-anagrams-family phase-1 class list, including external
 // pair synthesis and exclusions. exact_segments selects descending BEST
-// scoring when nonzero and the fixed BEST tier otherwise.
+// scoring when nonzero and the fixed BEST tier otherwise. With a dictionary in
+// workflow mode, every BEST word outside the dictionary is first added to it
+// and reported once on stderr, in yellow when stderr is a terminal. Then
+// every --pairs, YES, or BEST row that fits letters and would otherwise
+// reach phase 1, but has a word outside the dictionary, is reported once on
+// stderr as a WARNING, in red when stderr is a terminal.
 bool prepare_dfs_class_list(
     IndexReader* reader, std::string const& letters,
     DfsCommonArgs const& args,

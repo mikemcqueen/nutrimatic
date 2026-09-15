@@ -437,17 +437,11 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
 
 namespace {
 
-struct LoadedPairRow {
-  std::string left;
-  std::string right;
-  size_t line_number;
-};
-
 bool load_pair_rows(
     char const* path, char const* what, bool reject_hyphens,
     bool allow_single_words, bool ignore_single_words,
     size_t* ignored_single_word_count,
-    std::vector<LoadedPairRow>* loaded) {
+    std::vector<DfsPairRow>* loaded) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open %s \"%s\"\n", what, path);
@@ -495,7 +489,7 @@ bool load_pair_rows(
               : "expected two comma-separated words");
       return false;
     }
-    LoadedPairRow const row = { left, right, line_number };
+    DfsPairRow const row = { left, right, line_number };
     loaded->push_back(row);
   }
 
@@ -513,7 +507,7 @@ bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words,
     char const* diagnostic_source) {
-  std::vector<LoadedPairRow> loaded;
+  std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
           path, what, reject_hyphens, allow_single_words,
           /*ignore_single_words=*/false, NULL, &loaded))
@@ -542,7 +536,7 @@ bool load_pair_file(
 bool load_pair_file_ignoring_single_words(
     char const* path, char const* what, DfsPairSet* pairs,
     size_t* ignored_single_words) {
-  std::vector<LoadedPairRow> loaded;
+  std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
           path, what, /*reject_hyphens=*/true,
           /*allow_single_words=*/true, /*ignore_single_words=*/true,
@@ -560,8 +554,8 @@ bool load_pair_file_ignoring_single_words(
 bool load_extraction_pair_file(
     char const* path, char const* what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
-    bool reject_hyphens) {
-  std::vector<LoadedPairRow> loaded;
+    bool reject_hyphens, std::vector<DfsPairRow>* rows) {
+  std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
           path, what, reject_hyphens, /*allow_single_words=*/true,
           /*ignore_single_words=*/false, NULL, &loaded))
@@ -584,7 +578,7 @@ bool load_extraction_pair_file(
   pairs->reserve(pairs->size() + 2 * loaded.size());
   exception_prefixes->reserve(exception_prefixes->size() + loaded.size());
   for (size_t i = 0; i < loaded.size(); ++i) {
-    LoadedPairRow const& row = loaded[i];
+    DfsPairRow const& row = loaded[i];
     if (row.right.empty()) {
       pairs->insert(row.left);
       continue;
@@ -599,6 +593,7 @@ bool load_extraction_pair_file(
       pairs->insert(row.right + " " + row.left);
     }
   }
+  if (rows != NULL) rows->insert(rows->end(), loaded.begin(), loaded.end());
   if (!quiet)
     dfs_diagnostic("%s: %zu pairs, %zu keys\n",
                    what, loaded.size(), pairs->size());
@@ -607,16 +602,19 @@ bool load_extraction_pair_file(
 
 bool load_weighted_pair_files(
     DfsCommonArgs const& args, bool score_mode, int min_word_len,
-    DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes) {
+    DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes,
+    std::vector<DfsPairRow>* rows, std::vector<DfsPairRow>* best_rows) {
   struct Source {
     std::vector<std::string> const* paths;
     char const* description;
     DfsPairBonusKind kind;
+    std::vector<DfsPairRow>* rows;
   };
   Source const sources[] = {
-    { &args.seed_pair_files, "seed pair list", DFS_PAIR_BONUS_SEED },
-    { &args.yes_pair_files, "YES pair list", DFS_PAIR_BONUS_YES },
-    { &args.best_pair_files, "BEST pair list", DFS_PAIR_BONUS_BEST },
+    { &args.seed_pair_files, "seed pair list", DFS_PAIR_BONUS_SEED, NULL },
+    { &args.yes_pair_files, "YES pair list", DFS_PAIR_BONUS_YES, rows },
+    { &args.best_pair_files, "BEST pair list", DFS_PAIR_BONUS_BEST,
+      best_rows },
   };
   for (size_t source = 0;
        source < sizeof(sources) / sizeof(sources[0]); ++source) {
@@ -629,7 +627,7 @@ bool load_weighted_pair_files(
                            false, false, true)
           : load_extraction_pair_file(
                 path, sources[source].description, min_word_len,
-                &loaded, &prefixes, false, false);
+                &loaded, &prefixes, false, false, sources[source].rows);
       if (!success) return false;
       merge_pair_tier(loaded, sources[source].kind, pairs);
       exception_prefixes->insert(prefixes.begin(), prefixes.end());

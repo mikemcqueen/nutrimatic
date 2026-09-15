@@ -1,9 +1,82 @@
 #include "dfs-class-list-build.h"
 
 #include <stdio.h>
+#include <unistd.h>
+
+#include <array>
 
 #include "dfs-diagnostic.h"
 #include "index.h"
+
+namespace {
+
+bool row_fits_bag(std::array<int, 256> remaining, DfsPairRow const& row) {
+  std::string const text = row.left + row.right;
+  for (size_t i = 0; i < text.size(); ++i) {
+    unsigned char const ch = (unsigned char) text[i];
+    if (remaining[ch] == 0) return false;
+    --remaining[ch];
+  }
+  return true;
+}
+
+void warn_dictionary_drops(
+    IndexReader const& reader, std::string const& letters,
+    DfsCommonArgs const& args, DfsDictionary const& dictionary,
+    DfsPairSet const& exclude_pairs, std::vector<DfsPairRow> const& rows) {
+  std::array<int, 256> bag;
+  bag.fill(0);
+  for (size_t i = 0; i < letters.size(); ++i)
+    ++bag[(unsigned char) letters[i]];
+
+  bool const tty = isatty(fileno(stderr));
+  DfsPairSet reported;
+  for (size_t i = 0; i < rows.size(); ++i) {
+    DfsPairRow const& row = rows[i];
+    bool const pair = !row.right.empty();
+    bool const left_missing = dictionary.count(row.left) == 0;
+    bool const right_missing = pair && dictionary.count(row.right) == 0;
+    if (!left_missing && !right_missing) continue;
+    if (!row_fits_bag(bag, row)) continue;
+
+    std::string const entry = pair ? row.left + "," + row.right : row.left;
+    if (reported.count(entry) != 0) continue;
+    if (pair) {
+      if (args.max_extract_words == 1) continue;
+      if (exclude_pairs.count(row.left + " " + row.right) != 0) continue;
+    } else {
+      int64_t count;
+      if (!reader.aggregate_entry_count(row.left, &count)) continue;
+    }
+    reported.insert(entry);
+
+    bool const both = left_missing && right_missing && row.left != row.right;
+    std::string const missing = both
+        ? row.left + " and " + row.right
+        : (left_missing ? row.left : row.right);
+    dfs_diagnostic_to_stream(stderr,
+        "%sWARNING: %s dropped because %s %s not in dictionary%s\n",
+        tty ? "\033[31m" : "", entry.c_str(), missing.c_str(),
+        both ? "are" : "is", tty ? "\033[0m" : "");
+  }
+}
+
+void admit_best_words(
+    std::vector<DfsPairRow> const& rows, DfsDictionary* dictionary) {
+  bool const tty = isatty(fileno(stderr));
+  for (size_t i = 0; i < rows.size(); ++i) {
+    std::string const* const words[] = { &rows[i].left, &rows[i].right };
+    for (size_t w = 0; w < 2; ++w) {
+      std::string const& word = *words[w];
+      if (word.empty() || !dictionary->insert(word).second) continue;
+      dfs_diagnostic_to_stream(stderr,
+          "%sadded %s to dictionary from BEST pairs%s\n",
+          tty ? "\033[33m" : "", word.c_str(), tty ? "\033[0m" : "");
+    }
+  }
+}
+
+}  // namespace
 
 DfsBestBonusPolicy dfs_best_bonus_policy(size_t exact_segments) {
   return exact_segments > 0
@@ -22,18 +95,30 @@ bool prepare_dfs_class_list(
     dictionary_filter = &out->dictionary;
   }
 
+  std::vector<DfsPairRow> external_rows;
+  std::vector<DfsPairRow> best_rows;
   if (args.pair_file != NULL &&
       !load_extraction_pair_file(
           args.pair_file, "pair list", args.min_word_len,
-          &out->pairs, &out->exception_prefixes, false, false))
+          &out->pairs, &out->exception_prefixes, false, false,
+          &external_rows))
     return false;
   if (!load_weighted_pair_files(
           args, /*score_mode=*/false, args.min_word_len,
-          &out->weighted_pairs, &out->exception_prefixes))
+          &out->weighted_pairs, &out->exception_prefixes, &external_rows,
+          &best_rows))
     return false;
   if (!load_exclude_pair_files(
           exclude_pair_files, &out->exclude_pairs))
     return false;
+  if (dictionary_filter != NULL) {
+    if (!args.workflow_root.empty())
+      admit_best_words(best_rows, &out->dictionary);
+    external_rows.insert(
+        external_rows.end(), best_rows.begin(), best_rows.end());
+    warn_dictionary_drops(*reader, letters, args, out->dictionary,
+                          out->exclude_pairs, external_rows);
+  }
 
   DfsBestBonusPolicy const best_bonus =
       dfs_best_bonus_policy(exact_segments);

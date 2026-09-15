@@ -35,8 +35,8 @@ struct FilterStats {
   DfsPairSet classified_yes_pairs;
 };
 
-static void usage(FILE* fp, char const* program) {
-  fprintf(fp,
+static void usage(char const* program) {
+  fprintf(stdout,
       "usage: %s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
       "          [-c | --no-counts] [-l | --elim] [-n N]\n"
@@ -67,9 +67,9 @@ static void usage(FILE* fp, char const* program) {
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
       "                      repeated\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
-  print_reject_option_help(fp, 22);
-  print_allow_pairs_option_help(fp, 22);
-  fprintf(fp,
+  print_reject_option_help(stdout, 22);
+  print_allow_pairs_option_help(stdout, 22);
+  fprintf(stdout,
       "  -d, --dict PATH     discard rows with any word not in PATH; with\n"
       "                      --wf or --wfroot, defaults to DIR/%s\n"
       "  --wfroot DIR        implies -r DIR/%s; also implies\n"
@@ -496,7 +496,7 @@ int main(int argc, char* argv[]) {
         if (!select_segment_output(
                 SEGMENT_SELECTION_PAIRS, SEGMENT_PROJECTION_WORDS,
                 "top-segments", &output_options)) {
-          usage(stderr, argv[0]);
+          usage(argv[0]);
           return 2;
         }
         continue;
@@ -513,7 +513,7 @@ int main(int argc, char* argv[]) {
       PairFilterOptionResult const filter_result = parse_pair_filter_option(
           argc, argv, &i, "top-segments", true, true, &filter_options, true);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return 2;
       }
       if (filter_result == PAIR_FILTER_OPTION_HANDLED) continue;
@@ -521,7 +521,7 @@ int main(int argc, char* argv[]) {
       SegmentOutputOptionResult const result = parse_segment_output_option(
           argc, argv, &i, "top-segments", &output_options);
       if (result == SEGMENT_OUTPUT_OPTION_ERROR) {
-        usage(stderr, argv[0]);
+        usage(argv[0]);
         return 2;
       }
       if (result == SEGMENT_OUTPUT_OPTION_HANDLED) continue;
@@ -532,11 +532,11 @@ int main(int argc, char* argv[]) {
     } else if (parse_options &&
                (strcmp(argv[i], "-h") == 0 ||
                 strcmp(argv[i], "--help") == 0)) {
-      usage(stdout, argv[0]);
+      usage(argv[0]);
       return 0;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "top-segments: unknown option \"%s\"\n", argv[i]);
-      usage(stderr, argv[0]);
+      usage(argv[0]);
       return 2;
     } else {
       paths.push_back(argv[i]);
@@ -544,7 +544,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (!check_pair_filter_options(filter_options, "top-segments")) {
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
   bool const workflow =
@@ -563,26 +563,26 @@ int main(int argc, char* argv[]) {
   if (force_counts && suppress_counts) {
     fputs("top-segments: --counts and --no-counts are mutually exclusive\n",
         stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
   if (elimination && suppress_counts) {
     fputs("top-segments: --elim and --no-counts are mutually exclusive\n",
         stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
   bool const show_counts = force_counts ||
       (!suppress_counts && !pair_segments);
   if (output_options.weight == SEGMENT_WEIGHT_UNIQUE && !pair_words) {
     fputs("top-segments: --unique requires --pair-words\n", stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
   if (elimination && output_options.by_length) {
     fputs("top-segments: --elim and --by-length are mutually exclusive\n",
         stderr);
-    usage(stderr, argv[0]);
+    usage(argv[0]);
     return 2;
   }
 
