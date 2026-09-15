@@ -530,15 +530,17 @@ bool dfs_spelling_better(DfsSpelling const& a, DfsSpelling const& b) {
 
 bool dfs_print_results(
     FILE* output, std::vector<DfsSpelling> const& results,
-    bool show_bonus, DfsSoloWords const* solo_words) {
+    bool show_score, bool show_bonus, DfsSoloWords const* solo_words) {
   for (size_t i = 0; i < results.size(); ++i) {
-    int const written = show_bonus
-        ? fprintf(output, "%#.4g %s %s\n", exp(results[i].log_score),
-                  dfs_spelling_bonus_list(results[i]).c_str(),
-                  dfs_spelling_entry_list(results[i], solo_words).c_str())
-        : fprintf(output, "%#.4g %s\n", exp(results[i].log_score),
-                  dfs_spelling_entry_list(results[i], solo_words).c_str());
-    if (written < 0) return false;
+    if (show_score &&
+        fprintf(output, "%#.4g ", exp(results[i].log_score)) < 0)
+      return false;
+    if (show_bonus &&
+        fprintf(output, "%s ", dfs_spelling_bonus_list(results[i]).c_str()) < 0)
+      return false;
+    if (fprintf(output, "%s\n",
+                dfs_spelling_entry_list(results[i], solo_words).c_str()) < 0)
+      return false;
   }
   return fflush(output) == 0;
 }

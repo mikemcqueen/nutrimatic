@@ -29,6 +29,7 @@ struct Args {
   char const* index_file = NULL;
   char const* results_file = NULL;
   int num_segments = 0;
+  bool show_score = true;
   bool show_bonus = false;
 };
 
@@ -36,7 +37,8 @@ void usage(char const* program) {
   fprintf(stdout,
       "usage: %s (--wf | --wfroot DIR) -t FULL-TARGET"
       " [-r FILE]... [--best-pairs FILE] [--more-best-pairs FILE]..."
-      " [--show-bonus] [FILE]\n"
+      " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
+      " [--show-bonus] [--no-score] [-n N] [FILE]\n"
       "  revalidate, rescore, and sort an ordinary dfs-anagrams result file\n"
       "  --wf                 use the nonempty WFROOT environment variable\n"
       "  --wfroot DIR         use DIR as the workflow root\n"
@@ -47,12 +49,22 @@ void usage(char const* program) {
       "                       add BEST pairs; may be repeated\n"
       "  -r, --reject FILE    reject rows containing a listed word or exact\n"
       "                       bidirectional pair; may be repeated\n"
+      "  --solo-words WORD[,WORD...]\n"
+      "                       score single-word segments against external\n"
+      "                       partners as dfs-anagrams does; parenthesized\n"
+      "                       partners in the input are ignored\n"
+      "  --hide-solo-words    omit parenthesized solo partners from output\n"
       "  --show-bonus         add the aligned S/Y/B/- marker column\n"
+      "  --no-score           omit the leading score column; the output\n"
+      "                       can't be filtered or reranked\n"
+      "  -n, --top N          print only the best N rows; 0, the default,\n"
+      "                       prints every surviving row\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program);
 }
 
 inline constexpr int OPT_SHOW_BONUS = 256;
+inline constexpr int OPT_NO_SCORE = 257;
 
 struct optparse_long const long_options[] = {
   { "wf", DFS_OPT_WF, OPTPARSE_NONE },
@@ -61,7 +73,11 @@ struct optparse_long const long_options[] = {
   { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED },
   { "more-best-pairs", DFS_OPT_MORE_BEST_PAIRS, OPTPARSE_REQUIRED },
   { "reject", 'r', OPTPARSE_REQUIRED },
+  { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED },
+  { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
+  { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
+  { "top", 'n', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -89,6 +105,9 @@ bool parse_args(char* argv[], Args* out) {
       case OPT_SHOW_BONUS:
         out->show_bonus = true;
         break;
+      case OPT_NO_SCORE:
+        out->show_score = false;
+        break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
         usage(argv[0]);
@@ -113,6 +132,7 @@ bool parse_args(char* argv[], Args* out) {
     usage(argv[0]);
     return false;
   }
+  if (!validate_solo_bonuses(out->common)) return false;
 
   if (!finalize_dfs_workflow_args(
           &out->common, argv[0], &out->index_file))
@@ -180,7 +200,16 @@ bool parse_segments(
               name, line_number);
       return false;
     }
-    std::string const segment = line.substr(start, length);
+    std::string segment = line.substr(start, length);
+    size_t const partner = segment.rfind(" (");
+    if (partner != std::string::npos && segment.back() == ')' &&
+        partner + 3 < segment.size() &&
+        std::all_of(segment.begin() + partner + 2, segment.end() - 1,
+                    [](char ch) {
+                      return (ch >= 'a' && ch <= 'z') ||
+                             (ch >= '0' && ch <= '9');
+                    }))
+      segment.erase(partner);
     bool after_space = true;
     for (size_t i = 0; i < segment.size(); ++i) {
       char const ch = segment[i];
@@ -283,8 +312,11 @@ bool rerank_stream(
   }
 
   std::sort(results.begin(), results.end(), dfs_spelling_better);
+  if (args.common.top > 0 && results.size() > size_t(args.common.top))
+    results.resize(size_t(args.common.top));
   return dfs_print_results(
-      stdout, results, args.show_bonus, prepared.solo_words.get());
+      stdout, results, args.show_score, args.show_bonus,
+      args.common.hide_solo_words ? NULL : prepared.solo_words.get());
 }
 
 }  // namespace

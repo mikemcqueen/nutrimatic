@@ -101,6 +101,24 @@ if "$filter_segments" -a "$malformed_allow" "$allow_input" \
   fail "malformed allowlist entry succeeded"
 fi
 
+expected='9 alpha beta,beta gamma
+6 mu nu'
+actual=$("$filter_segments" --with-regex '^(beta|mu) ' "$input")
+[[ $actual == "$expected" ]] || fail "--with-regex filtering is wrong: $actual"
+
+actual=$("$filter_segments" -r "$reject" --with-regex 'eta$' "$input")
+[[ $actual == '8 delta epsilon,zeta eta' ]] ||
+  fail "--with-regex with -r is wrong: $actual"
+
+expected='delta epsilon,zeta eta
+mu nu'
+actual=$("$filter_segments" -r "$reject" --no-score "$input")
+[[ $actual == "$expected" ]] || fail "--no-score output is wrong: $actual"
+
+if "$filter_segments" --with-regex '(' "$input" >/dev/null 2>&1; then
+  fail "invalid --with-regex succeeded"
+fi
+
 dictionary=$test_dir/dictionary.txt
 cat > "$dictionary" <<'EOF'
 alpha

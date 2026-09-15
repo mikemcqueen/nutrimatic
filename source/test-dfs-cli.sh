@@ -575,6 +575,12 @@ if awk 'NF < 3 { exit 1 }' "$test_dir/show-bonus.stdout"; then
 else
   fail "--show-bonus did not add a separate marker column"
 fi
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 1 \
+  --show-bonus --no-score \
+  > "$test_dir/no-score.stdout" 2> "$test_dir/no-score.stderr"
+cmp <(cut -d' ' -f2- "$test_dir/show-bonus.stdout") \
+  "$test_dir/no-score.stdout" ||
+  fail "--no-score did not drop only the score column"
 
 # The same within-class promotion must work when only the selected pair earns
 # the bonus. This exercises pair lookup, score ordering, phase-2 bounds, and

@@ -81,10 +81,11 @@ DfsSpelling dfs_build_spelling(
 bool dfs_spelling_better(DfsSpelling const& a, DfsSpelling const& b);
 
 // Prints ordinary or bonus-annotated DFS rows with the established score
-// formatting contract.
+// formatting contract. Without show_score the leading score column is
+// omitted, and the rows can no longer be read back by the result filters.
 bool dfs_print_results(
     FILE* output, std::vector<DfsSpelling> const& results,
-    bool show_bonus, DfsSoloWords const* solo_words = NULL);
+    bool show_score, bool show_bonus, DfsSoloWords const* solo_words = NULL);
 
 // The dedup table's payload. The map key (not duplicated here) is the
 // word-set key. When the result limit is nonzero, heap_pos is this entry's

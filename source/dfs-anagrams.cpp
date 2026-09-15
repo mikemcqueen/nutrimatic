@@ -31,6 +31,7 @@ struct Args {
   int exact_letters;
   bool allow_cache_fallback;
   bool segments;
+  bool show_score;
   bool show_bonus;
   bool weighted;
   bool verbose;
@@ -69,7 +70,7 @@ static void usage(char const* program) {
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
       " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
-      " [--segments] [--show-bonus] [--weighted]"
+      " [--segments] [--show-bonus] [--no-score] [--weighted]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
       " workflow mode defaults to DIR/%s; required otherwise\n"
@@ -157,6 +158,9 @@ static void usage(char const* program) {
       "  --show-bonus adds one marker per segment between the score and"
       " anagram: W for word bonus, P for legacy pair bonus, S/Y/B for pair"
       " sources, and - for none; cannot be combined with --segments\n"
+      "  --no-score omits the leading score from each result; the output"
+      " can't be read by filter-segments or rerank-anagrams; cannot be"
+      " combined with --segments\n"
       "  --weighted sorts and reports each segment by best-score times"
       " result-count instead of best score alone; requires --segments\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
@@ -177,6 +181,7 @@ static int const OPT_SEGMENTS = 256;
 static int const OPT_WEIGHTED = 257;
 static int const OPT_EXCLUDE_PAIRS = 258;
 static int const OPT_SHOW_BONUS = 259;
+static int const OPT_NO_SCORE = 260;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -189,6 +194,7 @@ static struct optparse_long const long_options[] = {
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
   { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
+  { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
@@ -209,6 +215,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->exact_letters = -1;
   out->allow_cache_fallback = false;
   out->segments = false;
+  out->show_score = true;
   out->show_bonus = false;
   out->weighted = false;
   out->verbose = false;
@@ -268,6 +275,9 @@ static bool parse_args(char* argv[], Args* out) {
       case OPT_SHOW_BONUS:
         out->show_bonus = true;
         break;
+      case OPT_NO_SCORE:
+        out->show_score = false;
+        break;
       case OPT_WEIGHTED:
         out->weighted = true;
         break;
@@ -298,6 +308,10 @@ static bool parse_args(char* argv[], Args* out) {
   }
   if (out->show_bonus && out->segments) {
     fputs("error: --show-bonus cannot be combined with --segments\n", stderr);
+    return false;
+  }
+  if (!out->show_score && out->segments) {
+    fputs("error: --no-score cannot be combined with --segments\n", stderr);
     return false;
   }
 
@@ -461,7 +475,7 @@ int main(int argc, char* argv[]) {
     report_segments(results, args.weighted);
   } else {
     if (!dfs_print_results(
-            stdout, results, args.show_bonus,
+            stdout, results, args.show_score, args.show_bonus,
             args.common.hide_solo_words
                 ? NULL : prepared.solo_words.get()))
       return 1;

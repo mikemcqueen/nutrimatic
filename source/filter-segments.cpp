@@ -6,6 +6,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <string>
 
 #include "pair-exclusions.h"
@@ -13,12 +14,17 @@
 
 static void usage(char const* program) {
   fprintf(stdout,
-      "usage: %s [-n N] [-r FILE | --reject FILE]...\n"
+      "usage: %s [-n N] [--with-regex REGEX] [--no-score]\n"
+      "          [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
       "          [-d PATH]\n"
       "          [--wf | --wfroot DIR] [-t TARGET] [FILE]\n"
       "  print dfs-anagrams result lines that contain no rejected segment\n"
-      "  -n N                 print at most N result lines\n",
+      "  -n N                 print at most N result lines\n"
+      "  --with-regex REGEX   keep only lines with a segment REGEX matches\n"
+      "                       anywhere (ECMAScript syntax)\n"
+      "  --no-score           omit the leading score from printed lines;\n"
+      "                       the output can't be filtered or reranked\n",
       program);
   print_reject_option_help(stdout, 23);
   print_allow_pairs_option_help(stdout, 23);
@@ -42,7 +48,8 @@ static void usage(char const* program) {
 static bool filter_stream(
     std::istream* input, char const* name, DfsPairSet const& rejected,
     std::optional<DfsPairSet> const& allowed,
-    DfsDictionary const& dictionary, bool have_limit, uint64_t limit) {
+    DfsDictionary const& dictionary, std::regex const* with_regex,
+    bool show_score, bool have_limit, uint64_t limit) {
   std::string line;
   uint64_t line_number = 0;
   uint64_t output_count = 0;
@@ -64,6 +71,7 @@ static bool filter_stream(
     }
 
     bool include = true;
+    bool regex_matched = with_regex == NULL;
     size_t start = size_t(score_end - line.c_str()) + 1;
     while (true) {
       size_t const end = line.find(',', start);
@@ -81,13 +89,15 @@ static bool filter_stream(
           !is_allowed_segment(allowed, segment) ||
           !all_words_in_dict(dictionary, segment))
         include = false;
+      if (!regex_matched && std::regex_search(segment, *with_regex))
+        regex_matched = true;
 
       if (end == std::string::npos) break;
       start = end + 1;
     }
 
-    if (include) {
-      printf("%s\n", line.c_str());
+    if (include && regex_matched) {
+      printf("%s\n", show_score ? line.c_str() : score_end + 1);
       if (ferror(stdout)) return false;
       ++output_count;
     }
@@ -106,6 +116,8 @@ int main(int argc, char* argv[]) {
   bool parse_options = true;
   bool have_limit = false;
   uint64_t limit = 0;
+  char const* with_regex_pattern = NULL;
+  bool show_score = true;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const result = parse_pair_filter_option(
@@ -133,6 +145,16 @@ int main(int argc, char* argv[]) {
         return 2;
       }
       have_limit = true;
+    } else if (parse_options && strcmp(argv[i], "--with-regex") == 0) {
+      if (++i == argc || with_regex_pattern != NULL) {
+        fputs("filter-segments: --with-regex requires one REGEX and may be"
+            " given once\n", stderr);
+        usage(argv[0]);
+        return 2;
+      }
+      with_regex_pattern = argv[i];
+    } else if (parse_options && strcmp(argv[i], "--no-score") == 0) {
+      show_score = false;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "filter-segments: unknown option \"%s\"\n", argv[i]);
       usage(argv[0]);
@@ -151,6 +173,19 @@ int main(int argc, char* argv[]) {
     return 2;
   }
 
+  std::regex with_regex;
+  if (with_regex_pattern != NULL) {
+    try {
+      with_regex.assign(with_regex_pattern);
+    } catch (std::regex_error const& error) {
+      fprintf(stderr, "filter-segments: bad --with-regex \"%s\": %s\n",
+          with_regex_pattern, error.what());
+      return 2;
+    }
+  }
+  std::regex const* const with_regex_filter =
+      with_regex_pattern != NULL ? &with_regex : NULL;
+
   if (results_path != NULL && strcmp(results_path, "-") != 0)
     filter_options.input_path = results_path;
 
@@ -165,7 +200,8 @@ int main(int argc, char* argv[]) {
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
     return filter_stream(
-        &std::cin, "-", rejected, allowed, dictionary, have_limit, limit)
+        &std::cin, "-", rejected, allowed, dictionary, with_regex_filter,
+        show_score, have_limit, limit)
         ? 0 : 1;
 
   errno = 0;
@@ -176,6 +212,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   return filter_stream(
-      &input, results_path, rejected, allowed, dictionary, have_limit, limit)
+      &input, results_path, rejected, allowed, dictionary, with_regex_filter,
+      show_score, have_limit, limit)
       ? 0 : 1;
 }

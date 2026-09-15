@@ -99,6 +99,19 @@ new_score=$(awk 'NR == 2 { print $1 }' "$test_dir/changed.stdout")
 [[ -n $old_score && -n $new_score && $old_score != "$new_score" ]] ||
   fail "replacement BEST did not change the saved candidate score"
 
+"$rerank" --wfroot "$workflow" -t "$target_name" -n 1 \
+  "$test_dir/dfs.stdout" \
+  > "$test_dir/rerank-top.stdout" 2> "$test_dir/rerank-top.stderr"
+[[ $(cat "$test_dir/rerank-top.stdout") == $(head -n 1 "$test_dir/dfs.stdout") ]] ||
+  fail "-n 1 did not print only the best row"
+
+"$rerank" --wfroot "$workflow" -t "$target_name" --no-score \
+  "$test_dir/dfs.stdout" \
+  > "$test_dir/rerank-no-score.stdout" 2> "$test_dir/rerank-no-score.stderr"
+[[ $(cat "$test_dir/rerank-no-score.stdout") == \
+   $(cut -d' ' -f2- "$test_dir/dfs.stdout") ]] ||
+  fail "--no-score did not drop only the score column"
+
 expect_status 2 "$rerank" -t "$target_name" "$test_dir/dfs.stdout"
 expect_status 2 "$rerank" --wfroot "$workflow" \
   "$test_dir/dfs.stdout"
@@ -124,5 +137,25 @@ expect_status 1 "$rerank" --wfroot "$workflow" -t "$target_name" \
   "$test_dir/dfs-bonus.stdout"
 grep -q 'annotated input is not supported' "$test_dir/status.stderr" ||
   fail "annotated input diagnostic is missing"
+
+printf 'ab,zz\n' > "$test_dir/solo.pairs"
+"$dfs_anagrams" abcd --wfroot "$workflow" -t "$target_name" \
+  -m 2 -g 2 -n 0 --more-best-pairs "$test_dir/solo.pairs" --solo-words zz \
+  > "$test_dir/dfs-solo.stdout" 2> "$test_dir/dfs-solo.stderr"
+grep -q ' (zz)' "$test_dir/dfs-solo.stdout" ||
+  fail "solo fixture produced no partner annotation"
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --more-best-pairs "$test_dir/solo.pairs" --solo-words zz \
+  "$test_dir/dfs-solo.stdout" \
+  > "$test_dir/rerank-solo.stdout" 2> "$test_dir/rerank-solo.stderr"
+cmp "$test_dir/dfs-solo.stdout" "$test_dir/rerank-solo.stdout" ||
+  fail "solo rerank output differs from dfs-anagrams --solo-words"
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --more-best-pairs "$test_dir/solo.pairs" --solo-words zz --hide-solo-words \
+  "$test_dir/dfs-solo.stdout" \
+  > "$test_dir/rerank-solo-hidden.stdout" 2> "$test_dir/rerank-solo-hidden.stderr"
+if grep -q ' (zz)' "$test_dir/rerank-solo-hidden.stdout"; then
+  fail "--hide-solo-words kept partner annotations"
+fi
 
 echo PASS
