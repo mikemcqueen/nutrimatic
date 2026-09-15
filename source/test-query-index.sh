@@ -361,8 +361,16 @@ printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
 grep -q 'pair list: 2 pairs, 2 keys$' "$test_dir/pair-list.stderr" ||
   fail "the pair-list diagnostic did not report reversal and dedup"
-cmp "$test_dir/extract-uncapped.stdout" "$test_dir/pair-list.stdout" ||
-  fail "a loaded pair list changed stdout at --pair-bonus 0"
+grep -v ' cd ab$' "$test_dir/pair-list.stdout" \
+  > "$test_dir/pair-list-indexed.stdout"
+cmp "$test_dir/extract-uncapped.stdout" \
+    "$test_dir/pair-list-indexed.stdout" ||
+  fail "a loaded pair list changed an index-backed row at --pair-bonus 0"
+grep -q '^1 cd ab$' "$test_dir/pair-list.stdout" ||
+  fail "query-index did not synthesize a missing listed-pair orientation"
+assert_close "$(score_value 'cd ab' --pairs "$test_dir/pairs.txt" \
+    --pair-bonus 0 --word-bonus 0 -P 1)" 1 \
+  "--score did not use the synthesized pair's fallback count"
 
 assert_close "$(score_value 'ab cd' --pairs "$test_dir/pairs.txt" \
     --word-bonus 0 -P 1)" 70000000 \
@@ -424,6 +432,17 @@ for ((i = 0; i < 4; ++i)); do
   assert_close "$dynamic_score" "$dynamic_expected" \
     "four-entry cumulative BEST exponent ${dynamic_exponents[$i]} is wrong"
 done
+
+# Ordinary candidate listing has no exact result size, so it retains the
+# fixed BEST exponent even though --score above uses descending BEST.
+"$query_index" -i "$synthetic_index" abcd -m 2 -n 1 -P 1 \
+  --word-bonus 0 --best-pairs "$test_dir/best-pairs.txt" \
+  > "$test_dir/fixed-best-listing.stdout" \
+  2> "$test_dir/fixed-best-listing.stderr"
+assert_close "$(awk 'NR == 1 { print $1 }' \
+    "$test_dir/fixed-best-listing.stdout")" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 4) }')" \
+  "ordinary listing did not retain the fixed BEST exponent"
 expect_score_failure ab legacy-and-weighted --pairs "$test_dir/pairs.txt" \
   --seed-pairs "$test_dir/seed-pairs.txt"
 grep -q '^error: --pairs cannot be combined with --seed-pairs, --yes-pairs, --best-pairs, or --more-best-pairs$' \
@@ -439,7 +458,7 @@ mkdir -p "$workflow_root/.wf/dict" \
   "$workflow_root/.wf/best/idx" \
   "$workflow_root/.wf/best/s1/o-abcd/m2/g1"
 cp "$synthetic_index" "$workflow_root/.wf/best/idx/wiki-merged.2.index"
-printf 'ab\ncd\n' > "$workflow_root/.wf/dict/words.filtered"
+printf 'ab\ncd\ngh\nij\n' > "$workflow_root/.wf/dict/words.filtered"
 printf 'ab,cd\n' > "$workflow_root/.wf/classified/yes/yes.pairs"
 printf 'gh,ij\n' > "$workflow_root/.wf/best/s1/seed.m2.pairs"
 printf 'ab,cd\n' > "$workflow_root/.wf/best/s1/o-abcd/m2/g1/best.pairs"
@@ -503,6 +522,20 @@ assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
     --wfroot "$workflow_root" \
     --seed-pairs "$workflow_root/.wf/best/s1/seed.m2.pairs")" \
   5000000 "explicit --seed-pairs did not satisfy workflow mode"
+
+mkdir -p "$workflow_root/.wf/classified/no"
+printf 'ab,cd\n' > "$workflow_root/.wf/classified/no/no.pairs"
+expect_score_failure 'ab cd' workflow-no-score \
+  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1'
+grep -q 'dfs-anagrams phase 1 excludes entry "ab cd"' \
+  "$test_dir/workflow-no-score.stderr" ||
+  fail "--score did not apply the workflow NO exclusion"
+"$query_index" -i "$synthetic_index" abcd -m 2 -n 10 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
+  > "$test_dir/workflow-no-listing.stdout" \
+  2> "$test_dir/workflow-no-listing.stderr"
+! grep -q ' ab cd$' "$test_dir/workflow-no-listing.stdout" ||
+  fail "ordinary listing did not apply the workflow NO exclusion"
 
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
   --pairs "$test_dir/pairs.txt" --word-bonus 0 \

@@ -17,7 +17,6 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -32,13 +31,6 @@ struct Args {
   int num_segments = 0;
   bool show_bonus = false;
 };
-
-struct MemberAddress {
-  size_t class_index;
-  size_t member_index;
-};
-
-typedef std::unordered_map<std::string, MemberAddress> MemberIndex;
 
 void usage(FILE* output, char const* program) {
   fprintf(output,
@@ -152,25 +144,6 @@ bool load_rejections(
   return true;
 }
 
-bool index_members(DfsClassList const& classes, MemberIndex* members) {
-  members->reserve(classes.entry_count());
-  for (size_t ci = 0; ci < classes.classes().size(); ++ci) {
-    for (size_t mi = 0; mi < classes.member_count(ci); ++mi) {
-      DfsMemberView const member = classes.member(ci, mi);
-      MemberAddress const address = {ci, mi};
-      std::pair<MemberIndex::iterator, bool> const inserted = members->emplace(
-          std::string(member.text, member.text_length), address);
-      if (!inserted.second) {
-        fprintf(stderr,
-            "rerank-anagrams: duplicate phase-1 spelling \"%.*s\"\n",
-            int(member.text_length), member.text);
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 bool parse_segments(
     std::string const& line, char const* name, uint64_t line_number,
     std::string const& required_letters, int required_segments,
@@ -260,8 +233,13 @@ bool parse_segments(
 bool rerank_stream(
     std::istream* input, char const* name, Args const& args,
     DfsPairSet const& rejected, DfsPreparedClassList const& prepared) {
-  MemberIndex members;
-  if (!index_members(*prepared.classes, &members)) return false;
+  DfsMemberIndex members;
+  std::string duplicate;
+  if (!dfs_index_members(*prepared.classes, &members, &duplicate)) {
+    fprintf(stderr, "rerank-anagrams: duplicate phase-1 spelling \"%s\"\n",
+            duplicate.c_str());
+    return false;
+  }
   std::vector<DfsSpelling> results;
   std::string line;
   uint64_t line_number = 0;
@@ -283,7 +261,7 @@ bool rerank_stream(
     bool keep = true;
     for (size_t i = 0; i < segments.size(); ++i) {
       if (is_rejected_segment(rejected, segments[i])) keep = false;
-      MemberIndex::const_iterator const found = members.find(segments[i]);
+      DfsMemberIndex::const_iterator const found = members.find(segments[i]);
       if (found == members.end()) {
         keep = false;
       } else {
@@ -293,15 +271,8 @@ bool rerank_stream(
     }
     if (!keep) continue;
 
-    double representative = 0.0;
-    for (size_t i = 0; i < class_indexes.size(); ++i) {
-      DfsMemberView const member = prepared.classes->member(
-          class_indexes[i], 0);
-      double const score = prepared.model->member_upper_log_score(
-          member.count, member.word_count > 1, member.score_flags);
-      representative = i == 0
-          ? score : prepared.model->append_log_score(representative, score);
-    }
+    double const representative = dfs_representative_upper_log_score(
+        *prepared.classes, *prepared.model, class_indexes);
     results.push_back(dfs_build_spelling(
         *prepared.classes, *prepared.model, prepared.solo_words.get(),
         class_indexes, member_indexes, representative, args.show_bonus));

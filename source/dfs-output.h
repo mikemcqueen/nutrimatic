@@ -33,6 +33,13 @@ struct DfsSpelling {
   std::vector<uint8_t> segment_bonus_flags;
 };
 
+struct DfsMemberAddress {
+  size_t class_index;
+  size_t member_index;
+};
+
+typedef std::unordered_map<std::string, DfsMemberAddress> DfsMemberIndex;
+
 inline constexpr uint8_t DFS_SEGMENT_WORD_BONUS = 1 << 0;
 inline constexpr int DFS_SEGMENT_PAIR_BONUS_SHIFT = 1;
 inline constexpr uint8_t DFS_SEGMENT_PAIR_BONUS_MASK = uint8_t(7) << 1;
@@ -47,6 +54,18 @@ std::string dfs_spelling_entry_list(
 // Renders one W-then-pair-source token per segment, using "-" for a segment
 // with no active bonus. segment_bonus_flags must be populated and aligned.
 std::string dfs_spelling_bonus_list(DfsSpelling const& spelling);
+
+// Indexes every phase-1 spelling by its class and member position. Returns
+// false only if the class list violates its one-member-per-spelling invariant;
+// duplicate receives the repeated spelling when supplied.
+bool dfs_index_members(
+    DfsClassList const& classes, DfsMemberIndex* members,
+    std::string* duplicate = NULL);
+
+// Reconstructs the member-0 path score in the same segment order phase 2 uses.
+double dfs_representative_upper_log_score(
+    DfsClassList const& classes, DfsScoreModel const& model,
+    std::vector<size_t> const& class_indexes);
 
 // Constructs and exactly scores one concrete spelling from a class path.
 // The representative is the member-0 path score, accumulated in path order.

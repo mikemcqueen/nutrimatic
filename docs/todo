@@ -21,11 +21,3 @@
 * decide the BEST-pair bonus for dfs-anagrams invocations without -g; the
   dynamic scheme in plans/dynamic-best-bonus.md deliberately uses N from
   -g N and leaves the unbounded-search behavior unchanged for now
-* bring query-index scoring back into parity with dfs-anagrams (and the
-  shared code planned in plans/rerank-anagrams.md):
-  - fixed BEST scoring: candidate listing builds its DfsScoreModel with the
-    fixed BEST exponent, since query-index has no -g, while dfs-anagrams -g N
-    and query-index --score use descending BEST
-  - also: no workflow NO exclusions, index-only external pairs, and --score
-    sums segments directly rather than with DfsTopN::emit's arithmetic, so
-    exact scores can differ in the last bits

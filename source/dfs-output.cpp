@@ -110,6 +110,38 @@ static std::string make_word_set_key(std::string const& text) {
   return key;
 }
 
+bool dfs_index_members(
+    DfsClassList const& classes, DfsMemberIndex* members,
+    std::string* duplicate) {
+  members->reserve(classes.entry_count());
+  for (size_t ci = 0; ci < classes.classes().size(); ++ci) {
+    for (size_t mi = 0; mi < classes.member_count(ci); ++mi) {
+      DfsMemberView const member = classes.member(ci, mi);
+      DfsMemberAddress const address = {ci, mi};
+      std::string const text(member.text, member.text_length);
+      if (!members->emplace(text, address).second) {
+        if (duplicate != NULL) *duplicate = text;
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+double dfs_representative_upper_log_score(
+    DfsClassList const& classes, DfsScoreModel const& model,
+    std::vector<size_t> const& class_indexes) {
+  double representative = 0.0;
+  for (size_t i = 0; i < class_indexes.size(); ++i) {
+    DfsMemberView const member = classes.member(class_indexes[i], 0);
+    double const score = model.member_upper_log_score(
+        member.count, member.word_count > 1, member.score_flags);
+    representative = i == 0
+        ? score : model.append_log_score(representative, score);
+  }
+  return representative;
+}
+
 struct ExpansionCandidate {
   double upper_log_score;
   std::vector<size_t> member_indexes;

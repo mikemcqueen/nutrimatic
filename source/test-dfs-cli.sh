@@ -632,9 +632,11 @@ for ((i = 0; i < 4; ++i)); do
       -P 1 --word-bonus 0 --best-pairs "$dynamic_best" \
       2> "$test_dir/dynamic-best-query.stderr" | awk '{ print $1 }'
   )
-  assert_close "$(awk 'NR == 1 { print $1 }' \
-      "$test_dir/dynamic-best.stdout")" "$dynamic_query" \
-    "four-segment DFS and query-index BEST scores disagree"
+  dynamic_dfs=$(awk 'NR == 1 { print $1 }' \
+    "$test_dir/dynamic-best.stdout")
+  [[ "$dynamic_dfs" == "$dynamic_query" ]] ||
+    fail "four-segment DFS and query-index BEST scores differ exactly: "\
+"expected $dynamic_dfs, got $dynamic_query"
 done
 
 # Standalone fixed-tier entries cover every source marker in one search. "ab"
@@ -858,8 +860,9 @@ while read -r result_score result_entries; do
   round_trip=$("$query_index" -i "$index_file" "$result_entries" --score \
     --word-bonus 0 |
     awk '{ print $1 }')
-  assert_close "$round_trip" "$result_score" \
-    "query-index --score disagrees on \"$result_entries\""
+  [[ "$round_trip" == "$result_score" ]] ||
+    fail "query-index --score differs exactly on \"$result_entries\": "\
+"expected $result_score, got $round_trip"
 done < "$test_dir/all.stdout"
 
 # -g N keeps only N-entry results. "ab cd" wins the unconstrained search as one

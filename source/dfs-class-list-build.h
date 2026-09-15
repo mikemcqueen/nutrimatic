@@ -28,8 +28,9 @@ struct DfsPreparedClassList {
 
 DfsBestBonusPolicy dfs_best_bonus_policy(size_t exact_segments);
 
-// Builds dfs-anagrams' phase-1 class list. exact_segments selects descending
-// BEST scoring when nonzero and the fixed BEST tier otherwise.
+// Builds the shared dfs-anagrams-family phase-1 class list, including external
+// pair synthesis and exclusions. exact_segments selects descending BEST
+// scoring when nonzero and the fixed BEST tier otherwise.
 bool prepare_dfs_class_list(
     IndexReader* reader, std::string const& letters,
     DfsCommonArgs const& args,

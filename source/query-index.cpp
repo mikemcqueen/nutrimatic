@@ -5,8 +5,10 @@
 // endpoints and at least one complete intervening word.
 
 #include "dfs-class-list.h"
+#include "dfs-class-list-build.h"
 #include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
+#include "dfs-output.h"
 #include "dfs-score.h"
 #include "dfs-solo-words.h"
 #include "dfs-search-stats.h"
@@ -33,6 +35,7 @@ struct Args {
   std::string near_input;
   std::string near_target;
   DfsCommonArgs common;
+  std::vector<std::string> exclude_pair_files;
   bool words_only;
   bool csv;
   bool require_completable;
@@ -67,8 +70,8 @@ static void usage(char const* program) {
       "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
       " workflow mode defaults to DIR/%s; required otherwise and with"
       " --near\n"
-      "  --score treats letters as a comma-separated sequence of exact index\n"
-      "    entries and prints its DFS-model score\n"
+      "  --score treats letters as a comma-separated sequence of exact\n"
+      "    entries and prints the score dfs-anagrams assigns that spelling\n"
       "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
       "    it prints aggregate phrases spanning the endpoints with at least\n"
       "    one complete intervening word, searching each endpoint that is an\n"
@@ -92,6 +95,9 @@ static void usage(char const* program) {
       " matched only in written order; other pairs match in either order\n"
       "    every loaded entry must contain at least -m normalized"
       " non-space characters in total\n"
+      "    eligible listed pairs absent from the index are admitted with"
+      " corpus count 1\n"
+      "    dictionary, bag, -m, -x, and workflow NO rules still apply\n"
       "    --score instead matches pairs in either order and does not apply"
       " the extraction minimum\n"
       "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
@@ -107,6 +113,8 @@ static void usage(char const* program) {
       " the nonempty WFROOT environment variable\n"
       "    workflow mode loads DIR/%s as YES pairs and"
       " requires either --seed-pairs or -t beginning with sN\n"
+      "    it also excludes DIR/%s, and a complete target's %s, when those"
+      " files exist\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
       " its sentence seed is auto-loaded, and a complete target also loads"
       " its optional %s unless --best-pairs replaces it\n"
@@ -134,7 +142,8 @@ static void usage(char const* program) {
       DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS,
       DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP, WORKFLOW_DICT_PATH,
       DFS_SEED_PAIR_BONUS, DFS_YES_PAIR_BONUS, DFS_BEST_PAIR_BONUS,
-      WORKFLOW_YES_PAIRS_PATH, WORKFLOW_TARGET_BEST_PAIRS_NAME);
+      WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
+      WORKFLOW_TARGET_NO_PAIRS_NAME, WORKFLOW_TARGET_BEST_PAIRS_NAME);
 }
 
 static int const OPT_REQUIRE_COMPLETABLE = 256;
@@ -269,6 +278,9 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (!finalize_dfs_workflow_args(
           &out->common, argv[0], &out->index_file))
+    return false;
+  if (!collect_workflow_exclude_pair_files(
+          out->common, argv[0], &out->exclude_pair_files))
     return false;
   if (out->index_file == NULL) {
     usage(argv[0]);
@@ -506,71 +518,46 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
 
 static bool print_sequence_score(
     IndexReader const& reader, Args const& args,
-    std::vector<std::string> const& entries, DfsPairSet const& pairs,
-    DfsPairBonusMap const& weighted_pairs,
-    DfsScoreModel const& model, DfsSoloWords const* solo_words) {
-  std::vector<int64_t> counts;
-  counts.reserve(entries.size());
+    std::vector<std::string> const& entries,
+    DfsPreparedClassList const& prepared) {
+  DfsMemberIndex members;
+  std::string duplicate;
+  if (!dfs_index_members(*prepared.classes, &members, &duplicate)) {
+    fprintf(stderr, "error: duplicate phase-1 spelling \"%s\"\n",
+            duplicate.c_str());
+    return false;
+  }
+
+  std::vector<size_t> class_indexes;
+  std::vector<size_t> member_indexes;
+  class_indexes.reserve(entries.size());
+  member_indexes.reserve(entries.size());
   for (size_t i = 0; i < entries.size(); ++i) {
-    int64_t count;
-    // Aggregate, not exact: phase 1 scores an entry by the count on its
-    // trailing-space node, which includes every longer phrase continuing it.
-    // Using the exact residual here would silently disagree with the score
-    // dfs-anagrams prints for the same sequence.
-    if (!reader.aggregate_entry_count(entries[i], &count)) {
-      fprintf(stderr, "error: index has no entry \"%s\"\n",
-              entries[i].c_str());
+    DfsMemberIndex::const_iterator const found = members.find(entries[i]);
+    if (found == members.end()) {
+      int64_t count;
+      bool const asserted = prepared.pairs.count(entries[i]) != 0 ||
+          prepared.weighted_pairs.count(entries[i]) != 0;
+      if (!asserted && !reader.aggregate_entry_count(entries[i], &count))
+        fprintf(stderr, "error: index has no entry \"%s\"\n",
+                entries[i].c_str());
+      else
+        fprintf(stderr,
+            "error: dfs-anagrams phase 1 excludes entry \"%s\"\n",
+            entries[i].c_str());
       return false;
     }
-    counts.push_back(count);
+    class_indexes.push_back(found->second.class_index);
+    member_indexes.push_back(found->second.member_index);
   }
 
-  // An interior space is exactly what makes an entry multi-word; entries here
-  // are the user's own text, already validated against the index above.
-  std::vector<bool> multi_word;
-  std::vector<uint16_t> score_flags;
-  std::vector<DfsSoloMasks> profiles;
-  std::vector<bool> profile_direct_best;
-  size_t direct_best_segments = 0;
-  multi_word.reserve(entries.size());
-  score_flags.reserve(entries.size());
-  profiles.reserve(entries.size());
-  for (size_t i = 0; i < entries.size(); ++i) {
-    bool const phrase = entries[i].find(' ') != std::string::npos;
-    multi_word.push_back(phrase);
-    uint16_t flags = 0;
-    DfsPairBonusMap::const_iterator const weighted =
-        weighted_pairs.find(entries[i]);
-    if (weighted != weighted_pairs.end())
-      flags |= dfs_pair_bonus_score_flags(weighted->second);
-    else if (pairs.count(entries[i]) != 0)
-      flags |= dfs_pair_bonus_score_flags(DFS_PAIR_BONUS_LEGACY);
-    bool const direct_best =
-        dfs_member_pair_bonus_kind(flags) == DFS_PAIR_BONUS_BEST;
-    if (direct_best) ++direct_best_segments;
-    if (!phrase && solo_words != NULL) {
-      DfsSoloMasks const profile = solo_words->resolve(entries[i]);
-      flags |= dfs_solo_score_flags(profile);
-      if (profile.word_mask != 0) {
-        profiles.push_back(profile);
-        profile_direct_best.push_back(direct_best);
-      }
-    }
-    score_flags.push_back(flags);
-  }
-
-  double upper_log_score = model.member_upper_log_score(
-      counts[0], multi_word[0], score_flags[0]);
-  for (size_t i = 1; i < entries.size(); ++i)
-    upper_log_score = model.append_log_score(
-        upper_log_score, model.member_upper_log_score(
-            counts[i], multi_word[i], score_flags[i]));
-  DfsExactResultMatching const exact = dfs_exact_result_matching(
-      profiles, profile_direct_best, direct_best_segments, model);
-  double const log_score = upper_log_score + exact.correction;
-  assert(log_score <= upper_log_score);
-
-  printf("%#.4g %s\n", model.displayed_score(log_score),
+  double const representative = dfs_representative_upper_log_score(
+      *prepared.classes, *prepared.model, class_indexes);
+  DfsSpelling const spelling = dfs_build_spelling(
+      *prepared.classes, *prepared.model, prepared.solo_words.get(),
+      class_indexes, member_indexes, representative,
+      /*retain_segment_bonuses=*/false);
+  printf("%#.4g %s\n", prepared.model->displayed_score(spelling.log_score),
          args.score_sequence.c_str());
   return true;
 }
@@ -596,81 +583,39 @@ int main(int argc, char* argv[]) {
 
   if (args.near) return run_near_query(reader, args);
 
-  DfsPairSet pairs;
-  DfsPairBonusMap weighted_pairs;
-  DfsPairSet exception_prefixes;
-  if (args.common.pair_file != NULL) {
-    bool const loaded = args.score
-        ? load_pair_file(
-              args.common.pair_file, "pair list", &pairs,
-              false, false, true)
-        : load_extraction_pair_file(
-              args.common.pair_file, "pair list", args.common.min_word_len,
-              &pairs, &exception_prefixes, false, false);
-    if (!loaded) return 1;
-  }
-  if (!load_weighted_pair_files(
-          args.common, args.score, args.common.min_word_len,
-          &weighted_pairs, &exception_prefixes))
-    return 1;
   if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
-    DfsScoreModel const model(
-        args.common.segment_penalty, reader.count(), args.common.word_bonus,
-        args.common.pair_bonus,
-        DfsBestBonusPolicy::descending(score_entries.size()));
-    std::unique_ptr<DfsSoloWords> solo_words;
-    if (!args.common.solo_words.empty() &&
-        (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
-         !weighted_pairs.empty()))
-      solo_words.reset(new DfsSoloWords(
-          &reader, args.common.solo_words,
-          args.common.pair_file != NULL ? &pairs : NULL, &model,
-          !weighted_pairs.empty() ? &weighted_pairs : NULL));
-    return print_sequence_score(
-        reader, args, score_entries, pairs, weighted_pairs,
-        model, solo_words.get()) ? 0 : 2;
+    std::string letters;
+    for (size_t i = 0; i < score_entries.size(); ++i)
+      if (!clean_letters(
+              score_entries[i].c_str(), "--score entry", &letters))
+        return 2;
+    if (!check_bag_length(letters)) return 2;
+
+    // Exact scoring has no extraction minimum or entry-word cap, but otherwise
+    // builds the same phase-1 classes as dfs-anagrams for this complete bag.
+    DfsCommonArgs score_args = args.common;
+    score_args.min_word_len = 1;
+    score_args.max_extract_words = 0;
+    DfsPreparedClassList prepared;
+    if (!prepare_dfs_class_list(
+            &reader, letters, score_args, args.exclude_pair_files,
+            score_entries.size(), &prepared))
+      return 1;
+    return print_sequence_score(reader, args, score_entries, prepared)
+        ? 0 : 2;
   }
 
-  DfsDictionary dictionary;
-  DfsDictionary const* dictionary_filter = NULL;
-  if (args.common.dictionary_file != NULL) {
-    if (!load_dictionary(args.common.dictionary_file, &dictionary)) return 1;
-    dictionary_filter = &dictionary;
-  }
-
-  DfsScoreModel const model(
-      args.common.segment_penalty, reader.count(), args.common.word_bonus,
-      args.common.pair_bonus);
-  std::unique_ptr<DfsSoloWords> solo_words;
-  if (!args.common.solo_words.empty() &&
-      (args.common.word_bonus != 0.0 || args.common.pair_bonus != 0.0 ||
-       !weighted_pairs.empty()))
-    solo_words.reset(new DfsSoloWords(
-        &reader, args.common.solo_words,
-        args.common.pair_file != NULL ? &pairs : NULL, &model,
-        !weighted_pairs.empty() ? &weighted_pairs : NULL));
-  bool const include_phrases =
-      args.require_completable || !args.words_only;
-  DfsClassList classes(&reader, args.letters, args.common.min_word_len,
-                       include_phrases, dictionary_filter,
-                       args.common.max_extract_words,
-                       &model,
-                       args.common.pair_file != NULL ? &pairs : NULL,
-                       !weighted_pairs.empty() ? &weighted_pairs : NULL,
-                       !exception_prefixes.empty()
-                           ? &exception_prefixes : NULL,
-                       solo_words.get());
-  dfs_diagnostic(
-      "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
-      classes.entry_count(), classes.classes().size(),
-      (long long) classes.nodes_visited());
-  if (solo_words != NULL)
-    dfs_diagnostic(
-        "solo words: %zu profiles, %zu word edges, %zu pair edges\n",
-        solo_words->profile_count(), solo_words->word_edge_count(),
-        solo_words->pair_edge_count());
+  DfsPreparedClassList prepared;
+  if (!prepare_dfs_class_list(
+          &reader, args.letters, args.common, args.exclude_pair_files,
+          /*exact_segments=*/0, &prepared))
+    return 1;
+  DfsClassList& classes = *prepared.classes;
+  DfsScoreModel const& model = *prepared.model;
+  DfsSoloWords* const solo_words = prepared.solo_words.get();
+  DfsPairBonusMap const& weighted_pairs = prepared.weighted_pairs;
 
   std::vector<bool> completable(classes.classes().size(), true);
   if (args.require_completable) {
