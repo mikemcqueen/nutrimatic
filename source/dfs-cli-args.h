@@ -206,6 +206,14 @@ size_t resolve_search_threads(int requested);
 // false if the file can't be opened or read.
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
 
+// One normalized pair-file row in written order. right is empty for a
+// standalone word; line_number is 1-based.
+struct DfsPairRow {
+  std::string left;
+  std::string right;
+  size_t line_number;
+};
+
 // A pair set owns normalized whole-entry keys. The general loader below owns
 // every two-word pair as both "left right" and "right left"; the extraction
 // loader may keep a short-word pair in only its written orientation. When
@@ -220,25 +228,20 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary);
 // unique ordered keys loaded. When diagnostic_source is non-NULL, appends it
 // to that summary. Prints an error and returns false if the file can't be
 // opened or read, or if any surviving line does not hold an allowed number of
-// nonempty fields. `what` names the list in every diagnostic.
+// nonempty fields. `what` names the list in every diagnostic. Non-NULL rows
+// receives every row in written order, for a caller that must repeat the
+// file's own word order rather than a key's.
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words = false,
-    char const* diagnostic_source = NULL);
+    char const* diagnostic_source = NULL,
+    std::vector<DfsPairRow>* rows = NULL);
 
 // As load_pair_file(), but accepts standalone entries only to discard them.
 // Adds their number to `ignored_single_words`; pairs are loaded normally.
 bool load_pair_file_ignoring_single_words(
     char const* path, char const* what, DfsPairSet* pairs,
     size_t* ignored_single_words);
-
-// One normalized pair-file row in written order. right is empty for a
-// standalone word; line_number is 1-based.
-struct DfsPairRow {
-  std::string left;
-  std::string right;
-  size_t line_number;
-};
 
 // Loads an ordinary extraction bonus list after -m has been finalized.
 // Standalone words and pairs must contain at least min_word_len normalized

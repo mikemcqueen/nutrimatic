@@ -605,7 +605,7 @@ bool load_extraction_pair_value(
 bool load_pair_file(
     char const* path, char const* what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words,
-    char const* diagnostic_source) {
+    char const* diagnostic_source, std::vector<DfsPairRow>* rows) {
   std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
           path, what, reject_hyphens, allow_single_words,
@@ -613,6 +613,7 @@ bool load_pair_file(
     return false;
 
   insert_pair_keys(loaded, pairs);
+  if (rows != NULL) *rows = loaded;
   if (!quiet) {
     if (diagnostic_source == NULL)
       dfs_diagnostic("%s: %zu pairs, %zu keys\n",

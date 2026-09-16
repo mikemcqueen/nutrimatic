@@ -53,6 +53,49 @@ expected_results='9 hobbit home,red fox,extra one,solo
 actual=$("$common_segments" --results "$input" "$pairs" 2>/dev/null)
 [[ $actual == "$expected_results" ]] || fail "result rows are wrong: $actual"
 
+# --combos counts the rows each combination of two held pairs has in common,
+# in columns padded to the widest count and the widest first pair. Row 1 and
+# row 2 both hold hobbit,home and red,fox; row 2 alone adds the two
+# combinations involving tree,home, which it spelled "home tree" but which
+# prints in the pairs file's order.
+expected_combos='2 hobbit,home red,fox
+1 hobbit,home tree,home
+1 red,fox     tree,home'
+
+actual=$("$common_segments" --combos "$input" "$pairs" 2>/dev/null)
+[[ $actual == "$expected_combos" ]] || fail "combination counts are wrong: $actual"
+
+if "$common_segments" --results --combos "$input" "$pairs" >/dev/null 2>&1; then
+  fail "--results with --combos succeeded"
+fi
+
+# --pairs counts, per pair, the rows holding it with any other pair. Row 2
+# holds three pairs and counts once for each, not twice.
+expected_pairs='2 hobbit,home
+2 red,fox
+1 tree,home'
+
+actual=$("$common_segments" --pairs "$input" "$pairs" 2>/dev/null)
+[[ $actual == "$expected_pairs" ]] || fail "pair counts are wrong: $actual"
+
+if "$common_segments" --combos --pairs "$input" "$pairs" >/dev/null 2>&1; then
+  fail "--combos with --pairs succeeded"
+fi
+
+# --pairs drops an ignored pair from the output only. hobbit,home keeps the
+# count of 2 it earned partly from the row it shares with the ignored pair.
+ignore_list=$test_dir/ignore.pairs
+cat > "$ignore_list" <<'EOF'
+red,fox
+EOF
+expected_ignored='2 hobbit,home
+1 tree,home'
+
+actual=$("$common_segments" --pairs -i "$ignore_list" "$input" "$pairs" \
+  2>/dev/null)
+[[ $actual == "$expected_ignored" ]] ||
+  fail "ignored pair counts are wrong: $actual"
+
 # One pair can never make two, so every row is dropped and the empty result
 # is reported rather than failed.
 one_pair=$test_dir/one.pairs

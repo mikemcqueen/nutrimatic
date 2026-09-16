@@ -1,11 +1,15 @@
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -17,10 +21,38 @@
 static constexpr PairFilterSupport kSupport = {
     .ignore = true, .allow = true, .workflow_yes = true};
 
+enum OutputMode {
+  OUTPUT_SEGMENTS,
+  OUTPUT_ROWS,
+  OUTPUT_COMBOS,
+  OUTPUT_PAIRS,
+};
+
+// One combination of two distinct pairs, canonically spelled and ordered, and
+// the number of holding rows that held both.
+typedef std::map<std::pair<std::string, std::string>, uint64_t>
+    PairCombinationCounts;
+
+// One pair and the number of holding rows that held it, which is the union of
+// that pair's combinations rather than the sum of their counts.
+typedef std::map<std::string, uint64_t> PairCounts;
+
+// Each pair's spelling as the PAIRS file wrote it, keyed by its canonical
+// form, so output repeats that word order whichever way a row spelled it.
+typedef std::unordered_map<std::string, std::string> PairSpellings;
+
+// What one pass over the rows produced, in the mode that pass ran in.
+struct CommonOutput {
+  std::set<std::string> segments;
+  PairCombinationCounts combinations;
+  PairCounts pair_counts;
+  uint64_t holding_rows = 0;
+};
+
 struct Args {
   char const* results_path = NULL;
   char const* pairs_path = NULL;
-  bool print_rows = false;
+  OutputMode mode = OUTPUT_SEGMENTS;
   PairFilterOptions filter_options;
 };
 
@@ -30,7 +62,8 @@ static void usage(char const* program) {
       "          [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
       "          [-d PATH]\n"
-      "          [--wf | --wfroot DIR] [-t TARGET] [-y] [--results]\n"
+      "          [--wf | --wfroot DIR] [-t TARGET] [-y]\n"
+      "          [--results | --combos | --pairs]\n"
       "          RESULTS PAIRS\n"
       "  print the segments of the result rows that hold two or more PAIRS,\n"
       "  one per line in ascending order, in pair-file format\n"
@@ -40,7 +73,13 @@ static void usage(char const* program) {
       "  -i, --ignore FILE   do not print pairs listed in FILE; may be\n"
       "                      repeated\n"
       "  --results           print the result rows holding two or more\n"
-      "                      pairs, as read, instead of their segments\n",
+      "                      pairs, as read, instead of their segments\n"
+      "  --combos            print COUNT PAIR1 PAIR2 by descending count,\n"
+      "                      one line per combination of two pairs held by\n"
+      "                      the same row\n"
+      "  --pairs             print COUNT PAIR by descending count, one line\n"
+      "                      per pair, counting the rows that held it with\n"
+      "                      any other pair; honors --ignore and --yes\n",
       program);
   print_reject_option_help(stdout, 22);
   print_allow_pairs_option_help(stdout, 22);
@@ -63,12 +102,23 @@ static void usage(char const* program) {
       WORKFLOW_YES_PAIRS_PATH);
 }
 
+static char const* mode_flag(OutputMode mode) {
+  switch (mode) {
+    case OUTPUT_ROWS: return "--results";
+    case OUTPUT_COMBOS: return "--combos";
+    case OUTPUT_PAIRS: return "--pairs";
+    case OUTPUT_SEGMENTS: break;
+  }
+  return "";
+}
+
 static bool parse_args(
     int argc, char* argv[], Args* out, bool* requested_help) {
   *requested_help = false;
   std::vector<char const*> paths;
   PairFilterOptions filter_options;
-  bool print_rows = false;
+  OutputMode mode = OUTPUT_SEGMENTS;
+  bool mode_chosen = false;
   bool parse_options = true;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
@@ -83,8 +133,21 @@ static bool parse_args(
 
     if (parse_options && strcmp(argv[i], "--") == 0) {
       parse_options = false;
-    } else if (parse_options && strcmp(argv[i], "--results") == 0) {
-      print_rows = true;
+    } else if (parse_options &&
+               (strcmp(argv[i], "--results") == 0 ||
+                strcmp(argv[i], "--combos") == 0 ||
+                strcmp(argv[i], "--pairs") == 0)) {
+      OutputMode const chosen = strcmp(argv[i], "--results") == 0 ? OUTPUT_ROWS
+          : strcmp(argv[i], "--combos") == 0                     ? OUTPUT_COMBOS
+                                                                 : OUTPUT_PAIRS;
+      if (mode_chosen && mode != chosen) {
+        fprintf(stderr, "common-segments: %s and %s are mutually exclusive\n",
+            mode_flag(mode), argv[i]);
+        usage(argv[0]);
+        return false;
+      }
+      mode = chosen;
+      mode_chosen = true;
     } else if (parse_options &&
                (strcmp(argv[i], "-h") == 0 ||
                 strcmp(argv[i], "--help") == 0)) {
@@ -113,7 +176,7 @@ static bool parse_args(
 
   out->results_path = paths[0];
   out->pairs_path = paths[1];
-  out->print_rows = print_rows;
+  out->mode = mode;
   out->filter_options = std::move(filter_options);
   return true;
 }
@@ -148,10 +211,17 @@ static bool any_segment_outside(
   return false;
 }
 
+static std::string written_pair_segment(
+    PairSpellings const& spellings, std::string const& segment) {
+  std::string const canonical = canonical_pair_segment(segment);
+  PairSpellings::const_iterator const entry = spellings.find(canonical);
+  return entry == spellings.end() ? canonical : entry->second;
+}
+
 static bool collect_common(
     std::istream* input, char const* name, PairFilters const& filters,
-    DfsPairSet const& pairs, bool print_rows, std::set<std::string>* common,
-    uint64_t* holding_rows) {
+    DfsPairSet const& pairs, PairSpellings const& spellings, OutputMode mode,
+    CommonOutput* out) {
   SegmentRowReader reader = {input, name, "common-segments"};
   SegmentRow row;
   std::set<std::string> held;
@@ -167,12 +237,30 @@ static bool collect_common(
     held.clear();
     for (std::string const& segment : row.segments)
       if (pairs.find(segment) != pairs.end())
-        held.insert(canonical_pair_segment(segment));
+        held.insert(written_pair_segment(spellings, segment));
     if (held.size() < 2) continue;
-    ++*holding_rows;
+    ++out->holding_rows;
 
-    if (print_rows) {
+    if (mode == OUTPUT_ROWS) {
       printf("%s\n", row.line.c_str());
+      continue;
+    }
+
+    // Every combination of two held pairs has this row in common.
+    if (mode == OUTPUT_COMBOS) {
+      for (std::set<std::string>::const_iterator first = held.begin();
+           first != held.end(); ++first) {
+        std::set<std::string>::const_iterator second = first;
+        for (++second; second != held.end(); ++second)
+          ++out->combinations[std::make_pair(*first, *second)];
+      }
+      continue;
+    }
+
+    // Each held pair has this row in common with every other pair held here,
+    // so the row counts once for it however many others there are.
+    if (mode == OUTPUT_PAIRS) {
+      for (std::string const& pair : held) ++out->pair_counts[pair];
       continue;
     }
 
@@ -186,11 +274,68 @@ static bool collect_common(
           filters.sources.classified_yes.end())
         continue;
       if (filters.ignored.find(segment) != filters.ignored.end()) continue;
-      common->insert(segment);
+      out->segments.insert(segment);
     }
   }
 
   return !reader.failed;
+}
+
+static bool print_combination_counts(PairCombinationCounts const& counts) {
+  std::vector<PairCombinationCounts::const_iterator> ordered;
+  ordered.reserve(counts.size());
+  uint64_t largest = 0;
+  for (PairCombinationCounts::const_iterator entry = counts.begin();
+       entry != counts.end(); ++entry) {
+    ordered.push_back(entry);
+    largest = std::max(largest, entry->second);
+  }
+  std::sort(ordered.begin(), ordered.end(),
+      [](PairCombinationCounts::const_iterator a,
+          PairCombinationCounts::const_iterator b) {
+        if (a->second != b->second) return a->second > b->second;
+        return a->first < b->first;
+      });
+
+  int const count_width = snprintf(NULL, 0, "%" PRIu64, largest);
+  int first_width = 0;
+  for (PairCombinationCounts::const_iterator entry : ordered)
+    first_width = std::max(first_width, int(entry->first.first.size()));
+
+  for (PairCombinationCounts::const_iterator entry : ordered)
+    printf("%*" PRIu64 " %-*s %s\n", count_width, entry->second, first_width,
+        format_pair_segment(entry->first.first).c_str(),
+        format_pair_segment(entry->first.second).c_str());
+  return !ferror(stdout);
+}
+
+static bool print_pair_counts(
+    PairCounts const& counts, PairFilters const& filters) {
+  std::vector<PairCounts::const_iterator> ordered;
+  ordered.reserve(counts.size());
+  uint64_t largest = 0;
+  for (PairCounts::const_iterator entry = counts.begin(); entry != counts.end();
+       ++entry) {
+    // Counted above with every other held pair, suppressed only here, so
+    // hiding a classified pair leaves its neighbors' counts intact.
+    if (filters.sources.classified_yes.find(entry->first) !=
+        filters.sources.classified_yes.end())
+      continue;
+    if (filters.ignored.find(entry->first) != filters.ignored.end()) continue;
+    ordered.push_back(entry);
+    largest = std::max(largest, entry->second);
+  }
+  std::sort(ordered.begin(), ordered.end(),
+      [](PairCounts::const_iterator a, PairCounts::const_iterator b) {
+        if (a->second != b->second) return a->second > b->second;
+        return a->first < b->first;
+      });
+
+  int const count_width = snprintf(NULL, 0, "%" PRIu64, largest);
+  for (PairCounts::const_iterator entry : ordered)
+    printf("%*" PRIu64 " %s\n", count_width, entry->second,
+        format_pair_segment(entry->first).c_str());
+  return !ferror(stdout);
 }
 
 int main(int argc, char* argv[]) {
@@ -208,14 +353,21 @@ int main(int argc, char* argv[]) {
     return 1;
 
   DfsPairSet pairs;
-  if (!load_pair_file(args.pairs_path, "pair list", &pairs, true, true))
+  std::vector<DfsPairRow> pair_rows;
+  if (!load_pair_file(args.pairs_path, "pair list", &pairs, true, true, false,
+          NULL, &pair_rows))
     return 1;
 
-  std::set<std::string> common;
-  uint64_t holding_rows = 0;
+  PairSpellings spellings;
+  for (DfsPairRow const& row : pair_rows) {
+    std::string written = row.left + " " + row.right;
+    spellings.emplace(canonical_pair_segment(written), std::move(written));
+  }
+
+  CommonOutput output;
   if (strcmp(args.results_path, "-") == 0) {
-    if (!collect_common(&std::cin, "-", filters, pairs, args.print_rows,
-            &common, &holding_rows))
+    if (!collect_common(
+            &std::cin, "-", filters, pairs, spellings, args.mode, &output))
       return 1;
   } else {
     errno = 0;
@@ -225,17 +377,22 @@ int main(int argc, char* argv[]) {
           args.results_path, strerror(errno));
       return 1;
     }
-    if (!collect_common(&input, args.results_path, filters, pairs,
-            args.print_rows, &common, &holding_rows))
+    if (!collect_common(&input, args.results_path, filters, pairs, spellings,
+            args.mode, &output))
       return 1;
   }
 
-  if (holding_rows == 0) {
+  if (output.holding_rows == 0) {
     fputs("common-segments: no result row holds two or more pairs\n", stderr);
     return 0;
   }
 
-  for (std::string const& segment : common)
+  if (args.mode == OUTPUT_COMBOS)
+    return print_combination_counts(output.combinations) ? 0 : 1;
+  if (args.mode == OUTPUT_PAIRS)
+    return print_pair_counts(output.pair_counts, filters) ? 0 : 1;
+
+  for (std::string const& segment : output.segments)
     printf("%s\n", format_pair_segment(segment).c_str());
   return ferror(stdout) ? 1 : 0;
 }
