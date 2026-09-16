@@ -30,6 +30,9 @@
 * consider writing rerank_all output, and possibly top_all output, to a
   temporary file and renaming it only after successful completion (like wf's
   place())
+* investigate p1 eval's "previously filtered pairs" check: it probably uses
+  comm on ordered pair text, so reversed pair orderings are not recognized and
+  some pairs are evaluated twice
 * convert all enums to enum class where appropriate
 * after the shared pair-filter struct lands, consolidate top-segments' filter
   attribution and filter-segments' boolean rejection behind one implementation

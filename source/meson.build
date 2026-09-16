@@ -186,6 +186,11 @@ common_segments = executable('common-segments', 'common-segments.cpp',
   dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
   install: true)
 
+find_dupes = executable('find-dupes', 'find-dupes.cpp',
+  link_with: dfs_class_list_lib,
+  dependencies: [segment_output_dep, thread_dep],
+  install: true)
+
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   dependencies: segment_output_dep,
   install: true)
@@ -344,6 +349,11 @@ test(
   'common-segments',
   bash,
   args: [files('test-common-segments.sh'), common_segments],
+)
+test(
+  'find-dupes',
+  bash,
+  args: [files('test-find-dupes.sh'), find_dupes],
 )
 test(
   'first-segments',
