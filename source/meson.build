@@ -125,6 +125,11 @@ segment_output_dep = declare_dependency(
   sources: files('segment-output.cpp'),
 )
 
+segment_counts_dep = declare_dependency(
+  sources: files('segment-counts.cpp'),
+  dependencies: [pair_exclusions_dep, segment_output_dep],
+)
+
 search_lib = library(
   'search',
   ['search-driver.cpp', 'search-printer.cpp'],
@@ -170,7 +175,7 @@ weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
   install: true)
 
 top_segments = executable('top-segments', 'top-segments.cpp',
-  dependencies: [pair_exclusions_dep, segment_output_dep],
+  dependencies: [pair_exclusions_dep, segment_counts_dep, segment_output_dep],
   install: true)
 
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
