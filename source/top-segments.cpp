@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "pair-exclusions.h"
@@ -33,6 +34,14 @@ struct FilterStats {
   uint64_t classified_yes_instances = 0;
   uint64_t explicit_ignore_instances = 0;
   DfsPairSet classified_yes_pairs;
+};
+
+struct Args {
+  std::vector<char const*> paths;
+  PairFilterOptions filter_options;
+  SegmentOutputOptions output_options;
+  bool elimination = false;
+  bool show_counts = false;
 };
 
 static void usage(char const* program) {
@@ -473,7 +482,9 @@ static bool print_counts(
   return !ferror(stdout);
 }
 
-int main(int argc, char* argv[]) {
+static bool parse_args(
+    int argc, char* argv[], Args* out, bool* requested_help) {
+  *requested_help = false;
   std::vector<char const*> paths;
   PairFilterOptions filter_options;
   bool parse_options = true;
@@ -497,7 +508,7 @@ int main(int argc, char* argv[]) {
                 SEGMENT_SELECTION_PAIRS, SEGMENT_PROJECTION_WORDS,
                 "top-segments", &output_options)) {
           usage(argv[0]);
-          return 2;
+          return false;
         }
         continue;
       }
@@ -514,7 +525,7 @@ int main(int argc, char* argv[]) {
           argc, argv, &i, "top-segments", true, true, &filter_options, true);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
-        return 2;
+        return false;
       }
       if (filter_result == PAIR_FILTER_OPTION_HANDLED) continue;
 
@@ -522,7 +533,7 @@ int main(int argc, char* argv[]) {
           argc, argv, &i, "top-segments", &output_options);
       if (result == SEGMENT_OUTPUT_OPTION_ERROR) {
         usage(argv[0]);
-        return 2;
+        return false;
       }
       if (result == SEGMENT_OUTPUT_OPTION_HANDLED) continue;
     }
@@ -532,12 +543,12 @@ int main(int argc, char* argv[]) {
     } else if (parse_options &&
                (strcmp(argv[i], "-h") == 0 ||
                 strcmp(argv[i], "--help") == 0)) {
-      usage(argv[0]);
-      return 0;
+      *requested_help = true;
+      return true;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
       fprintf(stderr, "top-segments: unknown option \"%s\"\n", argv[i]);
       usage(argv[0]);
-      return 2;
+      return false;
     } else {
       paths.push_back(argv[i]);
     }
@@ -545,7 +556,7 @@ int main(int argc, char* argv[]) {
 
   if (!check_pair_filter_options(filter_options, "top-segments")) {
     usage(argv[0]);
-    return 2;
+    return false;
   }
   bool const workflow =
       filter_options.workflow || !filter_options.workflow_root.empty();
@@ -564,32 +575,51 @@ int main(int argc, char* argv[]) {
     fputs("top-segments: --counts and --no-counts are mutually exclusive\n",
         stderr);
     usage(argv[0]);
-    return 2;
+    return false;
   }
   if (elimination && suppress_counts) {
     fputs("top-segments: --elim and --no-counts are mutually exclusive\n",
         stderr);
     usage(argv[0]);
-    return 2;
+    return false;
   }
   bool const show_counts = force_counts ||
       (!suppress_counts && !pair_segments);
   if (output_options.weight == SEGMENT_WEIGHT_UNIQUE && !pair_words) {
     fputs("top-segments: --unique requires --pair-words\n", stderr);
     usage(argv[0]);
-    return 2;
+    return false;
   }
   if (elimination && output_options.by_length) {
     fputs("top-segments: --elim and --by-length are mutually exclusive\n",
         stderr);
     usage(argv[0]);
-    return 2;
+    return false;
   }
+
+  if (paths.empty()) paths.push_back("-");
 
   // Only a single named file names a single target; several files may sit in
   // several, and standard input sits in none.
   if (paths.size() == 1 && strcmp(paths[0], "-") != 0)
     filter_options.input_path = paths[0];
+
+  out->paths = std::move(paths);
+  out->filter_options = std::move(filter_options);
+  out->output_options = output_options;
+  out->elimination = elimination;
+  out->show_counts = show_counts;
+  return true;
+}
+
+int main(int argc, char* argv[]) {
+  Args args;
+  bool requested_help;
+  if (!parse_args(argc, argv, &args, &requested_help)) return 2;
+  if (requested_help) {
+    usage(argv[0]);
+    return 0;
+  }
 
   DfsPairSet ignored;
   DfsPairSet rejected;
@@ -597,7 +627,7 @@ int main(int argc, char* argv[]) {
   std::optional<DfsPairSet> allowed;
   PairFilterSources filter_sources;
   if (!load_pair_filters(
-          filter_options, "top-segments", &ignored, &rejected, &dictionary,
+          args.filter_options, "top-segments", &ignored, &rejected, &dictionary,
           &allowed, &filter_sources))
     return 1;
 
@@ -605,39 +635,31 @@ int main(int argc, char* argv[]) {
   uint64_t surviving_rows = 0;
   std::unordered_set<std::string> unique_segments;
   FilterStats filter_stats;
-  if (paths.empty()) {
-    if (!count_stream(&std::cin, "-", ignored, rejected, allowed, dictionary,
-            filter_sources, &filter_stats, output_options, elimination,
-            &surviving_rows, &unique_segments, &counts))
-      return 1;
-  } else {
-    for (size_t i = 0; i < paths.size(); ++i) {
-      if (strcmp(paths[i], "-") == 0) {
-        if (!count_stream(
-                &std::cin, "-", ignored, rejected, allowed, dictionary,
-                filter_sources, &filter_stats, output_options, elimination,
-                &surviving_rows, &unique_segments, &counts))
-          return 1;
-        continue;
-      }
-
-      errno = 0;
-      std::ifstream input(paths[i]);
-      if (!input.is_open()) {
-        fprintf(stderr, "top-segments: can't open \"%s\": %s\n",
-            paths[i], strerror(errno));
+  for (size_t i = 0; i < args.paths.size(); ++i) {
+    char const* const path = args.paths[i];
+    if (strcmp(path, "-") == 0) {
+      if (!count_stream(&std::cin, "-", ignored, rejected, allowed, dictionary,
+              filter_sources, &filter_stats, args.output_options,
+              args.elimination, &surviving_rows, &unique_segments, &counts))
         return 1;
-      }
-      if (!count_stream(
-              &input, paths[i], ignored, rejected, allowed, dictionary,
-              filter_sources, &filter_stats, output_options, elimination,
-              &surviving_rows, &unique_segments, &counts))
-        return 1;
+      continue;
     }
+
+    errno = 0;
+    std::ifstream input(path);
+    if (!input.is_open()) {
+      fprintf(stderr, "top-segments: can't open \"%s\": %s\n",
+          path, strerror(errno));
+      return 1;
+    }
+    if (!count_stream(&input, path, ignored, rejected, allowed, dictionary,
+            filter_sources, &filter_stats, args.output_options,
+            args.elimination, &surviving_rows, &unique_segments, &counts))
+      return 1;
   }
 
   print_filter_summary(filter_stats, filter_sources);
-  return print_counts(
-      counts, output_options, show_counts, elimination, surviving_rows)
+  return print_counts(counts, args.output_options, args.show_counts,
+      args.elimination, surviving_rows)
       ? 0 : 1;
 }

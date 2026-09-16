@@ -20,8 +20,13 @@ class NutrimaticConan(conan.ConanFile):
     exports_sources = "source/*"
     no_copy_source = True
 
+    def configure(self):
+        self.settings.compiler.cppstd = "gnu20"
+
     def validate(self):
-        conan.tools.build.check_min_cppstd(self, 17)
+        # Documentation only.  configure() runs first and pins cppstd, so this
+        # can never see a lower standard.
+        conan.tools.build.check_min_cppstd(self, 20)
 
     def layout(self):
         self.folders.source = "source"

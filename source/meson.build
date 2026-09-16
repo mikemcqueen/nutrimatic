@@ -2,7 +2,10 @@ project(
   'nutrimatic', ['cpp'],
   version: '0.1',
   default_options: [
-    'cpp_std=c++17',
+    # Documentation only.  MesonToolchain writes cpp_std into
+    # build/dep-info/conan_meson_native.ini from conanfile.py's configure(),
+    # and a native file's built-in options override these defaults.
+    'cpp_std=c++20',
     'warning_level=3',
     'werror=true',
     # The search spends nearly all its time crossing between these libraries:

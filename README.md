@@ -14,29 +14,12 @@ results as find-anagrams.
 A fair amount of it is x86-specific unfortunately, necessary for squeezing
 out the maximum performance.
 
-### Build from source (the easy scripted way)
-
-(If this doesn't work for you, see the manual steps below.)
+### Build from source
 
 1. You'll need a working C++ build system; for Debian/Ubuntu:
    ```
-   sudo apt install build-essential curl
+   sudo apt install build-essential
    ```
-
-2. Install [mise-en-place](https://mise.jdx.dev/) as a tool installer:
-   `curl https://mise.run | sh` (or see
-   [other install methods](https://mise.jdx.dev/getting-started.html))
-
-3. Run `./dev_setup.py` which will install various dependencies locally
-
-4. Then run `conan build .` which will leave binaries in `build/`
-
-### Build from source (the hard manual way)
-
-(The scripted path above is easier! But maybe that's too magical,
-or you don't like mise...)
-
-1. As above, you'll need C++ build tools
 
 2. Use **Python 3.10** (avoids
    [this wikiextractor bug](https://github.com/attardi/wikiextractor/issues/305)
@@ -46,17 +29,13 @@ or you don't like mise...)
 3. You probably want to set up a
    [Python venv](https://docs.python.org/3/library/venv.html)
 
-4. Install [Conan](https://docs.conan.io/2/), [CMake](https://cmake.org/), etc:
-   `pip install -r dev_requirements.txt`
+4. Install [Conan](https://docs.conan.io/2/): `pip install conan`
 
-5. Configure Conan to build on your machine (if you haven't already)
-   ```
-   conan profile detect
-   conan profile path default  # note the path this outputs
-   ```
+5. Configure Conan to build on your machine (if you haven't already):
+   `conan profile detect`
 
-   Edit the file listed by `conan profile path default` to set
-   `compiler.cppstd=17` (or `gnu17`)
+   (The C++ standard is set by `conanfile.py`, so the profile's
+   `compiler.cppstd` doesn't matter here.)
 
 6. Install C++ dependencies: `conan install . --build=missing`
 
