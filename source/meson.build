@@ -192,7 +192,8 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
   install: true)
 
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
-  dependencies: segment_output_dep,
+  link_with: [dfs_class_list_lib, optparse_lib],
+  dependencies: [segment_output_dep, thread_dep],
   install: true)
 
 first_segments = executable('first-segments', 'first-segments.cpp',

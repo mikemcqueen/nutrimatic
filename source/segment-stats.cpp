@@ -12,7 +12,14 @@
 #include <unordered_set>
 #include <vector>
 
+#include "dfs-cli-args.h"
+#include "optparse.h"
 #include "segment-output.h"
+
+struct Args {
+  char const* input_path = NULL;
+  std::vector<std::string> allow_paths;
+};
 
 struct Stats {
   uint64_t total_rows = 0;
@@ -22,6 +29,7 @@ struct Stats {
   uint64_t total_words = 0;
   size_t unique_pair_segments = 0;
   size_t unique_solo_word_segments = 0;
+  size_t allowed_unique_pair_segments = 0;
   std::unordered_set<std::string> unique_segments;
   std::unordered_set<std::string> unique_words;
   std::vector<uint64_t> words_by_length;
@@ -30,8 +38,11 @@ struct Stats {
 
 static void usage(char const* program) {
   fprintf(stdout,
-      "usage: %s [FILE]\n"
+      "usage: %s [-a FILE]... [FILE]\n"
       "  calculate segment and word statistics for dfs-anagrams output\n"
+      "  -a, --allow-pairs FILE  also report how many unique pair segments\n"
+      "                          are listed in FILE; pairs match in either\n"
+      "                          word order; may be repeated\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program);
 }
@@ -45,7 +56,8 @@ static bool increment(uint64_t* count, char const* description) {
   return true;
 }
 
-static bool add_segment(std::string const& segment, Stats* stats) {
+static bool add_segment(
+    std::string const& segment, DfsPairSet const* allowed, Stats* stats) {
   if (!increment(&stats->total_segments, "segment count")) return false;
   bool const pair = is_pair_segment(segment);
   if (pair) {
@@ -55,10 +67,13 @@ static bool add_segment(std::string const& segment, Stats* stats) {
     return false;
   }
   if (stats->unique_segments.insert(segment).second) {
-    if (pair)
+    if (pair) {
       ++stats->unique_pair_segments;
-    else
+      if (allowed != NULL && allowed->find(segment) != allowed->end())
+        ++stats->allowed_unique_pair_segments;
+    } else {
       ++stats->unique_solo_word_segments;
+    }
   }
 
   std::vector<std::string> const words = split_segment_words(segment);
@@ -78,7 +93,9 @@ static bool add_segment(std::string const& segment, Stats* stats) {
   return true;
 }
 
-static bool read_stats(std::istream* input, char const* name, Stats* stats) {
+static bool read_stats(
+    std::istream* input, char const* name, DfsPairSet const* allowed,
+    Stats* stats) {
   std::string line;
   uint64_t line_number = 0;
   while (std::getline(*input, line)) {
@@ -109,7 +126,8 @@ static bool read_stats(std::istream* input, char const* name, Stats* stats) {
             name, line_number);
         return false;
       }
-      if (!add_segment(line.substr(start, length), stats)) return false;
+      if (!add_segment(line.substr(start, length), allowed, stats))
+        return false;
 
       if (end == std::string::npos) break;
       start = end + 1;
@@ -150,7 +168,7 @@ static void print_percentage_count(
       label_width, label.c_str(), count_width, count, share, basis);
 }
 
-static bool print_stats(Stats const& stats) {
+static bool print_stats(Stats const& stats, bool show_allowed) {
   int const segment_label_width = 14;
   int const segment_count_width = decimal_width(stats.total_segments);
   print_count("total rows", segment_label_width,
@@ -166,6 +184,12 @@ static bool print_stats(Stats const& stats) {
       stats.unique_pair_segments, segment_count_width,
       percentage(stats.unique_pair_segments, stats.unique_segments.size()),
       "unique");
+  if (show_allowed)
+    print_percentage_count("allowed", segment_label_width,
+        stats.allowed_unique_pair_segments, segment_count_width,
+        percentage(
+            stats.allowed_unique_pair_segments, stats.unique_pair_segments),
+        "unique pair segments");
   print_percentage_count("solo segments", segment_label_width,
       stats.solo_word_segments, segment_count_width,
       percentage(stats.solo_word_segments, stats.total_segments), "total");
@@ -202,43 +226,85 @@ static bool print_stats(Stats const& stats) {
   return fflush(stdout) == 0;
 }
 
-int main(int argc, char* argv[]) {
-  char const* input_path = NULL;
-  bool parse_options = true;
-  for (int i = 1; i < argc; ++i) {
-    if (parse_options && strcmp(argv[i], "--") == 0) {
-      parse_options = false;
-    } else if (parse_options &&
-               (strcmp(argv[i], "-h") == 0 ||
-                strcmp(argv[i], "--help") == 0)) {
-      usage(argv[0]);
-      return 0;
-    } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "segment-stats: unknown option \"%s\"\n", argv[i]);
-      usage(argv[0]);
-      return 2;
-    } else if (input_path != NULL) {
-      fputs("segment-stats: at most one FILE may be given\n", stderr);
-      usage(argv[0]);
-      return 2;
-    } else {
-      input_path = argv[i];
+static bool parse_args(char* argv[], Args* out, bool* requested_help) {
+  enum {
+    OPT_HELP = 256,
+  };
+  static struct optparse_long const long_options[] = {
+    {"allow-pairs", 'a', OPTPARSE_REQUIRED},
+    {"help", OPT_HELP, OPTPARSE_NONE},
+    {NULL, 'h', OPTPARSE_NONE},
+    {NULL, 0, OPTPARSE_NONE},
+  };
+
+  *requested_help = false;
+
+  struct optparse options;
+  optparse_init(&options, argv);
+  int option;
+  while ((option = optparse_long(&options, long_options, NULL)) != -1) {
+    switch (option) {
+      case 'a':
+        if (options.optarg[0] == '\0') {
+          fputs("segment-stats: -a/--allow-pairs requires a file\n", stderr);
+          return false;
+        }
+        out->allow_paths.push_back(options.optarg);
+        break;
+      case 'h':
+      case OPT_HELP:
+        *requested_help = true;
+        return true;
+      default:
+        fprintf(stderr, "segment-stats: %s\n", options.errmsg);
+        return false;
     }
   }
+
+  out->input_path = optparse_arg(&options);
+  if (out->input_path != NULL && optparse_arg(&options) != NULL) {
+    fputs("segment-stats: at most one FILE may be given\n", stderr);
+    return false;
+  }
+  return true;
+}
+
+int main(int argc, char* argv[]) {
+  (void) argc;
+  Args args;
+  bool requested_help;
+  if (!parse_args(argv, &args, &requested_help)) {
+    usage(argv[0]);
+    return 2;
+  }
+  if (requested_help) {
+    usage(argv[0]);
+    return 0;
+  }
+
+  DfsPairSet allowed;
+  for (size_t i = 0; i < args.allow_paths.size(); ++i) {
+    if (!load_pair_file(args.allow_paths[i].c_str(), "allow list", &allowed,
+                        /*quiet=*/true, /*reject_hyphens=*/true,
+                        /*allow_single_words=*/true))
+      return 1;
+  }
+  DfsPairSet const* const allowed_pairs =
+      args.allow_paths.empty() ? NULL : &allowed;
 
   Stats stats;
-  if (input_path == NULL || strcmp(input_path, "-") == 0) {
-    if (!read_stats(&std::cin, "-", &stats)) return 1;
+  if (args.input_path == NULL || strcmp(args.input_path, "-") == 0) {
+    if (!read_stats(&std::cin, "-", allowed_pairs, &stats)) return 1;
   } else {
     errno = 0;
-    std::ifstream input(input_path);
+    std::ifstream input(args.input_path);
     if (!input.is_open()) {
       fprintf(stderr, "segment-stats: can't open \"%s\": %s\n",
-          input_path, strerror(errno));
+          args.input_path, strerror(errno));
       return 1;
     }
-    if (!read_stats(&input, input_path, &stats)) return 1;
+    if (!read_stats(&input, args.input_path, allowed_pairs, &stats)) return 1;
   }
 
-  return print_stats(stats) ? 0 : 1;
+  return print_stats(stats, allowed_pairs != NULL) ? 0 : 1;
 }
