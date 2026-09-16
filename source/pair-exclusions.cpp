@@ -1,5 +1,6 @@
 #include "pair-exclusions.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -279,9 +280,6 @@ bool load_target_pair_file(
       target + "/" + WORKFLOW_TARGET_NO_PAIRS_NAME;
   struct stat status;
   if (stat(path.c_str(), &status) == 0) {
-    if (source == NULL)
-      return load_pair_file(
-          path.c_str(), "reject list", rejected, true, true);
     if (!load_pair_file(path.c_str(), "reject list", source, true, true))
       return false;
     rejected->insert(source->begin(), source->end());
@@ -301,8 +299,6 @@ bool load_workflow_pair_file(
     DfsPairSet* pairs, DfsPairSet* source) {
   if (workflow_file_missing(path, program, "classified pair file"))
     return true;
-  if (source == NULL)
-    return load_pair_file(path.c_str(), description, pairs, true, true);
   if (!load_pair_file(path.c_str(), description, source, true, true))
     return false;
   pairs->insert(source->begin(), source->end());
@@ -339,8 +335,7 @@ void print_allow_pairs_option_help(FILE* fp, int description_column) {
 
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
-    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out,
-    bool support_allow) {
+    PairFilterSupport support, PairFilterOptions* out) {
   char const* const option = argv[*index];
   if (strcmp(option, "--wf") == 0) {
     if (!out->workflow_root.empty()) {
@@ -382,17 +377,17 @@ PairFilterOptionResult parse_pair_filter_option(
     out->target = value;
     return PAIR_FILTER_OPTION_HANDLED;
   }
-  if (support_workflow_yes &&
+  if (support.workflow_yes &&
       (strcmp(option, "-y") == 0 || strcmp(option, "--yes") == 0)) {
     out->workflow_yes = true;
     return PAIR_FILTER_OPTION_HANDLED;
   }
 
   std::vector<std::string>* paths;
-  if (support_allow &&
+  if (support.allow &&
       match_option_value(argc, argv, index, "-a", "--allow-pairs", &value)) {
     paths = &out->allow_paths;
-  } else if (support_ignore &&
+  } else if (support.ignore &&
       match_option_value(argc, argv, index, "-i", "--ignore", &value)) {
     paths = &out->ignore_paths;
   } else if (match_option_value(argc, argv, index, "-r", "--reject", &value)) {
@@ -425,9 +420,12 @@ bool check_pair_filter_options(
 
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
-    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
-    std::optional<DfsPairSet>* allowed,
-    PairFilterSources* sources) {
+    PairFilterSupport support, PairFilters* out) {
+  assert(support.allow || options.allow_paths.empty());
+  assert(support.ignore || options.ignore_paths.empty());
+  assert(support.workflow_yes || !options.workflow_yes);
+  (void) support;
+
   char const* wfroot = NULL;
   if (options.workflow) {
     wfroot = getenv("WFROOT");
@@ -448,65 +446,61 @@ bool load_pair_filters(
     if (!target_agrees_with_input(options, wfroot, target, program))
       return false;
     success(program, "TARGET resolved to %s", target.c_str());
-    if (sources != NULL) sources->target = target;
+    out->sources.target = target;
   }
 
-  if (allowed != NULL) {
-    allowed->reset();
-    if (!options.allow_paths.empty()) {
-      size_t ignored_non_pairs = 0;
-      allowed->emplace();
-      for (size_t i = 0; i < options.allow_paths.size(); ++i) {
-        if (!load_pair_file_ignoring_single_words(
-                options.allow_paths[i].c_str(), "allow list",
-                &allowed->value(), &ignored_non_pairs))
-          return false;
-      }
-      if (ignored_non_pairs != 0)
-        fprintf(stderr,
-            "%s: ignored %zu non-pairs in --allow-pairs file(s)\n",
-            program, ignored_non_pairs);
+  out->allowed.reset();
+  if (!options.allow_paths.empty()) {
+    size_t ignored_non_pairs = 0;
+    out->allowed.emplace();
+    for (size_t i = 0; i < options.allow_paths.size(); ++i) {
+      if (!load_pair_file_ignoring_single_words(
+              options.allow_paths[i].c_str(), "allow list",
+              &out->allowed.value(), &ignored_non_pairs))
+        return false;
     }
+    if (ignored_non_pairs != 0)
+      fprintf(stderr,
+          "%s: ignored %zu non-pairs in --allow-pairs file(s)\n",
+          program, ignored_non_pairs);
   }
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
     if (!load_pair_file(
-            options.ignore_paths[i].c_str(), "ignore list", ignored,
+            options.ignore_paths[i].c_str(), "ignore list", &out->ignored,
             true, true))
       return false;
   }
   for (size_t i = 0; i < options.reject_paths.size(); ++i) {
     if (!load_pair_file(
-            options.reject_paths[i].c_str(), "reject list", rejected,
+            options.reject_paths[i].c_str(), "reject list", &out->rejected,
             true, true, true))
       return false;
   }
   if (wfroot != NULL) {
     if (!load_workflow_pair_file(
             workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
-            "reject list", rejected,
-            sources == NULL ? NULL : &sources->classified_no))
+            "reject list", &out->rejected, &out->sources.classified_no))
       return false;
-    if (!load_target_pair_file(wfroot, target, program, rejected,
-            sources == NULL ? NULL : &sources->target_no))
+    if (!load_target_pair_file(wfroot, target, program, &out->rejected,
+            &out->sources.target_no))
       return false;
     if (options.workflow_yes) {
       if (!load_workflow_pair_file(
               workflow_path(wfroot, WORKFLOW_YES_PAIRS_PATH), program,
-              "ignore list", ignored,
-              sources == NULL ? NULL : &sources->classified_yes))
+              "ignore list", &out->ignored, &out->sources.classified_yes))
         return false;
     }
   }
 
   if (!options.dictionary_path.empty())
-    return load_dictionary(options.dictionary_path.c_str(), dictionary);
+    return load_dictionary(options.dictionary_path.c_str(), &out->dictionary);
   if (wfroot == NULL) {
     warn(program, "NO DICTIONARY SUPPLIED");
     return true;
   }
   std::string const dict_path = workflow_path(wfroot, WORKFLOW_DICT_PATH);
   if (workflow_file_missing(dict_path, program, "dictionary")) return true;
-  return load_dictionary(dict_path.c_str(), dictionary);
+  return load_dictionary(dict_path.c_str(), &out->dictionary);
 }
 
 bool is_rejected_segment(

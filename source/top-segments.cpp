@@ -36,6 +36,9 @@ struct FilterStats {
   DfsPairSet classified_yes_pairs;
 };
 
+static constexpr PairFilterSupport kSupport = {
+    .ignore = true, .allow = true, .workflow_yes = true};
+
 struct Args {
   std::vector<char const*> paths;
   PairFilterOptions filter_options;
@@ -173,10 +176,8 @@ static bool count_candidate(
 }
 
 static bool count_stream(
-    std::istream* input, char const* name, DfsPairSet const& ignored,
-    DfsPairSet const& rejected, std::optional<DfsPairSet> const& allowed,
-    DfsDictionary const& dictionary,
-    PairFilterSources const& filter_sources, FilterStats* filter_stats,
+    std::istream* input, char const* name, PairFilters const& filters,
+    FilterStats* filter_stats,
     SegmentOutputOptions const& output_options, bool elimination,
     uint64_t* surviving_rows,
     std::unordered_set<std::string>* unique_segments, SegmentCounts* counts) {
@@ -224,23 +225,23 @@ static bool count_stream(
     // YES owns an overlap with an explicit ignore. Keeping this order visible
     // is important because it defines diagnostic attribution even though set
     // union would produce the same selected output.
-    if (any_segment_in(segments, filter_sources.classified_no)) {
+    if (any_segment_in(segments, filters.sources.classified_no)) {
       ++filter_stats->classified_no_lines;
       continue;
     }
-    if (any_segment_in(segments, filter_sources.target_no)) {
+    if (any_segment_in(segments, filters.sources.target_no)) {
       ++filter_stats->target_no_lines;
       continue;
     }
-    if (any_rejected_segment(segments, rejected)) {
+    if (any_rejected_segment(segments, filters.rejected)) {
       ++filter_stats->explicit_reject_lines;
       continue;
     }
-    if (any_segment_disallowed(segments, allowed)) {
+    if (any_segment_disallowed(segments, filters.allowed)) {
       ++filter_stats->allow_lines;
       continue;
     }
-    if (any_segment_outside(segments, dictionary)) {
+    if (any_segment_outside(segments, filters.dictionary)) {
       ++filter_stats->dictionary_lines;
       continue;
     }
@@ -253,13 +254,13 @@ static bool count_stream(
       row = ++*surviving_rows;
     }
     for (std::string const& segment : segments) {
-      if (filter_sources.classified_yes.find(segment) !=
-          filter_sources.classified_yes.end()) {
+      if (filters.sources.classified_yes.find(segment) !=
+          filters.sources.classified_yes.end()) {
         ++filter_stats->classified_yes_instances;
         filter_stats->classified_yes_pairs.insert(canonical_pair(segment));
         continue;
       }
-      if (ignored.find(segment) != ignored.end()) {
+      if (filters.ignored.find(segment) != filters.ignored.end()) {
         ++filter_stats->explicit_ignore_instances;
         continue;
       }
@@ -522,7 +523,7 @@ static bool parse_args(
       }
 
       PairFilterOptionResult const filter_result = parse_pair_filter_option(
-          argc, argv, &i, "top-segments", true, true, &filter_options, true);
+          argc, argv, &i, "top-segments", kSupport, &filter_options);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return false;
@@ -621,14 +622,9 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  DfsPairSet ignored;
-  DfsPairSet rejected;
-  DfsDictionary dictionary;
-  std::optional<DfsPairSet> allowed;
-  PairFilterSources filter_sources;
+  PairFilters filters;
   if (!load_pair_filters(
-          args.filter_options, "top-segments", &ignored, &rejected, &dictionary,
-          &allowed, &filter_sources))
+          args.filter_options, "top-segments", kSupport, &filters))
     return 1;
 
   SegmentCounts counts;
@@ -638,9 +634,9 @@ int main(int argc, char* argv[]) {
   for (size_t i = 0; i < args.paths.size(); ++i) {
     char const* const path = args.paths[i];
     if (strcmp(path, "-") == 0) {
-      if (!count_stream(&std::cin, "-", ignored, rejected, allowed, dictionary,
-              filter_sources, &filter_stats, args.output_options,
-              args.elimination, &surviving_rows, &unique_segments, &counts))
+      if (!count_stream(&std::cin, "-", filters, &filter_stats,
+              args.output_options, args.elimination, &surviving_rows,
+              &unique_segments, &counts))
         return 1;
       continue;
     }
@@ -652,13 +648,13 @@ int main(int argc, char* argv[]) {
           path, strerror(errno));
       return 1;
     }
-    if (!count_stream(&input, path, ignored, rejected, allowed, dictionary,
-            filter_sources, &filter_stats, args.output_options,
-            args.elimination, &surviving_rows, &unique_segments, &counts))
+    if (!count_stream(&input, path, filters, &filter_stats,
+            args.output_options, args.elimination, &surviving_rows,
+            &unique_segments, &counts))
       return 1;
   }
 
-  print_filter_summary(filter_stats, filter_sources);
+  print_filter_summary(filter_stats, filters.sources);
   return print_counts(counts, args.output_options, args.show_counts,
       args.elimination, surviving_rows)
       ? 0 : 1;

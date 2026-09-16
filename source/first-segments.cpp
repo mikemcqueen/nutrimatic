@@ -13,6 +13,9 @@
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
+static constexpr PairFilterSupport kSupport = {
+    .ignore = true, .workflow_yes = true};
+
 struct FoundSegment {
   std::string text;
   size_t length;
@@ -68,8 +71,7 @@ static bool print_segments(std::vector<FoundSegment> const& segments) {
 }
 
 static bool find_segments(
-    std::istream* input, char const* name, DfsPairSet const& ignored,
-    DfsPairSet const& rejected, DfsDictionary const& dictionary,
+    std::istream* input, char const* name, PairFilters const& filters,
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
   std::vector<FoundSegment> result;
@@ -106,8 +108,8 @@ static bool find_segments(
       }
 
       segments.push_back(line.substr(start, length));
-      if (is_rejected_segment(rejected, segments.back()) ||
-          !all_words_in_dict(dictionary, segments.back()))
+      if (is_rejected_segment(filters.rejected, segments.back()) ||
+          !all_words_in_dict(filters.dictionary, segments.back()))
         reject_line = true;
 
       if (end == std::string::npos) break;
@@ -117,7 +119,7 @@ static bool find_segments(
     if (reject_line) continue;
     for (std::string const& segment : segments) {
       if (result.size() == output_options.limit) break;
-      if (ignored.find(segment) != ignored.end()) continue;
+      if (filters.ignored.find(segment) != filters.ignored.end()) continue;
       if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
           !is_pair_segment(segment))
         continue;
@@ -165,7 +167,7 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const result = parse_pair_filter_option(
-          argc, argv, &i, "first-segments", true, true, &filter_options);
+          argc, argv, &i, "first-segments", kSupport, &filter_options);
       if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return 2;
@@ -210,17 +212,13 @@ int main(int argc, char* argv[]) {
   if (results_path != NULL && strcmp(results_path, "-") != 0)
     filter_options.input_path = results_path;
 
-  DfsPairSet ignored;
-  DfsPairSet rejected;
-  DfsDictionary dictionary;
+  PairFilters filters;
   if (!load_pair_filters(
-          filter_options, "first-segments", &ignored, &rejected, &dictionary))
+          filter_options, "first-segments", kSupport, &filters))
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
-    return find_segments(
-        &std::cin, "-", ignored, rejected, dictionary, output_options)
-        ? 0 : 1;
+    return find_segments(&std::cin, "-", filters, output_options) ? 0 : 1;
 
   errno = 0;
   std::ifstream input(results_path);
@@ -229,7 +227,5 @@ int main(int argc, char* argv[]) {
         results_path, strerror(errno));
     return 1;
   }
-  return find_segments(
-      &input, results_path, ignored, rejected, dictionary, output_options)
-      ? 0 : 1;
+  return find_segments(&input, results_path, filters, output_options) ? 0 : 1;
 }

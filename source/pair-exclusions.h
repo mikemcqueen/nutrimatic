@@ -29,15 +29,32 @@ struct PairFilterOptions {
   std::string input_path;
 };
 
+// Which pair-filter options a tool accepts. Options a tool does not support
+// are refused at parse time, so the loader never sees them.
+struct PairFilterSupport {
+  bool ignore = false;        // -i/--ignore
+  bool allow = false;         // -a/--allow-pairs
+  bool workflow_yes = false;  // -y/--yes
+};
+
 // The workflow-owned portions of the aggregate ignore and reject sets.
-// Callers that need to explain which layer acted may request these from
-// load_pair_filters(); ordinary filtering can continue to use the aggregate
-// sets alone.
+// Callers that need to explain which layer acted may consult these; ordinary
+// filtering can continue to use the aggregate sets alone.
 struct PairFilterSources {
   DfsPairSet classified_yes;
   DfsPairSet classified_no;
   DfsPairSet target_no;
   std::string target;
+};
+
+// Every filtering layer a segment tool applies. Empty members accept
+// everything, so a tool consults only the layers it cares about.
+struct PairFilters {
+  DfsPairSet ignored;
+  DfsPairSet rejected;
+  DfsDictionary dictionary;
+  std::optional<DfsPairSet> allowed;  // nullopt: no allowlist policy active
+  PairFilterSources sources;          // empty without a workflow root
 };
 
 enum PairFilterOptionResult {
@@ -56,13 +73,12 @@ void print_allow_pairs_option_help(FILE* fp, int description_column);
 
 // Parses -a/--allow-pairs FILE, -i/--ignore FILE, -r/--reject FILE,
 // -d/--dict PATH, --wf, --wfroot DIR, -t/--target TARGET, and -y/--yes.
-// Allow, ignore, and -y/--yes options are returned as OTHER when their
-// support flags are false. `index` points to the current argument and advances
+// Allow, ignore, and -y/--yes options are returned as OTHER when `support`
+// does not list them. `index` points to the current argument and advances
 // over a consumed FILE, DIR or TARGET. Errors are diagnosed already.
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
-    bool support_ignore, bool support_workflow_yes, PairFilterOptions* out,
-    bool support_allow = false);
+    PairFilterSupport support, PairFilterOptions* out);
 
 // Diagnoses the options that need a workflow root without one: -y/--yes and
 // -t/--target. Tools call this once their arguments are parsed, before
@@ -73,8 +89,10 @@ bool check_pair_filter_options(
 // Loads explicit allow/ignore/reject files. Allow files load pairs while
 // ignoring and counting standalone entries; ignore files are pair-only;
 // explicit reject files may also contain standalone words. When no allow file
-// was supplied, `allowed` is nullopt; supplying one or more files containing no
-// pairs leaves it as an active empty set. With --wf or --wfroot, classified NO
+// was supplied, `out->allowed` is nullopt; supplying one or more files
+// containing no pairs leaves it as an active empty set. `support` states which
+// options the calling tool accepts, and has to agree with `options`, which the
+// tool's own parsing guarantees. With --wf or --wfroot, classified NO
 // pairs below the selected workflow root are rejected, and with -y/--yes,
 // classified YES pairs are ignored. -d/--dict selects the dictionary whether
 // or not there is a workflow root; otherwise workflow mode defaults to the
@@ -94,9 +112,7 @@ bool check_pair_filter_options(
 // no.pairs is silent, because having none is the ordinary case.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,
-    DfsPairSet* ignored, DfsPairSet* rejected, DfsDictionary* dictionary,
-    std::optional<DfsPairSet>* allowed = NULL,
-    PairFilterSources* sources = NULL);
+    PairFilterSupport support, PairFilters* out);
 
 // Returns true when `segment` is an exact rejected pair or contains a
 // space-delimited word listed on its own in an explicit reject file.

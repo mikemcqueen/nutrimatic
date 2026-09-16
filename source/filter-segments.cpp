@@ -13,6 +13,8 @@
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
+static constexpr PairFilterSupport kSupport = {.allow = true};
+
 static void usage(char const* program) {
   fprintf(stdout,
       "usage: %s [-n N] [--with-regex REGEX] [--no-score]\n"
@@ -47,9 +49,8 @@ static void usage(char const* program) {
 }
 
 static bool filter_stream(
-    std::istream* input, char const* name, DfsPairSet const& rejected,
-    std::optional<DfsPairSet> const& allowed,
-    DfsDictionary const& dictionary, std::regex const* with_regex,
+    std::istream* input, char const* name, PairFilters const& filters,
+    std::regex const* with_regex,
     bool show_score, bool have_limit, uint64_t limit) {
   std::string line;
   uint64_t line_number = 0;
@@ -86,9 +87,9 @@ static bool filter_stream(
       }
 
       std::string const segment = line.substr(start, length);
-      if (is_rejected_segment(rejected, segment) ||
-          !is_allowed_segment(allowed, segment) ||
-          !all_words_in_dict(dictionary, segment))
+      if (is_rejected_segment(filters.rejected, segment) ||
+          !is_allowed_segment(filters.allowed, segment) ||
+          !all_words_in_dict(filters.dictionary, segment))
         include = false;
       if (!regex_matched && std::regex_search(segment, *with_regex))
         regex_matched = true;
@@ -123,8 +124,7 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const result = parse_pair_filter_option(
-          argc, argv, &i, "filter-segments", false, false, &filter_options,
-          true);
+          argc, argv, &i, "filter-segments", kSupport, &filter_options);
       if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return 2;
@@ -194,19 +194,15 @@ int main(int argc, char* argv[]) {
   if (results_path != NULL && strcmp(results_path, "-") != 0)
     filter_options.input_path = results_path;
 
-  DfsPairSet ignored;
-  DfsPairSet rejected;
-  DfsDictionary dictionary;
-  std::optional<DfsPairSet> allowed;
+  PairFilters filters;
   if (!load_pair_filters(
-          filter_options, "filter-segments", &ignored, &rejected, &dictionary,
-          &allowed))
+          filter_options, "filter-segments", kSupport, &filters))
     return 1;
 
   if (results_path == NULL || strcmp(results_path, "-") == 0)
     return filter_stream(
-        &std::cin, "-", rejected, allowed, dictionary, with_regex_filter,
-        show_score, have_limit, limit)
+        &std::cin, "-", filters, with_regex_filter, show_score, have_limit,
+        limit)
         ? 0 : 1;
 
   errno = 0;
@@ -217,7 +213,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   return filter_stream(
-      &input, results_path, rejected, allowed, dictionary, with_regex_filter,
-      show_score, have_limit, limit)
+      &input, results_path, filters, with_regex_filter, show_score, have_limit,
+      limit)
       ? 0 : 1;
 }
