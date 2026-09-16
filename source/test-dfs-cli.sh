@@ -107,7 +107,7 @@ grep -Eq \
   fail "threaded preprocessing diagnostic is missing"
 [[ $(wc -l < "$test_dir/all.stdout") -eq 4 ]] ||
   fail "full synthetic search did not print four word sets"
-[[ $(grep -c '^70.00 ab cd$' "$test_dir/all.stdout") -eq 1 ]] ||
+[[ $(grep -c '^70.00000 ab cd$' "$test_dir/all.stdout") -eq 1 ]] ||
   fail "the contiguous phrase did not win and deduplicate its split form"
 if grep -Eq "$diagnostic_prefix" "$test_dir/all.stdout"; then
   fail "progress leaked onto stdout"
@@ -201,7 +201,7 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
   > "$test_dir/extract-one.stdout" 2> "$test_dir/extract-one.stderr"
 cmp "$test_dir/all.stdout" "$test_dir/extract-two.stdout" ||
   fail "-x 2 changed stdout where no entry holds three words"
-[[ $(grep -c '^70.00 ab cd$' "$test_dir/extract-one.stdout") -eq 0 ]] ||
+[[ $(grep -c '^70.00000 ab cd$' "$test_dir/extract-one.stdout") -eq 0 ]] ||
   fail "-x 1 kept the two-word index entry"
 grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
@@ -458,7 +458,7 @@ printf 'cd,ab\n' > "$test_dir/exclude.pairs"
 grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys from $test_dir/exclude.pairs$" \
   "$test_dir/excluded.stderr" ||
   fail "the exclude-list diagnostic is missing from stderr"
-grep -q '^70\.00 ab cd$' "$test_dir/all.stdout" ||
+grep -q '^70\.00000 ab cd$' "$test_dir/all.stdout" ||
   fail "the unexcluded run should rank the \"ab cd\" entry first"
 [[ $(grep -c ' ab cd$' "$test_dir/excluded.stdout") -eq 0 ]] ||
   fail "--exclude-pairs kept the excluded index entry"
@@ -898,7 +898,7 @@ fi
 [[ $(grep -c '^[^ ]* [^,]*,[^,]*$' "$test_dir/two-segment.stdout") \
    -eq $(wc -l < "$test_dir/two-segment.stdout") ]] ||
   fail "-g 2 returned a result that does not use exactly two entries"
-[[ $(grep -c '^70.00 ab cd$' "$test_dir/one-segment.stdout") -eq 1 ]] ||
+[[ $(grep -c '^70.00000 ab cd$' "$test_dir/one-segment.stdout") -eq 1 ]] ||
   fail "-g 1 lost the contiguous phrase"
 grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words, exactly 1 segment$' \
   "$test_dir/one-segment.stderr" ||

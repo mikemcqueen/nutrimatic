@@ -533,7 +533,7 @@ bool dfs_print_results(
     bool show_score, bool show_bonus, DfsSoloWords const* solo_words) {
   for (size_t i = 0; i < results.size(); ++i) {
     if (show_score &&
-        fprintf(output, "%#.4g ", exp(results[i].log_score)) < 0)
+        fprintf(output, "%#.7g ", exp(results[i].log_score)) < 0)
       return false;
     if (show_bonus &&
         fprintf(output, "%s ", dfs_spelling_bonus_list(results[i]).c_str()) < 0)

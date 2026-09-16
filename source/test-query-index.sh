@@ -176,6 +176,10 @@ assert_close "$(awk '$2 == "missing,pair" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 0 \
   "stdin scoring did not assign zero to a pair absent in both orientations"
 
+[[ $(awk '{ print length($0) - length($2) }' \
+     "$test_dir/stdin-score.stdout" | sort -u | wc -l) -eq 1 ]] ||
+  fail "stdin scores did not share one right-aligned column width"
+
 printf 'cd,ab\n' > "$test_dir/stdin-score-pair.txt"
 printf 'cd,ab\n' |
   "$query_index" -i "$synthetic_index" - --score \
@@ -419,9 +423,13 @@ cmp "$test_dir/extract-uncapped.stdout" \
   fail "a loaded pair list changed an index-backed row at --pair-bonus 0"
 grep -q '^1 cd ab$' "$test_dir/pair-list.stdout" ||
   fail "query-index did not synthesize a missing listed-pair orientation"
-assert_close "$(score_value 'cd ab' --pairs "$test_dir/pairs.txt" \
-    --pair-bonus 0 --word-bonus 0 -P 1)" 1 \
-  "--score did not use the synthesized pair's fallback count"
+# Listing still synthesizes the missing orientation above; --score scores only
+# what the index has.
+expect_score_failure 'cd ab' unindexed-asserted \
+  --pairs "$test_dir/pairs.txt" --pair-bonus 0 --word-bonus 0 -P 1
+grep -q 'index has no entry "cd ab"' \
+  "$test_dir/unindexed-asserted.stderr" ||
+  fail "--score accepted an asserted entry absent from the index"
 
 assert_close "$(score_value 'ab cd' --pairs "$test_dir/pairs.txt" \
     --word-bonus 0 -P 1)" 70000000 \
@@ -439,6 +447,22 @@ printf 'ab\n' > "$test_dir/single-word-pairs.txt"
 assert_close "$(score_value ab --pairs "$test_dir/single-word-pairs.txt" -P 1)" \
   80000000 \
   "--score should apply the pair bonus to a listed standalone word"
+
+# Exact scoring has no letter bag, so it has no bag maximum either.
+long_sequence=$(printf 'ab,%.0s' $(seq 70))
+[[ -n "$(score_value "${long_sequence%,}" -P 1 --word-bonus 0)" ]] ||
+  fail "--score rejected a sequence past the letter-bag maximum"
+
+# Every input loads once per invocation, not once per stdin line.
+printf 'ab,cd\ncd,ab\nab,cd\n' |
+  "$query_index" -i "$synthetic_index" - --score \
+    --pairs "$test_dir/pairs.txt" \
+    > "$test_dir/stdin-score-load-once.stdout" \
+    2> "$test_dir/stdin-score-load-once.stderr"
+pair_loads=$(grep -c 'pair list: 2 pairs' \
+  "$test_dir/stdin-score-load-once.stderr" || true)
+[[ "$pair_loads" == 1 ]] ||
+  fail "stdin scoring read its pair file $pair_loads times, expected once"
 
 # The fixed workflow tiers are repeatable, apply to either pair orientation,
 # and use the maximum tier rather than stacking overlapping evidence.
@@ -576,11 +600,30 @@ assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
 
 mkdir -p "$workflow_root/.wf/classified/no"
 printf 'ab,cd\n' > "$workflow_root/.wf/classified/no/no.pairs"
-expect_score_failure 'ab cd' workflow-no-score \
-  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1'
-grep -q 'dfs-anagrams phase 1 excludes entry "ab cd"' \
-  "$test_dir/workflow-no-score.stderr" ||
-  fail "--score did not apply the workflow NO exclusion"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1')" \
+  "$full_target_score" \
+  "a workflow NO exclusion should not block --score"
+
+# Score mode never inspects the NO path, so one it cannot even stat is fine;
+# ordinary listing must still refuse it.
+rm "$workflow_root/.wf/classified/no/no.pairs"
+mkdir "$workflow_root/.wf/classified/no/no.pairs"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1')" \
+  "$full_target_score" \
+  "--score inspected a workflow NO path it has no use for"
+set +e
+"$query_index" -i "$synthetic_index" abcd -m 2 -n 10 --word-bonus 0 \
+  --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
+  > "$test_dir/workflow-no-directory.stdout" \
+  2> "$test_dir/workflow-no-directory.stderr"
+workflow_no_directory_status=$?
+set -e
+[[ $workflow_no_directory_status -ne 0 ]] ||
+  fail "ordinary listing accepted a workflow NO path that is a directory"
+rmdir "$workflow_root/.wf/classified/no/no.pairs"
+printf 'ab,cd\n' > "$workflow_root/.wf/classified/no/no.pairs"
 "$query_index" -i "$synthetic_index" abcd -m 2 -n 10 --word-bonus 0 \
   --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1' \
   > "$test_dir/workflow-no-listing.stdout" \

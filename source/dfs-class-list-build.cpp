@@ -84,41 +84,24 @@ DfsBestBonusPolicy dfs_best_bonus_policy(size_t exact_segments) {
       : DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS);
 }
 
-bool prepare_dfs_class_list(
-    IndexReader* reader, std::string const& letters,
-    DfsCommonArgs const& args,
-    std::vector<std::string> const& exclude_pair_files,
+bool prepare_dfs_scoring_inputs(
+    IndexReader* reader, DfsCommonArgs const& args, bool score_mode,
     size_t exact_segments, DfsPreparedClassList* out) {
-  DfsDictionary const* dictionary_filter = NULL;
-  if (args.dictionary_file != NULL) {
-    if (!load_dictionary(args.dictionary_file, &out->dictionary)) return false;
-    dictionary_filter = &out->dictionary;
+  if (args.pair_file != NULL) {
+    bool const loaded = score_mode
+        ? load_pair_file(
+              args.pair_file, "pair list", &out->pairs, false, false, true)
+        : load_extraction_pair_file(
+              args.pair_file, "pair list", args.min_word_len,
+              &out->pairs, &out->exception_prefixes, false, false,
+              &out->external_rows);
+    if (!loaded) return false;
   }
-
-  std::vector<DfsPairRow> external_rows;
-  std::vector<DfsPairRow> best_rows;
-  if (args.pair_file != NULL &&
-      !load_extraction_pair_file(
-          args.pair_file, "pair list", args.min_word_len,
-          &out->pairs, &out->exception_prefixes, false, false,
-          &external_rows))
-    return false;
   if (!load_weighted_pair_files(
-          args, /*score_mode=*/false, args.min_word_len,
-          &out->weighted_pairs, &out->exception_prefixes, &external_rows,
-          &best_rows))
+          args, score_mode, args.min_word_len,
+          &out->weighted_pairs, &out->exception_prefixes,
+          &out->external_rows, &out->best_rows))
     return false;
-  if (!load_exclude_pair_files(
-          exclude_pair_files, &out->exclude_pairs))
-    return false;
-  if (dictionary_filter != NULL) {
-    if (!args.workflow_root.empty())
-      admit_best_words(best_rows, &out->dictionary);
-    external_rows.insert(
-        external_rows.end(), best_rows.begin(), best_rows.end());
-    warn_dictionary_drops(*reader, letters, args, out->dictionary,
-                          out->exclude_pairs, external_rows);
-  }
 
   DfsBestBonusPolicy const best_bonus =
       dfs_best_bonus_policy(exact_segments);
@@ -133,6 +116,35 @@ bool prepare_dfs_class_list(
         reader, args.solo_words,
         args.pair_file != NULL ? &out->pairs : NULL, out->model.get(),
         !out->weighted_pairs.empty() ? &out->weighted_pairs : NULL));
+  return true;
+}
+
+bool prepare_dfs_class_list(
+    IndexReader* reader, std::string const& letters,
+    DfsCommonArgs const& args,
+    std::vector<std::string> const& exclude_pair_files,
+    size_t exact_segments, DfsPreparedClassList* out) {
+  DfsDictionary const* dictionary_filter = NULL;
+  if (args.dictionary_file != NULL) {
+    if (!load_dictionary(args.dictionary_file, &out->dictionary)) return false;
+    dictionary_filter = &out->dictionary;
+  }
+
+  if (!prepare_dfs_scoring_inputs(
+          reader, args, /*score_mode=*/false, exact_segments, out))
+    return false;
+  if (!load_exclude_pair_files(
+          exclude_pair_files, &out->exclude_pairs))
+    return false;
+  if (dictionary_filter != NULL) {
+    if (!args.workflow_root.empty())
+      admit_best_words(out->best_rows, &out->dictionary);
+    out->external_rows.insert(
+        out->external_rows.end(),
+        out->best_rows.begin(), out->best_rows.end());
+    warn_dictionary_drops(*reader, letters, args, out->dictionary,
+                          out->exclude_pairs, out->external_rows);
+  }
 
   out->classes.reset(new DfsClassList(
       reader, letters, args.min_word_len, /*include_phrases=*/true,

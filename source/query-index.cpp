@@ -8,7 +8,6 @@
 #include "dfs-class-list-build.h"
 #include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
-#include "dfs-output.h"
 #include "dfs-score.h"
 #include "dfs-solo-words.h"
 #include "dfs-search-stats.h"
@@ -74,7 +73,9 @@ static void usage(char const* program) {
       " workflow mode defaults to DIR/%s; required otherwise and with"
       " --near\n"
       "  --score treats letters as a comma-separated sequence of exact\n"
-      "    entries and prints the score dfs-anagrams assigns that spelling\n"
+      "    entries and prints the score dfs-anagrams assigns that spelling;\n"
+      "    it scores the sequence as given, applies no dictionary or\n"
+      "    exclusion filtering, and requires every entry to be in the index\n"
       "    with sequence -, reads one comma-separated value per stdin line,\n"
       "    each as one space-separated index entry, and sorts by score; a\n"
       "    two-word value uses its higher-scoring index orientation, or\n"
@@ -102,11 +103,11 @@ static void usage(char const* program) {
       " matched only in written order; other pairs match in either order\n"
       "    every loaded entry must contain at least -m normalized"
       " non-space characters in total\n"
-      "    eligible listed pairs absent from the index are admitted with"
-      " corpus count 1\n"
-      "    dictionary, bag, -m, -x, and workflow NO rules still apply\n"
-      "    --score instead matches pairs in either order and does not apply"
-      " the extraction minimum\n"
+      "    when listing, eligible listed pairs absent from the index are"
+      " admitted with corpus count 1, and dictionary, bag, -m, -x, and"
+      " workflow NO rules still apply\n"
+      "    --score instead matches pairs in either order, does not apply"
+      " the extraction minimum, and filters nothing\n"
       "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
       " %.2f and %.2f; --best-pairs FILE and --more-best-pairs FILE mark"
       " BEST entries\n"
@@ -120,8 +121,8 @@ static void usage(char const* program) {
       " the nonempty WFROOT environment variable\n"
       "    workflow mode loads DIR/%s as YES pairs and"
       " requires either --seed-pairs or -t beginning with sN\n"
-      "    it also excludes DIR/%s, and a complete target's %s, when those"
-      " files exist\n"
+      "    when listing, it also excludes DIR/%s, and a complete target's"
+      " %s, when those files exist; --score reads neither\n"
       "    BEST pair words missing from the dictionary are added to it,"
       " with a stderr notice for each\n"
       "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
@@ -288,7 +289,8 @@ static bool parse_args(char* argv[], Args* out) {
   if (!finalize_dfs_workflow_args(
           &out->common, argv[0], &out->index_file))
     return false;
-  if (!collect_workflow_exclude_pair_files(
+  if (!out->score &&
+      !collect_workflow_exclude_pair_files(
           out->common, argv[0], &out->exclude_pair_files))
     return false;
   if (out->index_file == NULL) {
@@ -603,76 +605,92 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
   return 0;
 }
 
-static bool build_sequence_score(
-    IndexReader const& reader,
-    std::vector<std::string> const& entries,
-    DfsPreparedClassList const& prepared, DfsSpelling* result,
-    std::vector<std::string> const* reverse_entries = NULL) {
-  DfsMemberIndex members;
-  std::string duplicate;
-  if (!dfs_index_members(*prepared.classes, &members, &duplicate)) {
-    fprintf(stderr, "error: duplicate phase-1 spelling \"%s\"\n",
-            duplicate.c_str());
-    return false;
-  }
+// Everything one exact entry contributes to a score, gathered without
+// enumerating anything: see
+// findings/query-index-score-needs-no-phase-1.md.
+struct DfsEntryTerms {
+  int64_t count;
+  bool multi_word;
+  uint16_t flags;
+  bool direct_best;
+  bool has_profile;
+  DfsSoloMasks profile;
+};
 
-  std::vector<size_t> class_indexes;
-  std::vector<size_t> member_indexes;
-  class_indexes.reserve(entries.size());
-  member_indexes.reserve(entries.size());
-  for (size_t i = 0; i < entries.size(); ++i) {
-    DfsMemberIndex::const_iterator found = members.find(entries[i]);
-    if (reverse_entries != NULL && i < reverse_entries->size() &&
-        !(*reverse_entries)[i].empty()) {
-      DfsMemberIndex::const_iterator const reverse =
-          members.find((*reverse_entries)[i]);
-      if (reverse != members.end() &&
-          (found == members.end() ||
-           reverse->second.member_index < found->second.member_index)) {
-        if (found != members.end())
-          assert(reverse->second.class_index == found->second.class_index);
-        found = reverse;
-      }
+static bool gather_entry_terms(
+    IndexReader const& reader, DfsPreparedClassList const& prepared,
+    std::string const& entry, DfsEntryTerms* out) {
+  if (!reader.aggregate_entry_count(entry, &out->count)) return false;
+
+  out->multi_word = entry.find(' ') != std::string::npos;
+  uint16_t flags = 0;
+  DfsPairBonusMap::const_iterator const weighted =
+      prepared.weighted_pairs.find(entry);
+  if (weighted != prepared.weighted_pairs.end())
+    flags |= dfs_pair_bonus_score_flags(weighted->second);
+  else if (prepared.pairs.count(entry) != 0)
+    flags |= dfs_pair_bonus_score_flags(DFS_PAIR_BONUS_LEGACY);
+  out->direct_best =
+      dfs_member_pair_bonus_kind(flags) == DFS_PAIR_BONUS_BEST;
+
+  out->has_profile = false;
+  if (!out->multi_word && prepared.solo_words != NULL) {
+    DfsSoloMasks const profile = prepared.solo_words->resolve(entry);
+    flags |= dfs_solo_score_flags(profile);
+    if (profile.word_mask != 0) {
+      out->profile = profile;
+      out->has_profile = true;
     }
-    if (found == members.end()) {
-      int64_t count;
-      bool asserted = prepared.pairs.count(entries[i]) != 0 ||
-          prepared.weighted_pairs.count(entries[i]) != 0;
-      bool indexed = reader.aggregate_entry_count(entries[i], &count);
-      if (reverse_entries != NULL && i < reverse_entries->size() &&
-          !(*reverse_entries)[i].empty()) {
-        std::string const& reverse = (*reverse_entries)[i];
-        asserted = asserted || prepared.pairs.count(reverse) != 0 ||
-            prepared.weighted_pairs.count(reverse) != 0;
-        indexed = indexed || reader.aggregate_entry_count(reverse, &count);
-      }
-      if (!asserted && !indexed) {
-        if (reverse_entries != NULL && i < reverse_entries->size() &&
-            !(*reverse_entries)[i].empty())
-          fprintf(stderr,
-              "error: index has neither entry \"%s\" nor \"%s\"\n",
-              entries[i].c_str(), (*reverse_entries)[i].c_str());
-        else
-          fprintf(stderr, "error: index has no entry \"%s\"\n",
-                  entries[i].c_str());
-      } else {
-        fprintf(stderr,
-            "error: dfs-anagrams phase 1 excludes entry \"%s\"\n",
-            entries[i].c_str());
-      }
+  }
+  out->flags = flags;
+  return true;
+}
+
+static double entry_upper_log_score(
+    DfsScoreModel const& model, DfsEntryTerms const& terms) {
+  return model.member_upper_log_score(
+      terms.count, terms.multi_word, terms.flags);
+}
+
+static bool score_entry_sequence(
+    IndexReader const& reader, DfsPreparedClassList const& prepared,
+    std::vector<std::string> const& entries, double* log_score) {
+  DfsScoreModel const& model = *prepared.model;
+  std::vector<DfsSoloMasks> profiles;
+  std::vector<bool> profile_direct_best;
+  size_t direct_best_segments = 0;
+  profiles.reserve(entries.size());
+  profile_direct_best.reserve(entries.size());
+
+  double upper_log_score = 0.0;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    DfsEntryTerms terms;
+    if (!gather_entry_terms(reader, prepared, entries[i], &terms)) {
+      fprintf(stderr, "error: index has no entry \"%s\"\n",
+              entries[i].c_str());
       return false;
     }
-    class_indexes.push_back(found->second.class_index);
-    member_indexes.push_back(found->second.member_index);
+    if (terms.direct_best) ++direct_best_segments;
+    if (terms.has_profile) {
+      profiles.push_back(terms.profile);
+      profile_direct_best.push_back(terms.direct_best);
+    }
+    double const segment = entry_upper_log_score(model, terms);
+    upper_log_score = i == 0
+        ? segment : model.append_log_score(upper_log_score, segment);
   }
 
-  double const representative = dfs_representative_upper_log_score(
-      *prepared.classes, *prepared.model, class_indexes);
-  *result = dfs_build_spelling(
-      *prepared.classes, *prepared.model, prepared.solo_words.get(),
-      class_indexes, member_indexes, representative,
-      /*retain_segment_bonuses=*/false);
+  DfsExactResultMatching const exact = dfs_exact_result_matching(
+      profiles, profile_direct_best, direct_best_segments, model);
+  *log_score = upper_log_score + exact.correction;
+  assert(*log_score <= upper_log_score);
   return true;
+}
+
+static std::string format_score(double score) {
+  char buffer[32];
+  snprintf(buffer, sizeof buffer, "%#.7g", score);
+  return std::string(buffer);
 }
 
 struct StdinScoreResult {
@@ -690,57 +708,62 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
   std::vector<StdinScoreValue> values;
   if (!parse_stdin_score_values(&values)) return 2;
 
+  DfsPreparedClassList prepared;
+  if (!prepare_dfs_scoring_inputs(
+          &reader, args.common, /*score_mode=*/true,
+          /*exact_segments=*/1, &prepared))
+    return 1;
+
   std::vector<StdinScoreResult> results;
   results.reserve(values.size());
   for (size_t i = 0; i < values.size(); ++i) {
-    std::string letters;
-    if (!clean_letters(
-            values[i].entry.c_str(), "--score stdin entry", &letters) ||
-        !check_bag_length(letters))
-      return 2;
+    DfsEntryTerms forward;
+    DfsEntryTerms reverse;
+    bool const has_forward =
+        gather_entry_terms(reader, prepared, values[i].entry, &forward);
+    bool const has_reverse = !values[i].reverse_entry.empty() &&
+        gather_entry_terms(
+            reader, prepared, values[i].reverse_entry, &reverse);
 
-    if (values[i].pair) {
-      int64_t count;
-      bool const forward =
-          reader.aggregate_entry_count(values[i].entry, &count);
-      bool const reverse = !values[i].reverse_entry.empty() &&
-          reader.aggregate_entry_count(values[i].reverse_entry, &count);
-      if (!forward && !reverse) {
-        StdinScoreResult result = {
-          -INFINITY,
-          std::move(values[i].value),
-        };
-        results.push_back(std::move(result));
-        continue;
-      }
+    std::string const* chosen = NULL;
+    if (has_forward && has_reverse)
+      chosen = entry_upper_log_score(*prepared.model, reverse) >
+               entry_upper_log_score(*prepared.model, forward)
+          ? &values[i].reverse_entry : &values[i].entry;
+    else if (has_forward)
+      chosen = &values[i].entry;
+    else if (has_reverse)
+      chosen = &values[i].reverse_entry;
+    else if (!values[i].pair) {
+      fprintf(stderr, "error: index has no entry \"%s\"\n",
+              values[i].entry.c_str());
+      return 2;
     }
 
-    DfsCommonArgs score_args = args.common;
-    score_args.min_word_len = 1;
-    score_args.max_extract_words = 0;
-    DfsPreparedClassList prepared;
-    if (!prepare_dfs_class_list(
-            &reader, letters, score_args,
-            args.exclude_pair_files, /*exact_segments=*/1, &prepared))
-      return 1;
-
-    std::vector<std::string> const entries(1, values[i].entry);
-    std::vector<std::string> const reverse_entries(
-        1, values[i].reverse_entry);
-    DfsSpelling spelling;
-    if (!build_sequence_score(
-            reader, entries, prepared, &spelling, &reverse_entries))
-      return 2;
+    double log_score = -INFINITY;
+    if (chosen != NULL) {
+      std::vector<std::string> const entries(1, *chosen);
+      if (!score_entry_sequence(reader, prepared, entries, &log_score))
+        return 2;
+    }
     StdinScoreResult result = {
-      spelling.log_score,
+      log_score,
       std::move(values[i].value),
     };
     results.push_back(std::move(result));
   }
 
   std::sort(results.begin(), results.end(), stdin_score_result_better);
+  std::vector<std::string> scores;
+  scores.reserve(results.size());
+  size_t width = 0;
+  for (size_t i = 0; i < results.size(); ++i) {
+    scores.push_back(format_score(
+        prepared.model->displayed_score(results[i].log_score)));
+    width = std::max(width, scores[i].size());
+  }
   for (size_t i = 0; i < results.size(); ++i)
-    printf("%#.4g %s\n", exp(results[i].log_score),
+    printf("%*s %s\n", int(width), scores[i].c_str(),
            results[i].value.c_str());
   return 0;
 }
@@ -772,27 +795,16 @@ int main(int argc, char* argv[]) {
   if (args.score) {
     if (score_stdin) return score_stdin_values(reader, args);
 
-    std::string letters;
-    for (size_t i = 0; i < score_entries.size(); ++i)
-      if (!clean_letters(
-              score_entries[i].c_str(), "--score entry", &letters))
-        return 2;
-    if (!check_bag_length(letters)) return 2;
-
-    // Exact scoring has no extraction minimum or entry-word cap, but otherwise
-    // builds the same phase-1 classes as dfs-anagrams for this complete bag.
-    DfsCommonArgs score_args = args.common;
-    score_args.min_word_len = 1;
-    score_args.max_extract_words = 0;
     DfsPreparedClassList prepared;
-    if (!prepare_dfs_class_list(
-            &reader, letters, score_args, args.exclude_pair_files,
+    if (!prepare_dfs_scoring_inputs(
+            &reader, args.common, /*score_mode=*/true,
             score_entries.size(), &prepared))
       return 1;
-    DfsSpelling spelling;
-    if (!build_sequence_score(reader, score_entries, prepared, &spelling))
+    double log_score;
+    if (!score_entry_sequence(reader, prepared, score_entries, &log_score))
       return 2;
-    printf("%#.4g %s\n", prepared.model->displayed_score(spelling.log_score),
+    printf("%s %s\n",
+           format_score(prepared.model->displayed_score(log_score)).c_str(),
            args.score_sequence.c_str());
     return 0;
   }
