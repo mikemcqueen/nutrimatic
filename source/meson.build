@@ -125,6 +125,10 @@ segment_output_dep = declare_dependency(
   sources: files('segment-output.cpp'),
 )
 
+segment_rows_dep = declare_dependency(
+  sources: files('segment-rows.cpp'),
+)
+
 segment_counts_dep = declare_dependency(
   sources: files('segment-counts.cpp'),
   dependencies: [pair_exclusions_dep, segment_output_dep],
@@ -176,6 +180,10 @@ weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
 
 top_segments = executable('top-segments', 'top-segments.cpp',
   dependencies: [pair_exclusions_dep, segment_counts_dep, segment_output_dep],
+  install: true)
+
+common_segments = executable('common-segments', 'common-segments.cpp',
+  dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
   install: true)
 
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
@@ -331,6 +339,11 @@ test(
   'top-segments',
   bash,
   args: [files('test-top-segments.sh'), top_segments],
+)
+test(
+  'common-segments',
+  bash,
+  args: [files('test-common-segments.sh'), common_segments],
 )
 test(
   'first-segments',

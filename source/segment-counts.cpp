@@ -40,14 +40,6 @@ static bool any_segment_disallowed(
   return false;
 }
 
-static std::string canonical_pair(std::string const& segment) {
-  size_t const space = segment.find(' ');
-  if (space == std::string::npos) return segment;
-  std::string const left = segment.substr(0, space);
-  std::string const right = segment.substr(space + 1);
-  return left < right ? segment : right + " " + left;
-}
-
 static bool selected_segment(
     SegmentSelection selection, std::string const& segment) {
   if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
@@ -161,7 +153,8 @@ bool segment_counts_read(
       if (filters.sources.classified_yes.find(segment) !=
           filters.sources.classified_yes.end()) {
         ++data->filtered.classified_yes_instances;
-        data->filtered.classified_yes_pairs.insert(canonical_pair(segment));
+        data->filtered.classified_yes_pairs.insert(
+            canonical_pair_segment(segment));
         continue;
       }
       if (filters.ignored.find(segment) != filters.ignored.end()) {

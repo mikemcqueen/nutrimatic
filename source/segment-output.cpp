@@ -99,3 +99,11 @@ std::string format_pair_segment(std::string segment) {
   std::replace(segment.begin(), segment.end(), ' ', ',');
   return segment;
 }
+
+std::string canonical_pair_segment(std::string const& segment) {
+  size_t const space = segment.find(' ');
+  if (space == std::string::npos) return segment;
+  std::string const left = segment.substr(0, space);
+  std::string const right = segment.substr(space + 1);
+  return left < right ? segment : right + " " + left;
+}

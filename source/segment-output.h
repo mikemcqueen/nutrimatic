@@ -71,4 +71,9 @@ size_t segment_nonspace_length(std::string const& segment);
 // Returns a pair-file representation of a segment.
 std::string format_pair_segment(std::string segment);
 
+// Returns a two-word segment with the lexicographically smaller word first,
+// so both orientations of one pair share a key. Any other segment is returned
+// unchanged.
+std::string canonical_pair_segment(std::string const& segment);
+
 #endif
