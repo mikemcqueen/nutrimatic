@@ -7,6 +7,8 @@
 
 #include <algorithm>
 
+#include "option-value.h"
+
 bool parse_limit(char const* text, uint64_t* limit) {
   if (text[0] == '\0' || text[0] == '-') return false;
   errno = 0;
@@ -56,9 +58,11 @@ SegmentOutputOptionResult parse_segment_output_option(
     out->by_length = true;
     return SEGMENT_OUTPUT_OPTION_HANDLED;
   }
-  if (strcmp(option, "-n") != 0) return SEGMENT_OUTPUT_OPTION_OTHER;
+  char const* value;
+  if (!match_option_value(argc, argv, index, "-n", NULL, &value))
+    return SEGMENT_OUTPUT_OPTION_OTHER;
 
-  if (++*index == argc || !parse_limit(argv[*index], &out->limit)) {
+  if (value == NULL || !parse_limit(value, &out->limit)) {
     fprintf(stderr, "%s: -n requires a non-negative integer\n", program);
     return SEGMENT_OUTPUT_OPTION_ERROR;
   }

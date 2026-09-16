@@ -36,7 +36,8 @@ struct Args {
 void usage(char const* program) {
   fprintf(stdout,
       "usage: %s (--wf | --wfroot DIR) -t FULL-TARGET"
-      " [-r FILE]... [--best-pairs FILE] [--more-best-pairs FILE]..."
+      " [-r FILE]... [--best-pairs FILE | --one-best-pair PAIR]"
+      " [--more-best-pairs FILE]..."
       " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
       " [--show-bonus] [--no-score] [-n N] [FILE]\n"
       "  revalidate, rescore, and sort an ordinary dfs-anagrams result file\n"
@@ -45,6 +46,7 @@ void usage(char const* program) {
       "  -t, --target TARGET  require sN/[ou]-letters/mN/gN and derive the\n"
       "                       working bag, minimum, and segment count\n"
       "  --best-pairs FILE    replace the target's implicit best.pairs\n"
+      "  --one-best-pair PAIR replace it with one WORD,WORD pair\n"
       "  --more-best-pairs FILE\n"
       "                       add BEST pairs; may be repeated\n"
       "  -r, --reject FILE    reject rows containing a listed word or exact\n"
@@ -65,6 +67,7 @@ void usage(char const* program) {
 
 inline constexpr int OPT_SHOW_BONUS = 256;
 inline constexpr int OPT_NO_SCORE = 257;
+inline constexpr int OPT_ONE_BEST_PAIR = 258;
 
 struct optparse_long const long_options[] = {
   { "wf", DFS_OPT_WF, OPTPARSE_NONE },
@@ -72,6 +75,7 @@ struct optparse_long const long_options[] = {
   { "target", 't', OPTPARSE_REQUIRED },
   { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED },
   { "more-best-pairs", DFS_OPT_MORE_BEST_PAIRS, OPTPARSE_REQUIRED },
+  { "one-best-pair", OPT_ONE_BEST_PAIR, OPTPARSE_REQUIRED },
   { "reject", 'r', OPTPARSE_REQUIRED },
   { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED },
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE },
@@ -80,6 +84,15 @@ struct optparse_long const long_options[] = {
   { "top", 'n', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
+
+bool valid_one_best_pair(char const* value) {
+  char const* const comma = strchr(value, ',');
+  if (comma == NULL || comma == value || comma[1] == '\0') return false;
+  if (strchr(comma + 1, ',') != NULL) return false;
+  for (char const* p = value; *p != '\0'; ++p)
+    if (p != comma && (*p < 'a' || *p > 'z')) return false;
+  return true;
+}
 
 bool parse_args(char* argv[], Args* out) {
   out->common = DfsCommonArgs();
@@ -107,6 +120,22 @@ bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_NO_SCORE:
         out->show_score = false;
+        break;
+      case OPT_ONE_BEST_PAIR:
+        if (out->common.best_pairs_given) {
+          fputs("error: --one-best-pair and --best-pairs are mutually "
+                "exclusive, and each may be specified only once\n", stderr);
+          usage(argv[0]);
+          return false;
+        }
+        if (!valid_one_best_pair(options.optarg)) {
+          fputs("error: --one-best-pair requires two comma-separated "
+                "lowercase words\n", stderr);
+          usage(argv[0]);
+          return false;
+        }
+        out->common.best_pairs_given = true;
+        out->common.one_best_pair = options.optarg;
         break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);

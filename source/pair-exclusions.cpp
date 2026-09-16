@@ -11,6 +11,7 @@
 
 #include "dfs-cli-args.h"
 #include "log.h"
+#include "option-value.h"
 
 namespace {
 
@@ -350,34 +351,35 @@ PairFilterOptionResult parse_pair_filter_option(
     out->workflow = true;
     return PAIR_FILTER_OPTION_HANDLED;
   }
-  if (strcmp(option, "--wfroot") == 0) {
+  char const* value;
+  if (match_option_value(argc, argv, index, NULL, "--wfroot", &value)) {
     if (out->workflow) {
       fprintf(stderr, "%s: --wf and --wfroot are mutually exclusive\n",
           program);
       return PAIR_FILTER_OPTION_ERROR;
     }
-    if (++*index == argc || argv[*index][0] == '\0') {
+    if (value == NULL || value[0] == '\0') {
       fprintf(stderr, "%s: --wfroot requires a nonempty directory\n",
           program);
       return PAIR_FILTER_OPTION_ERROR;
     }
-    out->workflow_root = argv[*index];
+    out->workflow_root = value;
     return PAIR_FILTER_OPTION_HANDLED;
   }
-  if (strcmp(option, "-d") == 0 || strcmp(option, "--dict") == 0) {
-    if (++*index == argc || argv[*index][0] == '\0') {
+  if (match_option_value(argc, argv, index, "-d", "--dict", &value)) {
+    if (value == NULL || value[0] == '\0') {
       fprintf(stderr, "%s: %s requires a nonempty path\n", program, option);
       return PAIR_FILTER_OPTION_ERROR;
     }
-    out->dictionary_path = argv[*index];
+    out->dictionary_path = value;
     return PAIR_FILTER_OPTION_HANDLED;
   }
-  if (strcmp(option, "-t") == 0 || strcmp(option, "--target") == 0) {
-    if (++*index == argc || argv[*index][0] == '\0') {
+  if (match_option_value(argc, argv, index, "-t", "--target", &value)) {
+    if (value == NULL || value[0] == '\0') {
       fprintf(stderr, "%s: %s requires a nonempty target\n", program, option);
       return PAIR_FILTER_OPTION_ERROR;
     }
-    out->target = argv[*index];
+    out->target = value;
     return PAIR_FILTER_OPTION_HANDLED;
   }
   if (support_workflow_yes &&
@@ -388,23 +390,22 @@ PairFilterOptionResult parse_pair_filter_option(
 
   std::vector<std::string>* paths;
   if (support_allow &&
-      (strcmp(option, "-a") == 0 || strcmp(option, "--allow-pairs") == 0)) {
+      match_option_value(argc, argv, index, "-a", "--allow-pairs", &value)) {
     paths = &out->allow_paths;
   } else if (support_ignore &&
-      (strcmp(option, "-i") == 0 || strcmp(option, "--ignore") == 0)) {
+      match_option_value(argc, argv, index, "-i", "--ignore", &value)) {
     paths = &out->ignore_paths;
-  } else if (strcmp(option, "-r") == 0 ||
-             strcmp(option, "--reject") == 0) {
+  } else if (match_option_value(argc, argv, index, "-r", "--reject", &value)) {
     paths = &out->reject_paths;
   } else {
     return PAIR_FILTER_OPTION_OTHER;
   }
 
-  if (++*index == argc) {
+  if (value == NULL) {
     fprintf(stderr, "%s: %s requires a file\n", program, option);
     return PAIR_FILTER_OPTION_ERROR;
   }
-  paths->push_back(argv[*index]);
+  paths->push_back(value);
   return PAIR_FILTER_OPTION_HANDLED;
 }
 

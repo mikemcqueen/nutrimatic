@@ -73,6 +73,7 @@ struct DfsCommonArgs {
   std::vector<std::string> seed_pair_files;
   std::vector<std::string> yes_pair_files;
   std::vector<std::string> best_pair_files;
+  std::string one_best_pair;
   bool best_pairs_given = false;
   bool workflow = false;
   std::string workflow_root;
@@ -256,8 +257,10 @@ bool load_extraction_pair_file(
 // extraction mode preserves the short-word directional rules and accumulates
 // their exception prefixes. In extraction mode, non-NULL rows receives every
 // YES file's rows and non-NULL best_rows every BEST file's rows, as
-// load_extraction_pair_file() reports them. Seed rows are currently turned off
-// due to excessive occurrences of non-dictionary words.
+// load_extraction_pair_file() reports them. A nonempty `args.one_best_pair`
+// is loaded after the BEST files as one further BEST entry, with the same
+// semantics a BEST file holding that one line would have. Seed rows are
+// currently turned off due to excessive occurrences of non-dictionary words.
 bool load_weighted_pair_files(
     DfsCommonArgs const& args, bool score_mode, int min_word_len,
     DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes,

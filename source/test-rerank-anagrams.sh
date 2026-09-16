@@ -94,6 +94,24 @@ printf 'ab\n' > "$test_dir/reject.pairs"
 if grep -q 'B,- ba,' "$test_dir/changed.stdout"; then
   fail "explicit BEST augmented rather than replaced target best.pairs"
 fi
+
+printf 'ba,dc\n' > "$test_dir/one-best.pairs"
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --best-pairs "$test_dir/one-best.pairs" \
+  -r "$test_dir/reject.pairs" --show-bonus "$test_dir/dfs.stdout" \
+  > "$test_dir/one-best-file.stdout" 2> "$test_dir/one-best-file.stderr"
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --one-best-pair ba,dc \
+  -r "$test_dir/reject.pairs" --show-bonus "$test_dir/dfs.stdout" \
+  > "$test_dir/one-best.stdout" 2> "$test_dir/one-best.stderr"
+cmp "$test_dir/one-best-file.stdout" "$test_dir/one-best.stdout" ||
+  fail "--one-best-pair differs from the equivalent --best-pairs file"
+
+expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
+  --one-best-pair ba "$test_dir/dfs.stdout"
+expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
+  --one-best-pair ba,dc --best-pairs "$test_dir/one-best.pairs" \
+  "$test_dir/dfs.stdout"
 old_score=$(awk '$2 == "ba,cd" { print $1 }' "$test_dir/dfs.stdout")
 new_score=$(awk 'NR == 2 { print $1 }' "$test_dir/changed.stdout")
 [[ -n $old_score && -n $new_score && $old_score != "$new_score" ]] ||

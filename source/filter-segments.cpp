@@ -9,6 +9,7 @@
 #include <regex>
 #include <string>
 
+#include "option-value.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
 
@@ -117,6 +118,7 @@ int main(int argc, char* argv[]) {
   bool have_limit = false;
   uint64_t limit = 0;
   char const* with_regex_pattern = NULL;
+  char const* value;
   bool show_score = true;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
@@ -137,22 +139,25 @@ int main(int argc, char* argv[]) {
                 strcmp(argv[i], "--help") == 0)) {
       usage(argv[0]);
       return 0;
-    } else if (parse_options && strcmp(argv[i], "-n") == 0) {
-      if (++i == argc || !parse_limit(argv[i], &limit)) {
+    } else if (parse_options &&
+               match_option_value(argc, argv, &i, "-n", NULL, &value)) {
+      if (value == NULL || !parse_limit(value, &limit)) {
         fputs("filter-segments: -n requires a non-negative integer\n",
             stderr);
         usage(argv[0]);
         return 2;
       }
       have_limit = true;
-    } else if (parse_options && strcmp(argv[i], "--with-regex") == 0) {
-      if (++i == argc || with_regex_pattern != NULL) {
+    } else if (parse_options &&
+               match_option_value(
+                   argc, argv, &i, NULL, "--with-regex", &value)) {
+      if (value == NULL || with_regex_pattern != NULL) {
         fputs("filter-segments: --with-regex requires one REGEX and may be"
             " given once\n", stderr);
         usage(argv[0]);
         return 2;
       }
-      with_regex_pattern = argv[i];
+      with_regex_pattern = value;
     } else if (parse_options && strcmp(argv[i], "--no-score") == 0) {
       show_score = false;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
