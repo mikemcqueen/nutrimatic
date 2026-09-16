@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <algorithm>
 #include <set>
 #include <string>
 
@@ -79,6 +80,30 @@ int main() {
     check(keys.size() == 3 && keys.count("ab") == 1 &&
           keys.count("abcd") == 1 && keys.count("cd") == 1,
           "wrong class keys");
+  }
+
+  fclose(fp);
+
+  fp = tmpfile();
+  check(fp != NULL, "could not create wide-class temporary index");
+  {
+    IndexWriter writer(fp);
+    std::string spelling = "abcdefgh";
+    for (size_t i = 0; i < 256; ++i) {
+      writer.next((spelling + " ").c_str(), 0, 1);
+      check(std::next_permutation(spelling.begin(), spelling.end()),
+            "ran out of wide-class permutations");
+    }
+    writer.next(NULL, 0, 0);
+  }
+  fflush(fp);
+  rewind(fp);
+
+  {
+    IndexReader reader(fp);
+    DfsClassList list(&reader, "abcdefgh", 1);
+    check(list.classes().size() == 1, "wrong wide-class count");
+    check(list.member_count(0) == 256, "wide class was truncated");
   }
 
   fclose(fp);

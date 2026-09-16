@@ -516,10 +516,10 @@ void insert_pair_keys(
   pairs->reserve(pairs->size() + 2 * loaded.size());
   for (size_t i = 0; i < loaded.size(); ++i) {
     if (loaded[i].right.empty()) {
-      pairs->insert(loaded[i].left);
+      pairs->insert(loaded[i].entry());
     } else {
-      pairs->insert(loaded[i].left + " " + loaded[i].right);
-      pairs->insert(loaded[i].right + " " + loaded[i].left);
+      pairs->insert(loaded[i].entry());
+      pairs->insert(loaded[i].entry(/*reverse=*/true));
     }
   }
 }

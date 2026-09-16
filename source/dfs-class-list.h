@@ -58,11 +58,11 @@ struct DfsPackedMember {         // 16 bytes
 struct DfsClassRecord {          // 24 bytes
   uint64_t signature;            // mixed-radix subbag code
   DfsPackedMember const* members;  // member_count entries, highest score first
-  uint8_t member_count;
+  uint32_t member_count;
   uint8_t key_length;            // total letters
   uint8_t letters_count;         // distinct symbols
   uint8_t rarest_rank;           // 0..36, 36 = none
-  uint32_t reserved;             // tail padding, named
+  uint8_t reserved;              // tail padding, named
 };
 
 struct DfsClassSpan {

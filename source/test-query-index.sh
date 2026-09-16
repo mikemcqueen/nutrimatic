@@ -153,6 +153,55 @@ assert_close "$(score_value 'ab,ab')" \
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
   fail "spaces adjacent to commas should not affect scoring"
 
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+  "$query_index" -i "$synthetic_index" - --score \
+    > "$test_dir/stdin-score.stdout" \
+    2> "$test_dir/stdin-score.stderr"
+[[ "$(awk '{ print $2 }' "$test_dir/stdin-score.stdout")" == \
+   $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij\nmissing,pair' ]] ||
+  fail "stdin values were not sorted by descending score"
+assert_close "$(awk '$2 == "ab,cd" { print $1 }' \
+    "$test_dir/stdin-score.stdout")" 70 \
+  "stdin scoring did not query a comma-separated value as one phrase"
+assert_close "$(awk '$2 == "ab" { print $1 }' \
+    "$test_dir/stdin-score.stdout")" 80 \
+  "stdin scoring did not accept a single-word value"
+assert_close "$(awk '$2 == "f,gh,ij" { print $1 }' \
+    "$test_dir/stdin-score.stdout")" 1 \
+  "stdin scoring did not accept a three-word value"
+assert_close "$(awk '$2 == "ij,gh" { print $1 }' \
+    "$test_dir/stdin-score.stdout")" 5 \
+  "stdin scoring did not fall back to the indexed pair orientation"
+assert_close "$(awk '$2 == "missing,pair" { print $1 }' \
+    "$test_dir/stdin-score.stdout")" 0 \
+  "stdin scoring did not assign zero to a pair absent in both orientations"
+
+printf 'cd,ab\n' > "$test_dir/stdin-score-pair.txt"
+printf 'cd,ab\n' |
+  "$query_index" -i "$synthetic_index" - --score \
+    --pairs "$test_dir/stdin-score-pair.txt" --pair-bonus 0 \
+    > "$test_dir/stdin-score-best-order.stdout" \
+    2> "$test_dir/stdin-score-best-order.stderr"
+assert_close "$(awk '{ print $1 }' \
+    "$test_dir/stdin-score-best-order.stdout")" 70 \
+  "stdin scoring did not choose the higher-scoring pair orientation"
+[[ "$(awk '{ print $2 }' \
+    "$test_dir/stdin-score-best-order.stdout")" == 'cd,ab' ]] ||
+  fail "stdin scoring did not preserve the written pair order"
+
+set +e
+printf 'ab,,cd\n' |
+  "$query_index" -i "$synthetic_index" - --score \
+    > "$test_dir/stdin-score-malformed.stdout" \
+    2> "$test_dir/stdin-score-malformed.stderr"
+stdin_score_status=$?
+set -e
+[[ $stdin_score_status -eq 2 ]] ||
+  fail "malformed stdin value should exit 2, got $stdin_score_status"
+grep -q '^error: stdin line 1: expected comma-separated words$' \
+  "$test_dir/stdin-score-malformed.stderr" ||
+  fail "malformed stdin value diagnostic is unclear"
+
 expect_score_failure missing missing-entry
 grep -q 'index has no entry "missing"' "$test_dir/missing-entry.stderr" ||
   fail "missing-entry error does not name the failed item"

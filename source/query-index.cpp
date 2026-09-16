@@ -19,11 +19,14 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 
 #include <algorithm>
+#include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 static int const DEFAULT_TOP = 100;
@@ -59,7 +62,7 @@ static void usage(char const* program) {
       " [--wf|--wfroot DIR] [-t TARGET]"
       " [-w|--words-only] [--csv] [--require-completable]"
       " [-S|--search-threads N]\n"
-      "       %s [-i INDEX] sequence --score"
+      "       %s [-i INDEX] sequence|- --score"
       " [-P|--segment-penalty P] [--word-bonus N]"
       " [--pair-bonus N] [--pairs FILE]"
       " [--seed-pairs FILE]... [--yes-pairs FILE]..."
@@ -72,6 +75,10 @@ static void usage(char const* program) {
       " --near\n"
       "  --score treats letters as a comma-separated sequence of exact\n"
       "    entries and prints the score dfs-anagrams assigns that spelling\n"
+      "    with sequence -, reads one comma-separated value per stdin line,\n"
+      "    each as one space-separated index entry, and sorts by score; a\n"
+      "    two-word value uses its higher-scoring index orientation, or\n"
+      "    scores zero when neither orientation is in the index\n"
       "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
       "    it prints aggregate phrases spanning the endpoints with at least\n"
       "    one complete intervening word, searching each endpoint that is an\n"
@@ -371,6 +378,84 @@ static bool parse_score_sequence(
   }
 }
 
+struct StdinScoreValue {
+  std::string value;
+  std::string entry;
+  std::string reverse_entry;
+  bool pair;
+};
+
+static bool is_literal_word(std::string const& word) {
+  if (word.empty()) return false;
+  for (size_t i = 0; i < word.size(); ++i) {
+    char const ch = word[i];
+    if ((ch < 'a' || ch > 'z') && (ch < '0' || ch > '9')) return false;
+  }
+  return true;
+}
+
+static bool parse_stdin_score_values(
+    std::vector<StdinScoreValue>* values) {
+  std::string line;
+  size_t line_number = 0;
+  while (std::getline(std::cin, line)) {
+    ++line_number;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+
+    std::string value;
+    std::vector<std::string> words;
+    size_t start = 0;
+    for (;;) {
+      size_t const comma = line.find(',', start);
+      size_t first = start;
+      size_t last = comma == std::string::npos ? line.size() : comma;
+      while (first < last && isspace((unsigned char) line[first])) ++first;
+      while (last > first && isspace((unsigned char) line[last - 1])) --last;
+
+      std::string const word = line.substr(first, last - first);
+      if (!is_literal_word(word)) {
+        fprintf(stderr,
+            "error: stdin line %zu: expected comma-separated words\n",
+            line_number);
+        return false;
+      }
+      if (!value.empty()) {
+        value += ',';
+      }
+      value += word;
+      words.push_back(word);
+      if (comma == std::string::npos) break;
+      start = comma + 1;
+    }
+
+    std::string entry;
+    std::string reverse_entry;
+    if (words.size() == 2) {
+      DfsPairRow const row = { words[0], words[1], line_number };
+      entry = row.entry();
+      if (row.left != row.right)
+        reverse_entry = row.entry(/*reverse=*/true);
+    } else {
+      for (size_t i = 0; i < words.size(); ++i) {
+        if (!entry.empty()) entry += ' ';
+        entry += words[i];
+      }
+    }
+    StdinScoreValue const value_entry = {
+      std::move(value),
+      std::move(entry),
+      std::move(reverse_entry),
+      words.size() == 2,
+    };
+    values->push_back(value_entry);
+  }
+  if (std::cin.bad()) {
+    fputs("error: can't read stdin\n", stderr);
+    return false;
+  }
+  return true;
+}
+
 struct NearResult {
   int64_t count;
   std::string phrase;
@@ -518,10 +603,11 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
   return 0;
 }
 
-static bool print_sequence_score(
-    IndexReader const& reader, Args const& args,
+static bool build_sequence_score(
+    IndexReader const& reader,
     std::vector<std::string> const& entries,
-    DfsPreparedClassList const& prepared) {
+    DfsPreparedClassList const& prepared, DfsSpelling* result,
+    std::vector<std::string> const* reverse_entries = NULL) {
   DfsMemberIndex members;
   std::string duplicate;
   if (!dfs_index_members(*prepared.classes, &members, &duplicate)) {
@@ -535,18 +621,45 @@ static bool print_sequence_score(
   class_indexes.reserve(entries.size());
   member_indexes.reserve(entries.size());
   for (size_t i = 0; i < entries.size(); ++i) {
-    DfsMemberIndex::const_iterator const found = members.find(entries[i]);
+    DfsMemberIndex::const_iterator found = members.find(entries[i]);
+    if (reverse_entries != NULL && i < reverse_entries->size() &&
+        !(*reverse_entries)[i].empty()) {
+      DfsMemberIndex::const_iterator const reverse =
+          members.find((*reverse_entries)[i]);
+      if (reverse != members.end() &&
+          (found == members.end() ||
+           reverse->second.member_index < found->second.member_index)) {
+        if (found != members.end())
+          assert(reverse->second.class_index == found->second.class_index);
+        found = reverse;
+      }
+    }
     if (found == members.end()) {
       int64_t count;
-      bool const asserted = prepared.pairs.count(entries[i]) != 0 ||
+      bool asserted = prepared.pairs.count(entries[i]) != 0 ||
           prepared.weighted_pairs.count(entries[i]) != 0;
-      if (!asserted && !reader.aggregate_entry_count(entries[i], &count))
-        fprintf(stderr, "error: index has no entry \"%s\"\n",
-                entries[i].c_str());
-      else
+      bool indexed = reader.aggregate_entry_count(entries[i], &count);
+      if (reverse_entries != NULL && i < reverse_entries->size() &&
+          !(*reverse_entries)[i].empty()) {
+        std::string const& reverse = (*reverse_entries)[i];
+        asserted = asserted || prepared.pairs.count(reverse) != 0 ||
+            prepared.weighted_pairs.count(reverse) != 0;
+        indexed = indexed || reader.aggregate_entry_count(reverse, &count);
+      }
+      if (!asserted && !indexed) {
+        if (reverse_entries != NULL && i < reverse_entries->size() &&
+            !(*reverse_entries)[i].empty())
+          fprintf(stderr,
+              "error: index has neither entry \"%s\" nor \"%s\"\n",
+              entries[i].c_str(), (*reverse_entries)[i].c_str());
+        else
+          fprintf(stderr, "error: index has no entry \"%s\"\n",
+                  entries[i].c_str());
+      } else {
         fprintf(stderr,
             "error: dfs-anagrams phase 1 excludes entry \"%s\"\n",
             entries[i].c_str());
+      }
       return false;
     }
     class_indexes.push_back(found->second.class_index);
@@ -555,13 +668,81 @@ static bool print_sequence_score(
 
   double const representative = dfs_representative_upper_log_score(
       *prepared.classes, *prepared.model, class_indexes);
-  DfsSpelling const spelling = dfs_build_spelling(
+  *result = dfs_build_spelling(
       *prepared.classes, *prepared.model, prepared.solo_words.get(),
       class_indexes, member_indexes, representative,
       /*retain_segment_bonuses=*/false);
-  printf("%#.4g %s\n", prepared.model->displayed_score(spelling.log_score),
-         args.score_sequence.c_str());
   return true;
+}
+
+struct StdinScoreResult {
+  double log_score;
+  std::string value;
+};
+
+static bool stdin_score_result_better(
+    StdinScoreResult const& a, StdinScoreResult const& b) {
+  if (a.log_score != b.log_score) return a.log_score > b.log_score;
+  return a.value < b.value;
+}
+
+static int score_stdin_values(IndexReader& reader, Args const& args) {
+  std::vector<StdinScoreValue> values;
+  if (!parse_stdin_score_values(&values)) return 2;
+
+  std::vector<StdinScoreResult> results;
+  results.reserve(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    std::string letters;
+    if (!clean_letters(
+            values[i].entry.c_str(), "--score stdin entry", &letters) ||
+        !check_bag_length(letters))
+      return 2;
+
+    if (values[i].pair) {
+      int64_t count;
+      bool const forward =
+          reader.aggregate_entry_count(values[i].entry, &count);
+      bool const reverse = !values[i].reverse_entry.empty() &&
+          reader.aggregate_entry_count(values[i].reverse_entry, &count);
+      if (!forward && !reverse) {
+        StdinScoreResult result = {
+          -INFINITY,
+          std::move(values[i].value),
+        };
+        results.push_back(std::move(result));
+        continue;
+      }
+    }
+
+    DfsCommonArgs score_args = args.common;
+    score_args.min_word_len = 1;
+    score_args.max_extract_words = 0;
+    DfsPreparedClassList prepared;
+    if (!prepare_dfs_class_list(
+            &reader, letters, score_args,
+            args.exclude_pair_files, /*exact_segments=*/1, &prepared))
+      return 1;
+
+    std::vector<std::string> const entries(1, values[i].entry);
+    std::vector<std::string> const reverse_entries(
+        1, values[i].reverse_entry);
+    DfsSpelling spelling;
+    if (!build_sequence_score(
+            reader, entries, prepared, &spelling, &reverse_entries))
+      return 2;
+    StdinScoreResult result = {
+      spelling.log_score,
+      std::move(values[i].value),
+    };
+    results.push_back(std::move(result));
+  }
+
+  std::sort(results.begin(), results.end(), stdin_score_result_better);
+  for (size_t i = 0; i < results.size(); ++i)
+    printf("%#.4g %s\n", exp(results[i].log_score),
+           results[i].value.c_str());
+  return 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -572,7 +753,8 @@ int main(int argc, char* argv[]) {
   if (!parse_args(argv, &args)) return 2;
 
   std::vector<std::string> score_entries;
-  if (args.score &&
+  bool const score_stdin = args.score && args.score_sequence == "-";
+  if (args.score && !score_stdin &&
       !parse_score_sequence(args.score_sequence, &score_entries))
     return 2;
 
@@ -588,6 +770,8 @@ int main(int argc, char* argv[]) {
   if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
+    if (score_stdin) return score_stdin_values(reader, args);
+
     std::string letters;
     for (size_t i = 0; i < score_entries.size(); ++i)
       if (!clean_letters(
@@ -605,8 +789,12 @@ int main(int argc, char* argv[]) {
             &reader, letters, score_args, args.exclude_pair_files,
             score_entries.size(), &prepared))
       return 1;
-    return print_sequence_score(reader, args, score_entries, prepared)
-        ? 0 : 2;
+    DfsSpelling spelling;
+    if (!build_sequence_score(reader, score_entries, prepared, &spelling))
+      return 2;
+    printf("%#.4g %s\n", prepared.model->displayed_score(spelling.log_score),
+           args.score_sequence.c_str());
+    return 0;
   }
 
   DfsPreparedClassList prepared;

@@ -685,15 +685,8 @@ DfsClassList::DfsClassList(IndexReader const* reader,
           rarest,
           ranks_by_symbol[size_t(dfs_class_letter_symbol(decoded[i]))]);
     }
-    if (class_sizes[id] > UINT8_MAX) {
-      std::string const key = letters_key(decoded, count);
-      dfs_diagnostic_to_stream(stderr,
-          "error: class \"%s\" has %u members, %u maximum\n",
-          key.c_str(), (unsigned) class_sizes[id], (unsigned) UINT8_MAX);
-      abort();
-    }
     record.members = members + base[id];
-    record.member_count = uint8_t(class_sizes[id]);
+    record.member_count = class_sizes[id];
     record.key_length = uint8_t(key_length);
     record.letters_count = uint8_t(count);
     record.rarest_rank = uint8_t(rarest);

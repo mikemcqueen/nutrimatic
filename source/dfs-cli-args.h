@@ -212,6 +212,11 @@ struct DfsPairRow {
   std::string left;
   std::string right;
   size_t line_number;
+
+  std::string entry(bool reverse = false) const {
+    if (right.empty()) return left;
+    return reverse ? right + " " + left : left + " " + right;
+  }
 };
 
 // A pair set owns normalized whole-entry keys. The general loader below owns
