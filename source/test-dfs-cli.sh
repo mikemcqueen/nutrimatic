@@ -778,6 +778,14 @@ rm "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"
 cmp "$test_dir/all.stdout" "$test_dir/solo-inert.stdout" ||
   fail "score-inert --solo-words changed DFS output"
 
+# --pair-bonus without a --pairs file is normalized away before scoring.
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
+  --pair-bonus 1 \
+  > "$test_dir/pair-bonus-no-pairs.stdout" \
+  2> "$test_dir/pair-bonus-no-pairs.stderr"
+cmp "$test_dir/all.stdout" "$test_dir/pair-bonus-no-pairs.stdout" ||
+  fail "--pair-bonus without --pairs changed DFS output"
+
 # A pairs-only external edge promotes the split spelling above the contiguous
 # phrase even with a bounded top-N queue.
 printf 'ab,zz\n' > "$test_dir/solo-top-pairs.txt"

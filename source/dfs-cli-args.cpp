@@ -369,18 +369,20 @@ bool parse_solo_words(
   }
 }
 
-bool validate_solo_bonuses(DfsCommonArgs const& args) {
-  if (args.solo_words.empty()) return true;
-  if (args.word_bonus < 0.0) {
-    fputs("error: --word-bonus must be non-negative with --solo-words\n",
-          stderr);
-    return false;
+bool finalize_dfs_bonuses(DfsCommonArgs* args) {
+  if (!args->solo_words.empty()) {
+    if (args->word_bonus < 0.0) {
+      fputs("error: --word-bonus must be non-negative with --solo-words\n",
+            stderr);
+      return false;
+    }
+    if (args->pair_bonus < 0.0) {
+      fputs("error: --pair-bonus must be non-negative with --solo-words\n",
+            stderr);
+      return false;
+    }
   }
-  if (args.pair_bonus < 0.0) {
-    fputs("error: --pair-bonus must be non-negative with --solo-words\n",
-          stderr);
-    return false;
-  }
+  if (args->pair_file == NULL) args->pair_bonus = 0.0;
   return true;
 }
 

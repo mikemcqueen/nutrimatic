@@ -311,7 +311,7 @@ static bool parse_args(char* argv[], Args* out) {
     }
   }
 
-  if (!validate_solo_bonuses(out->common)) return false;
+  if (!finalize_dfs_bonuses(&out->common)) return false;
   if (!finalize_dfs_workflow_args(
           &out->common, argv[0], &out->index_file))
     return false;

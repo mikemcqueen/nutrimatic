@@ -105,12 +105,11 @@ bool prepare_dfs_scoring_inputs(
 
   DfsBestBonusPolicy const best_bonus =
       dfs_best_bonus_policy(exact_segments);
-  double const pair_bonus = args.pair_file == NULL ? 0.0 : args.pair_bonus;
   out->model.reset(new DfsScoreModel(
       args.segment_penalty, reader->count(), args.word_bonus,
-      pair_bonus, best_bonus));
+      args.pair_bonus, best_bonus));
   if (!args.solo_words.empty() &&
-      (args.word_bonus != 0.0 || pair_bonus != 0.0 ||
+      (args.word_bonus != 0.0 || args.pair_bonus != 0.0 ||
        !out->weighted_pairs.empty()))
     out->solo_words.reset(new DfsSoloWords(
         reader, args.solo_words,

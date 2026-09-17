@@ -312,6 +312,7 @@ static bool parse_args(char* argv[], Args* out) {
         validate_literal_entry(out->near_target);
   }
 
+  if (!finalize_dfs_bonuses(&out->common)) return false;
   if (!finalize_dfs_workflow_args(
           &out->common, argv[0], &out->index_file))
     return false;
@@ -323,8 +324,6 @@ static bool parse_args(char* argv[], Args* out) {
     usage(argv[0]);
     return false;
   }
-
-  if (!validate_solo_bonuses(out->common)) return false;
 
   if (out->score) {
     if (out->score_incompatible_option != NULL) {
@@ -950,8 +949,6 @@ int main(int argc, char* argv[]) {
   IndexReader reader(fp);
 
   if (args.near) return run_near_query(reader, args);
-
-  if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
     if (score_stdin) return score_value_list(reader, args);

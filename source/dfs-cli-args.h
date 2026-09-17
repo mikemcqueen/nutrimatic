@@ -184,9 +184,11 @@ bool parse_segment_penalty(char const* in, double* out);
 bool parse_solo_words(
     char const* in, std::vector<std::string>* solo_words);
 
-// Solo assignment is an optional reward, so negative score bonuses are legal
-// only when no solo words were supplied.
-bool validate_solo_bonuses(DfsCommonArgs const& args);
+// Checks raw solo-word bonus constraints, then normalizes the effective pair
+// bonus. Solo assignment is an optional reward, so negative score bonuses are
+// legal only when no solo words were supplied; the raw values are validated
+// before a missing --pairs file clears the pair bonus.
+bool finalize_dfs_bonuses(DfsCommonArgs* args);
 
 // Applies dfs-anagrams' short-input default adjustment and validates that the
 // resulting minimum can fit in the remaining bag.
