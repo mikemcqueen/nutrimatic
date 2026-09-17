@@ -107,14 +107,16 @@ DfsOptionResult dfs_parse_common_option(
     int option, struct optparse* options, DfsCommonArgs* out,
     DfsCommonOption* which);
 
-// Resolves --wf/--wfroot defaults and pair sources after option parsing.
-// Workflow mode supplies a default index when `*index_file` is NULL, plus a
-// default dictionary and classified YES source. An explicit index is retained.
-// Workflow mode also requires either an explicit seed input or a target whose
-// sentence can identify exactly one sentence seed; a complete target
-// additionally supplies its optional best.pairs unless --best-pairs replaced it.
-bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file);
+// Resolves the common arguments after option parsing: raw scalar bonuses are
+// validated and the effective legacy pair bonus is normalized, then the
+// workflow defaults and weighted pair sources are resolved, then the
+// workflow's exclude-pair files are appended to `exclude_pair_files`.
+// A NULL `exclude_pair_files` skips that last step for a caller that excludes
+// nothing. The order is fixed here because each step reads what the one
+// before it resolved.
+bool finalize_dfs_common_args(
+    DfsCommonArgs* args, char const* program, char const** index_file,
+    std::vector<std::string>* exclude_pair_files);
 
 struct DfsWorkflowTargetSettings {
   std::string letters;
@@ -125,20 +127,10 @@ struct DfsWorkflowTargetSettings {
 // Reads and derives the generator inputs encoded by a complete workflow
 // target. The sentence bag comes from ROOT/.wf/best/sN/letters; o- selects
 // the target label's letters and u- subtracts them. Call after
-// finalize_dfs_workflow_args().
+// finalize_dfs_common_args().
 bool load_dfs_workflow_target_settings(
     DfsCommonArgs const& args, char const* program,
     DfsWorkflowTargetSettings* out);
-
-// Appends the workflow root's classified NO pairs, and a complete selected
-// target's own no.pairs, to `paths` for tools that exclude pairs. Either file
-// is skipped when it is absent, since a workflow need not have classified
-// anything NO yet. Abbreviated targets do not name a target-local no.pairs.
-// Without a workflow root nothing is appended. Call after
-// finalize_dfs_workflow_args(), which resolves the root and the target.
-bool collect_workflow_exclude_pair_files(
-    DfsCommonArgs const& args, char const* program,
-    std::vector<std::string>* paths);
 
 inline constexpr size_t DFS_DEFAULT_SCORE_CACHE_MIB = 64;
 inline constexpr unsigned int DFS_DEFAULT_MAX_PREPROCESS_THREADS = 20;
@@ -183,12 +175,6 @@ bool parse_segment_penalty(char const* in, double* out);
 // shared maximum of 16 external partners.
 bool parse_solo_words(
     char const* in, std::vector<std::string>* solo_words);
-
-// Checks raw solo-word bonus constraints, then normalizes the effective pair
-// bonus. Solo assignment is an optional reward, so negative score bonuses are
-// legal only when no solo words were supplied; the raw values are validated
-// before a missing --pairs file clears the pair bonus.
-bool finalize_dfs_bonuses(DfsCommonArgs* args);
 
 // Applies dfs-anagrams' short-input default adjustment and validates that the
 // resulting minimum can fit in the remaining bag.

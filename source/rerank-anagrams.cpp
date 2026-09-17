@@ -161,10 +161,9 @@ bool parse_args(char* argv[], Args* out) {
     usage(argv[0]);
     return false;
   }
-  if (!finalize_dfs_bonuses(&out->common)) return false;
-
-  if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file))
+  if (!finalize_dfs_common_args(
+          &out->common, argv[0], &out->index_file,
+          &out->exclude_pair_files))
     return false;
   DfsWorkflowTargetSettings target;
   if (!load_dfs_workflow_target_settings(
@@ -174,12 +173,9 @@ bool parse_args(char* argv[], Args* out) {
   out->common.min_word_len = target.min_word_len;
   out->common.min_word_len_given = true;
   out->num_segments = target.num_segments;
-  if (!finalize_min_word_length(
-          out->letters, /*explicitly_given=*/true,
-          &out->common.min_word_len))
-    return false;
-  return collect_workflow_exclude_pair_files(
-      out->common, argv[0], &out->exclude_pair_files);
+  return finalize_min_word_length(
+      out->letters, /*explicitly_given=*/true,
+      &out->common.min_word_len);
 }
 
 bool load_rejections(

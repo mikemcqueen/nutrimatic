@@ -142,6 +142,14 @@ expect_status 2 env WFROOT="$workflow" "$rerank" --wf \
 expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
   -m 2 "$test_dir/dfs.stdout"
 
+mkdir "$target/no.pairs"
+expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
+  "$test_dir/dfs.stdout"
+grep -q 'target NO pair file .* is not a regular file' \
+  "$test_dir/status.stderr" ||
+  fail "target NO pair directory diagnostic is missing"
+rmdir "$target/no.pairs"
+
 printf 'not-a-score ab,cd\n' > "$test_dir/malformed.rows"
 expect_status 1 "$rerank" --wfroot "$workflow" -t "$target_name" \
   "$test_dir/malformed.rows"

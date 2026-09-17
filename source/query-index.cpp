@@ -312,13 +312,9 @@ static bool parse_args(char* argv[], Args* out) {
         validate_literal_entry(out->near_target);
   }
 
-  if (!finalize_dfs_bonuses(&out->common)) return false;
-  if (!finalize_dfs_workflow_args(
-          &out->common, argv[0], &out->index_file))
-    return false;
-  if (!out->score &&
-      !collect_workflow_exclude_pair_files(
-          out->common, argv[0], &out->exclude_pair_files))
+  if (!finalize_dfs_common_args(
+          &out->common, argv[0], &out->index_file,
+          out->score ? NULL : &out->exclude_pair_files))
     return false;
   if (out->index_file == NULL) {
     usage(argv[0]);

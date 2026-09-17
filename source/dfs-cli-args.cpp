@@ -369,7 +369,11 @@ bool parse_solo_words(
   }
 }
 
-bool finalize_dfs_bonuses(DfsCommonArgs* args) {
+// Checks raw solo-word bonus constraints, then normalizes the effective pair
+// bonus. Solo assignment is an optional reward, so negative score bonuses are
+// legal only when no solo words were supplied; the raw values are validated
+// before a missing --pairs file clears the pair bonus.
+static bool finalize_dfs_bonuses(DfsCommonArgs* args) {
   if (!args->solo_words.empty()) {
     if (args->word_bonus < 0.0) {
       fputs("error: --word-bonus must be non-negative with --solo-words\n",
@@ -924,7 +928,13 @@ DfsOptionResult dfs_parse_common_option(
   return DFS_OPTION_HANDLED;
 }
 
-bool finalize_dfs_workflow_args(
+// Resolves --wf/--wfroot defaults and pair sources after option parsing.
+// Workflow mode supplies a default index when `*index_file` is NULL, plus a
+// default dictionary and classified YES source. An explicit index is retained.
+// Workflow mode also requires either an explicit seed input or a target whose
+// sentence can identify exactly one sentence seed; a complete target
+// additionally supplies its optional best.pairs unless --best-pairs replaced it.
+static bool finalize_dfs_workflow_args(
     DfsCommonArgs* args, char const* program, char const** index_file) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
@@ -1088,7 +1098,13 @@ bool load_dfs_workflow_target_settings(
              &out->num_segments);
 }
 
-bool collect_workflow_exclude_pair_files(
+// Appends the workflow root's classified NO pairs, and a complete selected
+// target's own no.pairs, to `paths` for tools that exclude pairs. Either file
+// is skipped when it is absent, since a workflow need not have classified
+// anything NO yet. Abbreviated targets do not name a target-local no.pairs.
+// Without a workflow root nothing is appended. Call after
+// finalize_dfs_workflow_args(), which resolves the root and the target.
+static bool collect_workflow_exclude_pair_files(
     DfsCommonArgs const& args, char const* program,
     std::vector<std::string>* paths) {
   if (args.workflow_root.empty()) return true;
@@ -1103,4 +1119,14 @@ bool collect_workflow_exclude_pair_files(
       root / WORKFLOW_BEST_PATH / args.target /
           WORKFLOW_TARGET_NO_PAIRS_NAME, program,
       "target NO pair file", paths);
+}
+
+bool finalize_dfs_common_args(
+    DfsCommonArgs* args, char const* program, char const** index_file,
+    std::vector<std::string>* exclude_pair_files) {
+  if (!finalize_dfs_bonuses(args)) return false;
+  if (!finalize_dfs_workflow_args(args, program, index_file)) return false;
+  if (exclude_pair_files == NULL) return true;
+  return collect_workflow_exclude_pair_files(
+      *args, program, exclude_pair_files);
 }
