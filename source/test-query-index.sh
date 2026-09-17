@@ -157,28 +157,42 @@ printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
   "$query_index" -i "$synthetic_index" - --score \
     > "$test_dir/stdin-score.stdout" \
     2> "$test_dir/stdin-score.stderr"
-[[ "$(awk '{ print $2 }' "$test_dir/stdin-score.stdout")" == \
+[[ "$(awk 'NR > 1 { print $3 }' "$test_dir/stdin-score.stdout")" == \
    $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij\nmissing,pair' ]] ||
   fail "stdin values were not sorted by descending score"
-assert_close "$(awk '$2 == "ab,cd" { print $1 }' \
+mean_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]$'
+[[ "$(head -n 1 "$test_dir/stdin-score.stdout")" =~ $mean_line_pattern ]] ||
+  fail "stdin scoring did not print the mean score and deviation factor first"
+mean_score=$(awk 'NR == 1 { print $2 }' "$test_dir/stdin-score.stdout")
+[[ "$(awk -v mean="$mean_score" \
+     'NR > 1 && $2 != "-" { print ($1 > mean) == ($2 > 0) }' \
+     "$test_dir/stdin-score.stdout" | sort -u)" == 1 ]] ||
+  fail "deviation signs disagree with each score's side of the mean"
+assert_close "$(awk '$3 == "ab,cd" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 70 \
   "stdin scoring did not query a comma-separated value as one phrase"
-assert_close "$(awk '$2 == "ab" { print $1 }' \
+assert_close "$(awk '$3 == "ab" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 80 \
   "stdin scoring did not accept a single-word value"
-assert_close "$(awk '$2 == "f,gh,ij" { print $1 }' \
+assert_close "$(awk '$3 == "f,gh,ij" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 1 \
   "stdin scoring did not accept a three-word value"
-assert_close "$(awk '$2 == "ij,gh" { print $1 }' \
+assert_close "$(awk '$3 == "ij,gh" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 5 \
   "stdin scoring did not fall back to the indexed pair orientation"
-assert_close "$(awk '$2 == "missing,pair" { print $1 }' \
+assert_close "$(awk '$3 == "missing,pair" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 0 \
   "stdin scoring did not assign zero to a pair absent in both orientations"
 
-[[ $(awk '{ print length($0) - length($2) }' \
+[[ $(awk 'NR > 1 { print length($0) - length($3) }' \
      "$test_dir/stdin-score.stdout" | sort -u | wc -l) -eq 1 ]] ||
   fail "stdin scores did not share one right-aligned column width"
+[[ "$(awk '$3 == "missing,pair" { print $2 }' \
+     "$test_dir/stdin-score.stdout")" == '-' ]] ||
+  fail "a zero-scoring value did not print - for its deviation"
+[[ "$(awk 'NR == 2 { print ($2 > 0) }' \
+     "$test_dir/stdin-score.stdout")" == 1 ]] ||
+  fail "the highest-scoring value was not above the mean"
 
 printf 'cd,ab\n' > "$test_dir/stdin-score-pair.txt"
 printf 'cd,ab\n' |
@@ -186,12 +200,24 @@ printf 'cd,ab\n' |
     --pairs "$test_dir/stdin-score-pair.txt" --pair-bonus 0 \
     > "$test_dir/stdin-score-best-order.stdout" \
     2> "$test_dir/stdin-score-best-order.stderr"
-assert_close "$(awk '{ print $1 }' \
+assert_close "$(awk 'NR > 1 { print $1 }' \
     "$test_dir/stdin-score-best-order.stdout")" 70 \
   "stdin scoring did not choose the higher-scoring pair orientation"
-[[ "$(awk '{ print $2 }' \
+[[ "$(awk 'NR > 1 { print $3 }' \
     "$test_dir/stdin-score-best-order.stdout")" == 'cd,ab' ]] ||
   fail "stdin scoring did not preserve the written pair order"
+
+printf 'ab,cd\ngh,ij\n' |
+  "$query_index" -i "$synthetic_index" - --score \
+    --pairs "$test_dir/stdin-score-pair.txt" \
+    > "$test_dir/stdin-score-bonus.stdout" \
+    2> "$test_dir/stdin-score-bonus.stderr"
+if grep -q '^Mean:' "$test_dir/stdin-score-bonus.stdout"; then
+  fail "an applied bonus should withhold the score summary"
+fi
+[[ "$(awk '{ print $2 }' "$test_dir/stdin-score-bonus.stdout")" == \
+   $'ab,cd\ngh,ij' ]] ||
+  fail "a withheld summary should leave the value in the second column"
 
 set +e
 printf 'ab,,cd\n' |

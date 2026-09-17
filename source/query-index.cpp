@@ -80,6 +80,12 @@ static void usage(char const* program) {
       "    each as one space-separated index entry, and sorts by score; a\n"
       "    two-word value uses its higher-scoring index orientation, or\n"
       "    scores zero when neither orientation is in the index\n"
+      "    stdin mode also prints the geometric mean of the scores as its"
+      " first line, in score units, with one standard deviation as the\n"
+      "    factor it multiplies or divides a score by, then a column giving"
+      " each value's distance from the mean in those deviations;\n"
+      "    zero-scoring values are excluded from both and print -, and the\n"
+      "    whole summary is withheld once any bonus applies to any value\n"
       "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
       "    it prints aggregate phrases spanning the endpoints with at least\n"
       "    one complete intervening word, searching each endpoint that is an\n"
@@ -654,7 +660,8 @@ static double entry_upper_log_score(
 
 static bool score_entry_sequence(
     IndexReader const& reader, DfsPreparedClassList const& prepared,
-    std::vector<std::string> const& entries, double* log_score) {
+    std::vector<std::string> const& entries, double* log_score,
+    bool* bonus_applied = NULL) {
   DfsScoreModel const& model = *prepared.model;
   std::vector<DfsSoloMasks> profiles;
   std::vector<bool> profile_direct_best;
@@ -663,6 +670,7 @@ static bool score_entry_sequence(
   profile_direct_best.reserve(entries.size());
 
   double upper_log_score = 0.0;
+  double plain_log_score = 0.0;
   for (size_t i = 0; i < entries.size(); ++i) {
     DfsEntryTerms terms;
     if (!gather_entry_terms(reader, prepared, entries[i], &terms)) {
@@ -676,13 +684,19 @@ static bool score_entry_sequence(
       profile_direct_best.push_back(terms.direct_best);
     }
     double const segment = entry_upper_log_score(model, terms);
+    double const plain =
+        model.segment_log_score(terms.count, /*multi_word=*/false);
     upper_log_score = i == 0
         ? segment : model.append_log_score(upper_log_score, segment);
+    plain_log_score = i == 0
+        ? plain : model.append_log_score(plain_log_score, plain);
   }
 
   DfsExactResultMatching const exact = dfs_exact_result_matching(
       profiles, profile_direct_best, direct_best_segments, model);
   *log_score = upper_log_score + exact.correction;
+  if (bonus_applied != NULL)
+    *bonus_applied = *log_score != plain_log_score;
   assert(*log_score <= upper_log_score);
   return true;
 }
@@ -704,6 +718,51 @@ static bool stdin_score_result_better(
   return a.value < b.value;
 }
 
+// Displayed scores span the corpus by orders of magnitude, so the summary
+// describes the log scores; see findings/stdin-score-statistics.md for why a
+// bonus of any kind withdraws it.
+struct StdinScoreStats {
+  bool shown;
+  double mean;
+  double deviation;
+};
+
+static StdinScoreStats stdin_score_stats(
+    std::vector<StdinScoreResult> const& results, bool bonus_applied) {
+  StdinScoreStats stats = { false, 0.0, 0.0 };
+  if (bonus_applied) return stats;
+
+  size_t count = 0;
+  double total = 0.0;
+  for (size_t i = 0; i < results.size(); ++i) {
+    if (!isfinite(results[i].log_score)) continue;
+    total += results[i].log_score;
+    ++count;
+  }
+  if (count == 0) return stats;
+
+  stats.shown = true;
+  stats.mean = total / double(count);
+  double squares = 0.0;
+  for (size_t i = 0; i < results.size(); ++i) {
+    if (!isfinite(results[i].log_score)) continue;
+    double const difference = results[i].log_score - stats.mean;
+    squares += difference * difference;
+  }
+  stats.deviation = sqrt(squares / double(count));
+  return stats;
+}
+
+static std::string format_deviation(
+    StdinScoreStats const& stats, double log_score) {
+  if (!isfinite(log_score)) return "-";
+  double const deviations = stats.deviation == 0.0
+      ? 0.0 : (log_score - stats.mean) / stats.deviation;
+  char buffer[32];
+  snprintf(buffer, sizeof buffer, "%.2f", deviations);
+  return std::string(buffer);
+}
+
 static int score_stdin_values(IndexReader& reader, Args const& args) {
   std::vector<StdinScoreValue> values;
   if (!parse_stdin_score_values(&values)) return 2;
@@ -716,6 +775,7 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
 
   std::vector<StdinScoreResult> results;
   results.reserve(values.size());
+  bool bonus_applied = false;
   for (size_t i = 0; i < values.size(); ++i) {
     DfsEntryTerms forward;
     DfsEntryTerms reverse;
@@ -743,8 +803,11 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
     double log_score = -INFINITY;
     if (chosen != NULL) {
       std::vector<std::string> const entries(1, *chosen);
-      if (!score_entry_sequence(reader, prepared, entries, &log_score))
+      bool entry_bonus = false;
+      if (!score_entry_sequence(
+              reader, prepared, entries, &log_score, &entry_bonus))
         return 2;
+      if (entry_bonus) bonus_applied = true;
     }
     StdinScoreResult result = {
       log_score,
@@ -754,17 +817,36 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
   }
 
   std::sort(results.begin(), results.end(), stdin_score_result_better);
+  StdinScoreStats const stats = stdin_score_stats(results, bonus_applied);
+
   std::vector<std::string> scores;
+  std::vector<std::string> deviations;
   scores.reserve(results.size());
+  deviations.reserve(results.size());
   size_t width = 0;
+  size_t deviation_width = 0;
   for (size_t i = 0; i < results.size(); ++i) {
     scores.push_back(format_score(
         prepared.model->displayed_score(results[i].log_score)));
     width = std::max(width, scores[i].size());
+    if (!stats.shown) continue;
+    deviations.push_back(format_deviation(stats, results[i].log_score));
+    deviation_width = std::max(deviation_width, deviations[i].size());
   }
-  for (size_t i = 0; i < results.size(); ++i)
-    printf("%*s %s\n", int(width), scores[i].c_str(),
-           results[i].value.c_str());
+
+  if (stats.shown)
+    printf("Mean: %s  1 sigma: x%.2f\n",
+           format_score(prepared.model->displayed_score(stats.mean)).c_str(),
+           exp(stats.deviation));
+  for (size_t i = 0; i < results.size(); ++i) {
+    if (stats.shown)
+      printf("%*s %*s %s\n", int(width), scores[i].c_str(),
+             int(deviation_width), deviations[i].c_str(),
+             results[i].value.c_str());
+    else
+      printf("%*s %s\n", int(width), scores[i].c_str(),
+             results[i].value.c_str());
+  }
   return 0;
 }
 
