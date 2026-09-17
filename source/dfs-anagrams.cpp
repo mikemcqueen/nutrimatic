@@ -368,7 +368,6 @@ int main(int argc, char* argv[]) {
 
   Args args;
   if (!parse_args(argv, &args)) return 2;
-  if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   size_t const preprocess_threads = resolve_preprocess_threads(
       args.preprocess_threads, args.letters.size());
@@ -427,15 +426,10 @@ int main(int argc, char* argv[]) {
                    args.common.max_extract_words,
                    args.common.max_extract_words == 1 ? "" : "s");
 
-  DfsBestBonusPolicy const best_bonus =
-      dfs_best_bonus_policy(size_t(args.num_segments));
   DfsAnagramSearch search(
-      prepared.classes.get(), args.letters, args.common.segment_penalty,
-      reader.count(),
+      prepared.classes.get(), args.letters, *prepared.model,
       args.score_cache_bytes, preprocess_threads,
-      search_threads, size_t(args.num_segments),
-      args.common.word_bonus, args.common.pair_bonus, best_bonus,
-      prepared.base_remap.get());
+      search_threads, size_t(args.num_segments));
   DfsTopN output(
       prepared.classes.get(), prepared.model.get(), size_t(args.common.top),
       prepared.solo_words.get(),

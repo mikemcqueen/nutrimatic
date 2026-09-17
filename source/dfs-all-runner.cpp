@@ -73,8 +73,8 @@ void DfsAllSolutionsRunner::visit_fitting_class(
   worker->path.push_back(class_index);
   double const next_log_score =
       first_class ? class_score
-                  : data.score_model.append_log_score(
-                        representative_log_score, class_score);
+                  : representative_log_score +
+                        data.segment_boundary_log_score + class_score;
   if (DFS_UNLIKELY(next_letters_left == 0)) {
     if (DFS_LIKELY(data.exact_depth == 0
                    || worker->path.size() == data.exact_depth)) {

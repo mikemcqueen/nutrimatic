@@ -25,16 +25,11 @@
 class DfsAnagramSearch {
  public:
   DfsAnagramSearch(DfsClassList const* classes, std::string const& letters,
-                   double segment_penalty, int64_t corpus_total,
+                   DfsScoreModel const& score_model,
                    size_t score_cache_bytes = 0,
                    size_t preprocess_threads = 1,
                    size_t search_threads = 1,
-                   size_t exact_segments = 0,
-                   double word_bonus = 0.0,
-                   double pair_bonus = 0.0,
-                   DfsBestBonusPolicy best_bonus =
-                       DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS),
-                   DfsBaseRemap const* base_remap = NULL);
+                   size_t exact_segments = 0);
 
   // A null sink runs the search as a counter. `stats` receives everything this
   // call measured and may be NULL. When the ambient diagnostic stream
@@ -74,7 +69,6 @@ class DfsAnagramSearch {
   // The query. Fixed at construction and reused by every call.
   DfsClassList const* const class_list;
   std::string const letters;
-  DfsScoreModel const score_model;
   double const segment_boundary_log_score;
   std::vector<double> best_member_upper_log_scores;
   // Declared before max_depth: a nonzero exact_segments clamps it, so the

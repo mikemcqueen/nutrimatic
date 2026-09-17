@@ -568,8 +568,7 @@ static void search_output_integration_test() {
     DfsClassList classes(&reader, letters, 2);
     DfsScoreModel const model(
         DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
-    DfsAnagramSearch search(
-        &classes, letters, segment_penalty, reader.count());
+    DfsAnagramSearch search(&classes, letters, model);
     DfsTopN output(&classes, &model, 14);
     DfsSearchStats search_stats;
     search.run(&output, &search_stats);

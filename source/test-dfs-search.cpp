@@ -113,8 +113,7 @@ static int smoke_test() {
     DfsScoreModel const model(
         DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     CollectSolutions sink(&classes);
-    DfsAnagramSearch search(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
+    DfsAnagramSearch search(&classes, "aabb", model);
     DfsSearchStats search_stats;
     search.run(&sink, &search_stats);
 
@@ -143,8 +142,7 @@ static int smoke_test() {
           "reused search changed optimized traversal");
 
     CollectSolutions serial_only_sink(&classes);
-    DfsAnagramSearch serial_only_search(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0, 1, 4);
+    DfsAnagramSearch serial_only_search(&classes, "aabb", model, 0, 1, 4);
     DfsSearchStats serial_only_search_stats;
     serial_only_search.run(&serial_only_sink, &serial_only_search_stats);
     check(serial_only_search_stats.execution.search_threads == 1 &&
@@ -156,8 +154,7 @@ static int smoke_test() {
 
     check(setenv("NUTRIMATIC_SEARCH_TASKS", "2", 1) == 0,
           "could not lower exhaustive parallel task target");
-    DfsAnagramSearch parallel_counter(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0, 1, 4);
+    DfsAnagramSearch parallel_counter(&classes, "aabb", model, 0, 1, 4);
     DfsSearchStats parallel_counter_stats;
     parallel_counter.run(NULL, &parallel_counter_stats);
     check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
@@ -173,8 +170,7 @@ static int smoke_test() {
               "NUTRIMATIC_LENGTH_CERTIFICATE", "0", 1) == 0,
           "could not disable length certificate");
     DfsTopN expected_output(&classes, &model, 2);
-    DfsAnagramSearch exhaustive(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
+    DfsAnagramSearch exhaustive(&classes, "aabb", model, 0);
     DfsSearchStats exhaustive_stats;
     exhaustive.run(&expected_output, &exhaustive_stats);
     check(!exhaustive_stats.certificate.ready,
@@ -184,9 +180,7 @@ static int smoke_test() {
 
     size_t const bound_budget = 4096;
     DfsTopN disabled_output(&classes, &model, 2);
-    DfsAnagramSearch disabled(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-        bound_budget);
+    DfsAnagramSearch disabled(&classes, "aabb", model, bound_budget);
     DfsSearchStats disabled_stats;
     disabled.run(&disabled_output, &disabled_stats);
     std::vector<DfsSpelling> const disabled_spellings =
@@ -196,9 +190,7 @@ static int smoke_test() {
               "NUTRIMATIC_LENGTH_CERTIFICATE", "shadow", 1) == 0,
           "could not shadow length certificate");
     DfsTopN shadow_output(&classes, &model, 2);
-    DfsAnagramSearch shadow(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-        bound_budget);
+    DfsAnagramSearch shadow(&classes, "aabb", model, bound_budget);
     DfsSearchStats shadow_stats;
     shadow.run(&shadow_output, &shadow_stats);
     std::vector<DfsSpelling> const shadow_spellings =
@@ -207,9 +199,7 @@ static int smoke_test() {
           "could not enable length certificate");
 
     DfsTopN bounded_output(&classes, &model, 2);
-    DfsAnagramSearch bounded(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-        bound_budget);
+    DfsAnagramSearch bounded(&classes, "aabb", model, bound_budget);
     DfsSearchStats bounded_stats;
     bounded.run(&bounded_output, &bounded_stats);
     std::vector<DfsSpelling> const bounded_spellings =
@@ -265,8 +255,7 @@ static int smoke_test() {
           "could not disable parallel length certificate");
     DfsTopN parallel_disabled_output(&classes, &model, 2);
     DfsAnagramSearch parallel_disabled(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-        bound_budget, 1, 4);
+        &classes, "aabb", model, bound_budget, 1, 4);
     DfsSearchStats parallel_disabled_stats;
     parallel_disabled.run(&parallel_disabled_output, &parallel_disabled_stats);
     check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
@@ -279,9 +268,7 @@ static int smoke_test() {
         "certificate-disabled parallel search changed retained spellings");
     for (size_t run = 0; run < 3; ++run) {
       DfsTopN parallel_output(&classes, &model, 2);
-      DfsAnagramSearch parallel(
-          &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-          bound_budget, 1, 4);
+      DfsAnagramSearch parallel(&classes, "aabb", model, bound_budget, 1, 4);
       DfsSearchStats parallel_stats;
       parallel.run(&parallel_output, &parallel_stats);
       check(parallel_stats.execution.search_threads > 1 &&
@@ -297,8 +284,7 @@ static int smoke_test() {
           "could not restore parallel search task target");
 
     DfsTopN certificate_only_output(&classes, &model, 2);
-    DfsAnagramSearch certificate_only(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
+    DfsAnagramSearch certificate_only(&classes, "aabb", model, 0);
     DfsSearchStats certificate_only_stats;
     certificate_only.run(&certificate_only_output, &certificate_only_stats);
     check(certificate_only_stats.bounds.mode ==
@@ -313,8 +299,7 @@ static int smoke_test() {
     check(setenv("NUTRIMATIC_SEARCH_TASKS", "2", 1) == 0,
           "could not lower unbounded parallel task target");
     DfsTopN parallel_unbounded_output(&classes, &model, 2);
-    DfsAnagramSearch parallel_unbounded(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0, 1, 4);
+    DfsAnagramSearch parallel_unbounded(&classes, "aabb", model, 0, 1, 4);
     DfsSearchStats parallel_unbounded_stats;
     parallel_unbounded.run(&parallel_unbounded_output, &parallel_unbounded_stats);
     check(unsetenv("NUTRIMATIC_SEARCH_TASKS") == 0,
@@ -330,9 +315,7 @@ static int smoke_test() {
 
     DfsTopN isolated_output(&classes, &model, 2);
     size_t const score_only_budget = 128;
-    DfsAnagramSearch isolated(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-        score_only_budget);
+    DfsAnagramSearch isolated(&classes, "aabb", model, score_only_budget);
     DfsSearchStats isolated_stats;
     isolated.run(&isolated_output, &isolated_stats);
     check(isolated_stats.bounds.mode ==
@@ -345,9 +328,7 @@ static int smoke_test() {
         "small score cache changed retained spellings");
 
     DfsTopN threaded_output(&classes, &model, 2);
-    DfsAnagramSearch threaded(
-        &classes, "aabb", DFS_DEFAULT_SEGMENT_PENALTY, reader.count(),
-        bound_budget, 4);
+    DfsAnagramSearch threaded(&classes, "aabb", model, bound_budget, 4);
     DfsSearchStats threaded_stats;
     threaded.run(&threaded_output, &threaded_stats);
     std::vector<DfsSpelling> const threaded_spellings =
@@ -385,18 +366,14 @@ static int smoke_test() {
 
     std::string const exhausted_letters = "aaaaabbbbb";
     DfsTopN exhausted_expected_output(&classes, &model, 2);
-    DfsAnagramSearch exhausted_expected(
-        &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-        reader.count(), 0);
+    DfsAnagramSearch exhausted_expected(&classes, exhausted_letters, model, 0);
     DfsSearchStats exhausted_expected_stats;
     exhausted_expected.run(&exhausted_expected_output, &exhausted_expected_stats);
     std::vector<DfsSpelling> const exhausted_expected_spellings =
         exhausted_expected_output.take_sorted_results();
 
     DfsTopN projected_output(&classes, &model, 2);
-    DfsAnagramSearch projected(
-        &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-        reader.count(), 64, 4);
+    DfsAnagramSearch projected(&classes, exhausted_letters, model, 64, 4);
     FILE* projected_diagnostics = tmpfile();
     check(projected_diagnostics != NULL,
           "could not create projected diagnostic stream");
@@ -439,9 +416,7 @@ static int smoke_test() {
     // kernel on the path.
     for (size_t exact = 1; exact <= 2; ++exact) {
       DfsTopN depth_output(&classes, &model, 2);
-      DfsAnagramSearch depth(
-          &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-          reader.count(), 4096, 4);
+      DfsAnagramSearch depth(&classes, exhausted_letters, model, 4096, 4);
       DfsSearchStats depth_stats;
       depth.run(&depth_output, &depth_stats,
                 /*progress_factor=*/1, /*allow_cache_fallback=*/true,
@@ -467,9 +442,7 @@ static int smoke_test() {
           "projected exact depth changed retained spellings");
     }
     CollectSolutions boundary_expected(&classes);
-    DfsAnagramSearch boundary_exhaustive(
-        &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-        reader.count(), 0);
+    DfsAnagramSearch boundary_exhaustive(&classes, exhausted_letters, model, 0);
     DfsSearchStats boundary_exhaustive_stats;
     boundary_exhaustive.run(&boundary_expected, &boundary_exhaustive_stats);
     check(!boundary_expected.ordered_scores.empty(),
@@ -494,17 +467,14 @@ static int smoke_test() {
       FixedFloorSolutions disabled_boundary_output(
           boundary_floors[i]);
       DfsAnagramSearch disabled_boundary(
-          &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-          reader.count(), 128);
+          &classes, exhausted_letters, model, 128);
       DfsSearchStats disabled_boundary_stats;
       disabled_boundary.run(&disabled_boundary_output, &disabled_boundary_stats);
       check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
             "could not restore boundary length certificate");
 
       FixedFloorSolutions boundary_output(boundary_floors[i]);
-      DfsAnagramSearch boundary(
-          &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-          reader.count(), 128);
+      DfsAnagramSearch boundary(&classes, exhausted_letters, model, 128);
       DfsSearchStats boundary_stats;
       boundary.run(&boundary_output, &boundary_stats);
       check(boundary_stats.bounds.mode ==
@@ -528,9 +498,7 @@ static int smoke_test() {
     int const original_rounding = fegetround();
     if (original_rounding != -1 && fesetround(FE_DOWNWARD) == 0) {
       DfsTopN downward_output(&classes, &model, 2);
-      DfsAnagramSearch downward(
-          &classes, exhausted_letters, DFS_DEFAULT_SEGMENT_PENALTY,
-          reader.count(), 768);
+      DfsAnagramSearch downward(&classes, exhausted_letters, model, 768);
       DfsSearchStats downward_stats;
       downward.run(&downward_output, &downward_stats);
       check(downward_stats.bounds.mode ==
@@ -566,8 +534,7 @@ static void float_score_bound_test() {
     DfsScoreModel const model(
         DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
     DfsTopN expected_output(&classes, &model, 1);
-    DfsAnagramSearch exhaustive(
-        &classes, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0);
+    DfsAnagramSearch exhaustive(&classes, letters, model, 0);
     DfsSearchStats exhaustive_stats;
     exhaustive.run(&expected_output, &exhaustive_stats);
     std::vector<DfsSpelling> const expected_spellings =
@@ -575,8 +542,7 @@ static void float_score_bound_test() {
 
     DfsTopN output(&classes, &model, 1);
     size_t const budget = 512;
-    DfsAnagramSearch search(
-        &classes, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), budget);
+    DfsAnagramSearch search(&classes, letters, model, budget);
     DfsSearchStats search_stats;
     search.run(&output, &search_stats);
     check(search_stats.bounds.mode ==
@@ -620,16 +586,15 @@ static int validate_14_letters() {
 
   IndexReader reader(fp);
   std::string const letters = "featstudiotsen";
+  DfsScoreModel const model(DFS_DEFAULT_SEGMENT_PENALTY, reader.count(), 0.0);
 
   DfsClassList words(&reader, letters, 4, false);
-  DfsAnagramSearch words_search(
-      &words, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
+  DfsAnagramSearch words_search(&words, letters, model);
   DfsSearchStats words_stats;
   words_search.run(NULL, &words_stats);
 
   DfsClassList with_phrases(&reader, letters, 4);
-  DfsAnagramSearch phrase_search(
-      &with_phrases, letters, DFS_DEFAULT_SEGMENT_PENALTY, reader.count());
+  DfsAnagramSearch phrase_search(&with_phrases, letters, model);
   DfsSearchStats phrase_stats;
   phrase_search.run(NULL, &phrase_stats);
 

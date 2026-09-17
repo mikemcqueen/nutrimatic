@@ -171,35 +171,15 @@ bool ScoreKeyLayout::choose(
   return true;
 }
 
-// Phase 2 must prune with the model the class list ordered its members under,
-// which includes any recalibrated base; see findings/ptm-base-score.md.
-static DfsScoreModel make_search_score_model(
-    double segment_penalty, int64_t corpus_total, double word_bonus,
-    double pair_bonus, DfsBestBonusPolicy best_bonus,
-    DfsBaseRemap const* base_remap) {
-  DfsScoreModel model(
-      segment_penalty, corpus_total, word_bonus, pair_bonus, best_bonus);
-  model.set_base_remap(base_remap);
-  return model;
-}
-
 DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    std::string const& letters,
-                                   double segment_penalty,
-                                   int64_t corpus_total,
+                                   DfsScoreModel const& score_model,
                                    size_t score_cache_bytes,
                                    size_t preprocess_threads,
                                    size_t search_threads,
-                                   size_t exact_segments,
-                                   double word_bonus,
-                                   double pair_bonus,
-                                   DfsBestBonusPolicy best_bonus,
-                                   DfsBaseRemap const* base_remap):
+                                   size_t exact_segments):
     class_list(classes),
     letters(letters),
-    score_model(make_search_score_model(
-        segment_penalty, corpus_total, word_bonus, pair_bonus, best_bonus,
-        base_remap)),
     segment_boundary_log_score(
         score_model.segment_boundary_log_score()),
     exact_segments(exact_segments),
@@ -506,7 +486,6 @@ bool DfsAnagramSearch::prepare_phase_two(
   *data = DfsSearchData();
   *stats = DfsSearchStats();
   data->class_list = class_list;
-  data->score_model = score_model;
   data->best_member_upper_log_scores = best_member_upper_log_scores;
   data->segment_boundary_log_score = segment_boundary_log_score;
   data->letter_count = letters.size();

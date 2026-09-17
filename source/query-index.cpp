@@ -988,10 +988,9 @@ int main(int argc, char* argv[]) {
         "search threads %zu cache 0 segment penalty %.17g\n",
         search_threads, args.common.segment_penalty);
     DfsAnagramSearch search(
-        &classes, args.letters, args.common.segment_penalty, reader.count(),
+        &classes, args.letters, model,
         /*score_cache_bytes=*/0, /*preprocess_threads=*/1,
-        search_threads, /*exact_segments=*/0,
-        args.common.word_bonus, args.common.pair_bonus);
+        search_threads, /*exact_segments=*/0);
     DfsSearchStats stats;
     if (!search.find_completable_classes(
             &completable, &stats, /*progress_factor=*/1,
