@@ -1,4 +1,5 @@
 #include "segment-counts.h"
+#include "segment-rows.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -46,46 +47,13 @@ static bool count_candidate(
 bool segment_counts_read(
     std::istream* input, char const* name, PairFilters const& filters,
     SegmentCountsOptions const& options, SegmentCountsData* data) {
-  std::string line;
-  uint64_t line_number = 0;
-  while (std::getline(*input, line)) {
-    ++line_number;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.empty()) continue;
-
-    char* score_end;
-    (void) strtod(line.c_str(), &score_end);
-    if (score_end == line.c_str() || *score_end != ' ' ||
-        score_end[1] == '\0') {
-      fprintf(stderr,
-          "%s: %s:%" PRIu64
-          ": expected \"score segment[,segment ...]\"\n",
-          data->program, name, line_number);
-      return false;
-    }
-
-    std::vector<std::string> segments;
-    size_t start = size_t(score_end - line.c_str()) + 1;
-    while (true) {
-      size_t const end = line.find(',', start);
-      size_t const length =
-          end == std::string::npos ? line.size() - start : end - start;
-      if (length == 0) {
-        fprintf(stderr,
-            "%s: %s:%" PRIu64 ": empty segment\n",
-            data->program, name, line_number);
-        return false;
-      }
-      segments.push_back(line.substr(start, length));
-
-      if (end == std::string::npos) break;
-      start = end + 1;
-    }
-
+  SegmentRowReader reader = {input, name, data->program};
+  SegmentRow row;
+  while (segment_rows_next(&reader, &row)) {
     // Each segment uses the shared filter precedence. A row is attributed to
     // its earliest layer across every segment, independent of segment order.
     PairFilterLayer rejecting_layer = PAIR_FILTER_NONE;
-    for (std::string const& segment : segments) {
+    for (std::string const& segment : row.segments) {
       PairFilterLayer const layer = filters.first_rejecting_layer(segment);
       if (layer != PAIR_FILTER_NONE &&
           (rejecting_layer == PAIR_FILTER_NONE || layer < rejecting_layer))
@@ -114,15 +82,15 @@ bool segment_counts_read(
       }
       continue;
     }
-    uint64_t row = 0;
+    uint64_t row_number = 0;
     if (options.elimination) {
       if (data->surviving_rows == std::numeric_limits<uint64_t>::max()) {
         fprintf(stderr, "%s: result line count overflow\n", data->program);
         return false;
       }
-      row = ++data->surviving_rows;
+      row_number = ++data->surviving_rows;
     }
-    for (std::string const& segment : segments) {
+    for (std::string const& segment : row.segments) {
       if (filters.sources.classified_yes.find(segment) !=
           filters.sources.classified_yes.end()) {
         ++data->filtered.classified_yes_instances;
@@ -151,7 +119,7 @@ bool segment_counts_read(
       if (!selected_segment(options.output.selection, segment)) continue;
 
       if (options.output.projection == SEGMENT_PROJECTION_SEGMENTS) {
-        if (!count_candidate(segment, row, true, data->program,
+        if (!count_candidate(segment, row_number, true, data->program,
                 &data->segments))
           return false;
         continue;
@@ -162,17 +130,13 @@ bool segment_counts_read(
           data->unique_segments.insert(segment).second;
       std::vector<std::string> const words = split_segment_words(segment);
       for (std::string const& word : words)
-        if (!count_candidate(word, row, count_occurrence, data->program,
+        if (!count_candidate(word, row_number, count_occurrence, data->program,
                 &data->segments))
           return false;
     }
   }
 
-  if (input->bad()) {
-    fprintf(stderr, "%s: can't read \"%s\"\n", data->program, name);
-    return false;
-  }
-  return true;
+  return !reader.failed;
 }
 
 void segment_counts_print_filter_summary(

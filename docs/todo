@@ -44,6 +44,13 @@
 * move argument parsing out of filter-segments, first-segments, and any other
   tools with inline parsing into separate parse_args functions
 * use the optparse header/library for option parsing in those tools
+* consider making the result-row parser's stripping of parenthetical solo-word
+  annotations optional, so filter-segments and rerank-anagrams can reproduce
+  the input representation
+  - filter-segments can preserve the original row text directly
+  - rerank-anagrams is harder: it would probably need to strip the annotation
+    for lookup, mark the segment with a solo_word_tag_, and synthesize the solo
+    words from the input results so rendering can restore the annotation
 * consider writing rerank_all output, and possibly top_all output, to a
   temporary file and renaming it only after successful completion (like wf's
   place())

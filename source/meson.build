@@ -132,7 +132,7 @@ segment_rows_dep = declare_dependency(
 
 segment_counts_dep = declare_dependency(
   sources: files('segment-counts.cpp'),
-  dependencies: [pair_exclusions_dep, segment_output_dep],
+  dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
 )
 
 search_lib = library(
@@ -172,7 +172,7 @@ dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
 
 rerank_anagrams = executable('rerank-anagrams', 'rerank-anagrams.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
-  dependencies: [thread_dep, pair_exclusions_dep],
+  dependencies: [thread_dep, pair_exclusions_dep, segment_rows_dep],
   install: true)
 
 weighted_segments = executable('weighted-segments', 'weighted-segments.cpp',
@@ -194,15 +194,15 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
 
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
-  dependencies: [segment_output_dep, thread_dep],
+  dependencies: [segment_output_dep, segment_rows_dep, thread_dep],
   install: true)
 
 first_segments = executable('first-segments', 'first-segments.cpp',
-  dependencies: [pair_exclusions_dep, segment_output_dep],
+  dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
   install: true)
 
 filter_segments = executable('filter-segments', 'filter-segments.cpp',
-  dependencies: [pair_exclusions_dep, segment_output_dep],
+  dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
   install: true)
 
 # Keep the class-visitor logic in the hot caller rather than leaving it as a

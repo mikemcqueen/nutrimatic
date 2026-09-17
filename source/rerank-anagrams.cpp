@@ -5,10 +5,10 @@
 #include "index.h"
 #include "optparse.h"
 #include "pair-exclusions.h"
+#include "segment-rows.h"
 
 #include <errno.h>
 #include <inttypes.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -202,101 +202,6 @@ bool load_rejections(
   return true;
 }
 
-bool parse_segments(
-    std::string const& line, char const* name, uint64_t line_number,
-    std::string const& required_letters, int required_segments,
-    std::vector<std::string>* segments) {
-  char* score_end;
-  errno = 0;
-  double const input_score = strtod(line.c_str(), &score_end);
-  if (score_end == line.c_str() || *score_end != ' ' ||
-      score_end[1] == '\0' || errno == ERANGE || isnan(input_score) ||
-      input_score < 0.0) {
-    fprintf(stderr,
-        "rerank-anagrams: %s:%" PRIu64
-        ": expected \"score segment[,segment ...]\"\n",
-        name, line_number);
-    return false;
-  }
-
-  size_t start = size_t(score_end - line.c_str()) + 1;
-  if ((line[start] >= 'A' && line[start] <= 'Z') || line[start] == '-') {
-    fprintf(stderr,
-        "rerank-anagrams: %s:%" PRIu64
-        ": annotated input is not supported\n",
-        name, line_number);
-    return false;
-  }
-
-  std::string row_letters;
-  while (true) {
-    size_t const end = line.find(',', start);
-    size_t const length = end == std::string::npos
-        ? line.size() - start : end - start;
-    if (length == 0) {
-      fprintf(stderr, "rerank-anagrams: %s:%" PRIu64 ": empty segment\n",
-              name, line_number);
-      return false;
-    }
-    std::string segment = line.substr(start, length);
-    size_t const partner = segment.rfind(" (");
-    if (partner != std::string::npos && segment.back() == ')' &&
-        partner + 3 < segment.size() &&
-        std::all_of(segment.begin() + partner + 2, segment.end() - 1,
-                    [](char ch) {
-                      return (ch >= 'a' && ch <= 'z') ||
-                             (ch >= '0' && ch <= '9');
-                    }))
-      segment.erase(partner);
-    bool after_space = true;
-    for (size_t i = 0; i < segment.size(); ++i) {
-      char const ch = segment[i];
-      if (ch == ' ') {
-        if (after_space || i + 1 == segment.size()) {
-          fprintf(stderr,
-              "rerank-anagrams: %s:%" PRIu64
-              ": malformed spacing in segment \"%s\"\n",
-              name, line_number, segment.c_str());
-          return false;
-        }
-        after_space = true;
-      } else if ((ch >= 'a' && ch <= 'z') ||
-                 (ch >= '0' && ch <= '9')) {
-        row_letters.push_back(ch);
-        after_space = false;
-      } else {
-        fprintf(stderr,
-            "rerank-anagrams: %s:%" PRIu64
-            ": bad character '%c' in segment\n",
-            name, line_number, ch);
-        return false;
-      }
-    }
-    segments->push_back(segment);
-    if (end == std::string::npos) break;
-    start = end + 1;
-  }
-
-  if (segments->size() != size_t(required_segments)) {
-    fprintf(stderr,
-        "rerank-anagrams: %s:%" PRIu64
-        ": expected %d segments, found %zu\n",
-        name, line_number, required_segments, segments->size());
-    return false;
-  }
-  std::string bag = required_letters;
-  std::sort(bag.begin(), bag.end());
-  std::sort(row_letters.begin(), row_letters.end());
-  if (row_letters != bag) {
-    fprintf(stderr,
-        "rerank-anagrams: %s:%" PRIu64
-        ": row does not spell target letters \"%s\"\n",
-        name, line_number, required_letters.c_str());
-    return false;
-  }
-  return true;
-}
-
 bool rerank_stream(
     std::istream* input, char const* name, Args const& args,
     DfsPairSet const& rejected, DfsPreparedClassList const& prepared) {
@@ -308,27 +213,20 @@ bool rerank_stream(
     return false;
   }
   std::vector<DfsSpelling> results;
-  std::string line;
-  uint64_t line_number = 0;
-  while (std::getline(*input, line)) {
-    ++line_number;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.empty()) continue;
-
-    std::vector<std::string> segments;
-    if (!parse_segments(
-            line, name, line_number, args.letters, args.num_segments,
-            &segments))
-      return false;
-
+  SegmentRowReader reader = {input, name, "rerank-anagrams"};
+  reader.required_letters = args.letters;
+  reader.required_segments = args.num_segments;
+  SegmentRow row;
+  while (segment_rows_next(&reader, &row)) {
     std::vector<size_t> class_indexes;
     std::vector<size_t> member_indexes;
-    class_indexes.reserve(segments.size());
-    member_indexes.reserve(segments.size());
+    class_indexes.reserve(row.segments.size());
+    member_indexes.reserve(row.segments.size());
     bool keep = true;
-    for (size_t i = 0; i < segments.size(); ++i) {
-      if (is_rejected_segment(rejected, segments[i])) keep = false;
-      DfsMemberIndex::const_iterator const found = members.find(segments[i]);
+    for (size_t i = 0; i < row.segments.size(); ++i) {
+      if (is_rejected_segment(rejected, row.segments[i])) keep = false;
+      DfsMemberIndex::const_iterator const found =
+          members.find(row.segments[i]);
       if (found == members.end()) {
         keep = false;
       } else {
@@ -344,10 +242,7 @@ bool rerank_stream(
         *prepared.classes, *prepared.model, prepared.solo_words.get(),
         class_indexes, member_indexes, representative, args.show_bonus));
   }
-  if (input->bad()) {
-    fprintf(stderr, "rerank-anagrams: can't read \"%s\"\n", name);
-    return false;
-  }
+  if (reader.failed) return false;
 
   std::sort(results.begin(), results.end(), dfs_spelling_better);
   if (args.common.top > 0 && results.size() > size_t(args.common.top))

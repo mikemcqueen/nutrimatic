@@ -12,6 +12,7 @@
 
 #include "pair-exclusions.h"
 #include "segment-output.h"
+#include "segment-rows.h"
 
 static constexpr PairFilterSupport kSupport = {
     .ignore = true, .workflow_yes = true};
@@ -75,49 +76,18 @@ static bool find_segments(
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
   std::vector<FoundSegment> result;
-  std::string line;
-  uint64_t line_number = 0;
-  while (result.size() < output_options.limit && std::getline(*input, line)) {
-    ++line_number;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.empty()) continue;
-
-    char* score_end;
-    (void) strtod(line.c_str(), &score_end);
-    if (score_end == line.c_str() || *score_end != ' ' ||
-        score_end[1] == '\0') {
-      fprintf(stderr,
-          "first-segments: %s:%" PRIu64
-          ": expected \"score segment[,segment ...]\"\n",
-          name, line_number);
-      return false;
-    }
-
-    std::vector<std::string> segments;
+  SegmentRowReader reader = {input, name, "first-segments"};
+  SegmentRow row;
+  while (result.size() < output_options.limit &&
+         segment_rows_next(&reader, &row)) {
     bool reject_line = false;
-    size_t start = size_t(score_end - line.c_str()) + 1;
-    while (true) {
-      size_t const end = line.find(',', start);
-      size_t const length =
-          end == std::string::npos ? line.size() - start : end - start;
-      if (length == 0) {
-        fprintf(stderr,
-            "first-segments: %s:%" PRIu64 ": empty segment\n",
-            name, line_number);
-        return false;
-      }
-
-      segments.push_back(line.substr(start, length));
-      if (is_rejected_segment(filters.rejected, segments.back()) ||
-          !all_words_in_dict(filters.dictionary, segments.back()))
+    for (std::string const& segment : row.segments)
+      if (is_rejected_segment(filters.rejected, segment) ||
+          !all_words_in_dict(filters.dictionary, segment))
         reject_line = true;
 
-      if (end == std::string::npos) break;
-      start = end + 1;
-    }
-
     if (reject_line) continue;
-    for (std::string const& segment : segments) {
+    for (std::string const& segment : row.segments) {
       if (result.size() == output_options.limit) break;
       if (filters.ignored.find(segment) != filters.ignored.end()) continue;
       if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
@@ -144,10 +114,7 @@ static bool find_segments(
     }
   }
 
-  if (input->bad()) {
-    fprintf(stderr, "first-segments: can't read \"%s\"\n", name);
-    return false;
-  }
+  if (reader.failed) return false;
   if (output_options.by_length) {
     std::stable_sort(result.begin(), result.end(),
         [](FoundSegment const& a, FoundSegment const& b) {
@@ -155,7 +122,7 @@ static bool find_segments(
         });
   }
   fprintf(stderr, "found segment %zu on line %" PRIu64 "\n",
-      result.size(), line_number);
+      result.size(), reader.line_number);
   return print_segments(result);
 }
 

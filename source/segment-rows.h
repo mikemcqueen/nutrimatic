@@ -12,7 +12,7 @@
 struct SegmentRow {
   std::string line;                   // the row as read, without a trailing CR
   size_t segments_start = 0;          // offset in `line` of the first segment
-  std::vector<std::string> segments;  // the comma-separated segments, in order
+  std::vector<std::string> segments;  // comma-separated, solo suffix removed
 };
 
 // Reader state over one input.
@@ -20,6 +20,12 @@ struct SegmentRowReader {
   std::istream* input = NULL;
   char const* name = NULL;     // the file name in diagnostics; "-" for stdin
   char const* program = NULL;  // the diagnostic prefix
+
+  // Optional row-shape check. Both are set or both are left alone; only
+  // rerank-anagrams knows a target, so only rerank-anagrams sets them.
+  std::string required_letters{}; // the bag every row must spell
+  int required_segments = 0;      // the exact segment count each row carries
+
   uint64_t line_number = 0;    // lines consumed, counting skipped blank ones
   bool failed = false;         // a row was malformed, or the stream went bad
 };

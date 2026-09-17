@@ -15,6 +15,7 @@
 #include "dfs-cli-args.h"
 #include "optparse.h"
 #include "segment-output.h"
+#include "segment-rows.h"
 
 struct Args {
   char const* input_path = NULL;
@@ -108,43 +109,13 @@ static bool add_segment(
 static bool read_stats(
     std::istream* input, char const* name, DfsPairSet const* allowed,
     Stats* stats) {
-  std::string line;
-  uint64_t line_number = 0;
-  while (std::getline(*input, line)) {
-    ++line_number;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.empty()) continue;
+  SegmentRowReader reader = {input, name, "segment-stats"};
+  SegmentRow result_row;
+  while (segment_rows_next(&reader, &result_row)) {
     if (!increment(&stats->total_rows, "row count")) return false;
-
-    char* score_end;
-    (void) strtod(line.c_str(), &score_end);
-    if (score_end == line.c_str() || *score_end != ' ' ||
-        score_end[1] == '\0') {
-      fprintf(stderr,
-          "segment-stats: %s:%" PRIu64
-          ": expected \"score segment[,segment ...]\"\n",
-          name, line_number);
-      return false;
-    }
-
-    size_t start = size_t(score_end - line.c_str()) + 1;
     RowCounts row;
-    while (true) {
-      size_t const end = line.find(',', start);
-      size_t const length =
-          end == std::string::npos ? line.size() - start : end - start;
-      if (length == 0) {
-        fprintf(stderr,
-            "segment-stats: %s:%" PRIu64 ": empty segment\n",
-            name, line_number);
-        return false;
-      }
-      if (!add_segment(line.substr(start, length), allowed, stats, &row))
-        return false;
-
-      if (end == std::string::npos) break;
-      start = end + 1;
-    }
+    for (std::string const& segment : result_row.segments)
+      if (!add_segment(segment, allowed, stats, &row)) return false;
 
     if (row.pair_segments > 0) {
       if (row.allowed_pair_segments == row.pair_segments &&
@@ -160,11 +131,7 @@ static bool read_stats(
     }
   }
 
-  if (input->bad()) {
-    fprintf(stderr, "segment-stats: can't read \"%s\"\n", name);
-    return false;
-  }
-  return true;
+  return !reader.failed;
 }
 
 static double percentage(double count, double total) {

@@ -13,6 +13,7 @@
 #include "option-value.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
+#include "segment-rows.h"
 
 static constexpr PairFilterSupport kSupport = {.allow = true};
 
@@ -154,61 +155,29 @@ static bool filter_stream(
     std::istream* input, char const* name, PairFilters const& filters,
     std::regex const* with_regex,
     bool show_score, bool have_limit, uint64_t limit) {
-  std::string line;
-  uint64_t line_number = 0;
+  SegmentRowReader reader = {input, name, "filter-segments"};
+  SegmentRow row;
   uint64_t output_count = 0;
   while ((!have_limit || output_count < limit) &&
-         std::getline(*input, line)) {
-    ++line_number;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.empty()) continue;
-
-    char* score_end;
-    (void) strtod(line.c_str(), &score_end);
-    if (score_end == line.c_str() || *score_end != ' ' ||
-        score_end[1] == '\0') {
-      fprintf(stderr,
-          "filter-segments: %s:%" PRIu64
-          ": expected \"score segment[,segment ...]\"\n",
-          name, line_number);
-      return false;
-    }
-
+         segment_rows_next(&reader, &row)) {
     bool include = true;
     bool regex_matched = with_regex == NULL;
-    size_t start = size_t(score_end - line.c_str()) + 1;
-    while (true) {
-      size_t const end = line.find(',', start);
-      size_t const length =
-          end == std::string::npos ? line.size() - start : end - start;
-      if (length == 0) {
-        fprintf(stderr,
-            "filter-segments: %s:%" PRIu64 ": empty segment\n",
-            name, line_number);
-        return false;
-      }
-
-      std::string const segment = line.substr(start, length);
+    for (std::string const& segment : row.segments) {
       if (filters.first_rejecting_layer(segment) != PAIR_FILTER_NONE)
         include = false;
       if (!regex_matched && std::regex_search(segment, *with_regex))
         regex_matched = true;
-
-      if (end == std::string::npos) break;
-      start = end + 1;
     }
 
     if (include && regex_matched) {
-      printf("%s\n", show_score ? line.c_str() : score_end + 1);
+      printf("%s\n", show_score
+          ? row.line.c_str() : row.line.c_str() + row.segments_start);
       if (ferror(stdout)) return false;
       ++output_count;
     }
   }
 
-  if (input->bad()) {
-    fprintf(stderr, "filter-segments: can't read \"%s\"\n", name);
-    return false;
-  }
+  if (reader.failed) return false;
   return fflush(stdout) == 0;
 }
 
