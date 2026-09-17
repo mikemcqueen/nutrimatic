@@ -34,13 +34,3 @@
   comm on ordered pair text, so reversed pair orderings are not recognized and
   some pairs are evaluated twice
 * convert all enums to enum class where appropriate
-* after the shared pair-filter struct lands, consolidate top-segments' filter
-  attribution and filter-segments' boolean rejection behind one implementation
-  of the same precedence: classified_no, target_no, explicit reject, allowlist,
-  then dictionary.  For example:
-    enum PairFilterLayer { PAIR_FILTER_NONE, PAIR_FILTER_CLASSIFIED_NO, ... };
-    PairFilterLayer first_rejecting_layer(
-        std::string const& segment) const;
-  top-segments can use the returned layer for its per-layer counters, while
-  filter-segments can collapse it to a boolean.  Keep this change separate from
-  packaging the filter data in the shared struct.

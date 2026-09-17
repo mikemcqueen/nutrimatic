@@ -9,37 +9,6 @@
 #include <limits>
 #include <vector>
 
-static bool any_segment_in(
-    std::vector<std::string> const& segments, DfsPairSet const& pairs) {
-  for (std::string const& segment : segments)
-    if (pairs.find(segment) != pairs.end()) return true;
-  return false;
-}
-
-static bool any_rejected_segment(
-    std::vector<std::string> const& segments, DfsPairSet const& rejected) {
-  for (std::string const& segment : segments) {
-    if (is_rejected_segment(rejected, segment)) return true;
-  }
-  return false;
-}
-
-static bool any_segment_outside(
-    std::vector<std::string> const& segments,
-    DfsDictionary const& dictionary) {
-  for (std::string const& segment : segments)
-    if (!all_words_in_dict(dictionary, segment)) return true;
-  return false;
-}
-
-static bool any_segment_disallowed(
-    std::vector<std::string> const& segments,
-    std::optional<DfsPairSet> const& allowed) {
-  for (std::string const& segment : segments)
-    if (!is_allowed_segment(allowed, segment)) return true;
-  return false;
-}
-
 static bool selected_segment(
     SegmentSelection selection, std::string const& segment) {
   if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
@@ -113,32 +82,36 @@ bool segment_counts_read(
       start = end + 1;
     }
 
-    // Virtual filtering pipeline. The first matching rejection owns the row,
-    // so each rejected line contributes to exactly one summary counter.
-    // Workflow-wide NO is authoritative over target-local NO; explicit
-    // rejects, the explicit allowlist, and then the dictionary follow. Only
-    // surviving rows reach the per-segment ignore pipeline, where classified
-    // YES owns an overlap with an explicit ignore. Keeping this order visible
-    // is important because it defines diagnostic attribution even though set
-    // union would produce the same selected output.
-    if (any_segment_in(segments, filters.sources.classified_no)) {
-      ++data->filtered.classified_no_lines;
-      continue;
+    // Each segment uses the shared filter precedence. A row is attributed to
+    // its earliest layer across every segment, independent of segment order.
+    PairFilterLayer rejecting_layer = PAIR_FILTER_NONE;
+    for (std::string const& segment : segments) {
+      PairFilterLayer const layer = filters.first_rejecting_layer(segment);
+      if (layer != PAIR_FILTER_NONE &&
+          (rejecting_layer == PAIR_FILTER_NONE || layer < rejecting_layer))
+        rejecting_layer = layer;
+      if (rejecting_layer == PAIR_FILTER_CLASSIFIED_NO) break;
     }
-    if (any_segment_in(segments, filters.sources.target_no)) {
-      ++data->filtered.target_no_lines;
-      continue;
-    }
-    if (any_rejected_segment(segments, filters.rejected)) {
-      ++data->filtered.explicit_reject_lines;
-      continue;
-    }
-    if (any_segment_disallowed(segments, filters.allowed)) {
-      ++data->filtered.allow_lines;
-      continue;
-    }
-    if (any_segment_outside(segments, filters.dictionary)) {
-      ++data->filtered.dictionary_lines;
+    if (rejecting_layer != PAIR_FILTER_NONE) {
+      switch (rejecting_layer) {
+        case PAIR_FILTER_CLASSIFIED_NO:
+          ++data->filtered.classified_no_lines;
+          break;
+        case PAIR_FILTER_TARGET_NO:
+          ++data->filtered.target_no_lines;
+          break;
+        case PAIR_FILTER_EXPLICIT_REJECT:
+          ++data->filtered.explicit_reject_lines;
+          break;
+        case PAIR_FILTER_ALLOWLIST:
+          ++data->filtered.allow_lines;
+          break;
+        case PAIR_FILTER_DICTIONARY:
+          ++data->filtered.dictionary_lines;
+          break;
+        case PAIR_FILTER_NONE:
+          break;
+      }
       continue;
     }
     uint64_t row = 0;

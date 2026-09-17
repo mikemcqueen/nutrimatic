@@ -392,6 +392,7 @@ cat > "$precedence_input" <<'EOF'
 3 reject me,unlisted pair,badword
 2 unlisted pair,badword
 1 allowed pair,badword
+0 badword,unlisted pair,reject me
 EOF
 precedence_reject=$test_dir/allow-precedence-reject.pairs
 cat > "$precedence_reject" <<'EOF'
@@ -410,7 +411,7 @@ actual=$("$top_segments" -r "$precedence_reject" -a "$precedence_allow" \
   -d "$precedence_dictionary" "$precedence_input" \
   2> "$allow_diagnostics")
 [[ -z $actual ]] || fail "allowlist precedence produced output: $actual"
-expected_precedence_summary='top-segments: Filtered 1 rejected explicitly, 1 outside --allow-pairs, 1 rejected by dictionary'
+expected_precedence_summary='top-segments: Filtered 2 rejected explicitly, 1 outside --allow-pairs, 1 rejected by dictionary'
 [[ $(cat "$allow_diagnostics") == "$expected_precedence_summary" ]] ||
   fail "allowlist precedence is wrong: $(cat "$allow_diagnostics")"
 
@@ -522,6 +523,23 @@ EOF
 
 actual=$("$top_segments" --wfroot "$wfroot" -y "$target/dfs.seed" 2>/dev/null)
 [[ -z $actual ]] || fail "target no.pairs is wrong: $actual"
+
+workflow_precedence=$test_dir/workflow-precedence-results.txt
+cat > "$workflow_precedence" <<'EOF'
+5 badword,unlisted pair,reject me,mu nu,zeta epsilon
+4 badword,unlisted pair,reject me,mu nu
+3 badword,unlisted pair,reject me
+2 badword,unlisted pair
+1 allowed pair,badword
+EOF
+actual=$("$top_segments" --wfroot "$wfroot" -t current \
+  -r "$precedence_reject" -a "$precedence_allow" \
+  -d "$precedence_dictionary" "$workflow_precedence" \
+  2> "$allow_diagnostics")
+[[ -z $actual ]] || fail "workflow precedence produced output: $actual"
+expected_precedence_summary='top-segments: Filtered 1 lines from classified/no/no.pairs, 1 lines from s2/u-abc/m4/g4/no.pairs, 1 rejected explicitly, 1 outside --allow-pairs, 1 rejected by dictionary'
+[[ $(tail -n 1 "$allow_diagnostics") == "$expected_precedence_summary" ]] ||
+  fail "workflow precedence is wrong: $(cat "$allow_diagnostics")"
 
 # Standard input names no target of its own, but the selected target is
 # resolved regardless of the input, so its no.pairs is applied all the same.

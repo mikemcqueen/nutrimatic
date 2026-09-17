@@ -47,6 +47,17 @@ struct PairFilterSources {
   std::string target;
 };
 
+// Rejection layers in attribution precedence order. PAIR_FILTER_NONE is not
+// part of that order; it means every layer accepted the segment.
+enum PairFilterLayer {
+  PAIR_FILTER_NONE,
+  PAIR_FILTER_CLASSIFIED_NO,
+  PAIR_FILTER_TARGET_NO,
+  PAIR_FILTER_EXPLICIT_REJECT,
+  PAIR_FILTER_ALLOWLIST,
+  PAIR_FILTER_DICTIONARY,
+};
+
 // Every filtering layer a segment tool applies. Empty members accept
 // everything, so a tool consults only the layers it cares about.
 struct PairFilters {
@@ -55,6 +66,9 @@ struct PairFilters {
   DfsDictionary dictionary;
   std::optional<DfsPairSet> allowed;  // nullopt: no allowlist policy active
   PairFilterSources sources;          // empty without a workflow root
+
+  // Returns the first layer that rejects `segment`, in PairFilterLayer order.
+  PairFilterLayer first_rejecting_layer(std::string const& segment) const;
 };
 
 enum PairFilterOptionResult {

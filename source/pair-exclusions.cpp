@@ -541,3 +541,16 @@ bool all_words_in_dict(
     start = end + 1;
   }
 }
+
+PairFilterLayer PairFilters::first_rejecting_layer(
+    std::string const& segment) const {
+  if (sources.classified_no.find(segment) != sources.classified_no.end())
+    return PAIR_FILTER_CLASSIFIED_NO;
+  if (sources.target_no.find(segment) != sources.target_no.end())
+    return PAIR_FILTER_TARGET_NO;
+  if (is_rejected_segment(rejected, segment))
+    return PAIR_FILTER_EXPLICIT_REJECT;
+  if (!is_allowed_segment(allowed, segment)) return PAIR_FILTER_ALLOWLIST;
+  if (!all_words_in_dict(dictionary, segment)) return PAIR_FILTER_DICTIONARY;
+  return PAIR_FILTER_NONE;
+}
