@@ -33,7 +33,8 @@ class DfsAnagramSearch {
                    double word_bonus = 0.0,
                    double pair_bonus = 0.0,
                    DfsBestBonusPolicy best_bonus =
-                       DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS));
+                       DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS),
+                   DfsBaseRemap const* base_remap = NULL);
 
   // A null sink runs the search as a counter. `stats` receives everything this
   // call measured and may be NULL. When the ambient diagnostic stream

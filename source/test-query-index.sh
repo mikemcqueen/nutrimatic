@@ -194,6 +194,48 @@ assert_close "$(awk '$3 == "missing,pair" { print $1 }' \
      "$test_dir/stdin-score.stdout")" == 1 ]] ||
   fail "the highest-scoring value was not above the mean"
 
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+  "$query_index" -i "$synthetic_index" - --score --ptm \
+    > "$test_dir/stdin-score-ptm.stdout" \
+    2> "$test_dir/stdin-score-ptm.stderr"
+ptm_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]'
+ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
+[[ "$(head -n 1 "$test_dir/stdin-score-ptm.stdout")" =~ $ptm_line_pattern ]] ||
+  fail "--ptm did not add the fitted tail rate to the summary line"
+[[ "$(awk 'NR > 1 { print $5 }' "$test_dir/stdin-score-ptm.stdout")" == \
+   $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij\nmissing,pair' ]] ||
+  fail "--ptm did not add two columns ahead of the value"
+[[ "$(awk 'NR > 1 && $3 != "-" {
+       if (seen && $3 > previous) unsorted = 1
+       previous = $3; seen = 1
+     } END { print unsorted + 0 }' \
+     "$test_dir/stdin-score-ptm.stdout")" == 0 ]] ||
+  fail "mapped deviations did not follow the score order"
+[[ "$(awk '$5 == "missing,pair" { print $3, $4 }' \
+     "$test_dir/stdin-score-ptm.stdout")" == '- -' ]] ||
+  fail "a zero-scoring value did not print - for its mapped columns"
+[[ "$(awk 'NR > 1 && $4 != "-" {
+       if (seen && $4 > previous) unsorted = 1
+       previous = $4; seen = 1
+     } END { print unsorted + 0 }' \
+     "$test_dir/stdin-score-ptm.stdout")" == 0 ]] ||
+  fail "mapped scores did not follow the score order"
+
+set +e
+"$query_index" -i "$synthetic_index" abcd --ptm \
+  > "$test_dir/ptm-listing.stdout" 2> "$test_dir/ptm-listing.stderr"
+ptm_listing_status=$?
+set -e
+[[ $ptm_listing_status -eq 2 ]] ||
+  fail "--ptm without --score should exit 2, got $ptm_listing_status"
+grep -q -- '^error: --ptm cannot be used without --score$' \
+  "$test_dir/ptm-listing.stderr" ||
+  fail "--ptm without --score diagnostic is unclear"
+expect_score_failure ab ptm-sequence --ptm
+grep -q -- '^error: --ptm requires reading values from stdin, as -$' \
+  "$test_dir/ptm-sequence.stderr" ||
+  fail "--ptm on a literal sequence diagnostic is unclear"
+
 printf 'cd,ab\n' > "$test_dir/stdin-score-pair.txt"
 printf 'cd,ab\n' |
   "$query_index" -i "$synthetic_index" - --score \

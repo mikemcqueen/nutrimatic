@@ -214,6 +214,15 @@ class DfsClassList {
   size_t candidate_begin(int symbol) const;
   size_t candidate_end(int symbol) const;
 
+  // log(count) for every member, in arena order. Legal only while the class ->
+  // member grouping is intact.
+  std::vector<double> member_log_counts() const;
+
+  // Re-sorts every class's members under `score_model`, restoring member 0 as
+  // the class's best member after the model's base term has been recalibrated.
+  // Legal only while the class -> member grouping is intact.
+  void resort_members(DfsScoreModel const& score_model);
+
   // Moves to the front of the member arena every member of every class whose
   // keep_class entry is true, dropping members the filter excludes, and
   // returns a mutable span of the survivors. This reorders members across class

@@ -960,3 +960,21 @@ grep -q '^       use -C 1 or --allow-cache-fallback$' \
   "$test_dir/status.stderr" ||
   fail "projected-cache recovery diagnostic is missing"
 expect_status 1 "$dfs_anagrams" -i "$test_dir/missing.index" abcd
+
+# --ptm recalibrates the base count before any bonus. The search and the output
+# assemble one score between them, so a remap carried by only one of them still
+# prints a plain one-segment result; this checks it reaches what is printed.
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 6 --word-bonus 0 \
+  > "$test_dir/ptm-plain.stdout" 2> "$test_dir/ptm-plain.stderr"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 6 --word-bonus 0 --ptm \
+  > "$test_dir/ptm.stdout" 2> "$test_dir/ptm.stderr"
+[[ "$(awk '{ sub(/^[^ ]* /, ""); print }' "$test_dir/ptm.stdout")" == \
+   "$(awk '{ sub(/^[^ ]* /, ""); print }' "$test_dir/ptm-plain.stdout")" ]] ||
+  fail "--ptm changed which spellings were found"
+grep -q -- "${diagnostic_prefix}ptm: tail rate " "$test_dir/ptm.stderr" ||
+  fail "--ptm did not report the fitted tail"
+ptm_plain_top=$(awk 'NR == 1 { print $1 }' "$test_dir/ptm-plain.stdout")
+ptm_top=$(awk 'NR == 1 { print $1 }' "$test_dir/ptm.stdout")
+awk -v plain="$ptm_plain_top" -v mapped="$ptm_top" \
+  'BEGIN { exit (mapped > 0 && mapped < plain) ? 0 : 1 }' ||
+  fail "--ptm left the one-segment top score at $ptm_plain_top"

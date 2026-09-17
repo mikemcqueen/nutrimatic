@@ -15,6 +15,7 @@
 #include "index.h"
 #include "optparse.h"
 #include "workflow-paths.h"
+#include "tail-map.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -43,6 +44,7 @@ struct Args {
   bool require_completable;
   bool score;
   bool near;
+  bool ptm;
   char const* score_incompatible_option;
   char const* near_incompatible_option;
 };
@@ -67,7 +69,7 @@ static void usage(char const* program) {
       " [--seed-pairs FILE]... [--yes-pairs FILE]..."
       " [--best-pairs FILE] [--more-best-pairs FILE]..."
       " [--wf|--wfroot DIR] [-t TARGET]"
-      " [--solo-words WORD[,WORD...]]\n"
+      " [--solo-words WORD[,WORD...]] [--ptm]\n"
       "       %s -i INDEX input --near word [-n top]\n"
       "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
       " workflow mode defaults to DIR/%s; required otherwise and with"
@@ -86,6 +88,17 @@ static void usage(char const* program) {
       " each value's distance from the mean in those deviations;\n"
       "    zero-scoring values are excluded from both and print -, and the\n"
       "    whole summary is withheld once any bonus applies to any value\n"
+      "  --ptm adds a mapped-deviation column after the deviation, on a\n"
+      "    scale whose upper tail is normal rather than exponential: the\n"
+      "    top percent of log scores is mapped through a fitted exponential\n"
+      "    tail and the rest through their own ranks, so a value's column\n"
+      "    states the deviation it would have in a normal batch\n"
+      "    a score column follows it, giving the score that mapped\n"
+      "    deviation stands for: the score whose distance from the mean is\n"
+      "    the mapped deviation rather than the value's own\n"
+      "    it requires stdin --score, follows the summary in being withheld\n"
+      "    by any bonus, needs three finite scores and one below the tail,\n"
+      "    and adds the fitted tail rate to the summary line\n"
       "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
       "    it prints aggregate phrases spanning the endpoints with at least\n"
       "    one complete intervening word, searching each endpoint that is an\n"
@@ -166,6 +179,7 @@ static int const OPT_REQUIRE_COMPLETABLE = 256;
 static int const OPT_SCORE = 257;
 static int const OPT_CSV = 258;
 static int const OPT_NEAR = 259;
+static int const OPT_PTM = 260;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -173,6 +187,7 @@ static struct optparse_long const long_options[] = {
   { "words-only", 'w', OPTPARSE_NONE },
   { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
+  { "ptm", OPT_PTM, OPTPARSE_NONE },
   { "near", OPT_NEAR, OPTPARSE_REQUIRED },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -218,6 +233,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->require_completable = false;
   out->score = false;
   out->near = false;
+  out->ptm = false;
   out->score_incompatible_option = NULL;
   out->near_incompatible_option = NULL;
 
@@ -255,6 +271,10 @@ static bool parse_args(char* argv[], Args* out) {
       case OPT_SCORE:
         out->score = true;
         mark_near_incompatible(out, "--score");
+        break;
+      case OPT_PTM:
+        out->ptm = true;
+        mark_near_incompatible(out, "--ptm");
         break;
       case OPT_NEAR:
         out->near = true;
@@ -313,7 +333,16 @@ static bool parse_args(char* argv[], Args* out) {
       return false;
     }
     out->score_sequence = letters;
+    if (out->ptm && out->score_sequence != "-") {
+      fputs("error: --ptm requires reading values from stdin, as -\n", stderr);
+      return false;
+    }
     return true;
+  }
+
+  if (out->ptm) {
+    fputs("error: --ptm cannot be used without --score\n", stderr);
+    return false;
   }
 
   if (out->csv && out->words_only) {
@@ -386,7 +415,7 @@ static bool parse_score_sequence(
   }
 }
 
-struct StdinScoreValue {
+struct ScoreValue {
   std::string value;
   std::string entry;
   std::string reverse_entry;
@@ -402,8 +431,8 @@ static bool is_literal_word(std::string const& word) {
   return true;
 }
 
-static bool parse_stdin_score_values(
-    std::vector<StdinScoreValue>* values) {
+static bool parse_score_values(
+    std::vector<ScoreValue>* values) {
   std::string line;
   size_t line_number = 0;
   while (std::getline(std::cin, line)) {
@@ -449,7 +478,7 @@ static bool parse_stdin_score_values(
         entry += words[i];
       }
     }
-    StdinScoreValue const value_entry = {
+    ScoreValue const value_entry = {
       std::move(value),
       std::move(entry),
       std::move(reverse_entry),
@@ -707,13 +736,13 @@ static std::string format_score(double score) {
   return std::string(buffer);
 }
 
-struct StdinScoreResult {
+struct ScoreResult {
   double log_score;
   std::string value;
 };
 
-static bool stdin_score_result_better(
-    StdinScoreResult const& a, StdinScoreResult const& b) {
+static bool score_result_better(
+    ScoreResult const& a, ScoreResult const& b) {
   if (a.log_score != b.log_score) return a.log_score > b.log_score;
   return a.value < b.value;
 }
@@ -721,15 +750,15 @@ static bool stdin_score_result_better(
 // Displayed scores span the corpus by orders of magnitude, so the summary
 // describes the log scores; see findings/stdin-score-statistics.md for why a
 // bonus of any kind withdraws it.
-struct StdinScoreStats {
+struct ScoreStats {
   bool shown;
   double mean;
   double deviation;
 };
 
-static StdinScoreStats stdin_score_stats(
-    std::vector<StdinScoreResult> const& results, bool bonus_applied) {
-  StdinScoreStats stats = { false, 0.0, 0.0 };
+static ScoreStats score_stats(
+    std::vector<ScoreResult> const& results, bool bonus_applied) {
+  ScoreStats stats = { false, 0.0, 0.0 };
   if (bonus_applied) return stats;
 
   size_t count = 0;
@@ -754,7 +783,7 @@ static StdinScoreStats stdin_score_stats(
 }
 
 static std::string format_deviation(
-    StdinScoreStats const& stats, double log_score) {
+    ScoreStats const& stats, double log_score) {
   if (!isfinite(log_score)) return "-";
   double const deviations = stats.deviation == 0.0
       ? 0.0 : (log_score - stats.mean) / stats.deviation;
@@ -763,9 +792,23 @@ static std::string format_deviation(
   return std::string(buffer);
 }
 
-static int score_stdin_values(IndexReader& reader, Args const& args) {
-  std::vector<StdinScoreValue> values;
-  if (!parse_stdin_score_values(&values)) return 2;
+static std::string format_mapped(double mapped) {
+  if (!isfinite(mapped)) return "-";
+  char buffer[32];
+  snprintf(buffer, sizeof buffer, "%.2f", mapped);
+  return std::string(buffer);
+}
+
+static std::string format_mapped_score(
+    ScoreStats const& stats, DfsScoreModel const& model, double mapped) {
+  if (!isfinite(mapped)) return "-";
+  return format_score(
+      model.displayed_score(stats.mean + mapped * stats.deviation));
+}
+
+static int score_value_list(IndexReader& reader, Args const& args) {
+  std::vector<ScoreValue> values;
+  if (!parse_score_values(&values)) return 2;
 
   DfsPreparedClassList prepared;
   if (!prepare_dfs_scoring_inputs(
@@ -773,7 +816,7 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
           /*exact_segments=*/1, &prepared))
     return 1;
 
-  std::vector<StdinScoreResult> results;
+  std::vector<ScoreResult> results;
   results.reserve(values.size());
   bool bonus_applied = false;
   for (size_t i = 0; i < values.size(); ++i) {
@@ -809,22 +852,41 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
         return 2;
       if (entry_bonus) bonus_applied = true;
     }
-    StdinScoreResult result = {
+    ScoreResult result = {
       log_score,
       std::move(values[i].value),
     };
     results.push_back(std::move(result));
   }
 
-  std::sort(results.begin(), results.end(), stdin_score_result_better);
-  StdinScoreStats const stats = stdin_score_stats(results, bonus_applied);
+  std::sort(results.begin(), results.end(), score_result_better);
+  ScoreStats const stats = score_stats(results, bonus_applied);
+  TailMap map;
+  if (args.ptm && stats.shown) {
+    std::vector<double> finite;
+    finite.reserve(results.size());
+    for (size_t i = 0; i < results.size(); ++i) {
+      if (!isfinite(results[i].log_score)) break;
+      finite.push_back(results[i].log_score);
+    }
+    map.fit(finite);
+  }
+  std::vector<double> mapped(results.size(), NAN);
+  for (size_t i = 0; i < results.size(); ++i)
+    mapped[i] = map.deviation(results[i].log_score);
 
   std::vector<std::string> scores;
   std::vector<std::string> deviations;
+  std::vector<std::string> mapped_text;
+  std::vector<std::string> mapped_scores;
   scores.reserve(results.size());
   deviations.reserve(results.size());
+  mapped_text.reserve(results.size());
+  mapped_scores.reserve(results.size());
   size_t width = 0;
   size_t deviation_width = 0;
+  size_t mapped_width = 0;
+  size_t mapped_score_width = 0;
   for (size_t i = 0; i < results.size(); ++i) {
     scores.push_back(format_score(
         prepared.model->displayed_score(results[i].log_score)));
@@ -832,14 +894,31 @@ static int score_stdin_values(IndexReader& reader, Args const& args) {
     if (!stats.shown) continue;
     deviations.push_back(format_deviation(stats, results[i].log_score));
     deviation_width = std::max(deviation_width, deviations[i].size());
+    if (!map.valid()) continue;
+    mapped_text.push_back(format_mapped(mapped[i]));
+    mapped_width = std::max(mapped_width, mapped_text[i].size());
+    mapped_scores.push_back(
+        format_mapped_score(stats, *prepared.model, mapped[i]));
+    mapped_score_width = std::max(mapped_score_width, mapped_scores[i].size());
   }
 
-  if (stats.shown)
-    printf("Mean: %s  1 sigma: x%.2f\n",
-           format_score(prepared.model->displayed_score(stats.mean)).c_str(),
-           exp(stats.deviation));
+  if (stats.shown) {
+    std::string const mean =
+        format_score(prepared.model->displayed_score(stats.mean));
+    if (map.valid())
+      printf("Mean: %s  1 sigma: x%.2f  tail rate: %.3f\n",
+             mean.c_str(), exp(stats.deviation), map.rate());
+    else
+      printf("Mean: %s  1 sigma: x%.2f\n", mean.c_str(), exp(stats.deviation));
+  }
   for (size_t i = 0; i < results.size(); ++i) {
-    if (stats.shown)
+    if (stats.shown && map.valid())
+      printf("%*s %*s %*s %*s %s\n", int(width), scores[i].c_str(),
+             int(deviation_width), deviations[i].c_str(),
+             int(mapped_width), mapped_text[i].c_str(),
+             int(mapped_score_width), mapped_scores[i].c_str(),
+             results[i].value.c_str());
+    else if (stats.shown)
       printf("%*s %*s %s\n", int(width), scores[i].c_str(),
              int(deviation_width), deviations[i].c_str(),
              results[i].value.c_str());
@@ -875,7 +954,7 @@ int main(int argc, char* argv[]) {
   if (args.common.pair_file == NULL) args.common.pair_bonus = 0.0;
 
   if (args.score) {
-    if (score_stdin) return score_stdin_values(reader, args);
+    if (score_stdin) return score_value_list(reader, args);
 
     DfsPreparedClassList prepared;
     if (!prepare_dfs_scoring_inputs(

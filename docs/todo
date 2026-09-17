@@ -1,3 +1,20 @@
+* Regarding PTM implementation:
+ It makes the base score batch-relative, which the findings doc already
+ flags as the reason the tail is fitted rather than pure-rank. Today a
+ segment's contribution depends only on the index; afterwards it depends
+ on the letter bag, because the bag determines the class list. Two
+ consequences: scores stop being comparable across puzzles, and rerank-
+ anagrams — which revalidates an old result file by rebuilding a prepared
+ class list and rescoring through dfs_representative_upper_log_score
+ (rerank-anagrams.cpp:332) — only reproduces the original numbers if it
+ reconstructs an identical fit. If the bag or the dictionary shifted at
+ all, old score columns silently stop matching.
+
+ Fitting over the whole index instead of the class list would remove that
+ entirely and make the map a property of the index, at the cost of a
+ one-time scan (or a summary stored alongside the index). If this is
+ headed anywhere, that's the version I'd argue for.
+
 * manual reviews:
   - tmp/s7.g6.nytt.bad
 

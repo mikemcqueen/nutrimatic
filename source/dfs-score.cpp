@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include <algorithm>
+#include <functional>
 
 namespace {
 
@@ -82,10 +83,38 @@ DfsScoreModel::DfsScoreModel(
     best_pair_log_bonus_(make_pair_log_bonus(best_pair_exponent_)),
     best_bonus_policy_(best_bonus) { }
 
+bool DfsBaseRemap::fit(std::vector<double> log_counts) {
+  if (log_counts.empty()) return false;
+
+  double total = 0.0;
+  for (size_t i = 0; i < log_counts.size(); ++i) total += log_counts[i];
+  mean_ = total / double(log_counts.size());
+  double squares = 0.0;
+  for (size_t i = 0; i < log_counts.size(); ++i) {
+    double const difference = log_counts[i] - mean_;
+    squares += difference * difference;
+  }
+  deviation_ = sqrt(squares / double(log_counts.size()));
+
+  std::sort(log_counts.begin(), log_counts.end(), std::greater<double>());
+  return map_.fit(log_counts);
+}
+
+double DfsBaseRemap::log_score(double log_count) const {
+  if (!map_.valid() || deviation_ == 0.0) return log_count;
+  return mean_ + map_.deviation(log_count) * deviation_;
+}
+
+double DfsScoreModel::base_log_score(int64_t count) const {
+  assert(count > 0);
+  double const log_count = log(double(count));
+  return base_remap_ == NULL ? log_count : base_remap_->log_score(log_count);
+}
+
 double DfsScoreModel::segment_log_score(
     int64_t count, bool multi_word, bool known_pair) const {
   assert(count > 0);
-  return log(double(count)) +
+  return base_log_score(count) +
       (multi_word ? multi_word_log_bonus_ : 0.0) +
       (known_pair ? pair_log_bonus_ : 0.0);
 }

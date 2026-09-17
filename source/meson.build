@@ -95,6 +95,7 @@ dfs_class_list_lib = library(
     'dfs-cli-args.cpp',
     'dfs-diagnostic.cpp',
     'dfs-score.cpp',
+    'tail-map.cpp',
     'dfs-solo-words.cpp',
     'dfs-search.cpp',
     'dfs-all-runner.cpp',

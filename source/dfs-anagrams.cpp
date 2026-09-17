@@ -34,6 +34,7 @@ struct Args {
   bool show_score;
   bool show_bonus;
   bool weighted;
+  bool ptm;
   bool verbose;
 };
 
@@ -70,7 +71,7 @@ static void usage(char const* program) {
       " [--preprocess-threads N] [--search-threads N]"
       " [-d projection-depth]"
       " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
-      " [--segments] [--show-bonus] [--no-score] [--weighted]"
+      " [--segments] [--show-bonus] [--no-score] [--weighted] [--ptm]"
       " [-F|--allow-cache-fallback] [-v|--verbose]\n"
       "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
       " workflow mode defaults to DIR/%s; required otherwise\n"
@@ -163,6 +164,16 @@ static void usage(char const* program) {
       " combined with --segments\n"
       "  --weighted sorts and reports each segment by best-score times"
       " result-count instead of best score alone; requires --segments\n"
+      "  --ptm recalibrates the base count of every index entry, before any"
+      " bonus, onto a scale whose upper tail is normal rather than"
+      " exponential\n"
+      "    phase 1 fits the spread of the counts this bag reaches and"
+      " replaces each log(count) with the log count carrying the same"
+      " deviation in a normal batch, so one very frequent entry no longer"
+      " dominates a result\n"
+      "    the segment penalty and every bonus keep their meaning, being"
+      " stated in the same log-count units; the fit covers only the entries"
+      " this bag reaches, so scores are comparable only within one run\n"
       "  -F, --allow-cache-fallback allows score-cache fallback when the"
       " requested table does not fit\n"
       "  -v, --verbose reports search task splitting\n",
@@ -182,6 +193,7 @@ static int const OPT_WEIGHTED = 257;
 static int const OPT_EXCLUDE_PAIRS = 258;
 static int const OPT_SHOW_BONUS = 259;
 static int const OPT_NO_SCORE = 260;
+static int const OPT_PTM = 261;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -196,6 +208,7 @@ static struct optparse_long const long_options[] = {
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
+  { "ptm", OPT_PTM, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -218,6 +231,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->show_score = true;
   out->show_bonus = false;
   out->weighted = false;
+  out->ptm = false;
   out->verbose = false;
 
   struct optparse options;
@@ -280,6 +294,9 @@ static bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_WEIGHTED:
         out->weighted = true;
+        break;
+      case OPT_PTM:
+        out->ptm = true;
         break;
       case 'F':
         out->allow_cache_fallback = true;
@@ -373,7 +390,7 @@ int main(int argc, char* argv[]) {
   DfsPreparedClassList prepared;
   if (!prepare_dfs_class_list(
           &reader, args.letters, args.common, args.exclude_pair_files,
-          size_t(args.num_segments), &prepared))
+          size_t(args.num_segments), &prepared, args.ptm))
     return 1;
 
   // Both headers carry the segment constraint, since -g is independent of
@@ -417,7 +434,8 @@ int main(int argc, char* argv[]) {
       reader.count(),
       args.score_cache_bytes, preprocess_threads,
       search_threads, size_t(args.num_segments),
-      args.common.word_bonus, args.common.pair_bonus, best_bonus);
+      args.common.word_bonus, args.common.pair_bonus, best_bonus,
+      prepared.base_remap.get());
   DfsTopN output(
       prepared.classes.get(), prepared.model.get(), size_t(args.common.top),
       prepared.solo_words.get(),

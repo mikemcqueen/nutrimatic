@@ -1,8 +1,12 @@
 #ifndef NUTRIMATIC_DFS_SCORE_H
 #define NUTRIMATIC_DFS_SCORE_H
 
+#include "tail-map.h"
+
 #include <stddef.h>
 #include <stdint.h>
+
+#include <vector>
 
 // The production phase-2 penalty for starting another corpus segment.
 inline constexpr double DFS_DEFAULT_SEGMENT_PENALTY = 1e6;
@@ -49,6 +53,30 @@ class DfsBestBonusPolicy {
   size_t exact_segments_;
 };
 
+// A monotone recalibration of the base count term onto the scale the batch of
+// available segments would carry if its upper tail were normal. It replaces
+// log(count) with the log count carrying the same mapped deviation, which
+// leaves the boundary penalty and every bonus commensurate with it. See
+// findings/ptm-base-score.md.
+class DfsBaseRemap {
+ public:
+  // `log_counts` holds log(count) for every member of the batch, in any
+  // order. Returns false when the batch cannot be fitted.
+  bool fit(std::vector<double> log_counts);
+
+  bool valid() const { return map_.valid(); }
+  double rate() const { return map_.rate(); }
+  double mean() const { return mean_; }
+  double deviation() const { return deviation_; }
+  size_t size() const { return map_.size(); }
+  double log_score(double log_count) const;
+
+ private:
+  TailMap map_;
+  double mean_ = 0.0;
+  double deviation_ = 0.0;
+};
+
 // Shared log-space scoring for the dfs-anagrams family. A segment is one
 // selected index entry; spaces within an entry control its optional phrase
 // bonus, pair-source membership controls a second optional bonus, and
@@ -70,6 +98,12 @@ class DfsScoreModel {
 
   double segment_log_score(
       int64_t count, bool multi_word, bool known_pair = false) const;
+  // The base term a count contributes before any bonus: log(count), or its
+  // recalibration when a remap is installed.
+  double base_log_score(int64_t count) const;
+  // Borrowed, and installed only before any member ordering that reads it.
+  void set_base_remap(DfsBaseRemap const* remap) { base_remap_ = remap; }
+  DfsBaseRemap const* base_remap() const { return base_remap_; }
   double first_segment_log_score(
       int64_t count, bool multi_word, bool known_pair = false) const;
   double append_segment_log_score(
@@ -107,6 +141,7 @@ class DfsScoreModel {
   double best_pair_exponent_;
   double best_pair_log_bonus_;
   DfsBestBonusPolicy best_bonus_policy_;
+  DfsBaseRemap const* base_remap_ = NULL;
 };
 
 #endif

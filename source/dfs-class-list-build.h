@@ -28,6 +28,8 @@ struct DfsPreparedClassList {
   std::vector<DfsPairRow> external_rows;
   std::vector<DfsPairRow> best_rows;
   std::unique_ptr<DfsScoreModel> model;
+  // Present only under --ptm; borrowed by `model` once fitted.
+  std::unique_ptr<DfsBaseRemap> base_remap;
   std::unique_ptr<DfsSoloWords> solo_words;
   std::unique_ptr<DfsClassList> classes;
 };
@@ -56,10 +58,16 @@ bool prepare_dfs_scoring_inputs(
 // every --pairs, YES, or BEST row that fits letters and would otherwise
 // reach phase 1, but has a word outside the dictionary, is reported once on
 // stderr as a WARNING, in red when stderr is a terminal.
+//
+// With ptm, the base count term is recalibrated once phase 1 knows every
+// available segment: the member counts are fitted and the model's log(count)
+// is replaced by the log count carrying the same mapped deviation, after
+// which the members are re-sorted under the new model. See
+// findings/ptm-base-score.md.
 bool prepare_dfs_class_list(
     IndexReader* reader, std::string const& letters,
     DfsCommonArgs const& args,
     std::vector<std::string> const& exclude_pair_files,
-    size_t exact_segments, DfsPreparedClassList* out);
+    size_t exact_segments, DfsPreparedClassList* out, bool ptm = false);
 
 #endif

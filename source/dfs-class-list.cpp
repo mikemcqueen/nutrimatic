@@ -770,6 +770,27 @@ size_t DfsClassList::candidate_end(int symbol) const {
   return bucket_starts[size_t(ranks_by_symbol[size_t(symbol)] + 1)];
 }
 
+std::vector<double> DfsClassList::member_log_counts() const {
+  assert(!grouping_dropped);
+  DfsPackedMember const* const members = members_arena.get();
+  std::vector<double> log_counts;
+  log_counts.reserve(entries);
+  for (size_t i = 0; i < entries; ++i)
+    log_counts.push_back(log(double(members[i].count)));
+  return log_counts;
+}
+
+void DfsClassList::resort_members(DfsScoreModel const& score_model) {
+  assert(!grouping_dropped);
+  MemberOrder const member_order = { &score_model };
+  DfsPackedMember* const arena = members_arena.get();
+  DfsClassRecord const* const records = class_records.get();
+  for (size_t ci = 0; ci < class_count; ++ci) {
+    DfsPackedMember* const first = arena + (records[ci].members - arena);
+    std::sort(first, first + records[ci].member_count, member_order);
+  }
+}
+
 DfsMemberSpan DfsClassList::retain_members(
     std::vector<bool> const& keep_class, DfsMemberFilter filter) {
   assert(keep_class.size() == class_count);

@@ -123,7 +123,7 @@ bool prepare_dfs_class_list(
     IndexReader* reader, std::string const& letters,
     DfsCommonArgs const& args,
     std::vector<std::string> const& exclude_pair_files,
-    size_t exact_segments, DfsPreparedClassList* out) {
+    size_t exact_segments, DfsPreparedClassList* out, bool ptm) {
   DfsDictionary const* dictionary_filter = NULL;
   if (args.dictionary_file != NULL) {
     if (!load_dictionary(args.dictionary_file, &out->dictionary)) return false;
@@ -162,6 +162,19 @@ bool prepare_dfs_class_list(
       "phase 1 complete: %zu entries, %zu classes, %lld trie nodes\n",
       out->classes->entry_count(), out->classes->classes().size(),
       (long long) out->classes->nodes_visited());
+  if (ptm) {
+    out->base_remap.reset(new DfsBaseRemap);
+    if (!out->base_remap->fit(out->classes->member_log_counts())) {
+      fputs("error: --ptm found no fittable spread of index counts\n", stderr);
+      return false;
+    }
+    out->model->set_base_remap(out->base_remap.get());
+    out->classes->resort_members(*out->model);
+    dfs_diagnostic(
+        "ptm: tail rate %.3f over %zu entries, mean %.3f, 1 sigma %.3f\n",
+        out->base_remap->rate(), out->base_remap->size(),
+        out->base_remap->mean(), out->base_remap->deviation());
+  }
   if (out->solo_words != NULL)
     dfs_diagnostic(
         "solo words: %zu profiles, %zu word edges, %zu pair edges\n",
