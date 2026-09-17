@@ -31,6 +31,7 @@ struct Args {
   int num_segments = 0;
   bool show_score = true;
   bool show_bonus = false;
+  bool ptm = false;
 };
 
 void usage(char const* program) {
@@ -39,7 +40,7 @@ void usage(char const* program) {
       " [-r FILE]... [--best-pairs FILE | --one-best-pair PAIR]"
       " [--more-best-pairs FILE]..."
       " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
-      " [--show-bonus] [--no-score] [-n N] [FILE]\n"
+      " [--show-bonus] [--no-score] [--ptm] [-n N] [FILE]\n"
       "  revalidate, rescore, and sort an ordinary dfs-anagrams result file\n"
       "  --wf                 use the nonempty WFROOT environment variable\n"
       "  --wfroot DIR         use DIR as the workflow root\n"
@@ -59,6 +60,13 @@ void usage(char const* program) {
       "  --show-bonus         add the aligned S/Y/B/- marker column\n"
       "  --no-score           omit the leading score column; the output\n"
       "                       can't be filtered or reranked\n"
+      "  --ptm                recalibrate the base count of every index\n"
+      "                       entry, before any bonus, onto a scale whose\n"
+      "                       upper tail is normal, as dfs-anagrams --ptm\n"
+      "                       does; the fit covers the entries this bag\n"
+      "                       reaches, so it reproduces a result file's own\n"
+      "                       scores only when the bag, dictionary, pair\n"
+      "                       inputs, and exclusions are the generator's\n"
       "  -n, --top N          print only the best N rows; 0, the default,\n"
       "                       prints every surviving row\n"
       "  with no FILE, or when FILE is -, read standard input\n",
@@ -68,6 +76,7 @@ void usage(char const* program) {
 inline constexpr int OPT_SHOW_BONUS = 256;
 inline constexpr int OPT_NO_SCORE = 257;
 inline constexpr int OPT_ONE_BEST_PAIR = 258;
+inline constexpr int OPT_PTM = 259;
 
 struct optparse_long const long_options[] = {
   { "wf", DFS_OPT_WF, OPTPARSE_NONE },
@@ -81,6 +90,7 @@ struct optparse_long const long_options[] = {
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
+  { "ptm", OPT_PTM, OPTPARSE_NONE },
   { "top", 'n', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
@@ -120,6 +130,9 @@ bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_NO_SCORE:
         out->show_score = false;
+        break;
+      case OPT_PTM:
+        out->ptm = true;
         break;
       case OPT_ONE_BEST_PAIR:
         if (out->common.best_pairs_given) {
@@ -383,7 +396,7 @@ int main(int argc, char* argv[]) {
     DfsPreparedClassList prepared;
     if (prepare_dfs_class_list(
             &reader, args.letters, args.common, args.exclude_pair_files,
-            size_t(args.num_segments), &prepared)) {
+            size_t(args.num_segments), &prepared, args.ptm)) {
       status = rerank_stream(
           input, input_name, args, rejected, prepared) ? 0 : 1;
     }
