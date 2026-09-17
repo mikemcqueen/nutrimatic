@@ -21,8 +21,16 @@ struct Args {
   std::vector<std::string> allow_paths;
 };
 
+struct RowCounts {
+  size_t pair_segments = 0;
+  size_t allowed_pair_segments = 0;
+};
+
 struct Stats {
   uint64_t total_rows = 0;
+  uint64_t all_allowed_rows = 0;
+  uint64_t at_least_half_allowed_rows = 0;
+  uint64_t any_allowed_rows = 0;
   uint64_t pair_segments = 0;
   uint64_t solo_word_segments = 0;
   uint64_t total_segments = 0;
@@ -57,11 +65,16 @@ static bool increment(uint64_t* count, char const* description) {
 }
 
 static bool add_segment(
-    std::string const& segment, DfsPairSet const* allowed, Stats* stats) {
+    std::string const& segment, DfsPairSet const* allowed, Stats* stats,
+    RowCounts* row) {
   if (!increment(&stats->total_segments, "segment count")) return false;
   bool const pair = is_pair_segment(segment);
+  bool const allowed_pair =
+      pair && allowed != NULL && allowed->find(segment) != allowed->end();
   if (pair) {
     if (!increment(&stats->pair_segments, "pair segment count")) return false;
+    ++row->pair_segments;
+    if (allowed_pair) ++row->allowed_pair_segments;
   } else if (!increment(
                  &stats->solo_word_segments, "solo-word segment count")) {
     return false;
@@ -69,8 +82,7 @@ static bool add_segment(
   if (stats->unique_segments.insert(segment).second) {
     if (pair) {
       ++stats->unique_pair_segments;
-      if (allowed != NULL && allowed->find(segment) != allowed->end())
-        ++stats->allowed_unique_pair_segments;
+      if (allowed_pair) ++stats->allowed_unique_pair_segments;
     } else {
       ++stats->unique_solo_word_segments;
     }
@@ -116,6 +128,7 @@ static bool read_stats(
     }
 
     size_t start = size_t(score_end - line.c_str()) + 1;
+    RowCounts row;
     while (true) {
       size_t const end = line.find(',', start);
       size_t const length =
@@ -126,11 +139,24 @@ static bool read_stats(
             name, line_number);
         return false;
       }
-      if (!add_segment(line.substr(start, length), allowed, stats))
+      if (!add_segment(line.substr(start, length), allowed, stats, &row))
         return false;
 
       if (end == std::string::npos) break;
       start = end + 1;
+    }
+
+    if (row.pair_segments > 0) {
+      if (row.allowed_pair_segments == row.pair_segments &&
+          !increment(&stats->all_allowed_rows, "all-allowed row count"))
+        return false;
+      if (row.allowed_pair_segments * 2 >= row.pair_segments &&
+          !increment(&stats->at_least_half_allowed_rows,
+                     "half-allowed row count"))
+        return false;
+      if (row.allowed_pair_segments > 0 &&
+          !increment(&stats->any_allowed_rows, "any-allowed row count"))
+        return false;
     }
   }
 
@@ -173,6 +199,21 @@ static bool print_stats(Stats const& stats, bool show_allowed) {
   int const segment_count_width = decimal_width(stats.total_segments);
   print_count("total rows", segment_label_width,
       stats.total_rows, segment_count_width);
+  if (show_allowed) {
+    int const row_label_width = int(strlen(">=50% allowed pairs"));
+    int const row_count_width = decimal_width(stats.total_rows);
+    print_percentage_count("all allowed pairs", row_label_width,
+        stats.all_allowed_rows, row_count_width,
+        percentage(stats.all_allowed_rows, stats.total_rows), "total");
+    print_percentage_count(">=50% allowed pairs", row_label_width,
+        stats.at_least_half_allowed_rows, row_count_width,
+        percentage(stats.at_least_half_allowed_rows, stats.total_rows),
+        "total");
+    print_percentage_count("any allowed pairs", row_label_width,
+        stats.any_allowed_rows, row_count_width,
+        percentage(stats.any_allowed_rows, stats.total_rows), "total");
+    putchar('\n');
+  }
   print_count("total segments", segment_label_width,
       stats.total_segments, segment_count_width);
   print_count("unique", segment_label_width,
