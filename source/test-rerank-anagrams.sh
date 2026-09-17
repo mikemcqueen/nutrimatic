@@ -170,10 +170,11 @@ expect_status 1 "$rerank" --wfroot "$workflow" -t "$target_name" \
 printf '1.000 ab,ce\n' > "$test_dir/wrong-bag.rows"
 expect_status 1 "$rerank" --wfroot "$workflow" -t "$target_name" \
   "$test_dir/wrong-bag.rows"
-expect_status 1 "$rerank" --wfroot "$workflow" -t "$target_name" \
-  "$test_dir/dfs-bonus.stdout"
-grep -q 'annotated input is not supported' "$test_dir/status.stderr" ||
-  fail "annotated input diagnostic is missing"
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  "$test_dir/dfs-bonus.stdout" \
+  > "$test_dir/rerank-annotated.stdout" 2> "$test_dir/rerank-annotated.stderr"
+cmp "$test_dir/dfs.stdout" "$test_dir/rerank-annotated.stdout" ||
+  fail "annotated input did not skip the marker column"
 
 printf 'ab,zz\n' > "$test_dir/solo.pairs"
 "$dfs_anagrams" abcd --wfroot "$workflow" -t "$target_name" \

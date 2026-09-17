@@ -31,10 +31,14 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   out->segments_start = size_t(score_end - line.c_str()) + 1;
   char const first = line[out->segments_start];
   if ((first >= 'A' && first <= 'Z') || first == '-') {
-    fprintf(stderr,
-        "%s: %s:%" PRIu64 ": annotated input is not supported\n",
-        reader->program, reader->name, reader->line_number);
-    return reject_row(reader);
+    size_t const space = line.find(' ', out->segments_start);
+    if (space == std::string::npos || space + 1 == line.size()) {
+      fprintf(stderr,
+          "%s: %s:%" PRIu64 ": expected \"score segment[,segment ...]\"\n",
+          reader->program, reader->name, reader->line_number);
+      return reject_row(reader);
+    }
+    out->segments_start = space + 1;
   }
 
   bool const check_shape = reader->required_segments != 0;

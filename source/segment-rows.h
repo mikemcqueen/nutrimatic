@@ -11,7 +11,8 @@
 // needs the text past the current row copies it.
 struct SegmentRow {
   std::string line;                   // the row as read, without a trailing CR
-  size_t segments_start = 0;          // offset in `line` of the first segment
+  size_t segments_start = 0;          // offset of the first segment, past any
+                                      // --show-bonus marker column
   std::vector<std::string> segments;  // comma-separated, solo suffix removed
 };
 
