@@ -22,10 +22,13 @@ struct SegmentRowReader {
   char const* name = NULL;     // the file name in diagnostics; "-" for stdin
   char const* program = NULL;  // the diagnostic prefix
 
-  // Optional row-shape check. Both are set or both are left alone; only
-  // rerank-anagrams knows a target, so only rerank-anagrams sets them.
-  std::string required_letters{}; // the bag every row must spell
-  int required_segments = 0;      // the exact segment count each row carries
+  // Optional row-shape checks, each independent of the other; only
+  // rerank-anagrams knows a target, so only rerank-anagrams sets them. A
+  // nonempty bag is always checked, since a row that does not spell the
+  // target cannot be rescored against it. A zero segment count accepts any
+  // count.
+  std::string required_letters{}; // the bag every row must spell, or empty
+  int required_segments = 0;      // the exact segment count, or 0 for any
 
   uint64_t line_number = 0;    // lines consumed, counting skipped blank ones
   bool failed = false;         // a row was malformed, or the stream went bad

@@ -41,7 +41,7 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     out->segments_start = space + 1;
   }
 
-  bool const check_shape = reader->required_segments != 0;
+  bool const check_letters = !reader->required_letters.empty();
   std::string row_letters;
   out->segments.clear();
   size_t start = out->segments_start;
@@ -78,7 +78,7 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
         }
         after_space = true;
       } else if (segment_char(ch)) {
-        if (check_shape) row_letters.push_back(ch);
+        if (check_letters) row_letters.push_back(ch);
         after_space = false;
       } else {
         fprintf(stderr,
@@ -92,14 +92,15 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     start = end + 1;
   }
 
-  if (!check_shape) return true;
-  if (out->segments.size() != size_t(reader->required_segments)) {
+  if (reader->required_segments != 0 &&
+      out->segments.size() != size_t(reader->required_segments)) {
     fprintf(stderr,
         "%s: %s:%" PRIu64 ": expected %d segments, found %zu\n",
         reader->program, reader->name, reader->line_number,
         reader->required_segments, out->segments.size());
     return reject_row(reader);
   }
+  if (!check_letters) return true;
   std::string bag = reader->required_letters;
   std::sort(bag.begin(), bag.end());
   std::sort(row_letters.begin(), row_letters.end());
