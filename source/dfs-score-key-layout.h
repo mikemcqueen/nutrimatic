@@ -20,7 +20,8 @@ struct ScoreKeyLayout {
 
   static bool choose(
       std::array<uint32_t, DFS_SYMBOL_COUNT> const& bag,
-      size_t letter_count, size_t cache_budget, int exact_letters,
+      size_t letter_count, size_t cache_budget,
+      size_t value_bytes_per_state, int exact_letters,
       ScoreKeyLayout* result);
 };
 

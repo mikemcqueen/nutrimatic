@@ -30,6 +30,9 @@
   - should (always?) filter out DICT/no.words (which doesn't exist yet).
 
 * dfs-anagrams: don't show dense cache details if dense cache isn't chosen
+* exact remaining-depth CLI regression: use a satisfiable three-segment bag
+  such as `ababcd` (`ab,ab,cd`); the planned `abcd -m 1 -g 3` fixture has no
+  one-letter entries and produces empty stdout for both comparison runs
 * -S 0 (auto) default (hardware threads)
 * --require-completable auto
 * -P 10000 default

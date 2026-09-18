@@ -29,7 +29,8 @@ class DfsAnagramSearch {
                    size_t score_cache_bytes = 0,
                    size_t preprocess_threads = 1,
                    size_t search_threads = 1,
-                   size_t exact_segments = 0);
+                   size_t exact_segments = 0,
+                   bool exact_remaining_depth = false);
 
   // A null sink runs the search as a counter. `stats` receives everything this
   // call measured and may be NULL. When the ambient diagnostic stream
@@ -60,7 +61,7 @@ class DfsAnagramSearch {
   bool prepare_phase_two(
       DfsSearchData* data, DfsSearchStats* stats,
       int64_t progress_factor, bool allow_cache_fallback, int exact_letters,
-      bool score_bounds_requested);
+      bool score_bounds_requested, bool exact_remaining_depth_bounds);
   bool prepare_hot_classes(
       DfsSearchData* data, ScoreKeyLayout const& layout,
       std::unique_ptr<uint16_t[], DfsAlignedFree>* score_wild_lengths,
@@ -74,6 +75,7 @@ class DfsAnagramSearch {
   // Declared before max_depth: a nonzero exact_segments clamps it, so the
   // member initializer for max_depth reads this one.
   size_t const exact_segments;
+  bool const exact_remaining_depth;
   size_t const max_depth;
   size_t const score_cache_budget;
   size_t const requested_preprocess_threads;

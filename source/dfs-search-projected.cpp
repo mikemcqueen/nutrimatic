@@ -190,21 +190,30 @@ void ScoreBounds::clear() {
   plain_float_values_.reset();
   root_score_bound_ = HUGE_VAL;
   root_score_bound_ready_ = false;
+  state_capacity_ = 0;
+  depth_values_ = 1;
+  exact_segments_ = 0;
+  exact_remaining_depth_ = false;
 }
 
 bool ScoreBounds::prepare(
-    size_t state_count, size_t cache_budget, bool bottom_up_eligible) {
+    size_t state_capacity, size_t depth_values,
+    bool exact_remaining_depth, size_t cache_budget,
+    bool bottom_up_eligible) {
   static_assert(sizeof(AtomicFloatWord) == sizeof(uint32_t),
                 "atomic float bound words must remain four bytes");
   static_assert(std::is_trivially_destructible<AtomicFloatWord>::value,
                 "atomic float bound words must be trivially destructible");
   clear();
   size_t float_bytes = 0;
-  if (state_count == 0 ||
+  if (state_capacity == 0 || depth_values == 0 ||
+      state_capacity > SIZE_MAX / depth_values ||
       !projected_bound_requirements(
-          state_count, sizeof(float), &float_bytes) ||
+          uint64_t(state_capacity * depth_values), sizeof(float),
+          &float_bytes) ||
       float_bytes > cache_budget)
     return false;
+  size_t const entry_count = state_capacity * depth_values;
   if (bottom_up_eligible) {
     float* values = static_cast<float*>(dfs_allocate_aligned(float_bytes));
     if (values == NULL) return false;
@@ -213,14 +222,19 @@ bool ScoreBounds::prepare(
     AtomicFloatWord* values = static_cast<AtomicFloatWord*>(
         dfs_allocate_aligned(float_bytes));
     if (values == NULL) return false;
-    for (size_t i = 0; i < state_count; ++i) {
+    for (size_t i = 0; i < entry_count; ++i) {
       new (&values[i]) AtomicFloatWord;
       values[i].value.store(FLOAT_BOUND_UNSEEN, std::memory_order_relaxed);
     }
     float_values_.reset(values);
   }
-  stats_.capacity = state_count;
+  state_capacity_ = state_capacity;
+  depth_values_ = depth_values;
+  exact_remaining_depth_ = exact_remaining_depth;
+  stats_.capacity = state_capacity;
   stats_.value_bytes = sizeof(float);
+  stats_.depth_values = depth_values;
+  stats_.exact_remaining_depth = exact_remaining_depth;
   stats_.complete = true;
   stats_.mode = DFS_SCORE_BOUND_PROJECTED;
   stats_.bytes_charged = float_bytes;
@@ -230,22 +244,37 @@ bool ScoreBounds::prepare(
 bool ScoreBounds::build(
     BoundStateView root, ScoreKeyLayout const& layout,
     ProjectedActions const& actions, size_t budget, size_t threads,
+    size_t exact_segments, bool exact_remaining_depth,
     DfsSearchStats* stats) {
   assert(stats != NULL);
   clear();
   bool const bottom_up_eligible =
       layout.wild_span != 0 &&
       layout.effective_state_count / layout.wild_span <= UINT32_MAX;
+  size_t const depth_values = exact_remaining_depth
+      ? (exact_segments > 1 ? exact_segments - 1 : size_t(1))
+      : size_t(1);
   if (!prepare(
-          size_t(layout.effective_state_count), budget,
+          size_t(layout.effective_state_count), depth_values,
+          exact_remaining_depth, budget,
           bottom_up_eligible))
     return false;
+  exact_segments_ = exact_remaining_depth ? exact_segments : 0;
 
-  dfs_diagnostic(
-      "phase 2 preflight: score-bound mode projected dense "
-      "(%zu-byte values, capacity %zu, %s coverage)\n",
-      stats_.value_bytes, stats_.capacity,
-      stats_.complete ? "complete effective" : "partial");
+  if (exact_remaining_depth_) {
+    dfs_diagnostic(
+        "phase 2 preflight: score-bound mode projected dense exact "
+        "remaining depth (%zu-byte values, %zu values/state, capacity %zu, "
+        "%s coverage)\n",
+        stats_.value_bytes, stats_.depth_values, stats_.capacity,
+        stats_.complete ? "complete effective" : "partial");
+  } else {
+    dfs_diagnostic(
+        "phase 2 preflight: score-bound mode projected dense "
+        "(%zu-byte values, capacity %zu, %s coverage)\n",
+        stats_.value_bytes, stats_.capacity,
+        stats_.complete ? "complete effective" : "partial");
+  }
   dfs_diagnostic(
       "phase 2 preflight: projected evaluator %s\n",
       plain_float_values_.get() != NULL
@@ -254,11 +283,16 @@ bool ScoreBounds::build(
 
   bool computed = false;
   try {
-    computed = plain_float_values_.get() != NULL
-        ? compute_projected_score_bounds_bottom_up(
-              root, layout, actions, stats, threads)
-        : compute_projected_score_bounds_top_down(
-              root, layout, actions, stats, threads);
+    if (plain_float_values_.get() != NULL) {
+      computed = exact_remaining_depth_
+          ? compute_exact_projected_score_bounds_bottom_up(
+                root, layout, actions, stats, threads, exact_segments)
+          : compute_projected_score_bounds_bottom_up(
+                root, layout, actions, stats, threads);
+    } else {
+      computed = compute_projected_score_bounds_top_down(
+          root, layout, actions, stats, threads);
+    }
   } catch (...) {
     clear();
     return false;
@@ -270,16 +304,28 @@ bool ScoreBounds::build(
   return true;
 }
 
-bool ScoreBounds::lookup(uint64_t key, double* value) const {
-  if (stats_.mode == DFS_SCORE_BOUND_OFF || key >= stats_.capacity)
+size_t ScoreBounds::slot(size_t key, size_t segments_owed) const {
+  assert(key < state_capacity_);
+  if (!exact_remaining_depth_) return key;
+  assert(segments_owed >= 1 && segments_owed <= depth_values_);
+  return (segments_owed - 1) * state_capacity_ + key;
+}
+
+bool ScoreBounds::lookup(
+    uint64_t key, size_t segments_owed, double* value) const {
+  if (stats_.mode == DFS_SCORE_BOUND_OFF || key >= state_capacity_)
+    return false;
+  if (exact_remaining_depth_ &&
+      (segments_owed == 0 || segments_owed > depth_values_))
     return false;
   assert(stats_.value_bytes == sizeof(float));
+  size_t const index = slot(size_t(key), segments_owed);
   if (plain_float_values_.get() != NULL) {
-    *value = double(plain_float_values_.get()[size_t(key)]);
+    *value = double(plain_float_values_.get()[index]);
     return true;
   }
   uint32_t const stored =
-      float_values_.get()[size_t(key)].value.load(
+      float_values_.get()[index].value.load(
           std::memory_order_relaxed);
   if (stored == FLOAT_BOUND_UNSEEN || stored == FLOAT_BOUND_COMPUTING)
     return false;
@@ -298,11 +344,12 @@ void ScoreBounds::set_root(double value) {
   root_score_bound_ready_ = true;
 }
 
-void ScoreBounds::publish_top_down(uint64_t key, double value) {
-  assert(key < stats_.capacity);
+void ScoreBounds::publish_top_down(
+    uint64_t key, size_t segments_owed, double value) {
+  assert(key < state_capacity_);
   assert(stats_.value_bytes == sizeof(float));
   assert(plain_float_values_.get() == NULL);
-  float_values_.get()[size_t(key)].value.store(
+  float_values_.get()[slot(size_t(key), segments_owed)].value.store(
       float_to_bits(round_float_score_bound_up(value)),
       std::memory_order_release);
 }
@@ -315,7 +362,7 @@ DfsSearchData::cached_reachability(
   double value;
   if (original_root) {
     if (!score_bounds.root_lookup(&value)) return REACHABILITY_UNKNOWN;
-  } else if (!score_bounds.lookup(key, &value)) {
+  } else if (!score_bounds.lookup(key, 0, &value)) {
     return REACHABILITY_UNKNOWN;
   }
   if (value == -HUGE_VAL) return REACHABILITY_NO;
@@ -559,8 +606,13 @@ void ScoreBounds::consider_projected_top_down_candidate(
   worker->score_key -= action.score_key_delta;
   worker->letters_left -= candidate_length;
   worker->wild_left -= wild_length;
+  if (exact_remaining_depth_) {
+    assert(worker->segments_owed > 0);
+    --worker->segments_owed;
+  }
   double const child = compute_projected_score_bound_top_down(
       actions, worker);
+  if (exact_remaining_depth_) ++worker->segments_owed;
   worker->wild_left += wild_length;
   worker->letters_left += candidate_length;
   worker->score_key += action.score_key_delta;
@@ -593,10 +645,18 @@ void ScoreBounds::consider_projected_top_down_candidate(
 double ScoreBounds::compute_projected_score_bound_top_down(
     ProjectedActions const& actions, TopDownWorker* worker) {
   assert(stats_.mode == DFS_SCORE_BOUND_PROJECTED);
-  assert(worker->score_key < stats_.capacity);
+  if (exact_remaining_depth_ && worker->segments_owed == 0) {
+    return worker->bag_mask == 0 && worker->wild_left == 0
+        ? 0.0
+        : -HUGE_VAL;
+  }
+  assert(worker->score_key < state_capacity_);
+  if (exact_remaining_depth_)
+    assert(worker->segments_owed <= depth_values_);
   unsigned int wait_spins = 0;
   AtomicFloatWord& slot =
-      float_values_.get()[size_t(worker->score_key)];
+      float_values_.get()[this->slot(
+          size_t(worker->score_key), worker->segments_owed)];
   uint32_t stored = slot.value.load(std::memory_order_acquire);
   for (;;) {
     if (stored != FLOAT_BOUND_UNSEEN &&
@@ -615,9 +675,11 @@ double ScoreBounds::compute_projected_score_bound_top_down(
   }
 
   if (worker->bag_mask == 0 && worker->wild_left == 0) {
-    publish_top_down(worker->score_key, 0.0);
+    double const empty_value = exact_remaining_depth_ ? -HUGE_VAL : 0.0;
+    publish_top_down(
+        worker->score_key, worker->segments_owed, empty_value);
     ++worker->stats.states_computed;
-    return 0.0;
+    return empty_value;
   }
 
   double best = -HUGE_VAL;
@@ -638,7 +700,7 @@ double ScoreBounds::compute_projected_score_bound_top_down(
 
   double const result = get_score_bound(
       best, max_rounding_error, &worker->stats.nextafter_calls);
-  publish_top_down(worker->score_key, result);
+  publish_top_down(worker->score_key, worker->segments_owed, result);
   ++worker->stats.states_computed;
   return result;
 }
@@ -911,6 +973,7 @@ bool ScoreBounds::compute_projected_score_bounds_bottom_up(
   root.score_key = root_state.score_key;
   root.letters_left = root_state.letters_left;
   root.wild_left = root_state.wild_left;
+  root.segments_owed = 0;
   root.stats.clear();
   root.best = -HUGE_VAL;
   root.max_rounding_error = 0.0;
@@ -957,6 +1020,286 @@ bool ScoreBounds::compute_projected_score_bounds_bottom_up(
   return true;
 }
 
+bool ScoreBounds::compute_exact_projected_score_bounds_bottom_up(
+    BoundStateView root_state, ScoreKeyLayout const& layout,
+    ProjectedActions const& actions,
+    DfsSearchStats* stats, size_t requested_threads,
+    size_t exact_segments) {
+  FILE* const progress = dfs_diagnostic_stream();
+  if (stats_.mode != DFS_SCORE_BOUND_PROJECTED ||
+      !stats_.complete || !exact_remaining_depth_ ||
+      exact_segments == 0 || stats_.capacity == 0 ||
+      plain_float_values_.get() == NULL ||
+      layout.wild_span == 0 ||
+      stats_.capacity % layout.wild_span != 0)
+    return false;
+
+  size_t const exact_bag_count =
+      stats_.capacity / layout.wild_span;
+  if (exact_bag_count == 0 || exact_bag_count > UINT32_MAX)
+    return false;
+
+  if (progress != NULL) {
+    dfs_diagnostic(
+        "phase 2: projected wildcard update kernel avx2\n");
+  }
+
+  float* const values = plain_float_values_.get();
+  size_t max_exact_total = 0;
+  for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+    if ((layout.exact_mask & (UINT64_C(1) << rank)) != 0)
+      max_exact_total += root_state.letter_bag.counts[rank];
+  }
+  if (layout.exact_mask != 0) {
+    assert(max_exact_total != 0);
+    --max_exact_total;
+  }
+
+  std::vector<std::vector<uint32_t> > exact_layers;
+  std::vector<ScoreBounds::BottomUpWorker> workers;
+  size_t worker_count = 1;
+  try {
+    exact_layers.resize(max_exact_total + 1);
+    for (size_t exact_key = 0;
+         exact_key < exact_bag_count; ++exact_key) {
+      size_t exact_total = 0;
+      for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+        if ((layout.exact_mask & (UINT64_C(1) << rank)) == 0)
+          continue;
+        uint64_t const multiplier = layout.multipliers[rank];
+        uint64_t const radix =
+            uint64_t(root_state.letter_bag.counts[rank]) + 1;
+        exact_total += size_t(
+            (uint64_t(exact_key) / multiplier) % radix);
+      }
+      assert(exact_total < exact_layers.size());
+      exact_layers[exact_total].push_back(uint32_t(exact_key));
+    }
+
+    size_t largest_layer = 0;
+    for (size_t total = 0; total < exact_layers.size(); ++total)
+      largest_layer =
+          std::max(largest_layer, exact_layers[total].size());
+    worker_count = std::min(
+        std::max(size_t(1), requested_threads),
+        std::max(size_t(1), largest_layer));
+    workers.reserve(worker_count);
+    for (size_t i = 0; i < worker_count; ++i)
+      workers.emplace_back(layout.wild_span);
+  } catch (...) {
+    return false;
+  }
+
+  bool announced_threads = false;
+  size_t actual_workers = 1;
+  DfsSearchStats::Bounds::Projected total_stats;
+  for (size_t segments_owed = 1;
+       segments_owed <= depth_values_; ++segments_owed) {
+    size_t const plane_offset =
+        (segments_owed - 1) * stats_.capacity;
+    size_t const child_plane_offset = segments_owed > 1
+        ? (segments_owed - 2) * stats_.capacity
+        : 0;
+    for (size_t exact_total = 0;
+         exact_total < exact_layers.size(); ++exact_total) {
+      std::vector<uint32_t> const& layer = exact_layers[exact_total];
+      if (layer.empty()) continue;
+      size_t const layer_workers =
+          std::min(worker_count, layer.size());
+      std::atomic<size_t> next_bag(0);
+
+      auto work = [&](size_t worker_index) {
+        ScoreBounds::BottomUpWorker* worker = &workers[worker_index];
+        DfsSearchStats::Bounds::Projected local_stats;
+
+        for (;;) {
+          size_t const layer_index =
+              next_bag.fetch_add(1, std::memory_order_relaxed);
+          if (layer_index >= layer.size()) break;
+          uint64_t const exact_key = layer[layer_index];
+          uint64_t exact_mask = 0;
+          worker->bag.fill(0);
+          for (size_t rank = 0; rank < DFS_SYMBOL_COUNT; ++rank) {
+            if ((layout.exact_mask & (UINT64_C(1) << rank)) == 0)
+              continue;
+            uint64_t const multiplier = layout.multipliers[rank];
+            uint64_t const radix =
+                uint64_t(root_state.letter_bag.counts[rank]) + 1;
+            uint32_t const count = uint32_t(
+                (exact_key / multiplier) % radix);
+            worker->bag[rank] = count;
+            if (count != 0)
+              exact_mask |= UINT64_C(1) << rank;
+          }
+
+          std::fill(
+              worker->best.begin(), worker->best.end(), -HUGE_VAL);
+          std::fill(
+              worker->max_rounding_error.begin(),
+              worker->max_rounding_error.end(), 0.0);
+          size_t const bucket = exact_mask == 0
+              ? size_t(DFS_SYMBOL_COUNT)
+              : size_t(__builtin_ctzll(exact_mask));
+          size_t const begin = actions.bucket_begin(bucket);
+          size_t const end = actions.bucket_end(bucket);
+          uint64_t const base_key =
+              exact_key * uint64_t(layout.wild_span);
+
+          for (size_t action_index = begin;
+               action_index < end; ++action_index) {
+            ++local_stats.candidate_tests;
+            if ((actions.exact_support(action_index) & ~exact_mask) != 0)
+              continue;
+            ProjectedAction const& action =
+                actions.action(action_index);
+            uint32_t const* repeated = actions.repeated_begin(action);
+            bool fits = true;
+            for (uint32_t i = 0; i < action.repeated_count; ++i) {
+              uint32_t const requirement = repeated[i];
+              if (worker->bag[packed_rank(requirement)] <
+                  packed_count(requirement)) {
+                fits = false;
+                break;
+              }
+            }
+            if (!fits) continue;
+
+            size_t const wild_length =
+                projected_wild_length(action.packed_lengths);
+            DFS_CHECK(wild_length < layout.wild_span);
+            if (segments_owed == 1) {
+              local_stats.fitting_transitions +=
+                  layout.wild_span - wild_length;
+              uint64_t const parent_key = base_key + wild_length;
+              if (action.score_key_delta != parent_key) continue;
+              ++local_stats.transitions;
+              worker->best[wild_length] = std::max(
+                  worker->best[wild_length],
+                  action.partial_score + 0.0);
+              double rounding_error = action.rounding_error_base;
+              rounding_error += 1.0;
+              rounding_error *= DBL_EPSILON * 4.0;
+              worker->max_rounding_error[wild_length] = std::max(
+                  worker->max_rounding_error[wild_length],
+                  rounding_error);
+              continue;
+            }
+
+            size_t const count = layout.wild_span - wild_length;
+            uint64_t const first_parent_key = base_key + wild_length;
+            DFS_CHECK(action.score_key_delta <= first_parent_key);
+            size_t const children_offset =
+                size_t(first_parent_key - action.score_key_delta);
+            DFS_CHECK(children_offset + count <= stats_.capacity);
+            float const* const children =
+                values + child_plane_offset + children_offset;
+            double* const best = &worker->best[wild_length];
+            double* const error =
+                &worker->max_rounding_error[wild_length];
+            local_stats.fitting_transitions += count;
+            local_stats.transitions += projected_wild_update_avx2(
+                action.partial_score, action.rounding_error_base,
+                children, best, error, count);
+          }
+
+          for (size_t wild = 0; wild < layout.wild_span; ++wild) {
+            double const result = get_score_bound(
+                worker->best[wild],
+                worker->max_rounding_error[wild],
+                &local_stats.nextafter_calls);
+            values[plane_offset + size_t(base_key) + wild] =
+                round_float_score_bound_up(result);
+          }
+        }
+
+        worker->stats.add(local_stats);
+      };
+
+      std::vector<std::thread> background;
+      try {
+        background.reserve(layer_workers - 1);
+        for (size_t i = 1; i < layer_workers; ++i)
+          background.emplace_back(work, i);
+      } catch (...) {
+        // The main thread and already-created workers share the remaining
+        // dynamic queue.
+      }
+      size_t const active_workers = background.size() + 1;
+      actual_workers = std::max(actual_workers, active_workers);
+      if (!announced_threads && progress != NULL && active_workers > 1) {
+        dfs_diagnostic(
+            "phase 2: using up to %zu threads to calculate projected "
+            "score bounds bottom-up\n",
+            worker_count);
+        announced_threads = true;
+      }
+      work(0);
+      for (size_t i = 0; i < background.size(); ++i)
+        background[i].join();
+    }
+  }
+
+  for (size_t i = 0; i < workers.size(); ++i)
+    total_stats.add(workers[i].stats);
+
+  TopDownWorker root;
+  std::copy(
+      root_state.letter_bag.counts,
+      root_state.letter_bag.counts + DFS_SYMBOL_COUNT,
+      root.bag.begin());
+  root.bag_mask = root_state.letter_bag.support_mask & layout.exact_mask;
+  root.score_key = root_state.score_key;
+  root.letters_left = root_state.letters_left;
+  root.wild_left = root_state.wild_left;
+  root.segments_owed = exact_segments;
+  root.stats.clear();
+  root.best = -HUGE_VAL;
+  root.max_rounding_error = 0.0;
+
+  size_t const root_bucket = root.bag_mask == 0
+      ? size_t(DFS_SYMBOL_COUNT)
+      : size_t(__builtin_ctzll(root.bag_mask));
+  size_t const root_end = actions.bucket_end(root_bucket);
+  size_t const root_begin = actions.first_length_candidate(
+      actions.bucket_begin(root_bucket), root_end, root.letters_left);
+  total_stats.candidate_tests += root_end - root_begin;
+  double root_best = -HUGE_VAL;
+  double root_max_rounding_error = 0.0;
+  for (size_t action_index = root_begin;
+       action_index < root_end; ++action_index) {
+    if (!actions.fits(action_index, bound_state_view(root))) continue;
+    ProjectedAction const& action = actions.action(action_index);
+    ++total_stats.fitting_transitions;
+    assert(action.score_key_delta <= root.score_key);
+    uint64_t const child_key = root.score_key - action.score_key_delta;
+    double child = -HUGE_VAL;
+    if (exact_segments == 1) {
+      if (child_key == 0) child = 0.0;
+    } else {
+      assert(child_key < stats_.capacity);
+      child = double(values[
+          (exact_segments - 2) * stats_.capacity + size_t(child_key)]);
+    }
+    if (child == -HUGE_VAL) continue;
+    ++total_stats.transitions;
+    root_best = std::max(root_best, action.partial_score + child);
+    double rounding_error = action.rounding_error_base;
+    rounding_error += fabs(child);
+    rounding_error += 1.0;
+    rounding_error *= DBL_EPSILON * 4.0;
+    root_max_rounding_error = std::max(
+        root_max_rounding_error, rounding_error);
+  }
+
+  set_root(get_score_bound(
+      root_best, root_max_rounding_error, &total_stats.nextafter_calls));
+  stats_.entries = stats_.capacity * stats_.depth_values;
+  total_stats.states_computed = stats_.entries;
+  stats_.projected = total_stats;
+  stats->execution.preprocess_threads = actual_workers;
+  return true;
+}
+
 bool ScoreBounds::compute_projected_score_bounds_top_down(
     BoundStateView root_state, ScoreKeyLayout const& layout,
     ProjectedActions const& actions,
@@ -975,6 +1318,7 @@ bool ScoreBounds::compute_projected_score_bounds_top_down(
   root.score_key = root_state.score_key;
   root.letters_left = root_state.letters_left;
   root.wild_left = root_state.wild_left;
+  root.segments_owed = exact_remaining_depth_ ? exact_segments_ : 0;
   root.stats.clear();
   root.best = -HUGE_VAL;
   root.max_rounding_error = 0.0;

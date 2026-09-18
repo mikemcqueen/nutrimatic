@@ -37,9 +37,19 @@ DfsAllSolutionsRunner::DfsAllSolutionsRunner(
 bool DfsAllSolutionsRunner::should_prune(Worker* worker,
     double representative_log_score, DfsSolutionSink* sink) {
   double remaining_bound;
-  bool const have_bound = worker->path.empty()
-      ? data.score_bounds.root_lookup(&remaining_bound)
-      : data.score_bounds.lookup(worker->score_key, &remaining_bound);
+  bool have_bound;
+  if (worker->path.empty()) {
+    have_bound = data.score_bounds.root_lookup(&remaining_bound);
+  } else {
+    size_t segments_owed = 0;
+    if (data.exact_remaining_depth_bounds) {
+      assert(data.exact_depth > worker->path.size());
+      segments_owed = data.exact_depth - worker->path.size();
+      assert(segments_owed <= data.score_bounds.stats().depth_values);
+    }
+    have_bound = data.score_bounds.lookup(
+        worker->score_key, segments_owed, &remaining_bound);
+  }
   if (!have_bound) return false;
   if (remaining_bound == -HUGE_VAL) return true;
   if (worker->path.empty()) return false;

@@ -50,6 +50,8 @@ struct DfsSearchStats {
     size_t capacity = 0;
     size_t value_bytes = 0;
     size_t bytes_charged = 0;
+    size_t depth_values = 1;
+    bool exact_remaining_depth = false;
     bool complete = false;
     // The projection shape describes the table the bound would use, and is
     // recorded even when the mode ends up OFF. The search fills these in after

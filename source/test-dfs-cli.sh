@@ -904,6 +904,29 @@ done < "$test_dir/all.stdout"
   > "$test_dir/one-segment.stdout" 2> "$test_dir/one-segment.stderr"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -g 2 \
   > "$test_dir/two-segment.stdout" 2> "$test_dir/two-segment.stderr"
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -g 1 \
+  --exact \
+  > "$test_dir/one-segment-exact.stdout" \
+  2> "$test_dir/one-segment-exact.stderr"
+cmp "$test_dir/one-segment.stdout" "$test_dir/one-segment-exact.stdout" ||
+  fail "--exact changed -g 1 stdout"
+"$dfs_anagrams" -i "$index_file" abcd -m 1 -n 10 --word-bonus 0 -g 3 \
+  --exact \
+  > "$test_dir/three-segment-exact.stdout" \
+  2> "$test_dir/three-segment-exact.stderr"
+"$dfs_anagrams" -i "$index_file" abcd -m 1 -n 10 --word-bonus 0 -g 3 \
+  --exact -C 0 -F \
+  > "$test_dir/three-segment-uncached.stdout" \
+  2> "$test_dir/three-segment-uncached.stderr"
+cmp "$test_dir/three-segment-uncached.stdout" \
+    "$test_dir/three-segment-exact.stdout" ||
+  fail "exact remaining-depth cache changed -g 3 stdout"
+grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode projected dense exact remaining depth \\(4-byte values, 2 values/state, capacity [0-9]+, complete effective coverage\\)$" \
+  "$test_dir/three-segment-exact.stderr" ||
+  fail "exact remaining-depth mode diagnostic is missing"
+grep -Eq "${diagnostic_prefix}phase 2 preflight: score-bound mode off$" \
+  "$test_dir/three-segment-uncached.stderr" ||
+  fail "exact remaining-depth cache fallback did not turn bounds off"
 if grep -q ',' "$test_dir/one-segment.stdout"; then
   fail "-g 1 returned a multi-entry result"
 fi
@@ -943,6 +966,9 @@ expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --search-threads nope
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --projection-depth nope
+expect_status 2 "$dfs_anagrams" -i "$index_file" abcd --exact
+[[ $(cat "$test_dir/status.stderr") == 'error: --exact requires -g N' ]] ||
+  fail "--exact without -g did not print its exact diagnostic"
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --max-extract-words nope
 expect_status 2 "$dfs_anagrams" -i "$index_file" abcd \

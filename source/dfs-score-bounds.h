@@ -43,8 +43,9 @@ class ScoreBounds {
   bool build(
       BoundStateView root, ScoreKeyLayout const& layout,
       ProjectedActions const& actions, size_t budget, size_t threads,
+      size_t exact_segments, bool exact_remaining_depth,
       DfsSearchStats* stats);
-  bool lookup(uint64_t key, double* value) const;
+  bool lookup(uint64_t key, size_t segments_owed, double* value) const;
   bool root_lookup(double* value) const;
 
   bool active() const { return stats_.mode != DFS_SCORE_BOUND_OFF; }
@@ -73,6 +74,7 @@ class ScoreBounds {
     uint64_t score_key;
     size_t letters_left;
     size_t wild_left;
+    size_t segments_owed;
     double best;
     double max_rounding_error;
   };
@@ -82,9 +84,14 @@ class ScoreBounds {
   std::unique_ptr<float, DfsAlignedFree> plain_float_values_;
   double root_score_bound_ = HUGE_VAL;
   bool root_score_bound_ready_ = false;
+  size_t state_capacity_ = 0;
+  size_t depth_values_ = 1;
+  size_t exact_segments_ = 0;
+  bool exact_remaining_depth_ = false;
 
   void clear();
-  bool prepare(size_t state_count, size_t cache_budget,
+  bool prepare(size_t state_capacity, size_t depth_values,
+               bool exact_remaining_depth, size_t cache_budget,
                bool bottom_up_eligible);
   static BoundStateView bound_state_view(TopDownWorker const& worker) {
     return {{worker.bag.data(), worker.bag_mask}, worker.score_key,
@@ -103,7 +110,13 @@ class ScoreBounds {
       BoundStateView root, ScoreKeyLayout const& layout,
       ProjectedActions const& actions, DfsSearchStats* stats,
       size_t requested_threads);
-  void publish_top_down(uint64_t key, double value);
+  bool compute_exact_projected_score_bounds_bottom_up(
+      BoundStateView root, ScoreKeyLayout const& layout,
+      ProjectedActions const& actions, DfsSearchStats* stats,
+      size_t requested_threads, size_t exact_segments);
+  size_t slot(size_t key, size_t segments_owed) const;
+  void publish_top_down(
+      uint64_t key, size_t segments_owed, double value);
   void set_root(double value);
 };
 

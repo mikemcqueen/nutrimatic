@@ -33,6 +33,7 @@ struct Args {
   int preprocess_threads;
   int exact_letters;
   bool allow_cache_fallback;
+  bool exact_remaining_depth;
   bool segments;
   bool show_score;
   bool show_bonus;
@@ -213,6 +214,10 @@ static void usage(char const* program) {
   help_option("-d, --projection-depth N",
       "keep this many rarest letter types exact in the projected cache; the "
       "default is the largest depth that fits -C");
+  help_option("--exact",
+      "index projected score bounds by the exact number of segments "
+      "remaining; requires -g N and uses N-1 values per projected state for "
+      "N greater than 1, instead of one");
   help_option("-P, --segment-penalty P",
       "divide the score by P for each selected index entry after the first; "
       "P must be at least 1 (default: %.0f); k entries score as product(count) "
@@ -261,6 +266,7 @@ static int const OPT_NO_SCORE = 260;
 static int const OPT_PTM = 261;
 static int const OPT_NO_REPEAT = 262;
 static int const OPT_DISABLE_REPEATS = 263;
+static int const OPT_EXACT = 264;
 
 // Normalizes a --no-repeat value the way the dictionary loader normalizes a
 // line, keeping the word boundaries load_dictionary() has no use for.
@@ -294,6 +300,7 @@ static struct optparse_long const long_options[] = {
   { "cache-size", 'C', OPTPARSE_REQUIRED },
   { "preprocess-threads", 'T', OPTPARSE_REQUIRED },
   { "projection-depth", 'd', OPTPARSE_REQUIRED },
+  { "exact", OPT_EXACT, OPTPARSE_NONE },
   { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
@@ -319,6 +326,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->preprocess_threads = 0;
   out->exact_letters = -1;
   out->allow_cache_fallback = false;
+  out->exact_remaining_depth = false;
   out->segments = false;
   out->show_score = true;
   out->show_bonus = false;
@@ -414,6 +422,9 @@ static bool parse_args(char* argv[], Args* out) {
       case OPT_DISABLE_REPEATS:
         out->repeats.disable_repeats = true;
         break;
+      case OPT_EXACT:
+        out->exact_remaining_depth = true;
+        break;
       case 'F':
         out->allow_cache_fallback = true;
         break;
@@ -425,6 +436,11 @@ static bool parse_args(char* argv[], Args* out) {
         usage(argv[0]);
         return false;
     }
+  }
+
+  if (out->exact_remaining_depth && out->num_segments == 0) {
+    fputs("error: --exact requires -g N\n", stderr);
+    return false;
   }
 
   if (!finalize_dfs_common_args(
@@ -542,7 +558,8 @@ int main(int argc, char* argv[]) {
   DfsAnagramSearch search(
       prepared.classes.get(), args.letters, *prepared.model,
       args.score_cache_bytes, preprocess_threads,
-      search_threads, size_t(args.num_segments));
+      search_threads, size_t(args.num_segments),
+      args.exact_remaining_depth);
   DfsTopN output(
       prepared.classes.get(), prepared.model.get(), size_t(args.common.top),
       prepared.solo_words.get(),

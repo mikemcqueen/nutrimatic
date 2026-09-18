@@ -1,4 +1,5 @@
 #include "dfs-class-list.h"
+#include "dfs-alloc.h"
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
 #include "dfs-search-stats.h"
@@ -363,6 +364,112 @@ static int smoke_test() {
     check_same_spellings(
         bounded_spellings, threaded_spellings,
         "threaded score bound changed the retained spellings");
+
+    check(setenv(
+              "NUTRIMATIC_LENGTH_CERTIFICATE", "0", 1) == 0,
+          "could not disable exact-depth length certificate");
+    DfsTopN exact_expected_output(&classes, &model, 2);
+    DfsAnagramSearch exact_expected(
+        &classes, "aabb", model, 0, 1, 1, 3);
+    DfsSearchStats exact_expected_stats;
+    exact_expected.run(&exact_expected_output, &exact_expected_stats);
+    std::vector<DfsSpelling> const exact_expected_spellings =
+        exact_expected_output.take_sorted_results();
+    check(!exact_expected_spellings.empty(),
+          "exact-g3 fixture found no expected spellings");
+
+    DfsTopN relaxed_depth_output(&classes, &model, 2);
+    DfsAnagramSearch relaxed_depth(
+        &classes, "aabb", model, bound_budget, 1, 1, 3);
+    DfsSearchStats relaxed_depth_stats;
+    relaxed_depth.run(
+        &relaxed_depth_output, &relaxed_depth_stats,
+        /*progress_factor=*/1, /*allow_cache_fallback=*/false,
+        /*exact_letters=*/1);
+    check_same_spellings(
+        exact_expected_spellings,
+        relaxed_depth_output.take_sorted_results(),
+        "relaxed exact-g3 search changed retained spellings");
+
+    DfsTopN exact_depth_output(&classes, &model, 2);
+    DfsAnagramSearch exact_depth(
+        &classes, "aabb", model, bound_budget, 1, 1, 3, true);
+    DfsSearchStats exact_depth_stats;
+    exact_depth.run(
+        &exact_depth_output, &exact_depth_stats,
+        /*progress_factor=*/1, /*allow_cache_fallback=*/false,
+        /*exact_letters=*/1);
+    check_same_spellings(
+        exact_expected_spellings,
+        exact_depth_output.take_sorted_results(),
+        "exact remaining-depth bounds changed retained spellings");
+    check(exact_depth_stats.bounds.exact_remaining_depth &&
+              exact_depth_stats.bounds.depth_values == 2,
+          "exact remaining-depth table has the wrong depth shape");
+    check(exact_depth_stats.bounds.capacity ==
+              relaxed_depth_stats.bounds.capacity &&
+              exact_depth_stats.bounds.value_bytes == sizeof(float),
+          "exact remaining-depth table changed its per-plane layout");
+    size_t exact_depth_bytes = 0;
+    check(dfs_round_up_alignment(
+              exact_depth_stats.bounds.capacity *
+                  exact_depth_stats.bounds.depth_values * sizeof(float),
+              &exact_depth_bytes) &&
+              exact_depth_stats.bounds.bytes_charged == exact_depth_bytes,
+          "exact remaining-depth byte charge is wrong");
+    check(exact_depth_stats.bounds.entries ==
+              exact_depth_stats.bounds.capacity *
+                  exact_depth_stats.bounds.depth_values,
+          "exact remaining-depth bottom-up table stored the wrong entries");
+
+    DfsTopN threaded_exact_output(&classes, &model, 2);
+    DfsAnagramSearch threaded_exact(
+        &classes, "aabb", model, bound_budget, 4, 1, 3, true);
+    DfsSearchStats threaded_exact_stats;
+    threaded_exact.run(
+        &threaded_exact_output, &threaded_exact_stats,
+        /*progress_factor=*/1, /*allow_cache_fallback=*/false,
+        /*exact_letters=*/1);
+    check_same_spellings(
+        exact_expected_spellings,
+        threaded_exact_output.take_sorted_results(),
+        "threaded exact remaining-depth bounds changed retained spellings");
+    check(threaded_exact_stats.bounds.entries ==
+              exact_depth_stats.bounds.entries &&
+              threaded_exact_stats.bounds.depth_values ==
+                  exact_depth_stats.bounds.depth_values &&
+              threaded_exact_stats.bounds.bytes_charged ==
+                  exact_depth_stats.bounds.bytes_charged &&
+              threaded_exact_stats.bounds.projected.states_computed ==
+                  exact_depth_stats.bounds.projected.states_computed &&
+              threaded_exact_stats.bounds.projected.transitions ==
+                  exact_depth_stats.bounds.projected.transitions &&
+              threaded_exact_stats.bounds.projected.nextafter_calls ==
+                  exact_depth_stats.bounds.projected.nextafter_calls,
+          "threading changed exact remaining-depth construction");
+
+    double const exact_floor = exact_expected_spellings.back().log_score;
+    FixedFloorSolutions relaxed_floor_output(exact_floor);
+    DfsAnagramSearch relaxed_floor(
+        &classes, "aabb", model, bound_budget, 1, 1, 3);
+    DfsSearchStats relaxed_floor_stats;
+    relaxed_floor.run(
+        &relaxed_floor_output, &relaxed_floor_stats,
+        /*progress_factor=*/1, /*allow_cache_fallback=*/false,
+        /*exact_letters=*/1);
+    FixedFloorSolutions exact_floor_output(exact_floor);
+    DfsAnagramSearch exact_floor_search(
+        &classes, "aabb", model, bound_budget, 1, 1, 3, true);
+    DfsSearchStats exact_floor_stats;
+    exact_floor_search.run(
+        &exact_floor_output, &exact_floor_stats,
+        /*progress_factor=*/1, /*allow_cache_fallback=*/false,
+        /*exact_letters=*/1);
+    check(exact_floor_stats.all_solutions.nodes <=
+              relaxed_floor_stats.all_solutions.nodes,
+          "exact remaining-depth bounds visited more fixed-floor nodes");
+    check(unsetenv("NUTRIMATIC_LENGTH_CERTIFICATE") == 0,
+          "could not restore exact-depth length certificate");
 
     std::string const exhausted_letters = "aaaaabbbbb";
     DfsTopN exhausted_expected_output(&classes, &model, 2);

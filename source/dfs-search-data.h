@@ -60,6 +60,9 @@ struct DfsSearchData {
   // Fixed for the whole run, so the exact recurrence tests one local bool
   // instead of chasing the bound table's mode on every subtract/restore.
   bool score_bounds_active = false;
+  // True only when run() successfully prepared depth-indexed bounds. The
+  // completability runner and cache-fallback path both leave this false.
+  bool exact_remaining_depth_bounds = false;
   std::unique_ptr<FitClass[], DfsAlignedFree> fit_classes;
   std::unique_ptr<uint64_t[], DfsAlignedFree> class_supports;
   std::unique_ptr<uint64_t[], DfsAlignedFree> score_key_deltas;

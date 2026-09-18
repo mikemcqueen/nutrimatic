@@ -90,7 +90,8 @@ static char const* score_bound_mode_name(
 
 bool ScoreKeyLayout::choose(
     std::array<uint32_t, DFS_SYMBOL_COUNT> const& bag,
-    size_t letter_count, size_t cache_budget, int exact_letters,
+    size_t letter_count, size_t cache_budget,
+    size_t value_bytes_per_state, int exact_letters,
     ScoreKeyLayout* result) {
   ScoreKeyLayout selected;
   std::vector<int> present_ranks;
@@ -120,7 +121,7 @@ bool ScoreKeyLayout::choose(
       size_t bytes = 0;
       if (states_ok &&
           projected_bound_requirements(
-              effective, sizeof(float), &bytes) &&
+              effective, value_bytes_per_state, &bytes) &&
           bytes <= cache_budget)
         selected_exact_letters = d;
       if (d != present_ranks.size()) {
@@ -177,12 +178,14 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    size_t score_cache_bytes,
                                    size_t preprocess_threads,
                                    size_t search_threads,
-                                   size_t exact_segments):
+                                   size_t exact_segments,
+                                   bool exact_remaining_depth):
     class_list(classes),
     letters(letters),
     segment_boundary_log_score(
         score_model.segment_boundary_log_score()),
     exact_segments(exact_segments),
+    exact_remaining_depth(exact_remaining_depth),
     // A target below the letters' natural depth limit is itself the limit;
     // a target above it leaves the walk unchanged and simply finds nothing.
     max_depth(std::min(derived_max_depth(classes, letters.size()),
@@ -479,7 +482,7 @@ size_t DfsSearchData::first_length_candidate(
 bool DfsAnagramSearch::prepare_phase_two(
     DfsSearchData* data, DfsSearchStats* stats,
     int64_t progress_factor, bool allow_cache_fallback, int exact_letters,
-    bool score_bounds_requested) {
+    bool score_bounds_requested, bool exact_remaining_depth_bounds) {
   FILE* const progress = dfs_diagnostic_stream();
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const setup_start = PhaseClock::now();
@@ -527,9 +530,17 @@ bool DfsAnagramSearch::prepare_phase_two(
     if (data->bag[size_t(rank)] != 0)
       data->bag_mask |= UINT64_C(1) << rank;
 
+  assert(!exact_remaining_depth_bounds || exact_segments != 0);
+  size_t const depth_values = exact_remaining_depth_bounds
+      ? (exact_segments > 1 ? exact_segments - 1 : size_t(1))
+      : size_t(1);
+  if (depth_values > SIZE_MAX / sizeof(float))
+    abort_phase_two("projected score table size exceeds the supported range");
+  size_t const value_bytes_per_state = sizeof(float) * depth_values;
   ScoreKeyLayout layout;
   if (!ScoreKeyLayout::choose(
-          data->bag, letters.size(), score_cache_budget, exact_letters,
+          data->bag, letters.size(), score_cache_budget,
+          value_bytes_per_state, exact_letters,
           &layout))
     abort_phase_two("data->bag state count exceeds 64 bits");
   data->score_key = layout.root_key;
@@ -555,7 +566,8 @@ bool DfsAnagramSearch::prepare_phase_two(
   if (progress != NULL) {
     size_t projected_bytes = 0;
     bool const projected_size_ok = projected_bound_requirements(
-        layout.effective_state_count, sizeof(float), &projected_bytes);
+        layout.effective_state_count, value_bytes_per_state,
+        &projected_bytes);
     dfs_diagnostic(
         "phase 2 preflight: projected score table keeps %zu "
         "rarest letters exact, merges %zu wildcard letters; "
@@ -589,7 +601,8 @@ bool DfsAnagramSearch::prepare_phase_two(
   size_t required_bytes = 0;
   bool const size_available = !score_bounds_applicable ||
       projected_bound_requirements(
-          layout.effective_state_count, sizeof(float), &required_bytes);
+          layout.effective_state_count, value_bytes_per_state,
+          &required_bytes);
   bool const score_bounds_selected =
       score_bounds_applicable && size_available &&
       required_bytes <= score_cache_budget;
@@ -629,13 +642,16 @@ bool DfsAnagramSearch::prepare_phase_two(
         data->letter_count, data->score_wild_letters};
     if (!data->score_bounds.build(
             root, layout, projected_actions, score_cache_budget,
-            requested_preprocess_threads, stats))
+            requested_preprocess_threads, exact_segments,
+            exact_remaining_depth_bounds, stats))
       abort_phase_two("could not build projected score bounds");
   } else if (progress != NULL) {
     dfs_diagnostic("phase 2 preflight: score-bound mode off\n");
     fflush(progress);
   }
   data->score_bounds_active = data->score_bounds.active();
+  data->exact_remaining_depth_bounds =
+      data->score_bounds.active() && exact_remaining_depth_bounds;
   // Snapshot both components now: the bound table and the certificate tables
   // are moved into the runner and destroyed with it, but their statistics are
   // part of this call's result.
@@ -659,10 +675,17 @@ bool DfsAnagramSearch::prepare_phase_two(
   stats->execution.setup_seconds =
       std::chrono::duration<double>(setup_end - setup_start).count();
   if (data->progress_enabled) {
-    dfs_diagnostic(
-        "phase 2: precomputed %zu bounded states in %.1fs\n",
-        stats->bounds.projected.states_computed,
-        stats->execution.setup_seconds);
+    if (stats->bounds.exact_remaining_depth) {
+      dfs_diagnostic(
+          "phase 2: precomputed %zu bounded state-depth values in %.1fs\n",
+          stats->bounds.projected.states_computed,
+          stats->execution.setup_seconds);
+    } else {
+      dfs_diagnostic(
+          "phase 2: precomputed %zu bounded states in %.1fs\n",
+          stats->bounds.projected.states_computed,
+          stats->execution.setup_seconds);
+    }
   }
   return true;
 }
@@ -679,7 +702,7 @@ bool DfsAnagramSearch::run(DfsSolutionSink* sink, DfsSearchStats* stats,
   DfsSearchData data;
   if (!prepare_phase_two(
           &data, stats, progress_factor, allow_cache_fallback, exact_letters,
-          score_bounds_requested))
+          score_bounds_requested, exact_remaining_depth))
     return false;
 
   typedef std::chrono::steady_clock PhaseClock;
@@ -704,7 +727,7 @@ bool DfsAnagramSearch::find_completable_classes(
   DfsSearchData data;
   if (!prepare_phase_two(
           &data, stats, progress_factor, allow_cache_fallback, exact_letters,
-          true))
+          true, false))
     return false;
   typedef std::chrono::steady_clock PhaseClock;
   PhaseClock::time_point const validation_start = PhaseClock::now();
