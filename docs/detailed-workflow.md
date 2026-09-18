@@ -14,6 +14,20 @@
    should generally always be filtered through filter-segments --wf to
    remove all results with NO-classified segments.
 
+   when one entry keeps coming back across the results, dfs-anagrams
+   --no-repeat=VALUE limits it to a single use per result; repeat the
+   option to name more than one.  a value with no space is a word and is
+   counted wherever it falls, including inside a multi-word segment, so
+   --no-repeat=dog rejects "hot dog" + "dog house".  a value with a space
+   is a whole segment matched in the order written, so --no-repeat="hot
+   dog" rejects only the doubled segment and leaves "hot dog" + "dog
+   house" alone; naming the other order takes a second value.
+   --disable-repeats is the big hammer: no word may occur twice in a
+   result, so it rejects "hot dog" + "dog house" without being told which
+   word to watch, and rejects a self-repeating entry like "step by step"
+   on its own.  neither option is on by default, and a run passing
+   neither is unchanged.
+
 4. now it's time to start analyzing top-segments and first-segments of
    dfs.best, generally using --wf, with variations of --pairs (--count),
    --solo-words, and --all-words.

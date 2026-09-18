@@ -47,8 +47,12 @@ assert_close() {
 "$make_index" "$index_file"
 
 expect_status 2 "$dfs_anagrams" "$index_file" abcd
-grep -q '^usage: .* \[-i INDEX\] letters' "$test_dir/status.stdout" ||
+grep -q '^usage: .* \[-i INDEX\] \[options\] letters$' \
+  "$test_dir/status.stdout" ||
   fail "positional index rejection did not show the new synopsis"
+grep -q '^  -i, --idx INDEX  *read the completed Nutrimatic index' \
+  "$test_dir/status.stdout" ||
+  fail "help options are not presented in aligned columns"
 expect_status 2 "$dfs_anagrams" abcd
 
 "$dfs_anagrams" --idx "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
@@ -986,3 +990,67 @@ ptm_top=$(awk 'NR == 1 { print $1 }' "$test_dir/ptm.stdout")
 awk -v plain="$ptm_plain_top" -v mapped="$ptm_top" \
   'BEGIN { exit (mapped > 0 && mapped < plain) ? 0 : 1 }' ||
   fail "--ptm left the one-segment top score at $ptm_plain_top"
+
+# --no-repeat and --disable-repeats filter results after phase 3 picks each
+# class's member, so they see whole index entries rather than anagram classes.
+results() {
+  "$dfs_anagrams" -i "$index_file" "$@" 2> "$test_dir/repeat.stderr" |
+    awk '{ sub(/^[^ ]* /, ""); print }'
+}
+
+[[ "$(results abab -m 2 --word-bonus 0)" == \
+   "$(printf 'ab,ab\nab,ba\nba,ba')" ]] ||
+  fail "repeat fixture no longer reaches the ab,ab result"
+[[ "$(results abab -m 2 --word-bonus 0 --disable-repeats)" == "ab,ba" ]] ||
+  fail "--disable-repeats kept a repeated entry"
+[[ "$(results abab -m 2 --word-bonus 0 --no-repeat=ab)" == \
+   "$(printf 'ab,ba\nba,ba')" ]] ||
+  fail "--no-repeat WORD kept a repeated word"
+
+# A WORD is counted wherever it falls: once inside "ab cd" and once alone is
+# still twice, while "ab cd,ba" holds it only once.
+[[ "$(results abcdab -m 2 --no-repeat=ab | head -n 1)" == "ab cd,ba" ]] ||
+  fail "--no-repeat WORD ignored an occurrence inside a multi-word entry"
+
+# A PAIR is whole-entry equality, so only the doubled "ab cd" goes; the other
+# word order names a different entry and constrains nothing.
+[[ "$(results abcdabcd -m 2 --no-repeat='ab cd' | head -n 1)" == \
+   "ab cd,ab,cd" ]] ||
+  fail "--no-repeat PAIR did not reject the repeated segment"
+[[ "$(results abcdabcd -m 2 --no-repeat='cd ab' | head -n 1)" == \
+   "ab cd,ab cd" ]] ||
+  fail "--no-repeat PAIR matched the unwritten word order"
+
+# --disable-repeats is the WORD test widened to every word, so two entries
+# sharing "ab" go even though neither entry repeats.
+[[ "$(results abcdab -m 2 --disable-repeats)" == \
+   "$(printf 'ab cd,ba\nab,ba,dc')" ]] ||
+  fail "--disable-repeats kept two entries sharing a word"
+
+# Both word tests count an occurrence wherever it falls, so a self-repeating
+# entry goes on its own, with no second entry involved. The index holds no such
+# entry, so --pairs synthesizes one.
+printf 'ab,ab\n' > "$test_dir/self-repeat.pairs"
+[[ "$(results abab -m 2 --word-bonus 0 --pairs "$test_dir/self-repeat.pairs")" \
+   == "$(printf 'ab ab\nab,ba\nba,ba')" ]] ||
+  fail "--pairs no longer synthesizes the self-repeating entry"
+[[ "$(results abab -m 2 --word-bonus 0 --pairs "$test_dir/self-repeat.pairs" \
+        --disable-repeats)" == "ab,ba" ]] ||
+  fail "--disable-repeats kept an entry repeating its own word"
+[[ "$(results abab -m 2 --word-bonus 0 --pairs "$test_dir/self-repeat.pairs" \
+        --no-repeat=ab | head -n 1)" == "ab,ba" ]] ||
+  fail "--no-repeat WORD kept an entry repeating its own word"
+
+# One class holds both "klmn" and "kl mn", which share no word. This is the
+# case a class-level repeat test would wrongly reject.
+[[ "$(results klmnklmn -m 2 --disable-repeats)" == "klmn,kl mn" ]] ||
+  fail "--disable-repeats rejected two spellings of one class"
+
+expect_status 2 "$dfs_anagrams" -i "$index_file" abab -m 2 --no-repeat=ab,cd
+grep -q '^error: --no-repeat does not take a comma-separated list: ab,cd$' \
+  "$test_dir/status.stderr" ||
+  fail "--no-repeat list diagnostic is unclear"
+expect_status 2 "$dfs_anagrams" -i "$index_file" abab -m 2 --no-repeat='!!'
+grep -q '^error: --no-repeat value is empty after normalization: !!$' \
+  "$test_dir/status.stderr" ||
+  fail "empty --no-repeat value diagnostic is unclear"

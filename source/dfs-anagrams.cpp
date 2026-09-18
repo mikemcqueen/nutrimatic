@@ -10,7 +10,9 @@
 #include "workflow-paths.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <algorithm>
 #include <string>
@@ -22,6 +24,7 @@ struct Args {
   char const* index_file;
   std::string letters;
   DfsCommonArgs common;
+  DfsRepeatPolicy repeats;
   std::vector<std::string> exclude_pair_files;
   int max_combine_words;
   int num_segments;
@@ -55,137 +58,199 @@ static void report_segments(std::vector<DfsSpelling> const& results,
       stdout, weighted ? segment_report_weighted(report) : report);
 }
 
+static size_t const HELP_DESCRIPTION_COLUMN = 38;
+static size_t const HELP_LINE_WIDTH = 100;
+
+static void help_spaces(size_t count) {
+  while (count-- > 0) fputc(' ', stdout);
+}
+
+static void help_option(char const* option, char const* format, ...) {
+  char description[4096];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(description, sizeof description, format, args);
+  va_end(args);
+
+  fputs("  ", stdout);
+  fputs(option, stdout);
+  size_t column = 2 + strlen(option);
+  if (column >= HELP_DESCRIPTION_COLUMN) {
+    fputc('\n', stdout);
+    help_spaces(HELP_DESCRIPTION_COLUMN);
+  } else {
+    help_spaces(HELP_DESCRIPTION_COLUMN - column);
+  }
+  column = HELP_DESCRIPTION_COLUMN;
+
+  char const* p = description;
+  while (*p != '\0') {
+    while (*p == ' ') ++p;
+    char const* end = p;
+    while (*end != '\0' && *end != ' ') ++end;
+    size_t const word_length = size_t(end - p);
+    if (column > HELP_DESCRIPTION_COLUMN &&
+        column + 1 + word_length > HELP_LINE_WIDTH) {
+      fputc('\n', stdout);
+      help_spaces(HELP_DESCRIPTION_COLUMN);
+      column = HELP_DESCRIPTION_COLUMN;
+    } else if (column > HELP_DESCRIPTION_COLUMN) {
+      fputc(' ', stdout);
+      ++column;
+    }
+    fwrite(p, 1, word_length, stdout);
+    column += word_length;
+    p = end;
+  }
+  fputs("\n\n", stdout);
+}
+
 static void usage(char const* program) {
-  fprintf(stdout,
-      "usage: %s [-i INDEX] letters"
-      " [-u used-letters] [--dict PATH] [-m min-word-length]"
-      " [-g num-segments] [-n top]"
-      " [-x max-extract-words] [--pairs FILE]"
-      " [--seed-pairs FILE]... [--yes-pairs FILE]..."
-      " [--best-pairs FILE] [--more-best-pairs FILE]..."
-      " [--wf|--wfroot DIR] [-t TARGET]"
-      " [--exclude-pairs FILE|WORKFLOW-DIR]..."
-      " [--solo-words WORD[,WORD...]]"
-      " [--hide-solo-words]"
-      " [-p progress-factor] [--cache-size MiB]"
-      " [--preprocess-threads N] [--search-threads N]"
-      " [-d projection-depth]"
-      " [-P segment-penalty] [--word-bonus N] [--pair-bonus N]"
-      " [--segments] [--show-bonus] [--no-score] [--weighted] [--ptm]"
-      " [-F|--allow-cache-fallback] [-v|--verbose]\n"
-      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
-      " workflow mode defaults to DIR/%s; required otherwise\n"
-      "  -u, --used-letters LETTERS subtracts letters already used from the"
-      " input letters before searching\n"
-      "  -m defaults to %d; 0 for no minimum\n"
-      "  -n defaults to %d; 0 returns all results\n"
-      "  --dict PATH filters entries to words in the dictionary; workflow"
-      " mode defaults to DIR/%s\n"
-      "  -g, --num-segments N returns only results using exactly N index"
-      " entries; defaults to 0 (any number)\n"
-      "    every result then carries the same (corpus-total * P)^(N-1)"
-      " divisor, so -P cannot change their order and scores are comparable"
-      " only within one -g run\n"
-      "  -x, --max-extract-words N explores at most N words inside one index"
-      " entry; defaults to 2; 0 means no limit\n"
-      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line\n"
-      "    during extraction, a pair containing a word shorter than -m is"
-      " matched only in written order; other pairs match in either order\n"
-      "    every loaded entry must contain at least -m normalized non-space"
-      " characters in total\n"
-      "    eligible listed pairs absent from the index are admitted with"
-      " corpus count 1; standalone entries are not\n"
-      "    dictionary, bag, -m, -x, and exclusion rules still apply\n"
-      "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
-      " %.2f and %.2f; --best-pairs FILE and --more-best-pairs FILE mark"
-      " BEST entries\n"
-      "    with -g N, BEST-marked segments receive descending exponents from"
-      " N through 1, counted once per segment; without -g the exponent"
-      " remains fixed at %.2f; each option except --best-pairs may be"
-      " repeated\n"
-      "    duplicates and reversed pairs retain the strongest tier; these"
-      " options cannot be combined with legacy --pairs\n"
-      "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
-      " the nonempty WFROOT environment variable\n"
-      "    workflow mode loads DIR/%s as YES pairs and"
-      " requires either --seed-pairs or -t beginning with sN\n"
-      "    it also excludes DIR/%s, and a complete target's %s, as if each"
-      " were an --exclude-pairs file; either is"
-      " skipped when absent\n"
-      "    BEST pair words missing from the dictionary are added to it,"
-      " with a stderr notice for each\n"
-      "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
-      " its sentence seed is auto-loaded, and a complete target also loads"
-      " its optional %s unless --best-pairs replaces it\n"
-      "  --exclude-pairs FILE|WORKFLOW-DIR loads word pairs, one"
-      " \"word,word\" line each, and drops every index entry spelled exactly"
-      " like one, in either order, so"
-      " no result can contain it\n"
-      "    may be repeated to combine inputs, but only one argument may be a"
-      " directory\n"
-      "    the test is whole-entry equality, so a longer entry containing the"
-      " pair is kept; -x 2 is what confines entries to the two words this"
-      " compares\n"
-      "    a directory resolves to DIR/%s and must"
-      " hold a .wf subdirectory\n"
-      "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
-      " external words; they consume no letters and matched partners are"
-      " printed in parentheses\n"
-      "    a selected single-word entry earns --word-bonus when either"
-      " phrase order is an aggregate index phrase or is asserted by"
-      " a pair input; an asserted pair also earns its source's pair bonus\n"
-      "    each solo word can be used once per answer; both bonuses must be"
-      " non-negative, and the aggregate phrase test matches phase 1\n"
-      "  --hide-solo-words omits parenthesized solo partners from output\n"
-      "  -C, --cache-size defaults to %zu MiB; 0 disables it with -F\n"
-      "  --preprocess-threads defaults to 0: automatic for 26+ letters;"
-      " 1 disables it\n"
-      "  -S, --search-threads defaults to 0 (hardware threads)\n"
-      "  -d, --projection-depth keeps this many rarest letter types exact in"
-      " the projected cache; the default is the largest depth that fits -C\n"
-      "  -P, --segment-penalty P divides the score by P for each selected"
-      " index entry after the first; P must be at least 1 and defaults to"
-      " %.0f\n"
-      "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
-      "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
-      " defaults to %.1f\n"
-      "    at N=1 a multi-word entry earns back the default -P it costs, so"
-      " adding one as a further entry is free\n"
-      "  --pair-bonus N multiplies each index entry found in --pairs by"
-      " %.0f^N; defaults to %.1f\n"
-      "  --segments prints the index entries used by the results instead of"
-      " the results, as best-score, result-count and text, by descending"
-      " best score\n"
-      "  --show-bonus adds one marker per segment between the score and"
-      " anagram: W for word bonus, P for legacy pair bonus, S/Y/B for pair"
-      " sources, and - for none; cannot be combined with --segments\n"
-      "  --no-score omits the leading score from each result; the output"
-      " can't be read by filter-segments or rerank-anagrams; cannot be"
-      " combined with --segments\n"
-      "  --weighted sorts and reports each segment by best-score times"
-      " result-count instead of best score alone; requires --segments\n"
-      "  --ptm recalibrates the base count of every index entry, before any"
-      " bonus, onto a scale whose upper tail is normal rather than"
-      " exponential\n"
-      "    phase 1 fits the spread of the counts this bag reaches and"
-      " replaces each log(count) with the log count carrying the same"
-      " deviation in a normal batch, so one very frequent entry no longer"
-      " dominates a result\n"
-      "    the segment penalty and every bonus keep their meaning, being"
-      " stated in the same log-count units; the fit covers only the entries"
-      " this bag reaches, so scores are comparable only within one run\n"
-      "  -F, --allow-cache-fallback allows score-cache fallback when the"
-      " requested table does not fit\n"
-      "  -v, --verbose reports search task splitting\n",
-      program, WORKFLOW_INDEX_PATH, DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP,
-      WORKFLOW_DICT_PATH,
-      DFS_SEED_PAIR_BONUS, DFS_YES_PAIR_BONUS, DFS_BEST_PAIR_BONUS,
+  fprintf(stdout, "usage: %s [-i INDEX] [options] letters\n\noptions:\n",
+          program);
+  help_option("-i, --idx INDEX",
+      "read the completed Nutrimatic index from INDEX; workflow mode "
+      "defaults to DIR/%s; required otherwise",
+      WORKFLOW_INDEX_PATH);
+  help_option("-u, --used-letters LETTERS",
+      "subtract letters already used from the input letters before "
+      "searching");
+  help_option("--dict PATH",
+      "filter entries to words in the dictionary; workflow mode defaults "
+      "to DIR/%s", WORKFLOW_DICT_PATH);
+  help_option("-m, --min-word-length N",
+      "minimum word length (default: %d; 0 for no minimum)",
+      DFS_DEFAULT_MIN_WORD_LEN);
+  help_option("-g, --num-segments N",
+      "return only results using exactly N index entries (default: 0, any "
+      "number); every result then carries the same (corpus-total * "
+      "P)^(N-1) divisor, so -P cannot change their order and scores are "
+      "comparable only within one -g run");
+  help_option("-n, --top N",
+      "maximum number of results (default: %d; 0 returns all results)",
+      DEFAULT_TOP);
+  help_option("-x, --max-extract-words N",
+      "explore at most N words inside one index entry (default: 2; 0 means "
+      "no limit)");
+  help_option("--pairs FILE",
+      "load one \"word\" or \"word,word\" entry per line; a pair containing "
+      "a word shorter than -m is matched only in written order during "
+      "extraction, while other pairs match in either order; every loaded "
+      "entry must contain at least -m normalized non-space characters in "
+      "total; eligible listed pairs absent from the index are admitted with "
+      "corpus count 1, but standalone entries are not; dictionary, bag, -m, "
+      "-x, and exclusion rules still apply");
+  help_option("--seed-pairs FILE",
+      "load a repeatable fixed pair-bonus tier of %.2f",
+      DFS_SEED_PAIR_BONUS);
+  help_option("--yes-pairs FILE",
+      "load a repeatable fixed pair-bonus tier of %.2f",
+      DFS_YES_PAIR_BONUS);
+  help_option("--best-pairs FILE",
+      "mark BEST entries; may be given once");
+  help_option("--more-best-pairs FILE",
+      "mark additional BEST entries; may be repeated; with -g N, BEST-marked "
+      "segments receive descending exponents from N through 1, counted once "
+      "per segment; without -g the exponent remains fixed at %.2f; duplicate "
+      "and reversed pairs retain the strongest tier; weighted pair options "
+      "cannot be combined with legacy --pairs",
+      DFS_BEST_PAIR_BONUS);
+  help_option("--wf",
+      "use the nonempty WFROOT environment variable as the workflow root");
+  help_option("--wfroot DIR",
+      "use DIR as a workflow root; loads DIR/%s as YES pairs and requires "
+      "either --seed-pairs or -t beginning with sN; also excludes DIR/%s and "
+      "a complete target's %s as if each were an --exclude-pairs file, "
+      "skipping either when absent; BEST pair words missing from the "
+      "dictionary are added to it, with a stderr notice for each",
       WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
-      WORKFLOW_TARGET_NO_PAIRS_NAME, WORKFLOW_TARGET_BEST_PAIRS_NAME,
-      WORKFLOW_NO_PAIRS_PATH,
-      DFS_DEFAULT_SCORE_CACHE_MIB, DFS_DEFAULT_SEGMENT_PENALTY,
-      DFS_WORD_BONUS_BASE, DFS_DEFAULT_WORD_BONUS, DFS_PAIR_BONUS_BASE,
-      DFS_DEFAULT_PAIR_BONUS);
+      WORKFLOW_TARGET_NO_PAIRS_NAME);
+  help_option("-t, --target TARGET",
+      "select a prefix of sN/[ou]-letters/mN/gN; its sentence seed is "
+      "auto-loaded, and a complete target also loads its optional %s unless "
+      "--best-pairs replaces it", WORKFLOW_TARGET_BEST_PAIRS_NAME);
+  help_option("--exclude-pairs FILE|WORKFLOW-DIR",
+      "load word pairs, one \"word,word\" line each, and drop every index "
+      "entry spelled exactly like one in either order, so no result can "
+      "contain it; may be repeated, but only one argument may be a directory; "
+      "the test is whole-entry equality, so a longer entry containing the "
+      "pair is kept, and -x 2 is what confines entries to the two words this "
+      "compares; a directory resolves to DIR/%s and must hold a .wf "
+      "subdirectory", WORKFLOW_NO_PAIRS_PATH);
+  help_option("--solo-words WORD[,WORD...]",
+      "supply up to 16 unique lowercase external words; they consume no "
+      "letters and matched partners are printed in parentheses; a selected "
+      "single-word entry earns --word-bonus when either phrase order is an "
+      "aggregate index phrase or is asserted by a pair input, and an asserted "
+      "pair also earns its source's pair bonus; each solo word can be used "
+      "once per answer; both bonuses must be non-negative, and the aggregate "
+      "phrase test matches phase 1");
+  help_option("--hide-solo-words",
+      "omit parenthesized solo partners from output");
+  help_option("--no-repeat WORD|PAIR",
+      "limit one entry to a single use per result; may be repeated; a value "
+      "with no space is a word and is counted wherever it falls, including "
+      "inside a multi-word segment; a value with a space is a whole segment "
+      "matched in written order, and naming the other order takes a second "
+      "value");
+  help_option("--disable-repeats",
+      "apply the same test to every word: no word may occur twice in a "
+      "result, so \"hot dog\" beside \"dog house\" is rejected; occurrences "
+      "need not be in different entries, so a self-repeating entry like "
+      "\"step by step\" is rejected on its own; only whole words count, so "
+      "\"dog\" beside \"god\" or \"dogma\" is not a repeat");
+  help_option("-p, --progress-factor N",
+      "report search progress every 100000 * N operations (default: 1; must "
+      "be at least 1)");
+  help_option("-C, --cache-size MiB",
+      "set the projected-score cache size (default: %zu MiB; 0 disables it "
+      "with -F)", DFS_DEFAULT_SCORE_CACHE_MIB);
+  help_option("-T, --preprocess-threads N",
+      "set preprocessing threads (default: 0, automatic for 26+ letters; 1 "
+      "disables threaded preprocessing)");
+  help_option("-S, --search-threads N",
+      "set search threads (default: 0, hardware threads)");
+  help_option("-d, --projection-depth N",
+      "keep this many rarest letter types exact in the projected cache; the "
+      "default is the largest depth that fits -C");
+  help_option("-P, --segment-penalty P",
+      "divide the score by P for each selected index entry after the first; "
+      "P must be at least 1 (default: %.0f); k entries score as product(count) "
+      "/ (corpus-total * P)^(k-1)", DFS_DEFAULT_SEGMENT_PENALTY);
+  help_option("--word-bonus N",
+      "multiply each multi-word index entry by %.0f^N (default: %.1f); at N=1 "
+      "a multi-word entry earns back the default -P it costs, so adding one "
+      "as a further entry is free",
+      DFS_WORD_BONUS_BASE, DFS_DEFAULT_WORD_BONUS);
+  help_option("--pair-bonus N",
+      "multiply each index entry found in --pairs by %.0f^N (default: %.1f)",
+      DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS);
+  help_option("--segments",
+      "print the index entries used by the results instead of the results, as "
+      "best-score, result-count and text, by descending best score");
+  help_option("--show-bonus",
+      "add one marker per segment between the score and anagram: W for word "
+      "bonus, P for legacy pair bonus, S/Y/B for pair sources, and - for none; "
+      "cannot be combined with --segments");
+  help_option("--no-score",
+      "omit the leading score from each result; the output cannot be read by "
+      "filter-segments or rerank-anagrams; cannot be combined with "
+      "--segments");
+  help_option("--weighted",
+      "sort and report each segment by best-score times result-count instead "
+      "of best score alone; requires --segments");
+  help_option("--ptm",
+      "recalibrate the base count of every index entry, before any bonus, "
+      "onto a scale whose upper tail is normal rather than exponential; phase "
+      "1 fits the spread of the counts this bag reaches and replaces each "
+      "log(count) with the log count carrying the same deviation in a normal "
+      "batch, so one very frequent entry no longer dominates a result; the "
+      "segment penalty and every bonus keep their meaning in the same "
+      "log-count units; the fit covers only entries this bag reaches, so "
+      "scores are comparable only within one run");
+  help_option("-F, --allow-cache-fallback",
+      "allow score-cache fallback when the requested table does not fit");
+  help_option("-v, --verbose", "report search task splitting");
 }
 
 static int const OPT_SEGMENTS = 256;
@@ -194,6 +259,31 @@ static int const OPT_EXCLUDE_PAIRS = 258;
 static int const OPT_SHOW_BONUS = 259;
 static int const OPT_NO_SCORE = 260;
 static int const OPT_PTM = 261;
+static int const OPT_NO_REPEAT = 262;
+static int const OPT_DISABLE_REPEATS = 263;
+
+// Normalizes a --no-repeat value the way the dictionary loader normalizes a
+// line, keeping the word boundaries load_dictionary() has no use for.
+static std::string normalize_repeat_value(char const* value) {
+  std::string out;
+  bool separated = false;
+  for (char const* p = value; *p != '\0'; ++p) {
+    unsigned char const ch = (unsigned char) *p;
+    char kept;
+    if (ch >= 'A' && ch <= 'Z') {
+      kept = char(ch - 'A' + 'a');
+    } else if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      kept = char(ch);
+    } else {
+      separated = separated || (ch == ' ' || ch == '\t');
+      continue;
+    }
+    if (separated && !out.empty()) out.push_back(' ');
+    separated = false;
+    out.push_back(kept);
+  }
+  return out;
+}
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -209,6 +299,8 @@ static struct optparse_long const long_options[] = {
   { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
   { "ptm", OPT_PTM, OPTPARSE_NONE },
+  { "no-repeat", OPT_NO_REPEAT, OPTPARSE_REQUIRED },
+  { "disable-repeats", OPT_DISABLE_REPEATS, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -297,6 +389,30 @@ static bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_PTM:
         out->ptm = true;
+        break;
+      case OPT_NO_REPEAT: {
+        if (strchr(options.optarg, ',') != NULL) {
+          fprintf(stderr,
+              "error: --no-repeat does not take a comma-separated list: %s\n",
+              options.optarg);
+          return false;
+        }
+        std::string const value = normalize_repeat_value(options.optarg);
+        if (value.empty()) {
+          fprintf(stderr,
+              "error: --no-repeat value is empty after normalization: %s\n",
+              options.optarg);
+          return false;
+        }
+        std::vector<std::string>& named =
+            value.find(' ') == std::string::npos
+                ? out->repeats.words : out->repeats.pairs;
+        if (std::find(named.begin(), named.end(), value) == named.end())
+          named.push_back(value);
+        break;
+      }
+      case OPT_DISABLE_REPEATS:
+        out->repeats.disable_repeats = true;
         break;
       case 'F':
         out->allow_cache_fallback = true;
@@ -430,7 +546,7 @@ int main(int argc, char* argv[]) {
   DfsTopN output(
       prepared.classes.get(), prepared.model.get(), size_t(args.common.top),
       prepared.solo_words.get(),
-      args.show_bonus);
+      args.show_bonus, &args.repeats);
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,

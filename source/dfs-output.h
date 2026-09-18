@@ -87,6 +87,25 @@ bool dfs_print_results(
     FILE* output, std::vector<DfsSpelling> const& results,
     bool show_score, bool show_bonus, DfsSoloWords const* solo_words = NULL);
 
+// The optional repeat filter behind dfs-anagrams --no-repeat and
+// --disable-repeats. Every value is normalized the way the dictionary loader
+// normalizes a line: lowercased, characters outside a-z/0-9 dropped, internal
+// runs of space collapsed to one. `words` may appear at most once per result
+// wherever they fall, including inside a multi-word entry; `pairs` are whole
+// index entries, matched in the order written. The two lists are independent
+// counters, and disable_repeats is `words` widened to every word there is: no
+// word may occur twice in a result, whether the two occurrences fall in
+// different entries or inside one, so it rejects "step by step" on its own.
+struct DfsRepeatPolicy {
+  std::vector<std::string> words;
+  std::vector<std::string> pairs;
+  bool disable_repeats = false;
+
+  bool admits_everything() const {
+    return !disable_repeats && words.empty() && pairs.empty();
+  }
+};
+
 // The dedup table's payload. The map key (not duplicated here) is the
 // word-set key. When the result limit is nonzero, heap_pos is this entry's
 // current slot in DfsTopN::heap so a heap swap can fix up both sides in O(1);
@@ -123,10 +142,13 @@ class DfsTopN: public DfsSolutionSink {
   // solution's upper score adjusted by the upper-score difference between
   // each chosen member and its class's member 0. solo_words supplies the exact
   // profiles used to correct a concrete spelling before retention. Bonus
-  // metadata is retained only when retain_segment_bonuses is true.
+  // metadata is retained only when retain_segment_bonuses is true. A borrowed
+  // `repeats` rejects candidates before they are built; a NULL policy, or one
+  // that admits everything, costs nothing.
   DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
           size_t limit, DfsSoloWords const* solo_words = NULL,
-          bool retain_segment_bonuses = false);
+          bool retain_segment_bonuses = false,
+          DfsRepeatPolicy const* repeats = NULL);
 
   void emit(std::vector<size_t> const& class_indexes,
             double representative_upper_log_score);
@@ -145,6 +167,10 @@ class DfsTopN: public DfsSolutionSink {
   std::vector<DfsSpelling> take_sorted_results();
 
  private:
+  // Applies repeat_policy to one expansion candidate. Only legal when
+  // repeat_policy is non-NULL.
+  bool admits(std::vector<size_t> const& class_indexes,
+              std::vector<size_t> const& member_indexes) const;
   bool offer(DfsSpelling spelling);
   void swap_heap_entries(size_t a, size_t b);
   void sift_up(size_t position);
@@ -154,6 +180,7 @@ class DfsTopN: public DfsSolutionSink {
   DfsClassList const* const class_list;
   DfsScoreModel const* const score_model;
   DfsSoloWords const* const solo_words;
+  DfsRepeatPolicy const* const repeat_policy;
   size_t const result_limit;
   bool const retain_segment_bonuses;
   size_t expanded;

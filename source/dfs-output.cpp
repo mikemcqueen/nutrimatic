@@ -268,10 +268,13 @@ DfsSpelling dfs_build_spelling(
 
 DfsTopN::DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
                  size_t limit, DfsSoloWords const* solo_words,
-                 bool retain_segment_bonuses):
+                 bool retain_segment_bonuses,
+                 DfsRepeatPolicy const* repeats):
     class_list(classes),
     score_model(model),
     solo_words(solo_words),
+    repeat_policy(
+        repeats != NULL && !repeats->admits_everything() ? repeats : NULL),
     result_limit(limit),
     retain_segment_bonuses(retain_segment_bonuses),
     expanded(0),
@@ -315,6 +318,84 @@ bool DfsTopN::score_floor(double* floor) const {
   return true;
 }
 
+struct MemberWord {
+  char const* text;
+  size_t length;
+};
+
+static bool member_text_equals(
+    DfsMemberView const& view, std::string const& value) {
+  return value.size() == view.text_length &&
+      memcmp(view.text, value.data(), value.size()) == 0;
+}
+
+static size_t count_word_in_member(
+    DfsMemberView const& view, std::string const& word) {
+  size_t found = 0;
+  size_t start = 0;
+  while (start <= view.text_length) {
+    size_t end = start;
+    while (end < view.text_length && view.text[end] != ' ') ++end;
+    if (end - start == word.size() &&
+        memcmp(view.text + start, word.data(), word.size()) == 0)
+      ++found;
+    start = end + 1;
+  }
+  return found;
+}
+
+bool DfsTopN::admits(std::vector<size_t> const& class_indexes,
+                     std::vector<size_t> const& member_indexes) const {
+  DfsRepeatPolicy const& policy = *repeat_policy;
+  size_t const positions = class_indexes.size();
+
+  if (policy.disable_repeats) {
+    MemberWord seen[DFS_MAX_BAG_LETTERS];
+    size_t count = 0;
+    for (size_t i = 0; i < positions; ++i) {
+      DfsMemberView const view =
+          class_list->member(class_indexes[i], member_indexes[i]);
+      size_t start = 0;
+      while (start < view.text_length) {
+        size_t end = start;
+        while (end < view.text_length && view.text[end] != ' ') ++end;
+        size_t const length = end - start;
+        for (size_t w = 0; w < count; ++w)
+          if (seen[w].length == length &&
+              memcmp(seen[w].text, view.text + start, length) == 0)
+            return false;
+        assert(count < DFS_MAX_BAG_LETTERS);
+        seen[count].text = view.text + start;
+        seen[count].length = length;
+        ++count;
+        start = end + 1;
+      }
+    }
+  }
+
+  if (!policy.pairs.empty())
+    for (size_t i = 1; i < positions; ++i) {
+      if (class_indexes[i] != class_indexes[i - 1] ||
+          member_indexes[i] != member_indexes[i - 1])
+        continue;
+      DfsMemberView const view =
+          class_list->member(class_indexes[i], member_indexes[i]);
+      for (size_t p = 0; p < policy.pairs.size(); ++p)
+        if (member_text_equals(view, policy.pairs[p])) return false;
+    }
+
+  for (size_t w = 0; w < policy.words.size(); ++w) {
+    size_t seen = 0;
+    for (size_t i = 0; i < positions; ++i) {
+      seen += count_word_in_member(
+          class_list->member(class_indexes[i], member_indexes[i]),
+          policy.words[w]);
+      if (seen > 1) return false;
+    }
+  }
+  return true;
+}
+
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_upper_log_score) {
   if (class_indexes.empty()) return;
@@ -337,12 +418,15 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
     if (score_floor(&published) && current.upper_log_score <= published) break;
     pending.pop();
 
-    DfsSpelling spelling = dfs_build_spelling(
-        *class_list, *score_model, solo_words, class_indexes,
-        current.member_indexes, representative_upper_log_score,
-        retain_segment_bonuses);
-    assert(spelling.log_score <= current.upper_log_score);
-    {
+    // A rejected candidate is skipped, not pruned: its successors still go on
+    // the queue, since a repeat at this member can vanish at the next one.
+    if (repeat_policy == NULL ||
+        admits(class_indexes, current.member_indexes)) {
+      DfsSpelling spelling = dfs_build_spelling(
+          *class_list, *score_model, solo_words, class_indexes,
+          current.member_indexes, representative_upper_log_score,
+          retain_segment_bonuses);
+      assert(spelling.log_score <= current.upper_log_score);
       std::lock_guard<std::mutex> const guard(heap_mutex);
       // The published floor may have strengthened while this spelling was
       // constructed. Since pending is score ordered and descendants cannot

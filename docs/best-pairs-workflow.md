@@ -56,10 +56,22 @@ The details:
    
    Steps for generating pairs to submit/eval in P1 workflow:
 
-     * build/query-index $IDX $S2 -x 2 --dict tmp/words.big -n 0  --csv |sort -u > idx/idx.2.s2.m4
-     * comm -23 idx/idx.2.s2.m4 ../words/final/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain
+    * build list of index-known pairs:
+
+      `build/query-index -i $IDX $S2 -x 2 --dict tmp/words.big -n 0  --csv |sort -u > idx/idx.2.s2.m4`
+      
+      QUESTION: is this guaranteed to be all pairs? is -x2 an upper limit or a lower limit or both?
+      NOTE: this will have reversed entries: "one,two" and "two,one", which is
+            desirable at this stage for p1_done filtering.
+
+    * filter out already-auto-classified pairs:
+
+      `comm -23 idx/idx.2.s2.m4 ../words/final/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
+      
+      NOTE: this is dumb, need a better dedicated tool. need to think about it.
+      
      * if necessary (substantially more than 1M lines):
-         split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain.
+       `split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain`
 
    From here, we need to run
      * wf filter pairs idx/idx.2.s2.m4 -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes
