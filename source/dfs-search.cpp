@@ -398,10 +398,10 @@ bool DfsAnagramSearch::prepare_length_certificate(DfsSearchData* data) {
         previous_length = length;
         data->certificate_max_score[base + length] = std::max(
             data->certificate_max_score[base + length],
-            best_member_upper_log_scores[i]);
+            data->best_member_upper_log_scores[i]);
         data->certificate_group_end[base + length] = uint32_t(i + 1);
         best_score[length] = std::max(
-            best_score[length], best_member_upper_log_scores[i]);
+            best_score[length], data->best_member_upper_log_scores[i]);
       }
     }
 
@@ -486,7 +486,8 @@ bool DfsAnagramSearch::prepare_phase_two(
   *data = DfsSearchData();
   *stats = DfsSearchStats();
   data->class_list = class_list;
-  data->best_member_upper_log_scores = best_member_upper_log_scores;
+  data->best_member_upper_log_scores =
+      std::span<double const>(best_member_upper_log_scores);
   data->segment_boundary_log_score = segment_boundary_log_score;
   data->letter_count = letters.size();
   data->max_depth = max_depth;

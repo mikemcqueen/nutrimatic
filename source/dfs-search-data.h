@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include "dfs-alloc.h"
@@ -34,13 +35,13 @@ enum Reachability {
 
 // The prepared query: everything phase 2 builds for one call, owned outright.
 // A runner takes one by move and destroys it when the call ends, so no prepared
-// table outlives the search using it and the facade declares none of them. Only
-// the phase-1 class list is borrowed, because its owner outlives every phase-2
-// call.
+// table outlives the search using it and the facade declares none of them. The
+// phase-1 class list and query-fixed class scores are borrowed from owners that
+// outlive every phase-2 call.
 struct DfsSearchData {
   DfsClassList const* class_list = NULL;
   ScoreBounds score_bounds;
-  std::vector<double> best_member_upper_log_scores;
+  std::span<double const> best_member_upper_log_scores;
   double segment_boundary_log_score = 0.0;
   size_t letter_count = 0;
   size_t max_depth = 0;
