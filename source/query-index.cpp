@@ -257,7 +257,15 @@ static bool parse_args(char* argv[], Args* out) {
     }
   }
   char const* letters = optparse_arg(&options);
-  if (letters == NULL || optparse_arg(&options) != NULL) {
+  if (letters == NULL) {
+    fprintf(stderr, "error: missing %s argument\n",
+            out->near ? "input" : (out->score ? "sequence" : "letters"));
+    usage(argv[0]);
+    return false;
+  }
+  char const* extra = optparse_arg(&options);
+  if (extra != NULL) {
+    fprintf(stderr, "error: unexpected argument \"%s\"\n", extra);
     usage(argv[0]);
     return false;
   }
@@ -268,6 +276,7 @@ static bool parse_args(char* argv[], Args* out) {
       return false;
     }
     if (out->index_file == NULL) {
+      fputs("error: missing index; use -i INDEX\n", stderr);
       usage(argv[0]);
       return false;
     }
@@ -281,6 +290,7 @@ static bool parse_args(char* argv[], Args* out) {
           out->score ? NULL : &out->exclude_pair_files))
     return false;
   if (out->index_file == NULL) {
+    fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
     usage(argv[0]);
     return false;
   }

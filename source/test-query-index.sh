@@ -27,6 +27,10 @@ positional_index_status=$?
 "$query_index" abcd \
   > "$test_dir/missing-index.stdout" 2> "$test_dir/missing-index.stderr"
 missing_index_status=$?
+"$query_index" -i "$synthetic_index" \
+  > "$test_dir/missing-letters.stdout" \
+  2> "$test_dir/missing-letters.stderr"
+missing_letters_status=$?
 set -e
 [[ $positional_index_status -eq 2 ]] ||
   fail "positional index should exit 2, got $positional_index_status"
@@ -40,6 +44,14 @@ grep -Eq '^  -i, --idx INDEX +read the completed Nutrimatic index' \
   fail "query-index help did not align option descriptions"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
+grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
+  "$test_dir/missing-index.stderr" ||
+  fail "missing index error is unclear"
+[[ $missing_letters_status -eq 2 ]] ||
+  fail "missing letters should exit 2, got $missing_letters_status"
+grep -q '^error: missing letters argument$' \
+  "$test_dir/missing-letters.stderr" ||
+  fail "missing letters error is unclear"
 
 score_value() {
   "$query_index" -i "$synthetic_index" "$1" --score "${@:2}" \
