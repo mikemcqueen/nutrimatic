@@ -69,7 +69,16 @@ The details:
       `comm -23 idx/idx.2.s2.m4 ../words/final/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
       
       NOTE: this is dumb, need a better dedicated tool. need to think about it.
-      
+
+      UPDATE: src.filter has the logic on how to approach this, that we can probably leverage in 
+              another tool.  load pairs in canonical form, check for membership in p1_done.pairs.
+              or, alternatively, just leverage src.filter itself, and add some freaky new option
+              to not filter on --pm/--pm at all, but stream *all* results and return all matches
+              whether YES or NO classified. normally you'd expect it to show matches, and -v to
+              show non-matches (like grep), but in our case maybe show non-matches by default is
+              better.  maybe --matches to "filter (out) matches". not thrilled with that option
+              name but that's the gist of it i think.
+           
      * if necessary (substantially more than 1M lines):
        `split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain`
 
