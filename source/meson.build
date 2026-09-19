@@ -193,6 +193,8 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
   dependencies: [segment_output_dep, thread_dep],
   install: true)
 
+executable('pcomm', 'pcomm.cpp', install: true)
+
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: [segment_output_dep, segment_rows_dep, thread_dep],
