@@ -50,13 +50,22 @@ bool select_segment_output(
     SegmentSelection selection, SegmentProjection projection,
     char const* program, SegmentOutputOptions* out);
 
-// Parses --pairs, --solo-words, --all-words, -l/--by-length and -n N. `index`
-// points to the current argument and advances over a consumed N. The three
-// output options are mutually exclusive, though repeating one is allowed.
-// Errors are diagnosed already.
+// Parses --pairs, --solo-words, --all-words, --pair-words, --unique,
+// -l/--by-length and -n N. `index` points to the current argument and advances
+// over a consumed N. The four output modes are mutually exclusive, though
+// repeating one is allowed. Errors are diagnosed already.
 SegmentOutputOptionResult parse_segment_output_option(
     int argc, char* const argv[], int* index, char const* program,
     SegmentOutputOptions* out);
+
+// Validates option relationships that may be specified in either order.
+bool check_segment_output_options(
+    SegmentOutputOptions const& options, char const* program);
+
+bool is_selected_segment(
+    SegmentSelection selection, std::string const& segment);
+
+bool is_pair_word_output(SegmentOutputOptions const& options);
 
 bool is_pair_segment(std::string const& segment);
 

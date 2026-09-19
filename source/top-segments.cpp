@@ -98,19 +98,6 @@ static bool parse_args(
         suppress_counts = true;
         continue;
       }
-      if (strcmp(argv[i], "--pair-words") == 0) {
-        if (!select_segment_output(
-                SEGMENT_SELECTION_PAIRS, SEGMENT_PROJECTION_WORDS,
-                "top-segments", &output_options)) {
-          usage(argv[0]);
-          return false;
-        }
-        continue;
-      }
-      if (strcmp(argv[i], "--unique") == 0) {
-        output_options.weight = SEGMENT_WEIGHT_UNIQUE;
-        continue;
-      }
       if (strcmp(argv[i], "--elim") == 0) {
         elimination = true;
         continue;
@@ -163,9 +150,6 @@ static bool parse_args(
   bool const pair_segments =
       output_options.selection == SEGMENT_SELECTION_PAIRS &&
       output_options.projection == SEGMENT_PROJECTION_SEGMENTS;
-  bool const pair_words =
-      output_options.selection == SEGMENT_SELECTION_PAIRS &&
-      output_options.projection == SEGMENT_PROJECTION_WORDS;
   if (force_counts && suppress_counts) {
     fputs("top-segments: --counts and --no-counts are mutually exclusive\n",
         stderr);
@@ -180,8 +164,7 @@ static bool parse_args(
   }
   bool const show_counts = force_counts ||
       (!suppress_counts && !pair_segments);
-  if (output_options.weight == SEGMENT_WEIGHT_UNIQUE && !pair_words) {
-    fputs("top-segments: --unique requires --pair-words\n", stderr);
+  if (!check_segment_output_options(output_options, "top-segments")) {
     usage(argv[0]);
     return false;
   }

@@ -104,6 +104,37 @@ another'
 actual=$("$first_segments" --all-words -n 4 "$pairs_input" 2>/dev/null)
 [[ $actual == "$expected" ]] || fail "--all-words output is wrong: $actual"
 
+pair_words_input=$test_dir/pair-words-results.txt
+cat > "$pair_words_input" <<'EOF'
+9 red fox,alpha
+8 red fox,beta
+7 red dog,gamma
+EOF
+
+expected='red
+fox
+dog'
+actual=$("$first_segments" --pair-words "$pair_words_input" 2>/dev/null)
+[[ $actual == "$expected" ]] || fail "--pair-words output is wrong: $actual"
+
+actual=$("$first_segments" --pair-words --unique "$pair_words_input" \
+  2>/dev/null)
+[[ $actual == "$expected" ]] ||
+  fail "--pair-words --unique output is wrong: $actual"
+
+actual=$("$first_segments" --unique --pair-words "$pair_words_input" \
+  2>/dev/null)
+[[ $actual == "$expected" ]] ||
+  fail "--unique --pair-words output is wrong: $actual"
+
+if "$first_segments" --unique "$input" >/dev/null 2>&1; then
+  fail "--unique without --pair-words succeeded"
+fi
+
+if "$first_segments" --pair-words --pairs "$input" >/dev/null 2>&1; then
+  fail "--pair-words with --pairs succeeded"
+fi
+
 expected='alpha,beta
 beta,gamma
 another

@@ -10,13 +10,6 @@
 #include <limits>
 #include <vector>
 
-static bool selected_segment(
-    SegmentSelection selection, std::string const& segment) {
-  if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
-  if (selection == SEGMENT_SELECTION_SOLO) return is_solo_segment(segment);
-  return true;
-}
-
 static bool count_candidate(
     std::string const& candidate, uint64_t row, bool count_occurrence,
     char const* program, SegmentStatsMap* counts) {
@@ -116,7 +109,7 @@ bool segment_counts_read(
         ++entry->second.count;
         continue;
       }
-      if (!selected_segment(options.output.selection, segment)) continue;
+      if (!is_selected_segment(options.output.selection, segment)) continue;
 
       if (options.output.projection == SEGMENT_PROJECTION_SEGMENTS) {
         if (!count_candidate(segment, row_number, true, data->program,
@@ -202,7 +195,7 @@ static bool split_counts(
     SegmentWeight weight, char const* program, SegmentStatsMap* words) {
   for (SegmentStatsMap::const_iterator entry = counts.begin();
        entry != counts.end(); ++entry) {
-    if (!selected_segment(selection, entry->first)) continue;
+    if (!is_selected_segment(selection, entry->first)) continue;
     std::vector<std::string> const split = split_segment_words(entry->first);
     uint64_t const increment = weight == SEGMENT_WEIGHT_UNIQUE
         ? 1 : entry->second.count;
@@ -249,7 +242,7 @@ bool segment_counts_print_top(
   for (SegmentStatsMap::const_iterator entry = rows.begin();
        entry != rows.end(); ++entry) {
     if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS &&
-        !selected_segment(output_options.selection, entry->first))
+        !is_selected_segment(output_options.selection, entry->first))
       continue;
     ordered.push_back(entry);
     largest = std::max(largest, entry->second.count);

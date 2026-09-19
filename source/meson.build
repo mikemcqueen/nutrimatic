@@ -93,6 +93,7 @@ dfs_class_list_lib = library(
     'dfs-class-list.cpp',
     'dfs-class-list-build.cpp',
     'dfs-cli-args.cpp',
+    'dfs-cli-help.cpp',
     'dfs-diagnostic.cpp',
     'dfs-score.cpp',
     'tail-map.cpp',

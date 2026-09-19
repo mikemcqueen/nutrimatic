@@ -7,6 +7,7 @@
 #include "dfs-class-list.h"
 #include "dfs-class-list-build.h"
 #include "dfs-cli-args.h"
+#include "dfs-cli-help.h"
 #include "dfs-diagnostic.h"
 #include "dfs-score.h"
 #include "dfs-solo-words.h"
@@ -51,128 +52,91 @@ struct Args {
 
 static void usage(char const* program) {
   fprintf(stdout,
-      "usage: %s [-i INDEX] letters"
-      " [--score] [-P|--segment-penalty P] [--word-bonus N]"
-      " [--pair-bonus N]"
-      " [--solo-words WORD[,WORD...]]"
-      " [--hide-solo-words]"
-      " [-u used-letters] [--dict PATH] [-m min-word-length] [-n top]"
-      " [-x max-extract-words] [--pairs FILE]"
-      " [--seed-pairs FILE]... [--yes-pairs FILE]..."
-      " [--best-pairs FILE] [--more-best-pairs FILE]..."
-      " [--wf|--wfroot DIR] [-t TARGET]"
-      " [-w|--words-only] [--csv] [--require-completable]"
-      " [-S|--search-threads N]\n"
-      "       %s [-i INDEX] sequence|- --score"
-      " [-P|--segment-penalty P] [--word-bonus N]"
-      " [--pair-bonus N] [--pairs FILE]"
-      " [--seed-pairs FILE]... [--yes-pairs FILE]..."
-      " [--best-pairs FILE] [--more-best-pairs FILE]..."
-      " [--wf|--wfroot DIR] [-t TARGET]"
-      " [--solo-words WORD[,WORD...]] [--ptm]\n"
-      "       %s -i INDEX input --near word [-n top]\n"
-      "  -i, --idx INDEX reads the completed Nutrimatic index from INDEX;"
-      " workflow mode defaults to DIR/%s; required otherwise and with"
-      " --near\n"
-      "  --score treats letters as a comma-separated sequence of exact\n"
-      "    entries and prints the score dfs-anagrams assigns that spelling;\n"
-      "    it scores the sequence as given, applies no dictionary or\n"
-      "    exclusion filtering, and requires every entry to be in the index\n"
-      "    with sequence -, reads one comma-separated value per stdin line,\n"
-      "    each as one space-separated index entry, and sorts by score; a\n"
-      "    two-word value uses its higher-scoring index orientation, or\n"
-      "    scores zero when neither orientation is in the index\n"
-      "    stdin mode also prints the geometric mean of the scores as its"
-      " first line, in score units, with one standard deviation as the\n"
-      "    factor it multiplies or divides a score by, then a column giving"
-      " each value's distance from the mean in those deviations;\n"
-      "    zero-scoring values are excluded from both and print -, and the\n"
-      "    whole summary is withheld once any bonus applies to any value\n"
-      "  --ptm adds a mapped-deviation column after the deviation, on a\n"
-      "    scale whose upper tail is normal rather than exponential: the\n"
-      "    top percent of log scores is mapped through a fitted exponential\n"
-      "    tail and the rest through their own ranks, so a value's column\n"
-      "    states the deviation it would have in a normal batch\n"
-      "    a score column follows it, giving the score that mapped\n"
-      "    deviation stands for: the score whose distance from the mean is\n"
-      "    the mapped deviation rather than the value's own\n"
-      "    it requires stdin --score, follows the summary in being withheld\n"
-      "    by any bonus, needs three finite scores and one below the tail,\n"
-      "    and adds the fitted tail rate to the summary line\n"
-      "  --near treats both arguments as literal lowercase a-z0-9 entries;\n"
-      "    it prints aggregate phrases spanning the endpoints with at least\n"
-      "    one complete intervening word, searching each endpoint that is an\n"
-      "    aggregate index entry\n"
-      "  -P, --segment-penalty P divides the score by P for each selected"
-      " index entry after the first; P must be at least 1 and defaults to"
-      " %.0f\n"
-      "    k entries score as product(count) / (corpus-total * P)^(k-1)\n"
-      "  --word-bonus N multiplies each multi-word index entry by %.0f^N;"
-      " defaults to %.1f\n"
-      "  --pair-bonus N multiplies each index entry found in --pairs by"
-      " %.0f^N; defaults to %.1f\n"
-      "  -m defaults to %d; 0 for no minimum\n"
-      "  -n defaults to %d; 0 for no limit\n"
-      "  --dict PATH filters entries to words in the dictionary; workflow"
-      " mode defaults to DIR/%s\n"
-      "  -x, --max-extract-words N explores at most N words inside one index"
-      " entry; defaults to 0 (no limit)\n"
-      "  --pairs FILE loads one \"word\" or \"word,word\" entry per line\n"
-      "    during extraction, a pair containing a word shorter than -m is"
-      " matched only in written order; other pairs match in either order\n"
-      "    every loaded entry must contain at least -m normalized"
-      " non-space characters in total\n"
-      "    when listing, eligible listed pairs absent from the index are"
-      " admitted with corpus count 1, and dictionary, bag, -m, -x, and"
-      " workflow NO rules still apply\n"
-      "    --score instead matches pairs in either order, does not apply"
-      " the extraction minimum, and filters nothing\n"
-      "  --seed-pairs FILE and --yes-pairs FILE load fixed pair-bonus tiers"
-      " %.2f and %.2f; --best-pairs FILE and --more-best-pairs FILE mark"
-      " BEST entries\n"
-      "    --score uses the sequence entry count N and descending BEST"
-      " exponents from N through 1, counted once per entry; ordinary listing"
-      " keeps the fixed %.2f exponent; each option except --best-pairs may"
-      " be repeated\n"
-      "    duplicates and reversed pairs retain the strongest tier; these"
-      " options cannot be combined with legacy --pairs\n"
-      "  --wfroot DIR uses DIR as a workflow root; --wf is an alias using"
-      " the nonempty WFROOT environment variable\n"
-      "    workflow mode loads DIR/%s as YES pairs and"
-      " requires either --seed-pairs or -t beginning with sN\n"
-      "    when listing, it also excludes DIR/%s, and a complete target's"
-      " %s, when those files exist; --score reads neither\n"
-      "    BEST pair words missing from the dictionary are added to it,"
-      " with a stderr notice for each\n"
-      "  -t, --target TARGET selects a prefix of sN/[ou]-letters/mN/gN;"
-      " its sentence seed is auto-loaded, and a complete target also loads"
-      " its optional %s unless --best-pairs replaces it\n"
-      "  --solo-words WORD[,WORD...] supplies up to 16 unique lowercase"
-      " external words; they consume no letters and matched partners are"
-      " printed in parentheses\n"
-      "    a selected single-word entry earns --word-bonus when either"
-      " phrase order is an aggregate index phrase or is asserted by"
-      " a pair input; an asserted pair also earns its source's pair bonus\n"
-      "    each solo word can be used once per row or --score sequence; both"
-      " bonuses must be non-negative, and the aggregate phrase test matches"
-      " phase 1\n"
-      "  --hide-solo-words omits parenthesized solo partners from ordinary"
-      " output\n"
-      "  -w, --words-only excludes multi-word phrases\n"
-      "  --csv prints only multi-word entries, as their comma-separated"
-      " words, with no count or score column\n"
-      "  --require-completable drops classes whose removal leaves a\n"
-      "    remainder phase 2 can't fully turn into an anagram (subject to\n"
-      "    -m), using shared exact validation without a score cache\n"
-      "  -S, --search-threads defaults to 1; 0 uses hardware threads\n",
-      program, program, program, WORKFLOW_INDEX_PATH,
-      DFS_DEFAULT_SEGMENT_PENALTY,
-      DFS_WORD_BONUS_BASE, DFS_DEFAULT_WORD_BONUS,
-      DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS,
-      DFS_DEFAULT_MIN_WORD_LEN, DEFAULT_TOP, WORKFLOW_DICT_PATH,
-      DFS_SEED_PAIR_BONUS, DFS_YES_PAIR_BONUS, DFS_BEST_PAIR_BONUS,
+      "usage: %s [-i INDEX] [options] letters\n"
+      "       %s [-i INDEX] [options] sequence|- --score\n"
+      "       %s -i INDEX input --near WORD [-n N]\n\noptions:\n",
+      program, program, program);
+  dfs_help_index(true);
+  dfs_help_used_letters();
+  dfs_help_dictionary();
+  dfs_help_min_word_length();
+  dfs_help_top(DEFAULT_TOP);
+  dfs_help_max_extract_words(0);
+  dfs_help_option("--pairs FILE",
+      "load one \"word\" or \"word,word\" entry per line; during extraction, "
+      "a pair containing a word shorter than -m matches only in written "
+      "order, while other pairs match either way; each entry needs at least "
+      "-m normalized non-space characters; listing admits eligible missing "
+      "pairs with corpus count 1 and still applies dictionary, bag, -m, -x, "
+      "and workflow NO rules; --score matches pairs in either order without "
+      "the extraction minimum or filtering");
+  dfs_help_seed_pairs();
+  dfs_help_yes_pairs();
+  dfs_help_best_pairs();
+  dfs_help_option("--more-best-pairs FILE",
+      "mark additional BEST entries; may be repeated; --score uses sequence "
+      "entry count N and descending BEST exponents from N through 1, counted "
+      "once per entry; listing keeps the fixed %.2f exponent; duplicate and "
+      "reversed pairs retain the strongest tier; weighted pair options "
+      "cannot be combined with legacy --pairs", DFS_BEST_PAIR_BONUS);
+  dfs_help_wf();
+  dfs_help_option("--wfroot DIR",
+      "use DIR as a workflow root; loads DIR/%s as YES pairs and requires "
+      "either --seed-pairs or -t beginning with sN; listing also excludes "
+      "DIR/%s and a complete target's %s when present; --score reads neither "
+      "NO file; BEST pair words missing from the dictionary are added to it, "
+      "with a stderr notice for each",
       WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
-      WORKFLOW_TARGET_NO_PAIRS_NAME, WORKFLOW_TARGET_BEST_PAIRS_NAME);
+      WORKFLOW_TARGET_NO_PAIRS_NAME);
+  dfs_help_target();
+  dfs_help_option("--solo-words WORD[,WORD...]",
+      "supply up to 16 unique lowercase external words; they consume no "
+      "letters and matched partners are printed in parentheses; a selected "
+      "single-word entry earns --word-bonus when either phrase order is an "
+      "aggregate index phrase or is asserted by a pair input, and an "
+      "asserted pair also earns its source's pair bonus; each solo word can "
+      "be used once per row or --score sequence; both bonuses must be "
+      "non-negative, and the aggregate phrase test matches phase 1");
+  dfs_help_option("--hide-solo-words",
+      "omit parenthesized solo partners from ordinary output");
+  dfs_help_segment_penalty();
+  dfs_help_word_bonus();
+  dfs_help_pair_bonus();
+  dfs_help_option("-w, --words-only", "exclude multi-word phrases");
+  dfs_help_option("--csv",
+      "print only multi-word entries, as comma-separated words, with no "
+      "count or score column");
+  dfs_help_option("--require-completable",
+      "drop classes whose removal leaves a remainder phase 2 cannot fully "
+      "turn into an anagram (subject to -m), using shared exact validation "
+      "without a score cache");
+  dfs_help_option("-S, --search-threads N",
+      "set search threads (default: 1; 0 uses hardware threads)");
+  dfs_help_option("--score",
+      "treat sequence as comma-separated exact index entries and print the "
+      "score dfs-anagrams assigns that spelling; no dictionary or exclusion "
+      "filtering applies, and every entry must be in the index; sequence - "
+      "reads one comma-separated value per stdin line, each as one "
+      "space-separated index entry, and sorts by score; a two-word value "
+      "uses its higher-scoring orientation or scores zero if neither is in "
+      "the index; stdin mode prints the geometric mean first, in score "
+      "units, with one standard deviation as a multiplicative factor, then "
+      "each value's distance from the mean in those deviations; zero scores "
+      "are excluded from the summary and print -, and any bonus withholds "
+      "the whole summary");
+  dfs_help_option("--ptm",
+      "add a mapped-deviation column after the deviation, with a normal "
+      "rather than exponential upper tail; the top percent of log scores "
+      "uses a fitted exponential tail and the rest use their ranks; a "
+      "following score column gives the score corresponding to that mapped "
+      "deviation; requires stdin --score, is withheld by any bonus, needs "
+      "three finite scores and one below the tail, and adds the fitted "
+      "tail rate to the summary line");
+  dfs_help_option("--near WORD",
+      "treat input and WORD as literal lowercase a-z0-9 entries; print "
+      "aggregate phrases spanning the endpoints with at least one complete "
+      "intervening word, searching each endpoint that is an aggregate "
+      "index entry");
 }
 
 static int const OPT_REQUIRE_COMPLETABLE = 256;

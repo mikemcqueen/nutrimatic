@@ -58,7 +58,7 @@ The details:
 
     * build list of index-known pairs:
 
-      `build/query-index -i $IDX $S2 -x 2 --dict tmp/words.big -n 0  --csv |sort -u > idx/idx.2.s2.m4`
+      `query-index -i $IDX $S2 -x 2 --dict tmp/words.big -n 0  --csv |sort -u > idx/idx.2.s2.m4`
       
       QUESTION: is this guaranteed to be all pairs? is -x2 an upper limit or a lower limit or both?
       NOTE: this will have reversed entries: "one,two" and "two,one", which is
@@ -73,11 +73,21 @@ The details:
      * if necessary (substantially more than 1M lines):
        `split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain`
 
+    * seems i left out a step here, where i actually submit the .remain to p1 for auto-classification?
+      why did I do the filter + split manually here instead of letting p1 handle it?  i do recall
+      there being some .enex artifacts in nutrimatic/tmp/ like i was manually downloading notes and
+      extracting yes-probs from them, but i can't remember why i would do it that way.
+      probably need to dig into the history log to refresh my memory.
+      in any case, if i do end up using p1 submit/eval i need to fix it's "done filtering" to be
+      smarter than the dumb version it's using, which i think is the `comm` command directly above.
+
    From here, we need to run
      * wf filter pairs idx/idx.2.s2.m4 -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes
        input: the original (pre-filtered) pairs file
        output: top 15% of YES results.
        
+     * NOTE: wf filter is not a command.  maybe i renamed it to wf extract yes?
+
      * NOTE: I'm losing the ".2" of the "using the 2-occurance wiki-merged index in the
         filename here. Not ideal, but not sure it matters? I could prepend idx.2 i guess?
        
@@ -148,4 +158,3 @@ The details:
 4. use that newly generated p2.yes as the new --pairs input
 
    * build/dfs-anagrams $IDX $S2 -m 4 -S 20 -p 10000000 -n 1000000 --word-bonus 1 --dict tmp/words.big --pairs tmp/s2.m4.1000.p2.yes -x 2 -g 4 > results/s2/dfs.s2.m4.b1.bw.x2.g4.yes.1000000
-

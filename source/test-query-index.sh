@@ -30,9 +30,14 @@ missing_index_status=$?
 set -e
 [[ $positional_index_status -eq 2 ]] ||
   fail "positional index should exit 2, got $positional_index_status"
-grep -q '^usage: .* \[-i INDEX\] letters' \
+grep -q '^usage: .* \[-i INDEX\] \[options\] letters$' \
   "$test_dir/positional-index.stdout" ||
   fail "positional index rejection did not show the new synopsis"
+grep -q '^options:$' "$test_dir/positional-index.stdout" ||
+  fail "query-index help did not show the options section"
+grep -Eq '^  -i, --idx INDEX +read the completed Nutrimatic index' \
+  "$test_dir/positional-index.stdout" ||
+  fail "query-index help did not align option descriptions"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
 

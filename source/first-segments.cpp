@@ -24,7 +24,8 @@ struct FoundSegment {
 
 static void usage(char const* program) {
   fprintf(stdout,
-      "usage: %s [--pairs | --solo-words | --all-words]\n"
+      "usage: %s [--pairs | --solo-words | --all-words |\n"
+      "          --pair-words [--unique]]\n"
       "          [-l]\n"
       "          [-n N]\n"
       "          [-i FILE | --ignore FILE]...\n"
@@ -38,6 +39,10 @@ static void usage(char const* program) {
       "  --solo-words         print only single-word segments\n"
       "  --all-words          print the first N distinct words, splitting\n"
       "                       multi-word segments into their words\n"
+      "  --pair-words         print the first N distinct words from\n"
+      "                       multi-word segments\n"
+      "  --unique             with --pair-words, process each distinct\n"
+      "                       multi-word segment once\n"
       "  -l, --by-length      sort by descending non-space character length\n"
       "  -n N                 maximum number of segments to print; defaults\n"
       "                       to %" PRIu64 "\n"
@@ -75,6 +80,7 @@ static bool find_segments(
     std::istream* input, char const* name, PairFilters const& filters,
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
+  std::unordered_set<std::string> unique_segments;
   std::vector<FoundSegment> result;
   SegmentRowReader reader = {input, name, "first-segments"};
   SegmentRow row;
@@ -90,11 +96,9 @@ static bool find_segments(
     for (std::string const& segment : row.segments) {
       if (result.size() == output_options.limit) break;
       if (filters.ignored.find(segment) != filters.ignored.end()) continue;
-      if (output_options.selection == SEGMENT_SELECTION_PAIRS &&
-          !is_pair_segment(segment))
-        continue;
-      if (output_options.selection == SEGMENT_SELECTION_SOLO &&
-          !is_solo_segment(segment))
+      if (!is_selected_segment(output_options.selection, segment)) continue;
+      if (output_options.weight == SEGMENT_WEIGHT_UNIQUE &&
+          !unique_segments.insert(segment).second)
         continue;
 
       if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS) {
@@ -172,6 +176,10 @@ int main(int argc, char* argv[]) {
   }
 
   if (!check_pair_filter_options(filter_options, "first-segments")) {
+    usage(argv[0]);
+    return 2;
+  }
+  if (!check_segment_output_options(output_options, "first-segments")) {
     usage(argv[0]);
     return 2;
   }

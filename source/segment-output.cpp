@@ -54,6 +54,15 @@ SegmentOutputOptionResult parse_segment_output_option(
         SEGMENT_SELECTION_ALL, SEGMENT_PROJECTION_WORDS, program, out)
         ? SEGMENT_OUTPUT_OPTION_HANDLED : SEGMENT_OUTPUT_OPTION_ERROR;
   }
+  if (strcmp(option, "--pair-words") == 0) {
+    return select_segment_output(
+        SEGMENT_SELECTION_PAIRS, SEGMENT_PROJECTION_WORDS, program, out)
+        ? SEGMENT_OUTPUT_OPTION_HANDLED : SEGMENT_OUTPUT_OPTION_ERROR;
+  }
+  if (strcmp(option, "--unique") == 0) {
+    out->weight = SEGMENT_WEIGHT_UNIQUE;
+    return SEGMENT_OUTPUT_OPTION_HANDLED;
+  }
   if (strcmp(option, "-l") == 0 || strcmp(option, "--by-length") == 0) {
     out->by_length = true;
     return SEGMENT_OUTPUT_OPTION_HANDLED;
@@ -67,6 +76,28 @@ SegmentOutputOptionResult parse_segment_output_option(
     return SEGMENT_OUTPUT_OPTION_ERROR;
   }
   return SEGMENT_OUTPUT_OPTION_HANDLED;
+}
+
+bool check_segment_output_options(
+    SegmentOutputOptions const& options, char const* program) {
+  if (options.weight == SEGMENT_WEIGHT_UNIQUE &&
+      !is_pair_word_output(options)) {
+    fprintf(stderr, "%s: --unique requires --pair-words\n", program);
+    return false;
+  }
+  return true;
+}
+
+bool is_selected_segment(
+    SegmentSelection selection, std::string const& segment) {
+  if (selection == SEGMENT_SELECTION_PAIRS) return is_pair_segment(segment);
+  if (selection == SEGMENT_SELECTION_SOLO) return is_solo_segment(segment);
+  return true;
+}
+
+bool is_pair_word_output(SegmentOutputOptions const& options) {
+  return options.selection == SEGMENT_SELECTION_PAIRS &&
+      options.projection == SEGMENT_PROJECTION_WORDS;
 }
 
 bool is_pair_segment(std::string const& segment) {
