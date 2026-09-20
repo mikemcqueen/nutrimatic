@@ -422,22 +422,22 @@ cmp "$test_dir/completable-on.stdout" \
 # Filtering is score-independent: the phrase-only completion of "f" stays
 # reachable regardless of how the surviving members are ranked for display.
 "$query_index" -i "$synthetic_index" fghij -m 1 -n 10 \
-  --words-only --require-completable \
+  -w 1 --require-completable \
   > "$test_dir/phrase-completion.stdout" \
   2> "$test_dir/phrase-completion.stderr"
 grep -q ' f$' "$test_dir/phrase-completion.stdout" ||
   fail "phrase-only completion of f was filtered out"
 
-# Phrases remain available as completion classes under --words-only, but are
+# Phrases remain available as completion classes under -w 1, but are
 # filtered from the displayed members.
 "$query_index" -i "$synthetic_index" qrstuv -m 2 -n 10 \
-  --words-only --require-completable \
+  -w 1 --require-completable \
   > "$test_dir/words-completed-by-phrase.stdout" \
   2> "$test_dir/words-completed-by-phrase.stderr"
 [[ $(wc -l < "$test_dir/words-completed-by-phrase.stdout") -eq 1 ]] ||
-  fail "--words-only should print only the word completed by a phrase"
+  fail "-w 1 should print only the word completed by a phrase"
 grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
-  fail "a phrase was not retained as a completion path under --words-only"
+  fail "a phrase was not retained as a completion path under -w 1"
 
 # -x caps the words in one extracted entry, so it can only remove entries a
 # capless run already found.
@@ -452,6 +452,43 @@ awk '{ print }' "$test_dir/extract-uncapped.stdout" |
   awk 'gsub(/ /, " ") <= 2' > "$test_dir/extract-filtered.stdout"
 cmp "$test_dir/extract-filtered.stdout" "$test_dir/extract-x2.stdout" ||
   fail "-x 2 does not match the uncapped run filtered to two words"
+
+[[ "$("$query_index" -i "$synthetic_index" klmn -m 1 -n 1 \
+    --num-words 2)" == "5 kl mn" ]] ||
+  fail "--num-words did not select the highest two-word entry before -n"
+[[ "$("$query_index" -i "$synthetic_index" klmn -m 1 -n 1 \
+    --max-words 2 --min-words 2)" == "5 kl mn" ]] ||
+  fail "--min-words did not select a two-word entry with a matching cap"
+[[ "$("$query_index" -i "$synthetic_index" klmn -m 1 -n 1 \
+    -x 0 --min-words 2)" == "5 kl mn" ]] ||
+  fail "--min-words rejected an unlimited -x"
+set +e
+"$query_index" -i "$synthetic_index" klmn -w 2 -x 1 \
+  > "$test_dir/num-words-x.stdout" 2> "$test_dir/num-words-x.stderr"
+num_words_x_status=$?
+"$query_index" -i "$synthetic_index" klmn -w 2 -x 0 \
+  > "$test_dir/num-words-x0.stdout" 2> "$test_dir/num-words-x0.stderr"
+num_words_x0_status=$?
+"$query_index" -i "$synthetic_index" klmn -w 2 --min-words 1 \
+  > "$test_dir/num-words-min.stdout" 2> "$test_dir/num-words-min.stderr"
+num_words_min_status=$?
+"$query_index" -i "$synthetic_index" klmn --min-words 3 -x 2 \
+  > "$test_dir/min-words-x.stdout" 2> "$test_dir/min-words-x.stderr"
+min_words_x_status=$?
+"$query_index" -i "$synthetic_index" klmn -w 0 \
+  > "$test_dir/num-words-zero.stdout" 2> "$test_dir/num-words-zero.stderr"
+num_words_zero_status=$?
+set -e
+[[ $num_words_x_status -eq 2 ]] || fail "-w 2 -x 1 should exit 2"
+[[ $num_words_x0_status -eq 2 ]] || fail "-w 2 -x 0 should exit 2"
+[[ $num_words_min_status -eq 2 ]] ||
+  fail "-w 2 --min-words 1 should exit 2"
+grep -q '^error: --num-words cannot be combined with --min-words or --max-words$' \
+  "$test_dir/num-words-x.stderr" || fail "missing -w/-x diagnostic"
+[[ $min_words_x_status -eq 2 ]] || fail "--min-words 3 -x 2 should exit 2"
+grep -q '^error: --min-words 3 exceeds --max-words 2$' \
+  "$test_dir/min-words-x.stderr" || fail "missing min/max diagnostic"
+[[ $num_words_zero_status -eq 2 ]] || fail "-w 0 should exit 2"
 
 # An explicit zero pair bonus makes loading a pair list leave output unchanged.
 printf '1,2345\n' > "$test_dir/short-first.pairs"
@@ -483,12 +520,12 @@ grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
   > "$test_dir/short-longer.stdout" 2> "$test_dir/short-longer.stderr"
 ! grep -q ' 1 2345 67$' "$test_dir/short-longer.stdout" ||
   fail "a longer phrase containing a short pair was extracted"
-"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 --words-only \
+"$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 -w 1 \
   --pairs "$test_dir/short-first.pairs" \
-  > "$test_dir/short-words-only.stdout" \
-  2> "$test_dir/short-words-only.stderr"
-! grep -q ' 1 2345$' "$test_dir/short-words-only.stdout" ||
-  fail "--words-only displayed a short-pair phrase"
+  > "$test_dir/short-word-count.stdout" \
+  2> "$test_dir/short-word-count.stderr"
+! grep -q ' 1 2345$' "$test_dir/short-word-count.stdout" ||
+  fail "-w 1 displayed a short-pair phrase"
 
 # --score remains symmetric and does not apply the extraction minimum.
 assert_close "$(score_value '2345 1' --word-bonus 0 \
@@ -674,10 +711,17 @@ rm "$workflow_root/.wf/best/idx/wiki-merged.2.index"
 cmp "$test_dir/workflow-default-dict.stdout" \
     "$test_dir/workflow-index-override.stdout" ||
   fail "explicit -i did not override a missing workflow index"
-expect_score_failure ab workflow-needs-seed --wfroot "$workflow_root"
-grep -q 'workflow mode requires --target beginning with sN or an explicit --seed-pairs' \
-  "$test_dir/workflow-needs-seed.stderr" ||
-  fail "workflow seed requirement diagnostic is unclear"
+"$query_index" -i "$synthetic_index" 'ab cd' --score \
+  --word-bonus 0 -P 1 --wfroot "$workflow_root" \
+  > "$test_dir/workflow-no-target-score.stdout" \
+  2> "$test_dir/workflow-no-target-score.stderr"
+assert_close "$(awk '{ print $1 }' \
+    "$test_dir/workflow-no-target-score.stdout")" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
+  "workflow without a target did not apply the classified YES bonus"
+grep -q 'WARNING: no target specified\.$' \
+  "$test_dir/workflow-no-target-score.stderr" ||
+  fail "workflow score without a target did not warn"
 assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
     --wfroot "$workflow_root" \
     --seed-pairs "$workflow_root/.wf/best/s1/seed.m2.pairs")" \
@@ -715,6 +759,22 @@ printf 'ab,cd\n' > "$workflow_root/.wf/classified/no/no.pairs"
   2> "$test_dir/workflow-no-listing.stderr"
 ! grep -q ' ab cd$' "$test_dir/workflow-no-listing.stdout" ||
   fail "ordinary listing did not apply the workflow NO exclusion"
+printf 'gh,ij\n' > "$workflow_root/.wf/classified/no/no.pairs"
+WFROOT="$workflow_root" "$query_index" -i "$synthetic_index" abcdghij \
+  -m 2 -n 10 --word-bonus 0 -P 1 --wf \
+  > "$test_dir/workflow-no-target.stdout" \
+  2> "$test_dir/workflow-no-target.stderr"
+grep -q 'WARNING: no target specified\.$' \
+  "$test_dir/workflow-no-target.stderr" ||
+  fail "workflow listing without a target did not warn"
+! grep -q ' ab dc$' "$test_dir/workflow-no-target.stdout" ||
+  fail "workflow without a target did not apply dictionary filtering"
+! grep -q ' gh ij$' "$test_dir/workflow-no-target.stdout" ||
+  fail "workflow without a target did not apply classified NO filtering"
+assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
+    "$test_dir/workflow-no-target.stdout")" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
+  "workflow listing without a target did not apply classified YES bonus"
 
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
   --pairs "$test_dir/pairs.txt" --word-bonus 0 \
@@ -809,25 +869,21 @@ awk 'NF > 2 { $1 = ""; sub(/^ /, ""); gsub(/ /, ","); print }' \
 cmp "$test_dir/csv-expected.stdout" "$test_dir/csv.stdout" ||
   fail "--csv does not match the ordinary run's multi-word entries"
 
-set +e
-"$query_index" -i "$synthetic_index" abcdef --csv -w \
-  > "$test_dir/csv-words-only.stdout" 2> "$test_dir/csv-words-only.stderr"
-status=$?
-set -e
-[[ $status -eq 2 ]] || fail "--csv -w should exit 2, got $status"
+[[ -z $("$query_index" -i "$synthetic_index" abcdef --csv -w 1) ]] ||
+  fail "--csv -w 1 should have no matching phrases"
 expect_score_failure ab csv-with-score --csv
 grep -q -- '--csv cannot be used with --score' \
   "$test_dir/csv-with-score.stderr" ||
   fail "--csv should be rejected with --score"
 
 expect_score_failure ab extract-with-score -x 2
-grep -q -- '--max-extract-words cannot be used with --score' \
+grep -q -- '--max-words cannot be used with --score' \
   "$test_dir/extract-with-score.stderr" ||
   fail "-x should be rejected with --score"
 
 printf 'qr\nst\nuv\n' > "$test_dir/dictionary-all"
 "$query_index" -i "$synthetic_index" qrstuv -m 2 -n 10 \
-  --words-only --require-completable --dict "$test_dir/dictionary-all" \
+  -w 1 --require-completable --dict "$test_dir/dictionary-all" \
   > "$test_dir/dictionary-all.stdout" \
   2> "$test_dir/dictionary-all.stderr"
 grep -q ' uv$' "$test_dir/dictionary-all.stdout" ||
@@ -835,7 +891,7 @@ grep -q ' uv$' "$test_dir/dictionary-all.stdout" ||
 
 printf 'qr\nuv\n' > "$test_dir/dictionary-no-st"
 "$query_index" -i "$synthetic_index" qrstuv -m 2 -n 10 \
-  --words-only --require-completable --dict "$test_dir/dictionary-no-st" \
+  -w 1 --require-completable --dict "$test_dir/dictionary-no-st" \
   > "$test_dir/dictionary-no-st.stdout" \
   2> "$test_dir/dictionary-no-st.stderr"
 [[ ! -s "$test_dir/dictionary-no-st.stdout" ]] ||
@@ -866,10 +922,10 @@ head -n 2 "$test_dir/top5.stdout" > "$test_dir/expected-top2.stdout"
 cmp "$test_dir/expected-top2.stdout" "$test_dir/top2.stdout" ||
   fail "--top did not retain the two highest-frequency entries"
 
-"$query_index" -i "$IDX" penbuilt -n 5 -w --word-bonus 0 \
-  > "$test_dir/words-only.stdout" 2> "$test_dir/words-only.stderr"
-if awk 'NF > 2 { exit 1 }' "$test_dir/words-only.stdout"; then :; else
-  fail "--words-only emitted a multi-word phrase"
+"$query_index" -i "$IDX" penbuilt -n 5 -w 1 --word-bonus 0 \
+  > "$test_dir/word-count-one.stdout" 2> "$test_dir/word-count-one.stderr"
+if awk 'NF > 2 { exit 1 }' "$test_dir/word-count-one.stdout"; then :; else
+  fail "-w 1 emitted a multi-word phrase"
 fi
 
 set +e

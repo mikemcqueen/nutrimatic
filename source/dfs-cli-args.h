@@ -40,7 +40,7 @@ inline constexpr int DFS_OPT_MORE_BEST_PAIRS = 311;
   { "used-letters", 'u', OPTPARSE_REQUIRED }, \
   { "dict", DFS_OPT_DICT, OPTPARSE_REQUIRED }, \
   { "min-word-length", 'm', OPTPARSE_REQUIRED }, \
-  { "max-extract-words", 'x', OPTPARSE_REQUIRED }, \
+  { "max-words", 'x', OPTPARSE_REQUIRED }, \
   { "pairs", DFS_OPT_PAIRS, OPTPARSE_REQUIRED }, \
   { "top", 'n', OPTPARSE_REQUIRED }, \
   { "search-threads", 'S', OPTPARSE_REQUIRED }, \
@@ -113,10 +113,12 @@ DfsOptionResult dfs_parse_common_option(
 // workflow's exclude-pair files are appended to `exclude_pair_files`.
 // A NULL `exclude_pair_files` skips that last step for a caller that excludes
 // nothing. The order is fixed here because each step reads what the one
-// before it resolved.
+// before it resolved. `allow_workflow_without_seed` lets query-index use the
+// workflow's global sources without a selected target or seed pair file.
 bool finalize_dfs_common_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
-    std::vector<std::string>* exclude_pair_files);
+    std::vector<std::string>* exclude_pair_files,
+    bool allow_workflow_without_seed = false);
 
 struct DfsWorkflowTargetSettings {
   std::string letters;

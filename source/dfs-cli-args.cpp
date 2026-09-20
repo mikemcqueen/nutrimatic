@@ -810,11 +810,11 @@ DfsOptionResult dfs_parse_common_option(
       info.name = "--min-word-length";
       break;
     case 'x':
-      if (!parse_count(options->optarg, "--max-extract-words",
+      if (!parse_count(options->optarg, "--max-words",
                        &out->max_extract_words))
         return DFS_OPTION_ERROR;
       out->max_extract_words_given = true;
-      info.name = "--max-extract-words";
+      info.name = "--max-words";
       break;
     case DFS_OPT_PAIRS:
       out->pair_file = options->optarg;
@@ -939,11 +939,12 @@ DfsOptionResult dfs_parse_common_option(
 // Resolves --wf/--wfroot defaults and pair sources after option parsing.
 // Workflow mode supplies a default index when `*index_file` is NULL, plus a
 // default dictionary and classified YES source. An explicit index is retained.
-// Workflow mode also requires either an explicit seed input or a target whose
-// sentence can identify exactly one sentence seed; a complete target
-// additionally supplies its optional best.pairs unless --best-pairs replaced it.
+// By default, workflow mode also requires either an explicit seed input or a
+// target whose sentence identifies one sentence seed; a complete target also
+// supplies its optional best.pairs unless --best-pairs replaced it.
 static bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file) {
+    DfsCommonArgs* args, char const* program, char const** index_file,
+    bool allow_workflow_without_seed) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
   if (args->pair_file != NULL &&
@@ -1012,20 +1013,23 @@ static bool finalize_dfs_workflow_args(
 
   if (args->seed_pair_files.empty()) {
     if (target_parts.empty()) {
-      fprintf(stderr,
-          "%s: workflow mode requires --target beginning with sN or an "
-          "explicit --seed-pairs\n",
-          program);
-      return false;
+      if (!allow_workflow_without_seed) {
+        fprintf(stderr,
+            "%s: workflow mode requires --target beginning with sN or an "
+            "explicit --seed-pairs\n",
+            program);
+        return false;
+      }
+    } else {
+      std::string seed;
+      std::string const universe = target_parts.size() >= 3
+          ? target_parts[2] : std::string();
+      if (!resolve_sentence_seed(
+              root / WORKFLOW_BEST_PATH / target_parts[0], universe,
+              program, &seed))
+        return false;
+      args->seed_pair_files.push_back(seed);
     }
-    std::string seed;
-    std::string const universe = target_parts.size() >= 3
-        ? target_parts[2] : std::string();
-    if (!resolve_sentence_seed(
-            root / WORKFLOW_BEST_PATH / target_parts[0], universe,
-            program, &seed))
-      return false;
-    args->seed_pair_files.push_back(seed);
   }
 
   if (target_parts.size() == 4 && !args->best_pairs_given) {
@@ -1131,9 +1135,12 @@ static bool collect_workflow_exclude_pair_files(
 
 bool finalize_dfs_common_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
-    std::vector<std::string>* exclude_pair_files) {
+    std::vector<std::string>* exclude_pair_files,
+    bool allow_workflow_without_seed) {
   if (!finalize_dfs_bonuses(args)) return false;
-  if (!finalize_dfs_workflow_args(args, program, index_file)) return false;
+  if (!finalize_dfs_workflow_args(
+          args, program, index_file, allow_workflow_without_seed))
+    return false;
   if (exclude_pair_files == NULL) return true;
   return collect_workflow_exclude_pair_files(
       *args, program, exclude_pair_files);

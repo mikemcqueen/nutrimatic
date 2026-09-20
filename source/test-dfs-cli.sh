@@ -199,7 +199,7 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
     "$test_dir/penalty-one.stdout")" 70 \
   "one-segment phrase should be invariant"
 
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 --max-extract-words 2 \
+"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 --max-words 2 \
   > "$test_dir/extract-two.stdout" 2> "$test_dir/extract-two.stderr"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 --word-bonus 0 -x 1 \
   > "$test_dir/extract-one.stdout" 2> "$test_dir/extract-one.stderr"
@@ -209,7 +209,7 @@ cmp "$test_dir/all.stdout" "$test_dir/extract-two.stdout" ||
   fail "-x 1 kept the two-word index entry"
 grep -Eq "${diagnostic_prefix}at most 1 word per index entry$" \
   "$test_dir/extract-one.stderr" ||
-  fail "--max-extract-words diagnostic is missing from stderr"
+  fail "--max-words diagnostic is missing from stderr"
 
 "$dfs_anagrams" -i "$index_file" fghij -m 1 -n 10 \
   > "$test_dir/extract-default.stdout" 2> "$test_dir/extract-default.stderr"
@@ -970,7 +970,7 @@ expect_status 2 "$dfs_anagrams" -i "$index_file" abcd --exact
 [[ $(cat "$test_dir/status.stderr") == 'error: --exact requires -g N' ]] ||
   fail "--exact without -g did not print its exact diagnostic"
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
-  --max-extract-words nope
+  --max-words nope
 expect_status 2 "$dfs_anagrams" -i "$index_file" abcd \
   --show-bonus --segments
 grep -q '^error: --show-bonus cannot be combined with --segments$' \

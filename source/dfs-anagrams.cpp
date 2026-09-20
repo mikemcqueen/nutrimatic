@@ -405,7 +405,7 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
 
   // Words across the whole answer, which is also what phase 2 derives its
-  // maximum depth from; --max-extract-words bounds words within one entry
+  // maximum depth from; --max-words bounds words within one entry
   // instead and leaves this alone. 0 means there is no minimum to divide by.
   out->max_combine_words = out->common.min_word_len > 1
       ? int(out->letters.size()) / out->common.min_word_len

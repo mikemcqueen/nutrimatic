@@ -87,11 +87,11 @@ void dfs_help_top(int default_top) {
 
 void dfs_help_max_extract_words(int default_max) {
   if (default_max == 0) {
-    dfs_help_option("-x, --max-extract-words N",
+    dfs_help_option("-x, --max-words N",
         "explore at most N words inside one index entry (default: 0, no "
         "limit)");
   } else {
-    dfs_help_option("-x, --max-extract-words N",
+    dfs_help_option("-x, --max-words N",
         "explore at most N words inside one index entry (default: %d; 0 "
         "means no limit)", default_max);
   }

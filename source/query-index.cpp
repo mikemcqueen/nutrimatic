@@ -40,7 +40,9 @@ struct Args {
   std::string near_target;
   DfsCommonArgs common;
   std::vector<std::string> exclude_pair_files;
-  bool words_only;
+  int num_words;
+  int min_words;
+  bool min_words_given;
   bool csv;
   bool require_completable;
   bool score;
@@ -62,6 +64,12 @@ static void usage(char const* program) {
   dfs_help_min_word_length();
   dfs_help_top(DEFAULT_TOP);
   dfs_help_max_extract_words(0);
+  dfs_help_option("-w, --num-words N",
+      "show only entries containing exactly N words (N must be positive; "
+      "cannot be combined with --min-words or --max-words)");
+  dfs_help_option("--min-words N",
+      "show entries containing at least N words (default: 0; N cannot "
+      "exceed a positive -x limit)");
   dfs_help_option("--pairs FILE",
       "load one \"word\" or \"word,word\" entry per line; during extraction, "
       "a pair containing a word shorter than -m matches only in written "
@@ -81,8 +89,8 @@ static void usage(char const* program) {
       "cannot be combined with legacy --pairs", DFS_BEST_PAIR_BONUS);
   dfs_help_wf();
   dfs_help_option("--wfroot DIR",
-      "use DIR as a workflow root; loads DIR/%s as YES pairs and requires "
-      "either --seed-pairs or -t beginning with sN; listing also excludes "
+      "use DIR as a workflow root; loads DIR/%s as YES pairs; without -t "
+      "warns and uses no sentence seed; listing also excludes "
       "DIR/%s and a complete target's %s when present; --score reads neither "
       "NO file; BEST pair words missing from the dictionary are added to it, "
       "with a stderr notice for each",
@@ -102,7 +110,6 @@ static void usage(char const* program) {
   dfs_help_segment_penalty();
   dfs_help_word_bonus();
   dfs_help_pair_bonus();
-  dfs_help_option("-w, --words-only", "exclude multi-word phrases");
   dfs_help_option("--csv",
       "print only multi-word entries, as comma-separated words, with no "
       "count or score column");
@@ -144,11 +151,13 @@ static int const OPT_SCORE = 257;
 static int const OPT_CSV = 258;
 static int const OPT_NEAR = 259;
 static int const OPT_PTM = 260;
+static int const OPT_MIN_WORDS = 261;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
   { "idx", 'i', OPTPARSE_REQUIRED },
-  { "words-only", 'w', OPTPARSE_NONE },
+  { "num-words", 'w', OPTPARSE_REQUIRED },
+  { "min-words", OPT_MIN_WORDS, OPTPARSE_REQUIRED },
   { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "ptm", OPT_PTM, OPTPARSE_NONE },
@@ -192,7 +201,9 @@ static bool parse_args(char* argv[], Args* out) {
   out->index_file = NULL;
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
-  out->words_only = false;
+  out->num_words = 0;
+  out->min_words = 0;
+  out->min_words_given = false;
   out->csv = false;
   out->require_completable = false;
   out->score = false;
@@ -223,9 +234,21 @@ static bool parse_args(char* argv[], Args* out) {
         out->index_file = options.optarg;
         break;
       case 'w':
-        out->words_only = true;
-        mark_score_incompatible(out, "--words-only");
-        mark_near_incompatible(out, "--words-only");
+        if (!parse_count(options.optarg, "--num-words", &out->num_words))
+          return false;
+        if (out->num_words == 0) {
+          fputs("error: --num-words must be positive\n", stderr);
+          return false;
+        }
+        mark_score_incompatible(out, "--num-words");
+        mark_near_incompatible(out, "--num-words");
+        break;
+      case OPT_MIN_WORDS:
+        if (!parse_count(options.optarg, "--min-words", &out->min_words))
+          return false;
+        out->min_words_given = true;
+        mark_score_incompatible(out, "--min-words");
+        mark_near_incompatible(out, "--min-words");
         break;
       case OPT_CSV:
         out->csv = true;
@@ -287,7 +310,8 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
-          out->score ? NULL : &out->exclude_pair_files))
+          out->score ? NULL : &out->exclude_pair_files,
+          /*allow_workflow_without_seed=*/true))
     return false;
   if (out->index_file == NULL) {
     fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
@@ -314,8 +338,16 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
-  if (out->csv && out->words_only) {
-    fputs("error: --csv cannot be used with --words-only\n", stderr);
+  if (out->num_words != 0 &&
+      (out->min_words_given || out->common.max_extract_words_given)) {
+    fputs("error: --num-words cannot be combined with --min-words or "
+          "--max-words\n", stderr);
+    return false;
+  }
+  if (out->min_words > 0 && out->common.max_extract_words > 0 &&
+      out->min_words > out->common.max_extract_words) {
+    fprintf(stderr, "error: --min-words %d exceeds --max-words %d\n",
+            out->min_words, out->common.max_extract_words);
     return false;
   }
 
@@ -904,6 +936,8 @@ int main(int argc, char* argv[]) {
 
   Args args;
   if (!parse_args(argv, &args)) return 2;
+  if (!args.common.workflow_root.empty() && args.common.target.empty())
+    dfs_diagnostic("WARNING: no target specified.\n");
 
   std::vector<std::string> score_entries;
   bool const score_stdin = args.score && args.score_sequence == "-";
@@ -981,17 +1015,24 @@ int main(int argc, char* argv[]) {
   // The class -> member grouping has no reader left: phase 2 touched it once at
   // setup and its search is already destroyed, and printing needs only each
   // member's count and text.
-  DfsMemberFilter const filter = args.words_only
-      ? DFS_RETAIN_WORDS
-      : (args.csv ? DFS_RETAIN_PHRASES : DFS_RETAIN_ALL);
+  DfsMemberFilter const filter = args.csv
+      ? DFS_RETAIN_PHRASES : DFS_RETAIN_ALL;
   DfsMemberSpan const survivors =
       classes.retain_members(completable, filter);
-  size_t const top = args.common.top == 0
-      ? survivors.count
-      : std::min(survivors.count, size_t(args.common.top));
-
   DfsPackedMember* const first = survivors.data;
-  DfsPackedMember* const last = first + survivors.count;
+  DfsPackedMember* const last = args.num_words == 0 && args.min_words == 0
+      ? first + survivors.count
+      : std::remove_if(first, first + survivors.count,
+            [&](DfsPackedMember const& member) {
+              return args.num_words != 0
+                  ? member.word_count != args.num_words
+                  : member.word_count < args.min_words;
+            });
+  size_t const survivor_count = size_t(last - first);
+  size_t const top = args.common.top == 0
+      ? survivor_count
+      : std::min(survivor_count, size_t(args.common.top));
+
   auto const print_row = [&](DfsPackedMember const& row) {
     char const* partner = NULL;
     if (!args.common.hide_solo_words && solo_words != NULL &&

@@ -74,11 +74,10 @@ struct DfsClassSpan {
   DfsClassRecord const& operator[](size_t index) const { return data[index]; }
 };
 
-// Which extracted spellings retain_members() keeps: everything, single words
-// only, or multi-word phrases only.
+// Which extracted spellings retain_members() keeps: everything or multi-word
+// phrases only.
 enum DfsMemberFilter {
   DFS_RETAIN_ALL,
-  DFS_RETAIN_WORDS,
   DFS_RETAIN_PHRASES,
 };
 

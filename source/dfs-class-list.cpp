@@ -808,8 +808,7 @@ DfsMemberSpan DfsClassList::retain_members(
     size_t const start = size_t(record.members - members);
     for (size_t mi = 0; mi < record.member_count; ++mi) {
       int const words = record.members[mi].word_count;
-      bool const keep = filter == DFS_RETAIN_ALL ||
-          (filter == DFS_RETAIN_WORDS ? words == 1 : words > 1);
+      bool const keep = filter == DFS_RETAIN_ALL || words > 1;
       if (keep) keep_member[start + mi] = true;
     }
   }
