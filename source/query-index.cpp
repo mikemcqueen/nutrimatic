@@ -89,8 +89,9 @@ static void usage(char const* program) {
       "cannot be combined with legacy --pairs", DFS_BEST_PAIR_BONUS);
   dfs_help_wf();
   dfs_help_option("--wfroot DIR",
-      "use DIR as a workflow root; loads DIR/%s as YES pairs; without -t "
-      "warns and uses no sentence seed; listing also excludes "
+      "use DIR as a workflow root; with -t loads DIR/%s as YES pairs; "
+      "without -t warns and uses no classified YES or sentence seed; "
+      "listing also excludes "
       "DIR/%s and a complete target's %s when present; --score reads neither "
       "NO file; BEST pair words missing from the dictionary are added to it, "
       "with a stderr notice for each",
@@ -311,7 +312,7 @@ static bool parse_args(char* argv[], Args* out) {
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
           out->score ? NULL : &out->exclude_pair_files,
-          /*allow_workflow_without_seed=*/true))
+          /*allow_targetless_workflow=*/true))
     return false;
   if (out->index_file == NULL) {
     fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
@@ -937,7 +938,9 @@ int main(int argc, char* argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
   if (!args.common.workflow_root.empty() && args.common.target.empty())
-    dfs_diagnostic("WARNING: no target specified.\n");
+    dfs_diagnostic(
+        "WARNING: no target supplied; only dictionary and classified-no "
+        "filtering are active\n");
 
   std::vector<std::string> score_entries;
   bool const score_stdin = args.score && args.score_sequence == "-";

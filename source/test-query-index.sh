@@ -662,6 +662,10 @@ printf 'ab,cd\n' > "$workflow_root/.wf/best/s1/o-abcd/m2/g1/best.pairs"
 assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
     --wfroot "$workflow_root" -t s1)" 5000000 \
   "sentence target did not auto-load its seed pairs"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" -t s1)" \
+  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
+  "sentence target did not load classified YES pairs"
 full_target_score=$(score_value 'ab cd' --word-bonus 0 -P 1 \
   --wfroot "$workflow_root" -t 's1/o-abcd/m2/g1')
 assert_close "$full_target_score" \
@@ -717,15 +721,18 @@ cmp "$test_dir/workflow-default-dict.stdout" \
   2> "$test_dir/workflow-no-target-score.stderr"
 assert_close "$(awk '{ print $1 }' \
     "$test_dir/workflow-no-target-score.stdout")" \
-  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
-  "workflow without a target did not apply the classified YES bonus"
-grep -q 'WARNING: no target specified\.$' \
+  70 "workflow without a target loaded classified YES pairs"
+grep -q 'WARNING: no target supplied; only dictionary and classified-no filtering are active$' \
   "$test_dir/workflow-no-target-score.stderr" ||
   fail "workflow score without a target did not warn"
 assert_close "$(score_value 'gh ij' --word-bonus 0 -P 1 \
     --wfroot "$workflow_root" \
     --seed-pairs "$workflow_root/.wf/best/s1/seed.m2.pairs")" \
   5000000 "explicit --seed-pairs did not satisfy workflow mode"
+assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
+    --wfroot "$workflow_root" \
+    --seed-pairs "$workflow_root/.wf/best/s1/seed.m2.pairs")" \
+  70 "explicit seed without a target loaded classified YES pairs"
 
 mkdir -p "$workflow_root/.wf/classified/no"
 printf 'ab,cd\n' > "$workflow_root/.wf/classified/no/no.pairs"
@@ -764,7 +771,7 @@ WFROOT="$workflow_root" "$query_index" -i "$synthetic_index" abcdghij \
   -m 2 -n 10 --word-bonus 0 -P 1 --wf \
   > "$test_dir/workflow-no-target.stdout" \
   2> "$test_dir/workflow-no-target.stderr"
-grep -q 'WARNING: no target specified\.$' \
+grep -q 'WARNING: no target supplied; only dictionary and classified-no filtering are active$' \
   "$test_dir/workflow-no-target.stderr" ||
   fail "workflow listing without a target did not warn"
 ! grep -q ' ab dc$' "$test_dir/workflow-no-target.stdout" ||
@@ -773,8 +780,7 @@ grep -q 'WARNING: no target specified\.$' \
   fail "workflow without a target did not apply classified NO filtering"
 assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
     "$test_dir/workflow-no-target.stdout")" \
-  "$(awk 'BEGIN { print 70 * exp(log(1000000) * 1.05) }')" \
-  "workflow listing without a target did not apply classified YES bonus"
+  70 "workflow listing without a target loaded classified YES pairs"
 
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
   --pairs "$test_dir/pairs.txt" --word-bonus 0 \

@@ -938,13 +938,15 @@ DfsOptionResult dfs_parse_common_option(
 
 // Resolves --wf/--wfroot defaults and pair sources after option parsing.
 // Workflow mode supplies a default index when `*index_file` is NULL, plus a
-// default dictionary and classified YES source. An explicit index is retained.
+// default dictionary. Classified YES is loaded when a target is selected, or
+// when the caller requires the usual workflow sources. An explicit index is
+// retained.
 // By default, workflow mode also requires either an explicit seed input or a
 // target whose sentence identifies one sentence seed; a complete target also
 // supplies its optional best.pairs unless --best-pairs replaced it.
 static bool finalize_dfs_workflow_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
-    bool allow_workflow_without_seed) {
+    bool allow_targetless_workflow) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
   if (args->pair_file != NULL &&
@@ -1006,14 +1008,16 @@ static bool finalize_dfs_workflow_args(
     args->dictionary_file = args->workflow_dictionary_file.c_str();
   }
 
-  fs::path const yes = root / WORKFLOW_YES_PAIRS_PATH;
-  if (!require_regular_file(yes, program, "classified YES pair file"))
-    return false;
-  args->yes_pair_files.push_back(yes.string());
+  if (!allow_targetless_workflow || !target_parts.empty()) {
+    fs::path const yes = root / WORKFLOW_YES_PAIRS_PATH;
+    if (!require_regular_file(yes, program, "classified YES pair file"))
+      return false;
+    args->yes_pair_files.push_back(yes.string());
+  }
 
   if (args->seed_pair_files.empty()) {
     if (target_parts.empty()) {
-      if (!allow_workflow_without_seed) {
+      if (!allow_targetless_workflow) {
         fprintf(stderr,
             "%s: workflow mode requires --target beginning with sN or an "
             "explicit --seed-pairs\n",
@@ -1136,10 +1140,10 @@ static bool collect_workflow_exclude_pair_files(
 bool finalize_dfs_common_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
     std::vector<std::string>* exclude_pair_files,
-    bool allow_workflow_without_seed) {
+    bool allow_targetless_workflow) {
   if (!finalize_dfs_bonuses(args)) return false;
   if (!finalize_dfs_workflow_args(
-          args, program, index_file, allow_workflow_without_seed))
+          args, program, index_file, allow_targetless_workflow))
     return false;
   if (exclude_pair_files == NULL) return true;
   return collect_workflow_exclude_pair_files(

@@ -113,12 +113,13 @@ DfsOptionResult dfs_parse_common_option(
 // workflow's exclude-pair files are appended to `exclude_pair_files`.
 // A NULL `exclude_pair_files` skips that last step for a caller that excludes
 // nothing. The order is fixed here because each step reads what the one
-// before it resolved. `allow_workflow_without_seed` lets query-index use the
-// workflow's global sources without a selected target or seed pair file.
+// before it resolved. `allow_targetless_workflow` lets query-index use the
+// workflow without a target or seed, and skips its classified YES source
+// when no target is selected.
 bool finalize_dfs_common_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
     std::vector<std::string>* exclude_pair_files,
-    bool allow_workflow_without_seed = false);
+    bool allow_targetless_workflow = false);
 
 struct DfsWorkflowTargetSettings {
   std::string letters;
