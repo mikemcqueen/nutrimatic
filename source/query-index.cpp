@@ -14,6 +14,7 @@
 #include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
+#include "log.h"
 #include "optparse.h"
 #include "workflow-paths.h"
 #include "tail-map.h"
@@ -938,9 +939,11 @@ int main(int argc, char* argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
   if (!args.common.workflow_root.empty() && args.common.target.empty())
-    dfs_diagnostic(
-        "WARNING: no target supplied; only dictionary and classified-no "
-        "filtering are active\n");
+    warn(argv[0],
+        "no target supplied; only dictionary and classified-no filtering "
+        "are active");
+  if (!args.score && !args.near)
+    dfs_diagnostic_letter_bag(args.letters);
 
   std::vector<std::string> score_entries;
   bool const score_stdin = args.score && args.score_sequence == "-";

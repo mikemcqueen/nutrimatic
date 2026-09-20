@@ -228,7 +228,7 @@ custom_target(
 
 query_index = executable('query-index', 'query-index.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
-  dependencies: thread_dep,
+  dependencies: [thread_dep, log_dep],
   install: true)
 
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.

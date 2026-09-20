@@ -116,9 +116,10 @@ grep -Eq \
 if grep -Eq "$diagnostic_prefix" "$test_dir/all.stdout"; then
   fail "progress leaked onto stdout"
 fi
-grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words$' \
-  "$test_dir/all.stderr" ||
-  fail "search header is missing from stderr"
+grep -EA1 "${diagnostic_prefix}"'4 letters "abcd"$' \
+  "$test_dir/all.stderr" |
+  grep -Eq "${diagnostic_prefix}"'words of 2\+, at most 2 words$' ||
+  fail "letter bag and search details are not adjacent on stderr"
 default_search_threads=$(sed -n -E \
   's/.*search threads ([1-9][0-9]*) cache 64 segment penalty 1000000$/\1/p' \
   "$test_dir/all.stderr")
@@ -365,8 +366,9 @@ grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
   2> "$test_dir/short-one-segment.stderr"
 grep -q ' 1 2345$' "$test_dir/short-one-segment.stdout" ||
   fail "-g 1 did not retain a short-pair entry as one segment"
-grep -Eq "${diagnostic_prefix}"'5 letters "12345", entries of 4[+] letters, at most 1 segment, exactly 1 segment$' \
-  "$test_dir/short-one-segment.stderr" ||
+grep -EA1 "${diagnostic_prefix}"'5 letters "12345"$' \
+  "$test_dir/short-one-segment.stderr" |
+  grep -Eq "${diagnostic_prefix}"'entries of 4[+] letters, at most 1 segment, exactly 1 segment$' ||
   fail "short-pair search header did not preserve the entry bound"
 "$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
@@ -935,8 +937,9 @@ fi
   fail "-g 2 returned a result that does not use exactly two entries"
 [[ $(grep -c '^70.00000 ab cd$' "$test_dir/one-segment.stdout") -eq 1 ]] ||
   fail "-g 1 lost the contiguous phrase"
-grep -Eq "${diagnostic_prefix}"'4 letters "abcd", words of 2\+, at most 2 words, exactly 1 segment$' \
-  "$test_dir/one-segment.stderr" ||
+grep -EA1 "${diagnostic_prefix}"'4 letters "abcd"$' \
+  "$test_dir/one-segment.stderr" |
+  grep -Eq "${diagnostic_prefix}"'words of 2\+, at most 2 words, exactly 1 segment$' ||
   fail "the search header did not report the segment constraint"
 grep -Eq "${diagnostic_prefix}"'.*, exactly 2 segments$' \
   "$test_dir/two-segment.stderr" ||
@@ -955,6 +958,9 @@ grep -q ' ab,cd$' "$test_dir/two-segment.stdout" ||
   > "$test_dir/left.stdout" 2> "$test_dir/left.stderr"
 cmp "$test_dir/used.stdout" "$test_dir/left.stdout" ||
   fail "--used-letters differs from searching the remaining bag"
+grep -Eq "${diagnostic_prefix}"'2 letters "cd"$' \
+  "$test_dir/used.stderr" ||
+  fail "--used-letters diagnostic did not show the remaining bag"
 
 expect_status 2 "$dfs_anagrams" -i "$index_file" 'ab!'
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc -p 0

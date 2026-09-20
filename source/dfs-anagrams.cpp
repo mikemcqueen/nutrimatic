@@ -443,8 +443,9 @@ int main(int argc, char* argv[]) {
           size_t(args.num_segments), &prepared, args.ptm))
     return 1;
 
-  // Both headers carry the segment constraint, since -g is independent of
-  // whether a minimum word length narrowed the search.
+  dfs_diagnostic_letter_bag(args.letters);
+
+  // The search-detail line carries -g independently of the word-length limit.
   char segments_note[64];
   segments_note[0] = '\0';
   if (args.num_segments > 0) {
@@ -457,19 +458,18 @@ int main(int argc, char* argv[]) {
        args.common.max_extract_words >= 2);
   if (active_short_pair_exception) {
     dfs_diagnostic(
-        "%zu letters \"%s\", entries of %d+ letters, at most %d segment%s%s\n",
-        args.letters.size(), args.letters.c_str(), args.common.min_word_len,
+        "entries of %d+ letters, at most %d segment%s%s\n",
+        args.common.min_word_len,
         args.max_combine_words, args.max_combine_words == 1 ? "" : "s",
         segments_note);
   } else if (args.max_combine_words > 0) {
     dfs_diagnostic(
-        "%zu letters \"%s\", words of %d+, at most %d word%s%s\n",
-        args.letters.size(), args.letters.c_str(), args.common.min_word_len,
+        "words of %d+, at most %d word%s%s\n",
+        args.common.min_word_len,
         args.max_combine_words, args.max_combine_words == 1 ? "" : "s",
         segments_note);
   } else {
-    dfs_diagnostic("%zu letters \"%s\", no minimum word length%s\n",
-                   args.letters.size(), args.letters.c_str(), segments_note);
+    dfs_diagnostic("no minimum word length%s\n", segments_note);
   }
 
   if (args.common.max_extract_words > 0)

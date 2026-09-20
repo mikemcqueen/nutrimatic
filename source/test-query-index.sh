@@ -53,6 +53,12 @@ grep -q '^error: missing letters argument$' \
   "$test_dir/missing-letters.stderr" ||
   fail "missing letters error is unclear"
 
+"$query_index" -i "$synthetic_index" abcd -u ab -m 2 -n 1 \
+  --word-bonus 0 > /dev/null 2> "$test_dir/letter-bag.stderr"
+grep -Eq '^\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\] 2 letters "cd"$' \
+  "$test_dir/letter-bag.stderr" ||
+  fail "query-index did not report the final letter bag"
+
 score_value() {
   "$query_index" -i "$synthetic_index" "$1" --score "${@:2}" \
       2> "$test_dir/score-value.stderr" |

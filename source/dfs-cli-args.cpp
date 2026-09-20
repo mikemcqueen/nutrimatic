@@ -263,6 +263,10 @@ bool subtract_letters(std::string const& bag, std::string const& used,
   return true;
 }
 
+void dfs_diagnostic_letter_bag(std::string const& letters) {
+  dfs_diagnostic("%zu letters \"%s\"\n", letters.size(), letters.c_str());
+}
+
 bool check_bag_length(std::string const& bag) {
   if (bag.size() <= DFS_MAX_BAG_LETTERS) return true;
   fprintf(stderr,

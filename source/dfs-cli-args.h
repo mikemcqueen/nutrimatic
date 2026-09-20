@@ -150,6 +150,9 @@ bool clean_letters(char const* in, char const* what, std::string* out);
 bool subtract_letters(std::string const& bag, std::string const& used,
                       std::string* out);
 
+// Reports the cleaned, post-subtraction letter bag to the diagnostic stream.
+void dfs_diagnostic_letter_bag(std::string const& letters);
+
 // Rejects a bag wider than DFS_MAX_BAG_LETTERS. Call this on the
 // post-subtraction bag, not on the raw argument: the packed-record field widths
 // depend on what phase 1 extracts, and subtraction only shrinks.
