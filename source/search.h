@@ -52,12 +52,8 @@ class SearchDriver {
   size_t crumbs_size() const { return crumbs.size(); }
 
   // Report each collection of path history to this stream, or NULL (the
-  // default) for silence.  Deliberately not tied to PrintAll's progress stream:
-  // find-expr points that at stdout, where cgi-search.py parses "# <steps>" and
-  // reads the whole rest of the line as the step count, so an extra line there
-  // would be taken for a step count.  Callers that send progress to stderr can
-  // safely pass it here.  Lines start with '#', like the progress lines, so one
-  // filter drops both.
+  // default) for silence.  Deliberately not tied to PrintAll's progress stream.
+  // Lines start with '#', like the progress lines, so one filter drops both.
   void report_collections(FILE* fp) { gc_progress = fp; }
 
   // The score of the median entry in the frontier, or 0 if it's empty.  The
@@ -284,11 +280,7 @@ class SearchDriver {
 //   # <steps> seen(<matches>) crumbs(<path history>) queue(<frontier>)
 //     median(<frontier median score>)
 //
-// every 100k * progress_factor steps to "progress".  cgi-search.py parses the
-// progress lines out of find-expr's stdout to enforce its computation limit,
-// so that tool must keep them there (and must keep the interval it expects);
-// note it reads the whole rest of the line as the step count, so it needs
-// updating for the fields after <steps>.  Tools meant to be used in a shell
-// pipeline can pass stderr instead to keep stdout clean, and can space the
+// every 100k * progress_factor steps to "progress".  Tools meant to be used
+// in a shell pipeline can pass stderr to keep stdout clean, and can space the
 // lines out with progress_factor.
 void PrintAll(SearchDriver*, FILE* progress, int64_t progress_factor = 1);
