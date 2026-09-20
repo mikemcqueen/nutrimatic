@@ -207,6 +207,12 @@ struct DfsPairRow {
   }
 };
 
+// Parse one PAIRS line using the same validation and normalization as the
+// shared file loader. Prints a source/line diagnostic on failure.
+bool parse_pair_row(
+    std::string const& line, char const* what, char const* source,
+    size_t line_number, bool allow_single_words, DfsPairRow* out);
+
 // A pair set owns normalized whole-entry keys. The general loader below owns
 // every two-word pair as both "left right" and "right left"; the extraction
 // loader may keep a short-word pair in only its written orientation. When

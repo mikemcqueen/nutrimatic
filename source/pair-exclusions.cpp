@@ -428,8 +428,8 @@ bool load_pair_filters(
 
   char const* wfroot = NULL;
   if (options.workflow) {
-    wfroot = getenv("WFROOT");
-    if (wfroot == NULL || wfroot[0] == '\0') {
+    wfroot = workflow_root_from_env();
+    if (wfroot == NULL) {
       fprintf(stderr,
           "%s: --wf requires WFROOT to be set and nonempty\n", program);
       return false;

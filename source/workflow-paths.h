@@ -1,6 +1,14 @@
 #ifndef NUTRIMATIC_WORKFLOW_PATHS_H
 #define NUTRIMATIC_WORKFLOW_PATHS_H
 
+#include <stdlib.h>
+
+// Return the configured workflow root, or NULL when it is unset or empty.
+inline char const* workflow_root_from_env() {
+  char const* const root = getenv("WFROOT");
+  return root != NULL && root[0] != '\0' ? root : NULL;
+}
+
 // Workflow-root-relative paths and target-local artifact names shared by the
 // DFS/query and segment-selection tools. Keep these aligned with the workflow
 // producer rather than spelling paths independently in each consumer.

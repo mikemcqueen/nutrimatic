@@ -442,6 +442,42 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   return true;
 }
 
+bool parse_pair_row(
+    std::string const& line, char const* what, char const* source,
+    size_t line_number, bool allow_single_words, DfsPairRow* out) {
+  size_t const comma = line.find(',');
+  if (line.find('-') != std::string::npos) {
+    fprintf(stderr,
+        "error: %s \"%s\" line %zu: '-' would silently skip this entry\n",
+        what, source, line_number);
+    return false;
+  }
+
+  bool const one_field = allow_single_words && comma == std::string::npos;
+  bool const two_fields = comma != std::string::npos &&
+      line.find(',', comma + 1) == std::string::npos;
+  if (one_field) {
+    clean_word(line.data(), line.data() + line.size(), &out->left);
+    out->right.clear();
+  } else if (two_fields) {
+    clean_word(line.data(), line.data() + comma, &out->left);
+    clean_word(line.data() + comma + 1, line.data() + line.size(),
+               &out->right);
+  }
+  if ((!one_field && !two_fields) || out->left.empty() ||
+      (two_fields && out->right.empty())) {
+    fprintf(stderr,
+        "error: %s \"%s\" line %zu: %s\n",
+        what, source, line_number,
+        allow_single_words
+            ? "expected one word or two comma-separated words"
+            : "expected two comma-separated words");
+    return false;
+  }
+  out->line_number = line_number;
+  return true;
+}
+
 namespace {
 
 bool load_pair_rows_stream(
@@ -450,47 +486,19 @@ bool load_pair_rows_stream(
     size_t* ignored_single_word_count,
     std::vector<DfsPairRow>* loaded) {
   std::string line;
-  std::string left;
-  std::string right;
   size_t line_number = 0;
   while (std::getline(input, line)) {
     ++line_number;
-    size_t const comma = line.find(',');
-    if (ignore_single_words && comma == std::string::npos && !line.empty()) {
+    if (ignore_single_words && line.find(',') == std::string::npos &&
+        !line.empty()) {
       ++*ignored_single_word_count;
       continue;
     }
-    if (line.find('-') != std::string::npos) {
-      if (!reject_hyphens) continue;
-      fprintf(stderr,
-          "error: %s \"%s\" line %zu: '-' would silently skip this entry\n",
-          what, source, line_number);
+    if (!reject_hyphens && line.find('-') != std::string::npos) continue;
+    DfsPairRow row;
+    if (!parse_pair_row(
+            line, what, source, line_number, allow_single_words, &row))
       return false;
-    }
-
-    bool const one_field =
-        allow_single_words && comma == std::string::npos;
-    bool const two_fields =
-        comma != std::string::npos &&
-        line.find(',', comma + 1) == std::string::npos;
-    if (one_field) {
-      clean_word(line.data(), line.data() + line.size(), &left);
-      right.clear();
-    } else if (two_fields) {
-      clean_word(line.data(), line.data() + comma, &left);
-      clean_word(line.data() + comma + 1, line.data() + line.size(), &right);
-    }
-    if ((!one_field && !two_fields) || left.empty() ||
-        (two_fields && right.empty())) {
-      fprintf(stderr,
-          "error: %s \"%s\" line %zu: %s\n",
-          what, source, line_number,
-          allow_single_words
-              ? "expected one word or two comma-separated words"
-              : "expected two comma-separated words");
-      return false;
-    }
-    DfsPairRow const row = { left, right, line_number };
     loaded->push_back(row);
   }
 
@@ -946,8 +954,8 @@ static bool finalize_dfs_workflow_args(
   }
 
   if (args->workflow) {
-    char const* const root = getenv("WFROOT");
-    if (root == NULL || root[0] == '\0') {
+    char const* const root = workflow_root_from_env();
+    if (root == NULL) {
       fprintf(stderr, "%s: --wf requires WFROOT to be set and nonempty\n",
               program);
       return false;
