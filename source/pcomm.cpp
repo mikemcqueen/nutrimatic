@@ -45,12 +45,13 @@ struct PairSet {
 
 void usage(FILE* out, char const* program) {
   fprintf(out,
-      "usage: %s [-123] FILE1 FILE2\n"
+      "usage: %s [--tabs] [-123] FILE1 FILE2\n"
       "  compare word,word lines with either word order considered equal\n"
+      "  --tabs  prefix columns with tabs as in comm\n"
       "  -1  suppress pairs only in FILE1\n"
       "  -2  suppress pairs only in FILE2\n"
       "  -3  suppress pairs in both files\n"
-      "  columns use comm's tab prefixes; shared pairs use FILE1's spelling\n"
+      "  output is left justified by default; shared pairs use FILE1's spelling\n"
       "  scanned-file rows precede unmatched in-memory rows\n"
       "  each shared unordered pair is printed at most once\n"
       "  use - for standard input in either position, but not both\n"
@@ -173,10 +174,12 @@ bool load_set(char const* path, PairSet* set) {
   });
 }
 
-bool print_pair(int column, std::string_view spelling, bool const show[3]) {
+bool print_pair(int column, std::string_view spelling, bool const show[3],
+                bool tabs) {
   if (!show[column]) return true;
-  for (int i = 0; i < column; ++i)
-    if (show[i] && putchar('\t') == EOF) return false;
+  if (tabs)
+    for (int i = 0; i < column; ++i)
+      if (show[i] && putchar('\t') == EOF) return false;
   return fwrite(spelling.data(), 1, spelling.size(), stdout) ==
       spelling.size() && putchar('\n') != EOF;
 }
@@ -184,7 +187,7 @@ bool print_pair(int column, std::string_view spelling, bool const show[3]) {
 // The streamed side's rows are emitted as they are read. The set side's
 // unmatched rows follow in their original file order.
 bool compare(char const* stream_path, char const* set_path,
-             int stream_column, bool const show[3]) {
+             int stream_column, bool const show[3], bool tabs) {
   PairSet set;
   if (!load_set(set_path, &set)) return false;
   bool const stream_is_first = stream_column == 0;
@@ -193,17 +196,18 @@ bool compare(char const* stream_path, char const* set_path,
         if (!reverse_pair(line, stream_path, number, &reverse)) return false;
         auto const found = find_pair(&set, line, reverse);
         if (found == set.index.end())
-          return print_pair(stream_column, line, show);
+          return print_pair(stream_column, line, show, tabs);
         if (found->second.matched) return true;
         found->second.matched = true;
         std::string_view const spelling = stream_is_first
             ? line : std::string_view(found->first);
-        return print_pair(2, spelling, show);
+        return print_pair(2, spelling, show, tabs);
       })) return false;
 
   int const set_column = 1 - stream_column;
   for (PairMap::value_type const* pair : set.order)
-    if (!pair->second.matched && !print_pair(set_column, pair->first, show))
+    if (!pair->second.matched &&
+        !print_pair(set_column, pair->first, show, tabs))
       return false;
   return fflush(stdout) == 0;
 }
@@ -224,6 +228,7 @@ bool smaller_first(struct stat const& first, struct stat const& second) {
 
 int main(int argc, char* argv[]) {
   bool show[3] = {true, true, true};
+  bool tabs = false;
   char const* paths[2] = {NULL, NULL};
   int count = 0;
   bool options_done = false;
@@ -235,6 +240,10 @@ int main(int argc, char* argv[]) {
     }
     if (!options_done && arg == "--") {
       options_done = true;
+      continue;
+    }
+    if (!options_done && arg == "--tabs") {
+      tabs = true;
       continue;
     }
     if (!options_done && arg.size() > 1 && arg[0] == '-') {
@@ -285,5 +294,5 @@ int main(int argc, char* argv[]) {
     stream_first = !smaller_first(statuses[0], statuses[1]);
   return compare(paths[stream_first ? 0 : 1],
                  paths[stream_first ? 1 : 0],
-                 stream_first ? 0 : 1, show) ? 0 : 1;
+                 stream_first ? 0 : 1, show, tabs) ? 0 : 1;
 }

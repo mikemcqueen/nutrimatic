@@ -60,6 +60,9 @@
 * investigate p1 eval's "previously filtered pairs" check: it probably uses
   comm on ordered pair text, so reversed pair orderings are not recognized and
   some pairs are evaluated twice
+* make pcomm able to stream either input regardless of suppression flags or
+  argument position: always stream `-` when present; otherwise stream the
+  smaller file
 * pfilter and pairs should filter out pairs listed in
   $WFROOT/.wf/classified/no/no.pairs; eventually also filter target-local
   TARGET/no.pairs
