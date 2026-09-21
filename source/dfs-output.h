@@ -45,9 +45,8 @@ inline constexpr int DFS_SEGMENT_PAIR_BONUS_SHIFT = 1;
 inline constexpr uint8_t DFS_SEGMENT_PAIR_BONUS_MASK = uint8_t(7) << 1;
 
 // Rewrites a spelling's text with a comma between index entries, leaving the
-// spaces inside an entry alone. Without solo_words the result is exactly the
-// sequence syntax that "query-index --score" parses. With solo_words, selected
-// external partners are appended as human-readable parenthetical annotations.
+// spaces inside an entry alone. With solo_words, selected external partners
+// are appended as human-readable parenthetical annotations.
 std::string dfs_spelling_entry_list(
     DfsSpelling const& spelling, DfsSoloWords const* solo_words = NULL);
 

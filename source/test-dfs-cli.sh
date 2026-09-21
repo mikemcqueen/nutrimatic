@@ -631,27 +631,30 @@ assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/weighted-pairs.stdout")" \
   "$(awk 'BEGIN { print 5 * exp(log(1000000) * 4) }')" \
   "weighted pair without -g did not retain the fixed BEST tier"
 
-# The exact-result DFS score agrees with query-index for each cumulative BEST
-# exponent in a four-segment result.
+# Exact four-segment results use cumulative BEST exponents 4, 7, 9, and 10.
 dynamic_best="$test_dir/dynamic-best.pairs"
 : > "$dynamic_best"
 dynamic_words=(ab cd uv wx)
+dynamic_exponents=(4 7 9 10)
+"$dfs_anagrams" -i "$index_file" abcduvwx -m 2 -g 4 -n 1 \
+  -P 1 --word-bonus 0 \
+  > "$test_dir/dynamic-best-base.stdout" \
+  2> "$test_dir/dynamic-best-base.stderr"
+dynamic_base=$(awk 'NR == 1 { print $1 }' \
+  "$test_dir/dynamic-best-base.stdout")
 for ((i = 0; i < 4; ++i)); do
   printf '%s\n' "${dynamic_words[$i]}" >> "$dynamic_best"
   "$dfs_anagrams" -i "$index_file" abcduvwx -m 2 -g 4 -n 1 \
     -P 1 --word-bonus 0 --best-pairs "$dynamic_best" \
     > "$test_dir/dynamic-best.stdout" \
     2> "$test_dir/dynamic-best.stderr"
-  dynamic_query=$(
-    "$query_index" -i "$index_file" 'ab,cd,uv,wx' --score \
-      -P 1 --word-bonus 0 --best-pairs "$dynamic_best" \
-      2> "$test_dir/dynamic-best-query.stderr" | awk '{ print $1 }'
-  )
   dynamic_dfs=$(awk 'NR == 1 { print $1 }' \
     "$test_dir/dynamic-best.stdout")
-  [[ "$dynamic_dfs" == "$dynamic_query" ]] ||
-    fail "four-segment DFS and query-index BEST scores differ exactly: "\
-"expected $dynamic_dfs, got $dynamic_query"
+  dynamic_expected=$(awk -v score="$dynamic_base" \
+    -v exponent="${dynamic_exponents[$i]}" \
+    'BEGIN { print score * exp(log(1000000) * exponent) }')
+  assert_close "$dynamic_dfs" "$dynamic_expected" \
+    "four-entry cumulative BEST exponent ${dynamic_exponents[$i]} is wrong"
 done
 
 # Standalone fixed-tier entries cover every source marker in one search. "ab"
@@ -803,11 +806,9 @@ printf 'ab,zz\n' > "$test_dir/solo-top-pairs.txt"
    == "ab (zz),cd" ]] ||
   fail "solo-word upper bounds did not retain the bounded winner"
 solo_top_score=$(awk 'NR == 1 { print $1 }' "$test_dir/solo-top.stdout")
-solo_top_round_trip=$("$query_index" -i "$index_file" ab,cd --score -P 1 \
-  --solo-words zz --word-bonus 0 \
-  --pairs "$test_dir/solo-top-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
-assert_close "$solo_top_score" "$solo_top_round_trip" \
-  "DFS solo-word score did not round-trip through query-index --score"
+assert_close "$solo_top_score" \
+  "$(awk 'BEGIN { print 80 * 7 / 1148 * 1e6 }')" \
+  "DFS solo-word score is wrong"
 
 # Direct and selected solo BEST sources mark and score one result segment once.
 printf 'ab\nab,zz\n' > "$test_dir/solo-best-overlap.pairs"
@@ -838,10 +839,8 @@ printf 'ba,cd\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
 scarce_score=$(awk '$0 ~ / ab,ba \(cd\)$/ { print $1 }' \
   "$test_dir/solo-scarcity.stdout")
 [[ -n $scarce_score ]] || fail "solo-word scarcity spelling is missing"
-scarce_round_trip=$("$query_index" -i "$index_file" ab,ba --score -P 1 \
-  --solo-words cd --word-bonus 1 \
-  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0 | awk '{ print $1 }')
-assert_close "$scarce_score" "$scarce_round_trip" \
+assert_close "$scarce_score" \
+  "$(awk 'BEGIN { print 80 * 5 / 1148 * 1e6 }')" \
   "DFS spent one solo word more than once"
 
 # wx can reroute from its asserted ab edge to its aggregate yz edge, leaving
@@ -855,11 +854,9 @@ assert_close "$scarce_score" "$scarce_round_trip" \
   fail "solo-word assignment reroute lost the bounded DFS winner"
 reroute_score=$(awk 'NR == 1 { print $1 }' \
   "$test_dir/solo-reroute.stdout")
-reroute_round_trip=$("$query_index" -i "$index_file" wx,xy --score -P 1 \
-  --solo-words ab,yz --word-bonus 1 \
-  --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 | awk '{ print $1 }')
-assert_close "$reroute_score" "$reroute_round_trip" \
-  "rerouted DFS score did not round-trip through query-index --score"
+assert_close "$reroute_score" \
+  "$(awk 'BEGIN { print 7 * 4 / 1148 * 1e18 }')" \
+  "rerouted DFS score is wrong"
 "$dfs_anagrams" -i "$index_file" wxxy -m 2 -n 1 -P 1 \
   --solo-words ab,yz --word-bonus 1 \
   --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1 \
@@ -889,9 +886,10 @@ grep -Eq "${diagnostic_prefix}solo words: 2 profiles, 3 word edges, 2 pair edges
   "$test_dir/solo-reroute.stderr" ||
   fail "solo profile and edge diagnostics are missing"
 
-# Every result line's entry list must be pasteable into "query-index --score"
-# and reproduce that line's own score.
+# A one-entry DFS result remains pasteable into "query-index --score" and
+# reproduces that line's own score.
 while read -r result_score result_entries; do
+  [[ $result_entries == *,* ]] && continue
   round_trip=$("$query_index" -i "$index_file" "$result_entries" --score \
     --word-bonus 0 |
     awk '{ print $1 }')

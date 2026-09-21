@@ -60,4 +60,9 @@
 * investigate p1 eval's "previously filtered pairs" check: it probably uses
   comm on ordered pair text, so reversed pair orderings are not recognized and
   some pairs are evaluated twice
+* pfilter and pairs should filter out pairs listed in
+  $WFROOT/.wf/classified/no/no.pairs; eventually also filter target-local
+  TARGET/no.pairs
+* add a tool to show the consonant/vowel (C/V) ratio for a letter bag, with
+  -u/--used-letters support; consider a related option for pfilter
 * convert all enums to enum class where appropriate

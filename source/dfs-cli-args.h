@@ -32,6 +32,7 @@ inline constexpr int DFS_OPT_BEST_PAIRS = 308;
 inline constexpr int DFS_OPT_WF = 309;
 inline constexpr int DFS_OPT_WFROOT = 310;
 inline constexpr int DFS_OPT_MORE_BEST_PAIRS = 311;
+inline constexpr int DFS_OPT_NO_SCORE = 312;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -49,6 +50,7 @@ inline constexpr int DFS_OPT_MORE_BEST_PAIRS = 311;
   { "pair-bonus", DFS_OPT_PAIR_BONUS, OPTPARSE_REQUIRED }, \
   { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED }, \
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE }, \
+  { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE }, \
   { "seed-pairs", DFS_OPT_SEED_PAIRS, OPTPARSE_REQUIRED }, \
   { "yes-pairs", DFS_OPT_YES_PAIRS, OPTPARSE_REQUIRED }, \
   { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED }, \
@@ -83,6 +85,7 @@ struct DfsCommonArgs {
   std::string workflow_dictionary_file;
   std::vector<std::string> solo_words;
   bool hide_solo_words = false;
+  bool show_score = true;
   bool min_word_len_given = false;
   bool max_extract_words_given = false;
 };

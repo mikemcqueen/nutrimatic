@@ -42,6 +42,9 @@ grep -q '^options:$' "$test_dir/positional-index.stdout" ||
 grep -Eq '^  -i, --idx INDEX +read the completed Nutrimatic index' \
   "$test_dir/positional-index.stdout" ||
   fail "query-index help did not align option descriptions"
+grep -Eq '^  --no-score +omit the leading count or score from each result$' \
+  "$test_dir/positional-index.stdout" ||
+  fail "query-index help did not describe --no-score"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
 grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
@@ -116,6 +119,9 @@ expect_near_failure() {
 [[ "$("$query_index" --idx "$synthetic_index" f --near ij)" == \
    "1 f gh ij" ]] ||
   fail "near query did not find the one-anchor intervening phrase"
+[[ "$("$query_index" --idx "$synthetic_index" f --near ij --no-score)" == \
+   "f gh ij" ]] ||
+  fail "near --no-score did not omit the leading count"
 [[ "$("$query_index" -i "$synthetic_index" ij --near f)" == \
    "1 f gh ij" ]] ||
   fail "near query did not search from the second argument's anchor"
@@ -142,83 +148,87 @@ grep -q -- '--score cannot be used with --near' \
 expect_near_failure 'f  gh' ij near-malformed-spacing
 expect_near_failure f iJ near-malformed-character
 
-# The synthetic corpus total is 1148. Each comma after the first divides by
-# corpus_total * P; spaces inside an exact entry do not add a segment. An
-# entry counts what phase 1 counts, which is its whole trailing-space subtree:
-# "ab" is 80, its own 10 plus the 70 of "ab cd".
-default_two_entry_score=$(score_value 'ab,cd')
-assert_close "$default_two_entry_score" \
-  "$(awk 'BEGIN { print 80 * 7 / (1148 * 1000000) }')" \
-  "the default should preserve the production segment penalty"
-assert_close "$(score_value 'ab,cd' -P 1000000)" \
-  "$default_two_entry_score" \
-  "explicit default segment penalty should match the omitted option"
-
+# An entry counts what phase 1 counts, which is its whole trailing-space
+# subtree: "ab" is 80, its own 10 plus the 70 of "ab cd".
 for penalty in 1 100 1000000; do
   assert_close "$(score_value ab -P "$penalty")" 80 \
     "one exact entry should be invariant at P=$penalty"
-done
-
-assert_close "$(score_value 'ab,cd' -P 100)" \
-  "$(awk 'BEGIN { print 80 * 7 / (1148 * 100) }')" \
-  "two entries should pay one segment penalty"
-assert_close "$(score_value 'ab,cd,ab' --segment-penalty 100)" \
-  "$(awk 'BEGIN { print 80 * 7 * 80 / (1148 * 100)^2 }')" \
-  "three entries should pay two segment penalties"
-for penalty in 1 100 1000000; do
+  assert_close "$(score_value 'ab,cd' -P "$penalty" --word-bonus 0)" 70 \
+    "a positional pair should remain one entry at P=$penalty"
   assert_close "$(score_value 'ab cd' -P "$penalty" --word-bonus 0)" 70 \
     "a multi-word entry should remain one segment at P=$penalty"
 done
-assert_close "$(score_value 'ab,ab')" \
-  "$(awk 'BEGIN { print 80 * 80 / (1148 * 1000000) }')" \
-  "repeated entries should contribute repeatedly"
+
+[[ "$(score_value 'ab,cd' -P 100)" == \
+   "$(score_value 'cd,ab' -P 100)" ]] ||
+  fail "a positional pair should use its indexed ordering"
+[[ -z $(score_value 'missing,pair') ]] ||
+  fail "a missing positional pair should not be printed"
 
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
   fail "spaces adjacent to commas should not affect scoring"
+[[ "$("$query_index" -i "$synthetic_index" ab --score --no-score)" == ab ]] ||
+  fail "positional --score --no-score did not omit the leading score"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
   "$query_index" -i "$synthetic_index" - --score \
     > "$test_dir/stdin-score.stdout" \
     2> "$test_dir/stdin-score.stderr"
-[[ "$(awk 'NR > 1 { print $3 }' "$test_dir/stdin-score.stdout")" == \
-   $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij\nmissing,pair' ]] ||
+[[ "$(awk '{ print $2 }' "$test_dir/stdin-score.stdout")" == \
+   $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij' ]] ||
   fail "stdin values were not sorted by descending score"
-mean_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]$'
-[[ "$(head -n 1 "$test_dir/stdin-score.stdout")" =~ $mean_line_pattern ]] ||
-  fail "stdin scoring did not print the mean score and deviation factor first"
-mean_score=$(awk 'NR == 1 { print $2 }' "$test_dir/stdin-score.stdout")
-[[ "$(awk -v mean="$mean_score" \
-     'NR > 1 && $2 != "-" { print ($1 > mean) == ($2 > 0) }' \
-     "$test_dir/stdin-score.stdout" | sort -u)" == 1 ]] ||
-  fail "deviation signs disagree with each score's side of the mean"
-assert_close "$(awk '$3 == "ab,cd" { print $1 }' \
+[[ "$(head -n 1 "$test_dir/stdin-score.stdout")" != Mean:* ]] ||
+  fail "stdin scoring printed a score summary without --sd"
+[[ $(awk '{ print NF }' "$test_dir/stdin-score.stdout" | sort -u) == 2 ]] ||
+  fail "stdin scoring printed a deviation column without --sd"
+assert_close "$(awk '$2 == "ab,cd" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 70 \
   "stdin scoring did not query a comma-separated value as one phrase"
-assert_close "$(awk '$3 == "ab" { print $1 }' \
+assert_close "$(awk '$2 == "ab" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 80 \
   "stdin scoring did not accept a single-word value"
-assert_close "$(awk '$3 == "f,gh,ij" { print $1 }' \
+assert_close "$(awk '$2 == "f,gh,ij" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 1 \
   "stdin scoring did not accept a three-word value"
-assert_close "$(awk '$3 == "ij,gh" { print $1 }' \
+assert_close "$(awk '$2 == "ij,gh" { print $1 }' \
     "$test_dir/stdin-score.stdout")" 5 \
   "stdin scoring did not fall back to the indexed pair orientation"
-assert_close "$(awk '$3 == "missing,pair" { print $1 }' \
-    "$test_dir/stdin-score.stdout")" 0 \
-  "stdin scoring did not assign zero to a pair absent in both orientations"
+[[ -z $(awk '$2 == "missing,pair"' "$test_dir/stdin-score.stdout") ]] ||
+  fail "stdin scoring printed a pair absent in both orientations"
 
+printf 'gh,ij\nab\nmissing,pair\n' |
+  "$query_index" -i "$synthetic_index" - --score --no-score \
+    > "$test_dir/stdin-no-score.stdout" \
+    2> "$test_dir/stdin-no-score.stderr"
+[[ "$(cat "$test_dir/stdin-no-score.stdout")" == \
+   $'ab\ngh,ij' ]] ||
+  fail "stdin --score --no-score printed a missing pair"
+
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+  "$query_index" -i "$synthetic_index" - --score --sd \
+    > "$test_dir/stdin-score-sd.stdout" \
+    2> "$test_dir/stdin-score-sd.stderr"
+mean_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]$'
+[[ "$(head -n 1 "$test_dir/stdin-score-sd.stdout")" =~ \
+   $mean_line_pattern ]] ||
+  fail "--sd did not print the mean score and deviation factor first"
+mean_score=$(awk 'NR == 1 { print $2 }' "$test_dir/stdin-score-sd.stdout")
+[[ "$(awk -v mean="$mean_score" \
+     'NR > 1 && $2 != "-" { print ($1 > mean) == ($2 > 0) }' \
+     "$test_dir/stdin-score-sd.stdout" | sort -u)" == 1 ]] ||
+  fail "deviation signs disagree with each score's side of the mean"
 [[ $(awk 'NR > 1 { print length($0) - length($3) }' \
-     "$test_dir/stdin-score.stdout" | sort -u | wc -l) -eq 1 ]] ||
+     "$test_dir/stdin-score-sd.stdout" | sort -u | wc -l) -eq 1 ]] ||
   fail "stdin scores did not share one right-aligned column width"
-[[ "$(awk '$3 == "missing,pair" { print $2 }' \
-     "$test_dir/stdin-score.stdout")" == '-' ]] ||
-  fail "a zero-scoring value did not print - for its deviation"
+[[ -z $(awk '$3 == "missing,pair"' \
+     "$test_dir/stdin-score-sd.stdout") ]] ||
+  fail "--sd printed a missing pair"
 [[ "$(awk 'NR == 2 { print ($2 > 0) }' \
-     "$test_dir/stdin-score.stdout")" == 1 ]] ||
+     "$test_dir/stdin-score-sd.stdout")" == 1 ]] ||
   fail "the highest-scoring value was not above the mean"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
-  "$query_index" -i "$synthetic_index" - --score --ptm \
+  "$query_index" -i "$synthetic_index" - --score --sd --ptm \
     > "$test_dir/stdin-score-ptm.stdout" \
     2> "$test_dir/stdin-score-ptm.stderr"
 ptm_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]'
@@ -226,7 +236,7 @@ ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
 [[ "$(head -n 1 "$test_dir/stdin-score-ptm.stdout")" =~ $ptm_line_pattern ]] ||
   fail "--ptm did not add the fitted tail rate to the summary line"
 [[ "$(awk 'NR > 1 { print $5 }' "$test_dir/stdin-score-ptm.stdout")" == \
-   $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij\nmissing,pair' ]] ||
+   $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij' ]] ||
   fail "--ptm did not add two columns ahead of the value"
 [[ "$(awk 'NR > 1 && $3 != "-" {
        if (seen && $3 > previous) unsorted = 1
@@ -234,15 +244,25 @@ ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
      } END { print unsorted + 0 }' \
      "$test_dir/stdin-score-ptm.stdout")" == 0 ]] ||
   fail "mapped deviations did not follow the score order"
-[[ "$(awk '$5 == "missing,pair" { print $3, $4 }' \
-     "$test_dir/stdin-score-ptm.stdout")" == '- -' ]] ||
-  fail "a zero-scoring value did not print - for its mapped columns"
+[[ -z $(awk '$5 == "missing,pair"' \
+     "$test_dir/stdin-score-ptm.stdout") ]] ||
+  fail "--ptm printed a missing pair"
 [[ "$(awk 'NR > 1 && $4 != "-" {
        if (seen && $4 > previous) unsorted = 1
        previous = $4; seen = 1
      } END { print unsorted + 0 }' \
      "$test_dir/stdin-score-ptm.stdout")" == 0 ]] ||
   fail "mapped scores did not follow the score order"
+
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+  "$query_index" -i "$synthetic_index" - --score --ptm \
+    > "$test_dir/stdin-score-ptm-no-sd.stdout" \
+    2> "$test_dir/stdin-score-ptm-no-sd.stderr"
+[[ "$(head -n 1 "$test_dir/stdin-score-ptm-no-sd.stdout")" != Mean:* ]] ||
+  fail "--ptm printed a score summary without --sd"
+[[ $(awk '{ print NF }' "$test_dir/stdin-score-ptm-no-sd.stdout" |
+     sort -u) == 4 ]] ||
+  fail "--ptm did not hide only the deviation column without --sd"
 
 set +e
 "$query_index" -i "$synthetic_index" abcd --ptm \
@@ -254,6 +274,16 @@ set -e
 grep -q -- '^error: --ptm cannot be used without --score$' \
   "$test_dir/ptm-listing.stderr" ||
   fail "--ptm without --score diagnostic is unclear"
+set +e
+"$query_index" -i "$synthetic_index" abcd --sd \
+  > "$test_dir/sd-listing.stdout" 2> "$test_dir/sd-listing.stderr"
+sd_listing_status=$?
+set -e
+[[ $sd_listing_status -eq 2 ]] ||
+  fail "--sd without --score should exit 2, got $sd_listing_status"
+grep -q -- '^error: --sd cannot be used without --score$' \
+  "$test_dir/sd-listing.stderr" ||
+  fail "--sd without --score diagnostic is unclear"
 expect_score_failure ab ptm-sequence --ptm
 grep -q -- '^error: --ptm requires reading values from stdin, as -$' \
   "$test_dir/ptm-sequence.stderr" ||
@@ -265,10 +295,10 @@ printf 'cd,ab\n' |
     --pairs "$test_dir/stdin-score-pair.txt" --pair-bonus 0 \
     > "$test_dir/stdin-score-best-order.stdout" \
     2> "$test_dir/stdin-score-best-order.stderr"
-assert_close "$(awk 'NR > 1 { print $1 }' \
+assert_close "$(awk '{ print $1 }' \
     "$test_dir/stdin-score-best-order.stdout")" 70 \
   "stdin scoring did not choose the higher-scoring pair orientation"
-[[ "$(awk 'NR > 1 { print $3 }' \
+[[ "$(awk '{ print $2 }' \
     "$test_dir/stdin-score-best-order.stdout")" == 'cd,ab' ]] ||
   fail "stdin scoring did not preserve the written pair order"
 
@@ -300,15 +330,19 @@ grep -q '^error: stdin line 1: expected comma-separated words$' \
 expect_score_failure missing missing-entry
 grep -q 'index has no entry "missing"' "$test_dir/missing-entry.stderr" ||
   fail "missing-entry error does not name the failed item"
-expect_score_failure 'ab,,cd' empty-entry
+expect_score_failure 'ab,cd,ef' multiple-commas
+grep -q '^error: positional --score query may contain at most one comma$' \
+  "$test_dir/multiple-commas.stderr" ||
+  fail "multiple positional commas diagnostic is unclear"
+expect_score_failure 'ab,' trailing-empty-entry
+grep -q '^error: positional --score pair must be two lowercase a-z0-9 words$' \
+  "$test_dir/trailing-empty-entry.stderr" ||
+  fail "an empty positional entry diagnostic is unclear"
 expect_score_failure a prefix-only
 expect_score_failure 'ab  cd' malformed-spacing
 
 assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1)" 70 \
   "a multi-word entry should score as its own count with an explicit zero bonus"
-assert_close "$(score_value 'ab cd,ab' --word-bonus 0 -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1148 }')" \
-  "word count should not affect any segment's score with an explicit zero bonus"
 
 assert_close "$(score_value 'ab cd' -P 1)" 70 \
   "the default word bonus should be zero"
@@ -317,9 +351,6 @@ assert_close "$(score_value 'ab cd' -P 1)" 70 \
   fail "omitted --word-bonus did not match --word-bonus 0"
 assert_close "$(score_value ab --word-bonus 1)" 80 \
   "--word-bonus should not apply to a single-word segment"
-assert_close "$(score_value 'ab cd,ab' -P 1)" \
-  "$(awk 'BEGIN { print 70 * 80 / 1148 }')" \
-  "the default should not bonus the multi-word segment"
 
 expect_score_failure ab penalty-zero -P 0
 grep -q '^error: --segment-penalty must be at least 1$' \
@@ -451,6 +482,14 @@ grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
   --word-bonus 0 \
   > "$test_dir/extract-uncapped.stdout" \
   2> "$test_dir/extract-uncapped.stderr"
+"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
+  --word-bonus 0 --no-score \
+  > "$test_dir/extract-no-score.stdout" \
+  2> "$test_dir/extract-no-score.stderr"
+awk '{ $1 = ""; sub(/^ /, ""); print }' \
+  "$test_dir/extract-uncapped.stdout" > "$test_dir/extract-text.stdout"
+cmp "$test_dir/extract-text.stdout" "$test_dir/extract-no-score.stdout" ||
+  fail "--no-score changed ordinary results beyond dropping the count"
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
   --word-bonus 0 \
   > "$test_dir/extract-x2.stdout" 2> "$test_dir/extract-x2.stderr"
@@ -576,11 +615,6 @@ assert_close "$(score_value ab --pairs "$test_dir/single-word-pairs.txt" -P 1)" 
   80000000 \
   "--score should apply the pair bonus to a listed standalone word"
 
-# Exact scoring has no letter bag, so it has no bag maximum either.
-long_sequence=$(printf 'ab,%.0s' $(seq 70))
-[[ -n "$(score_value "${long_sequence%,}" -P 1 --word-bonus 0)" ]] ||
-  fail "--score rejected a sequence past the letter-bag maximum"
-
 # Every input loads once per invocation, not once per stdin line.
 printf 'ab,cd\ncd,ab\nab,cd\n' |
   "$query_index" -i "$synthetic_index" - --score \
@@ -619,25 +653,8 @@ assert_close "$(score_value 'ab cd' --word-bonus 0 -P 1 \
   70000000 \
   "one-entry BEST score did not use the final exponent"
 
-# Exact four-entry sequences use cumulative BEST exponents 4, 7, 9, and 10.
-dynamic_best="$test_dir/dynamic-best.pairs"
-: > "$dynamic_best"
-dynamic_base=$(score_value 'ab,cd,uv,wx' --word-bonus 0 -P 1)
-dynamic_words=(ab cd uv wx)
-dynamic_exponents=(4 7 9 10)
-for ((i = 0; i < 4; ++i)); do
-  printf '%s\n' "${dynamic_words[$i]}" >> "$dynamic_best"
-  dynamic_score=$(score_value 'ab,cd,uv,wx' --word-bonus 0 -P 1 \
-    --best-pairs "$dynamic_best")
-  dynamic_expected=$(awk -v score="$dynamic_base" \
-    -v exponent="${dynamic_exponents[$i]}" \
-    'BEGIN { print score * exp(log(1000000) * exponent) }')
-  assert_close "$dynamic_score" "$dynamic_expected" \
-    "four-entry cumulative BEST exponent ${dynamic_exponents[$i]} is wrong"
-done
-
 # Ordinary candidate listing has no exact result size, so it retains the
-# fixed BEST exponent even though --score above uses descending BEST.
+# fixed BEST exponent even though --score uses the final exponent.
 "$query_index" -i "$synthetic_index" abcd -m 2 -n 1 -P 1 \
   --word-bonus 0 --best-pairs "$test_dir/best-pairs.txt" \
   > "$test_dir/fixed-best-listing.stdout" \
@@ -796,6 +813,10 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
   fail "query-index did not promote a listed pair above both other groups"
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   70000000 "query-index printed the wrong listed-pair score"
+[[ "$("$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
+    --pairs "$test_dir/pairs.txt" --word-bonus 0 --no-score)" == \
+   'ab cd' ]] ||
+  fail "--no-score did not omit a computed listing score"
 
 # Solo words are external one-use partners. Index phrases work in either
 # order, asserted pairs work without index support, and an aggregate-only
@@ -811,21 +832,6 @@ printf 'ba,dc\nwx,ab\nxy,ab\n' > "$test_dir/solo-pairs.txt"
 assert_close "$(score_value ba --solo-words dc --word-bonus 1 \
     --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1)" 5000000000000 \
   "pairs-only solo edge did not earn both bonuses"
-
-# Both entries can reach cd, but the external word has capacity one.
-assert_close "$(score_value 'ab,ba' -P 1 --solo-words cd --word-bonus 1 \
-    --pairs "$test_dir/solo-pairs.txt" --pair-bonus 0)" \
-  "$(awk 'BEGIN { print 80 * 5 / 1148 * 1e6 }')" \
-  "one solo word was spent twice in --score"
-
-# wx prefers the high edge to ab but can reroute to yz; xy has only the high
-# edge to ab. The optimum therefore needs the augmenting-path reroute and earns
-# three log-space bonus units.
-reroute_score=$(score_value 'wx,xy' -P 1 --solo-words ab,yz \
-  --word-bonus 1 --pairs "$test_dir/solo-pairs.txt" --pair-bonus 1)
-assert_close "$reroute_score" \
-  "$(awk 'BEGIN { print 7 * 4 / 1148 * 1e18 }')" \
-  "solo assignment did not reroute to its maximum-score matching"
 
 "$query_index" -i "$synthetic_index" wxyz -m 2 -n 0 \
   --solo-words ab,yz --word-bonus 1 \

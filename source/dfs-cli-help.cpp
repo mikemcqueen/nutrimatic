@@ -146,3 +146,15 @@ void dfs_help_pair_bonus() {
       "multiply each index entry found in --pairs by %.0f^N (default: %.1f)",
       DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS);
 }
+
+void dfs_help_no_score(bool has_segments_mode) {
+  if (has_segments_mode) {
+    dfs_help_option("--no-score",
+        "omit the leading score from each result; the output cannot be read "
+        "by filter-segments or rerank-anagrams; cannot be combined with "
+        "--segments");
+  } else {
+    dfs_help_option("--no-score",
+        "omit the leading count or score from each result");
+  }
+}

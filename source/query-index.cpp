@@ -1,7 +1,7 @@
 // Queries aggregate index entries in three modes. By default, prints the
 // highest-corpus-frequency words/phrases makeable from a subset of a letter
 // bag. --require-completable adds shared phase-2 feasibility filtering.
-// --score scores an exact sequence, while --near finds phrases with supplied
+// --score scores an exact query, while --near finds phrases with supplied
 // endpoints and at least one complete intervening word.
 
 #include "dfs-class-list.h"
@@ -48,6 +48,7 @@ struct Args {
   bool require_completable;
   bool score;
   bool near;
+  bool sd;
   bool ptm;
   char const* score_incompatible_option;
   char const* near_incompatible_option;
@@ -56,7 +57,7 @@ struct Args {
 static void usage(char const* program) {
   fprintf(stdout,
       "usage: %s [-i INDEX] [options] letters\n"
-      "       %s [-i INDEX] [options] sequence|- --score\n"
+      "       %s [-i INDEX] [options] query|- --score\n"
       "       %s -i INDEX input --near WORD [-n N]\n\noptions:\n",
       program, program, program);
   dfs_help_index(true);
@@ -83,9 +84,9 @@ static void usage(char const* program) {
   dfs_help_yes_pairs();
   dfs_help_best_pairs();
   dfs_help_option("--more-best-pairs FILE",
-      "mark additional BEST entries; may be repeated; --score uses sequence "
-      "entry count N and descending BEST exponents from N through 1, counted "
-      "once per entry; listing keeps the fixed %.2f exponent; duplicate and "
+      "mark additional BEST entries; may be repeated; --score treats each "
+      "query as one index entry and uses the final BEST exponent; listing "
+      "keeps the fixed %.2f exponent; duplicate and "
       "reversed pairs retain the strongest tier; weighted pair options "
       "cannot be combined with legacy --pairs", DFS_BEST_PAIR_BONUS);
   dfs_help_wf();
@@ -105,7 +106,7 @@ static void usage(char const* program) {
       "single-word entry earns --word-bonus when either phrase order is an "
       "aggregate index phrase or is asserted by a pair input, and an "
       "asserted pair also earns its source's pair bonus; each solo word can "
-      "be used once per row or --score sequence; both bonuses must be "
+      "be used once per row or --score query; both bonuses must be "
       "non-negative, and the aggregate phrase test matches phase 1");
   dfs_help_option("--hide-solo-words",
       "omit parenthesized solo partners from ordinary output");
@@ -115,6 +116,7 @@ static void usage(char const* program) {
   dfs_help_option("--csv",
       "print only multi-word entries, as comma-separated words, with no "
       "count or score column");
+  dfs_help_no_score(/*has_segments_mode=*/false);
   dfs_help_option("--require-completable",
       "drop classes whose removal leaves a remainder phase 2 cannot fully "
       "turn into an anagram (subject to -m), using shared exact validation "
@@ -122,25 +124,27 @@ static void usage(char const* program) {
   dfs_help_option("-S, --search-threads N",
       "set search threads (default: 1; 0 uses hardware threads)");
   dfs_help_option("--score",
-      "treat sequence as comma-separated exact index entries and print the "
-      "score dfs-anagrams assigns that spelling; no dictionary or exclusion "
-      "filtering applies, and every entry must be in the index; sequence - "
+      "treat a positional query without a comma as one exact index entry; "
+      "with one comma, score it like a pair read from stdin by trying both "
+      "word orderings and printing the higher score, or print nothing if "
+      "neither is in the index; more than one comma is invalid; no "
+      "dictionary or exclusion filtering applies; query - "
       "reads one comma-separated value per stdin line, each as one "
       "space-separated index entry, and sorts by score; a two-word value "
-      "uses its higher-scoring orientation or scores zero if neither is in "
-      "the index; stdin mode prints the geometric mean first, in score "
-      "units, with one standard deviation as a multiplicative factor, then "
-      "each value's distance from the mean in those deviations; zero scores "
-      "are excluded from the summary and print -, and any bonus withholds "
-      "the whole summary");
+      "uses its higher-scoring orientation and is omitted if neither is in "
+      "the index");
+  dfs_help_option("--sd",
+      "with stdin --score, print the geometric mean first, in score units, "
+      "with one standard deviation as a multiplicative factor, then add "
+      "each value's distance from the mean in those deviations; any bonus "
+      "withholds the whole summary; requires --score");
   dfs_help_option("--ptm",
-      "add a mapped-deviation column after the deviation, with a normal "
+      "add mapped-deviation and corresponding score columns, with a normal "
       "rather than exponential upper tail; the top percent of log scores "
-      "uses a fitted exponential tail and the rest use their ranks; a "
-      "following score column gives the score corresponding to that mapped "
-      "deviation; requires stdin --score, is withheld by any bonus, needs "
-      "three finite scores and one below the tail, and adds the fitted "
-      "tail rate to the summary line");
+      "uses a fitted exponential tail and the rest use their ranks; requires "
+      "stdin --score, is withheld by any bonus, needs three finite scores and "
+      "one below the tail, and adds the fitted tail rate to the --sd summary "
+      "line");
   dfs_help_option("--near WORD",
       "treat input and WORD as literal lowercase a-z0-9 entries; print "
       "aggregate phrases spanning the endpoints with at least one complete "
@@ -154,6 +158,7 @@ static int const OPT_CSV = 258;
 static int const OPT_NEAR = 259;
 static int const OPT_PTM = 260;
 static int const OPT_MIN_WORDS = 261;
+static int const OPT_SD = 262;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -162,6 +167,7 @@ static struct optparse_long const long_options[] = {
   { "min-words", OPT_MIN_WORDS, OPTPARSE_REQUIRED },
   { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
+  { "sd", OPT_SD, OPTPARSE_NONE },
   { "ptm", OPT_PTM, OPTPARSE_NONE },
   { "near", OPT_NEAR, OPTPARSE_REQUIRED },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
@@ -210,6 +216,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->require_completable = false;
   out->score = false;
   out->near = false;
+  out->sd = false;
   out->ptm = false;
   out->score_incompatible_option = NULL;
   out->near_incompatible_option = NULL;
@@ -226,7 +233,8 @@ static bool parse_args(char* argv[], Args* out) {
       case DFS_OPTION_HANDLED:
         if (which.score_incompatible)
           mark_score_incompatible(out, which.name);
-        if (opt != 'n') mark_near_incompatible(out, which.name);
+        if (opt != 'n' && opt != DFS_OPT_NO_SCORE)
+          mark_near_incompatible(out, which.name);
         continue;
       case DFS_OPTION_OTHER:
         break;
@@ -261,6 +269,10 @@ static bool parse_args(char* argv[], Args* out) {
         out->score = true;
         mark_near_incompatible(out, "--score");
         break;
+      case OPT_SD:
+        out->sd = true;
+        mark_near_incompatible(out, "--sd");
+        break;
       case OPT_PTM:
         out->ptm = true;
         mark_near_incompatible(out, "--ptm");
@@ -284,7 +296,7 @@ static bool parse_args(char* argv[], Args* out) {
   char const* letters = optparse_arg(&options);
   if (letters == NULL) {
     fprintf(stderr, "error: missing %s argument\n",
-            out->near ? "input" : (out->score ? "sequence" : "letters"));
+            out->near ? "input" : (out->score ? "query" : "letters"));
     usage(argv[0]);
     return false;
   }
@@ -337,6 +349,10 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (out->ptm) {
     fputs("error: --ptm cannot be used without --score\n", stderr);
+    return false;
+  }
+  if (out->sd) {
+    fputs("error: --sd cannot be used without --score\n", stderr);
     return false;
   }
 
@@ -396,28 +412,6 @@ struct ScoreOrder {
   }
 };
 
-static bool parse_score_sequence(
-    std::string const& sequence, std::vector<std::string>* entries) {
-  size_t start = 0;
-  for (;;) {
-    size_t const comma = sequence.find(',', start);
-    size_t first = start;
-    size_t last = comma == std::string::npos ? sequence.size() : comma;
-    while (first < last && isspace((unsigned char) sequence[first])) ++first;
-    while (last > first && isspace((unsigned char) sequence[last - 1])) --last;
-
-    std::string const entry = sequence.substr(first, last - first);
-    if (entry.empty()) {
-      fputs("error: empty entry in --score sequence\n", stderr);
-      return false;
-    }
-    if (!validate_literal_entry(entry)) return false;
-    entries->push_back(entry);
-    if (comma == std::string::npos) return true;
-    start = comma + 1;
-  }
-}
-
 struct ScoreValue {
   std::string value;
   std::string entry;
@@ -431,6 +425,64 @@ static bool is_literal_word(std::string const& word) {
     char const ch = word[i];
     if ((ch < 'a' || ch > 'z') && (ch < '0' || ch > '9')) return false;
   }
+  return true;
+}
+
+static bool parse_positional_score_value(
+    std::string const& query, ScoreValue* out) {
+  size_t const comma = query.find(',');
+  if (comma == std::string::npos) {
+    size_t first = 0;
+    size_t last = query.size();
+    while (first < last && isspace((unsigned char) query[first])) ++first;
+    while (last > first && isspace((unsigned char) query[last - 1])) --last;
+    out->entry = query.substr(first, last - first);
+    if (out->entry.empty()) {
+      fputs("error: empty entry in --score query\n", stderr);
+      return false;
+    }
+    if (!validate_literal_entry(out->entry)) return false;
+    out->value = query;
+    out->pair = false;
+    return true;
+  }
+  if (query.find(',', comma + 1) != std::string::npos) {
+    fputs("error: positional --score query may contain at most one comma\n",
+          stderr);
+    return false;
+  }
+
+  size_t left_first = 0;
+  size_t left_last = comma;
+  while (left_first < left_last &&
+         isspace((unsigned char) query[left_first]))
+    ++left_first;
+  while (left_last > left_first &&
+         isspace((unsigned char) query[left_last - 1]))
+    --left_last;
+  size_t right_first = comma + 1;
+  size_t right_last = query.size();
+  while (right_first < right_last &&
+         isspace((unsigned char) query[right_first]))
+    ++right_first;
+  while (right_last > right_first &&
+         isspace((unsigned char) query[right_last - 1]))
+    --right_last;
+
+  std::string const left = query.substr(left_first, left_last - left_first);
+  std::string const right =
+      query.substr(right_first, right_last - right_first);
+  if (!is_literal_word(left) || !is_literal_word(right)) {
+    fputs("error: positional --score pair must be two lowercase a-z0-9 words\n",
+          stderr);
+    return false;
+  }
+
+  DfsPairRow const row = { left, right, 0 };
+  out->value = query;
+  out->entry = row.entry();
+  if (left != right) out->reverse_entry = row.entry(/*reverse=*/true);
+  out->pair = true;
   return true;
 }
 
@@ -638,8 +690,12 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
              rows.end());
   std::sort(rows.begin(), rows.end(), near_result_better);
   if (top != 0 && rows.size() > top) rows.resize(top);
-  for (size_t i = 0; i < rows.size(); ++i)
-    printf("%lld %s\n", (long long) rows[i].count, rows[i].phrase.c_str());
+  for (size_t i = 0; i < rows.size(); ++i) {
+    if (args.common.show_score)
+      printf("%lld %s\n", (long long) rows[i].count, rows[i].phrase.c_str());
+    else
+      puts(rows[i].phrase.c_str());
+  }
   return 0;
 }
 
@@ -809,6 +865,41 @@ static std::string format_mapped_score(
       model.displayed_score(stats.mean + mapped * stats.deviation));
 }
 
+static bool score_value(
+    IndexReader const& reader, DfsPreparedClassList const& prepared,
+    ScoreValue const& value, double* log_score,
+    bool* bonus_applied = NULL) {
+  DfsEntryTerms forward;
+  DfsEntryTerms reverse;
+  bool const has_forward =
+      gather_entry_terms(reader, prepared, value.entry, &forward);
+  bool const has_reverse = !value.reverse_entry.empty() &&
+      gather_entry_terms(reader, prepared, value.reverse_entry, &reverse);
+
+  std::string const* chosen = NULL;
+  if (has_forward && has_reverse)
+    chosen = entry_upper_log_score(*prepared.model, reverse) >
+             entry_upper_log_score(*prepared.model, forward)
+        ? &value.reverse_entry : &value.entry;
+  else if (has_forward)
+    chosen = &value.entry;
+  else if (has_reverse)
+    chosen = &value.reverse_entry;
+  else if (!value.pair) {
+    fprintf(stderr, "error: index has no entry \"%s\"\n",
+            value.entry.c_str());
+    return false;
+  }
+
+  *log_score = -INFINITY;
+  if (bonus_applied != NULL) *bonus_applied = false;
+  if (chosen == NULL) return true;
+
+  std::vector<std::string> const entries(1, *chosen);
+  return score_entry_sequence(
+      reader, prepared, entries, log_score, bonus_applied);
+}
+
 static int score_value_list(IndexReader& reader, Args const& args) {
   std::vector<ScoreValue> values;
   if (!parse_score_values(&values)) return 2;
@@ -823,38 +914,13 @@ static int score_value_list(IndexReader& reader, Args const& args) {
   results.reserve(values.size());
   bool bonus_applied = false;
   for (size_t i = 0; i < values.size(); ++i) {
-    DfsEntryTerms forward;
-    DfsEntryTerms reverse;
-    bool const has_forward =
-        gather_entry_terms(reader, prepared, values[i].entry, &forward);
-    bool const has_reverse = !values[i].reverse_entry.empty() &&
-        gather_entry_terms(
-            reader, prepared, values[i].reverse_entry, &reverse);
-
-    std::string const* chosen = NULL;
-    if (has_forward && has_reverse)
-      chosen = entry_upper_log_score(*prepared.model, reverse) >
-               entry_upper_log_score(*prepared.model, forward)
-          ? &values[i].reverse_entry : &values[i].entry;
-    else if (has_forward)
-      chosen = &values[i].entry;
-    else if (has_reverse)
-      chosen = &values[i].reverse_entry;
-    else if (!values[i].pair) {
-      fprintf(stderr, "error: index has no entry \"%s\"\n",
-              values[i].entry.c_str());
+    double log_score;
+    bool entry_bonus = false;
+    if (!score_value(
+            reader, prepared, values[i], &log_score, &entry_bonus))
       return 2;
-    }
-
-    double log_score = -INFINITY;
-    if (chosen != NULL) {
-      std::vector<std::string> const entries(1, *chosen);
-      bool entry_bonus = false;
-      if (!score_entry_sequence(
-              reader, prepared, entries, &log_score, &entry_bonus))
-        return 2;
-      if (entry_bonus) bonus_applied = true;
-    }
+    if (!isfinite(log_score)) continue;
+    if (entry_bonus) bonus_applied = true;
     ScoreResult result = {
       log_score,
       std::move(values[i].value),
@@ -905,7 +971,7 @@ static int score_value_list(IndexReader& reader, Args const& args) {
     mapped_score_width = std::max(mapped_score_width, mapped_scores[i].size());
   }
 
-  if (stats.shown) {
+  if (args.sd && stats.shown) {
     std::string const mean =
         format_score(prepared.model->displayed_score(stats.mean));
     if (map.valid())
@@ -915,19 +981,43 @@ static int score_value_list(IndexReader& reader, Args const& args) {
       printf("Mean: %s  1 sigma: x%.2f\n", mean.c_str(), exp(stats.deviation));
   }
   for (size_t i = 0; i < results.size(); ++i) {
-    if (stats.shown && map.valid())
-      printf("%*s %*s %*s %*s %s\n", int(width), scores[i].c_str(),
-             int(deviation_width), deviations[i].c_str(),
-             int(mapped_width), mapped_text[i].c_str(),
-             int(mapped_score_width), mapped_scores[i].c_str(),
-             results[i].value.c_str());
-    else if (stats.shown)
-      printf("%*s %*s %s\n", int(width), scores[i].c_str(),
-             int(deviation_width), deviations[i].c_str(),
-             results[i].value.c_str());
-    else
+    if (args.sd && stats.shown && map.valid()) {
+      if (args.common.show_score)
+        printf("%*s %*s %*s %*s %s\n", int(width), scores[i].c_str(),
+               int(deviation_width), deviations[i].c_str(),
+               int(mapped_width), mapped_text[i].c_str(),
+               int(mapped_score_width), mapped_scores[i].c_str(),
+               results[i].value.c_str());
+      else
+        printf("%*s %*s %*s %s\n",
+               int(deviation_width), deviations[i].c_str(),
+               int(mapped_width), mapped_text[i].c_str(),
+               int(mapped_score_width), mapped_scores[i].c_str(),
+               results[i].value.c_str());
+    } else if (args.sd && stats.shown) {
+      if (args.common.show_score)
+        printf("%*s %*s %s\n", int(width), scores[i].c_str(),
+               int(deviation_width), deviations[i].c_str(),
+               results[i].value.c_str());
+      else
+        printf("%*s %s\n", int(deviation_width), deviations[i].c_str(),
+               results[i].value.c_str());
+    } else if (map.valid()) {
+      if (args.common.show_score)
+        printf("%*s %*s %*s %s\n", int(width), scores[i].c_str(),
+               int(mapped_width), mapped_text[i].c_str(),
+               int(mapped_score_width), mapped_scores[i].c_str(),
+               results[i].value.c_str());
+      else
+        printf("%*s %*s %s\n", int(mapped_width), mapped_text[i].c_str(),
+               int(mapped_score_width), mapped_scores[i].c_str(),
+               results[i].value.c_str());
+    } else if (args.common.show_score) {
       printf("%*s %s\n", int(width), scores[i].c_str(),
              results[i].value.c_str());
+    } else {
+      puts(results[i].value.c_str());
+    }
   }
   return 0;
 }
@@ -945,10 +1035,11 @@ int main(int argc, char* argv[]) {
   if (!args.score && !args.near)
     dfs_diagnostic_letter_bag(args.letters);
 
-  std::vector<std::string> score_entries;
+  ScoreValue positional_score_value;
   bool const score_stdin = args.score && args.score_sequence == "-";
   if (args.score && !score_stdin &&
-      !parse_score_sequence(args.score_sequence, &score_entries))
+      !parse_positional_score_value(
+          args.score_sequence, &positional_score_value))
     return 2;
 
   FILE* fp = fopen(args.index_file, "rb");
@@ -966,14 +1057,20 @@ int main(int argc, char* argv[]) {
     DfsPreparedClassList prepared;
     if (!prepare_dfs_scoring_inputs(
             &reader, args.common, /*score_mode=*/true,
-            score_entries.size(), &prepared))
+            /*exact_segments=*/1, &prepared))
       return 1;
+
     double log_score;
-    if (!score_entry_sequence(reader, prepared, score_entries, &log_score))
+    if (!score_value(
+            reader, prepared, positional_score_value, &log_score))
       return 2;
-    printf("%s %s\n",
-           format_score(prepared.model->displayed_score(log_score)).c_str(),
-           args.score_sequence.c_str());
+    if (!isfinite(log_score)) return 0;
+    if (args.common.show_score)
+      printf("%s %s\n",
+             format_score(prepared.model->displayed_score(log_score)).c_str(),
+             args.score_sequence.c_str());
+    else
+      puts(args.score_sequence.c_str());
     return 0;
   }
 
@@ -1056,6 +1153,10 @@ int main(int argc, char* argv[]) {
       for (size_t i = 0; i < row.text_length; ++i)
         putchar(row.text[i] == ' ' ? ',' : row.text[i]);
       putchar('\n');
+    } else if (!args.common.show_score) {
+      printf("%.*s%s%s%s\n", int(row.text_length), row.text,
+             partner != NULL ? " (" : "", partner != NULL ? partner : "",
+             partner != NULL ? ")" : "");
     } else if (args.common.word_bonus == 0.0 &&
                args.common.pair_bonus == 0.0 && weighted_pairs.empty())
       printf("%lld %.*s%s%s%s\n", (long long) row.count,

@@ -928,8 +928,14 @@ DfsOptionResult dfs_parse_common_option(
     case DFS_OPT_HIDE_SOLO_WORDS:
       out->hide_solo_words = true;
       info.name = "--hide-solo-words";
-      // --score never annotates its input sequence, so hiding annotations is
+      // --score never annotates its input query, so hiding annotations is
       // harmless there and keeps the shared presentation option composable.
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_NO_SCORE:
+      out->show_score = false;
+      info.name = "--no-score";
+      // Scoring still determines ordering; this changes only presentation.
       info.score_incompatible = false;
       break;
     default:

@@ -200,6 +200,11 @@ executable('pfilter', 'pfilter.cpp',
   dependencies: thread_dep,
   install: true)
 
+executable('pairs', 'pairs.cpp',
+  link_with: [dfs_class_list_lib, optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: [segment_output_dep, segment_rows_dep, thread_dep],

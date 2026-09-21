@@ -29,7 +29,6 @@ struct Args {
   char const* index_file = NULL;
   char const* results_file = NULL;
   int num_segments = 0;
-  bool show_score = true;
   bool show_bonus = false;
   bool ptm = false;
 };
@@ -74,7 +73,6 @@ void usage(char const* program) {
 }
 
 inline constexpr int OPT_SHOW_BONUS = 256;
-inline constexpr int OPT_NO_SCORE = 257;
 inline constexpr int OPT_ONE_BEST_PAIR = 258;
 inline constexpr int OPT_PTM = 259;
 
@@ -89,7 +87,7 @@ struct optparse_long const long_options[] = {
   { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED },
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
-  { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
+  { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
   { "ptm", OPT_PTM, OPTPARSE_NONE },
   { "top", 'n', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
@@ -127,9 +125,6 @@ bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_SHOW_BONUS:
         out->show_bonus = true;
-        break;
-      case OPT_NO_SCORE:
-        out->show_score = false;
         break;
       case OPT_PTM:
         out->ptm = true;
@@ -248,7 +243,7 @@ bool rerank_stream(
   if (args.common.top > 0 && results.size() > size_t(args.common.top))
     results.resize(size_t(args.common.top));
   return dfs_print_results(
-      stdout, results, args.show_score, args.show_bonus,
+      stdout, results, args.common.show_score, args.show_bonus,
       args.common.hide_solo_words ? NULL : prepared.solo_words.get());
 }
 

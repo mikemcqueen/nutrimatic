@@ -35,7 +35,6 @@ struct Args {
   bool allow_cache_fallback;
   bool exact_remaining_depth;
   bool segments;
-  bool show_score;
   bool show_bonus;
   bool weighted;
   bool ptm;
@@ -159,10 +158,7 @@ static void usage(char const* program) {
       "add one marker per segment between the score and anagram: W for word "
       "bonus, P for legacy pair bonus, S/Y/B for pair sources, and - for none; "
       "cannot be combined with --segments");
-  dfs_help_option("--no-score",
-      "omit the leading score from each result; the output cannot be read by "
-      "filter-segments or rerank-anagrams; cannot be combined with "
-      "--segments");
+  dfs_help_no_score(/*has_segments_mode=*/true);
   dfs_help_option("--weighted",
       "sort and report each segment by best-score times result-count instead "
       "of best score alone; requires --segments");
@@ -184,7 +180,6 @@ static int const OPT_SEGMENTS = 256;
 static int const OPT_WEIGHTED = 257;
 static int const OPT_EXCLUDE_PAIRS = 258;
 static int const OPT_SHOW_BONUS = 259;
-static int const OPT_NO_SCORE = 260;
 static int const OPT_PTM = 261;
 static int const OPT_NO_REPEAT = 262;
 static int const OPT_DISABLE_REPEATS = 263;
@@ -225,7 +220,6 @@ static struct optparse_long const long_options[] = {
   { "exact", OPT_EXACT, OPTPARSE_NONE },
   { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
-  { "no-score", OPT_NO_SCORE, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
   { "ptm", OPT_PTM, OPTPARSE_NONE },
   { "no-repeat", OPT_NO_REPEAT, OPTPARSE_REQUIRED },
@@ -250,7 +244,6 @@ static bool parse_args(char* argv[], Args* out) {
   out->allow_cache_fallback = false;
   out->exact_remaining_depth = false;
   out->segments = false;
-  out->show_score = true;
   out->show_bonus = false;
   out->weighted = false;
   out->ptm = false;
@@ -310,9 +303,6 @@ static bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_SHOW_BONUS:
         out->show_bonus = true;
-        break;
-      case OPT_NO_SCORE:
-        out->show_score = false;
         break;
       case OPT_WEIGHTED:
         out->weighted = true;
@@ -378,7 +368,7 @@ static bool parse_args(char* argv[], Args* out) {
     fputs("error: --show-bonus cannot be combined with --segments\n", stderr);
     return false;
   }
-  if (!out->show_score && out->segments) {
+  if (!out->common.show_score && out->segments) {
     fputs("error: --no-score cannot be combined with --segments\n", stderr);
     return false;
   }
@@ -539,7 +529,7 @@ int main(int argc, char* argv[]) {
     report_segments(results, args.weighted);
   } else {
     if (!dfs_print_results(
-            stdout, results, args.show_score, args.show_bonus,
+            stdout, results, args.common.show_score, args.show_bonus,
             args.common.hide_solo_words
                 ? NULL : prepared.solo_words.get()))
       return 1;

@@ -17,5 +17,6 @@ void dfs_help_target();
 void dfs_help_segment_penalty();
 void dfs_help_word_bonus();
 void dfs_help_pair_bonus();
+void dfs_help_no_score(bool has_segments_mode);
 
 #endif
