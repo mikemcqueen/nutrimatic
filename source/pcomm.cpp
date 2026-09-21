@@ -52,7 +52,8 @@ void usage(FILE* out, char const* program) {
       "  -3  suppress pairs in both files\n"
       "  columns use comm's tab prefixes; shared pairs use FILE1's spelling\n"
       "  scanned-file rows precede unmatched in-memory rows\n"
-      "  repeated scanned rows print repeatedly; the set side is deduplicated\n"
+      "  each shared unordered pair is printed at most once\n"
+      "  use - for standard input in either position, but not both\n"
       "  each input line must have exactly two nonempty comma-separated words\n",
       program);
 }
@@ -63,7 +64,9 @@ bool reverse_pair(std::string_view line, char const* path, size_t number,
   if (comma == 0 || comma == std::string_view::npos ||
       comma + 1 == line.size() ||
       line.find(',', comma + 1) != std::string_view::npos) {
-    fprintf(stderr, "pcomm: %s:%zu: expected word,word\n", path, number);
+    fprintf(stderr, "pcomm: %s:%zu: expected word,word: ", path, number);
+    fwrite(line.data(), 1, line.size(), stderr);
+    fputc('\n', stderr);
     return false;
   }
   reverse->assign(line.substr(comma + 1));
@@ -75,7 +78,8 @@ bool reverse_pair(std::string_view line, char const* path, size_t number,
 // Map regular files. For files that cannot be mapped, read one line at a time.
 template <typename Visit>
 bool for_each_line(char const* path, Visit visit) {
-  int const fd = open(path, O_RDONLY);
+  bool const from_stdin = strcmp(path, "-") == 0;
+  int const fd = from_stdin ? STDIN_FILENO : open(path, O_RDONLY);
   if (fd < 0) {
     fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
     return false;
@@ -84,15 +88,15 @@ bool for_each_line(char const* path, Visit visit) {
   struct stat status;
   if (fstat(fd, &status) != 0) {
     fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
-    close(fd);
+    if (!from_stdin) close(fd);
     return false;
   }
 
-  if (S_ISREG(status.st_mode) && status.st_size == 0) {
+  if (!from_stdin && S_ISREG(status.st_mode) && status.st_size == 0) {
     close(fd);
     return true;
   }
-  if (S_ISREG(status.st_mode) && status.st_size > 0 &&
+  if (!from_stdin && S_ISREG(status.st_mode) && status.st_size > 0 &&
       static_cast<uintmax_t>(status.st_size) <= SIZE_MAX) {
     size_t const size = static_cast<size_t>(status.st_size);
     void* const mapped = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -119,7 +123,7 @@ bool for_each_line(char const* path, Visit visit) {
     }
   }
 
-  FILE* const input = fdopen(fd, "rb");
+  FILE* const input = from_stdin ? stdin : fdopen(fd, "rb");
   if (input == NULL) {
     fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
     close(fd);
@@ -144,7 +148,7 @@ bool for_each_line(char const* path, Visit visit) {
     ok = false;
   }
   free(buffer);
-  if (fclose(input) != 0) {
+  if (!from_stdin && fclose(input) != 0) {
     fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
     ok = false;
   }
@@ -190,6 +194,7 @@ bool compare(char const* stream_path, char const* set_path,
         auto const found = find_pair(&set, line, reverse);
         if (found == set.index.end())
           return print_pair(stream_column, line, show);
+        if (found->second.matched) return true;
         found->second.matched = true;
         std::string_view const spelling = stream_is_first
             ? line : std::string_view(found->first);
@@ -203,11 +208,15 @@ bool compare(char const* stream_path, char const* set_path,
   return fflush(stdout) == 0;
 }
 
-bool smaller_first(char const* first, char const* second) {
-  struct stat a, b;
-  if (stat(first, &a) == 0 && stat(second, &b) == 0 &&
-      S_ISREG(a.st_mode) && S_ISREG(b.st_mode))
-    return a.st_size <= b.st_size;
+bool get_status(char const* path, struct stat* status) {
+  if (stat(path, status) == 0) return true;
+  fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+  return false;
+}
+
+bool smaller_first(struct stat const& first, struct stat const& second) {
+  if (S_ISREG(first.st_mode) && S_ISREG(second.st_mode))
+    return first.st_size <= second.st_size;
   return true;
 }
 
@@ -251,15 +260,29 @@ int main(int argc, char* argv[]) {
     usage(stderr, argv[0]);
     return 2;
   }
+  bool const stdin_first = strcmp(paths[0], "-") == 0;
+  bool const stdin_second = strcmp(paths[1], "-") == 0;
+  if (stdin_first && stdin_second) {
+    fputs("pcomm: standard input cannot be used for both files\n", stderr);
+    usage(stderr, argv[0]);
+    return 2;
+  }
+  struct stat statuses[2];
+  if ((!stdin_first && !get_status(paths[0], &statuses[0])) ||
+      (!stdin_second && !get_status(paths[1], &statuses[1])))
+    return 1;
 
-  // A single requested exclusive column determines the streamed file. When
-  // either both or neither exclusive columns are requested, map the larger
-  // file and hold the smaller one in the set.
+  // Standard input must be streamed. Otherwise, a single requested exclusive
+  // column determines the streamed file. When either both or neither exclusive
+  // columns are requested, map the larger file and hold the smaller one in the
+  // set.
   bool stream_first;
-  if (show[0] != show[1])
+  if (stdin_first || stdin_second)
+    stream_first = stdin_first;
+  else if (show[0] != show[1])
     stream_first = show[0];
   else
-    stream_first = !smaller_first(paths[0], paths[1]);
+    stream_first = !smaller_first(statuses[0], statuses[1]);
   return compare(paths[stream_first ? 0 : 1],
                  paths[stream_first ? 1 : 0],
                  stream_first ? 0 : 1, show) ? 0 : 1;
