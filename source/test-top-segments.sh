@@ -199,6 +199,24 @@ actual=$("$top_segments" --pairs --by-length -n 2 "$input")
 [[ $actual == "$expected_longest_pairs" ]] ||
   fail "--pairs --by-length -n output is wrong: $actual"
 
+# -u takes the letter bag from the first row and prints only what fits in it
+# once the used letters come out.
+used_input=$test_dir/used-results.txt
+cat > "$used_input" <<'EOF'
+9 ab cd,ef
+8 abc,def
+7 fed,cba
+EOF
+expected_used='1 ab cd
+1 abc
+1 cba'
+actual=$("$top_segments" -u e --used-letters f "$used_input")
+[[ $actual == "$expected_used" ]] || fail "-u output is wrong: $actual"
+
+if "$top_segments" -u z "$used_input" >/dev/null 2>&1; then
+  fail "-u with a letter not in the bag succeeded"
+fi
+
 expected_solo='3 alpha
 2 delta'
 actual=$("$top_segments" --solo-words "$input")

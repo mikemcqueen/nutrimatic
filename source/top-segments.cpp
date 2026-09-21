@@ -5,10 +5,13 @@
 
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "dfs-cli-args.h"
+#include "option-value.h"
 #include "pair-exclusions.h"
 #include "segment-counts.h"
 #include "segment-output.h"
@@ -27,6 +30,7 @@ static void usage(char const* program) {
       "usage: %s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
       "          [-c | --no-counts] [-l | --elim] [-n N]\n"
+      "          [-u LETTERS | --used-letters LETTERS]...\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
@@ -51,6 +55,9 @@ static void usage(char const* program) {
       "                      rows\n"
       "  -n N                print at most N rows; 0 prints all; defaults to "
       "%" PRIu64 "\n"
+      "  -u, --used-letters LETTERS\n"
+      "                      print only segments made from the first input\n"
+      "                      row's letters less LETTERS; may be repeated\n"
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
       "                      repeated\n",
       program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
@@ -86,6 +93,7 @@ static bool parse_args(
   bool force_counts = false;
   bool suppress_counts = false;
   bool elimination = false;
+  std::optional<std::string> used_letters;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
@@ -118,6 +126,22 @@ static bool parse_args(
         return false;
       }
       if (result == SEGMENT_OUTPUT_OPTION_HANDLED) continue;
+
+      char const* value;
+      if (match_option_value(
+              argc, argv, &i, "-u", "--used-letters", &value)) {
+        if (value == NULL) {
+          fputs("top-segments: -u requires LETTERS\n", stderr);
+          usage(argv[0]);
+          return false;
+        }
+        if (!used_letters) used_letters.emplace();
+        if (!clean_letters(value, "used letters", &*used_letters)) {
+          usage(argv[0]);
+          return false;
+        }
+        continue;
+      }
     }
 
     if (parse_options && strcmp(argv[i], "--") == 0) {
@@ -187,6 +211,7 @@ static bool parse_args(
   out->options.output = output_options;
   out->options.elimination = elimination;
   out->options.show_counts = show_counts;
+  out->options.used_letters = std::move(used_letters);
   return true;
 }
 

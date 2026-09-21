@@ -374,8 +374,19 @@ static bool parse_args(char* argv[], Args* out) {
   }
 
   char const* letters = optparse_arg(&options);
-  if (out->index_file == NULL || letters == NULL ||
-      optparse_arg(&options) != NULL) {
+  if (letters == NULL) {
+    fputs("error: missing letters argument\n", stderr);
+    usage(argv[0]);
+    return false;
+  }
+  char const* extra = optparse_arg(&options);
+  if (extra != NULL) {
+    fprintf(stderr, "error: unexpected argument \"%s\"\n", extra);
+    usage(argv[0]);
+    return false;
+  }
+  if (out->index_file == NULL) {
+    fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
     usage(argv[0]);
     return false;
   }

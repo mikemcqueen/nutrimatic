@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <istream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,6 +43,9 @@ struct SegmentCountsOptions {
   SegmentOutputOptions output;
   bool elimination = false;  // --elim: rank by decision impact, not count
   bool show_counts = false;  // print the count column
+  // -u: cleaned letters to remove from the first row's letter bag; only
+  // segments that fit in what remains are printed.
+  std::optional<std::string> used_letters;
 };
 
 // Everything accumulated across every input. `program` prefixes diagnostics.
@@ -51,6 +55,8 @@ struct SegmentCountsData {
   PairFilterStats filtered;
   uint64_t surviving_rows = 0;
   std::unordered_set<std::string> unique_segments;
+  // With -u, the first row's letters less the used letters, sorted.
+  std::optional<std::string> remaining_letters;
 };
 
 // Reads one input, adding to *data. `name` is the file name in diagnostics.

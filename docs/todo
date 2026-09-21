@@ -35,6 +35,9 @@
   one-letter entries and produces empty stdout for both comparison runs
 * -S 0 (auto) default (hardware threads)
 * --require-completable auto
+* query-index file filtering currently requires `--score --no-score`: without
+  `--score`, it will not read a `-f FILE`, but `--no-score` is then needed to
+  suppress the scores; maybe add `--filter` to imply both options
 * -P 10000 default
 * filter index entries containing configurable "skip words" during phase 1,
   especially `the`

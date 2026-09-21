@@ -1,7 +1,9 @@
 #include "segment-counts.h"
+#include "dfs-cli-args.h"
 #include "segment-rows.h"
 
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +45,16 @@ bool segment_counts_read(
   SegmentRowReader reader = {input, name, data->program};
   SegmentRow row;
   while (segment_rows_next(&reader, &row)) {
+    if (options.used_letters && !data->remaining_letters) {
+      std::string bag;
+      for (std::string const& segment : row.segments)
+        for (char ch : segment)
+          if (ch != ' ') bag.push_back(ch);
+      std::string remaining;
+      if (!subtract_letters(bag, *options.used_letters, &remaining))
+        return false;
+      data->remaining_letters = std::move(remaining);
+    }
     // Each segment uses the shared filter precedence. A row is attributed to
     // its earliest layer across every segment, independent of segment order.
     PairFilterLayer rejecting_layer = PAIR_FILTER_NONE;
@@ -217,6 +229,17 @@ static bool split_counts(
   return true;
 }
 
+static bool fits_letters(
+    int const (&remaining)[UCHAR_MAX + 1], std::string const& segment) {
+  int need[UCHAR_MAX + 1] = { 0 };
+  for (char ch : segment) {
+    if (ch == ' ') continue;
+    unsigned char const index = (unsigned char) ch;
+    if (++need[index] > remaining[index]) return false;
+  }
+  return true;
+}
+
 bool segment_counts_print_top(
     SegmentCountsData const& data, SegmentCountsOptions const& options) {
   SegmentOutputOptions const& output_options = options.output;
@@ -233,6 +256,10 @@ bool segment_counts_print_top(
           output_options.projection == SEGMENT_PROJECTION_WORDS
       ? split : data.segments;
 
+  int remaining[UCHAR_MAX + 1] = { 0 };
+  if (data.remaining_letters)
+    for (char ch : *data.remaining_letters) ++remaining[(unsigned char) ch];
+
   std::vector<SegmentStatsMap::const_iterator> ordered;
   ordered.reserve(rows.size());
   uint64_t largest = 0;
@@ -243,6 +270,8 @@ bool segment_counts_print_top(
        entry != rows.end(); ++entry) {
     if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS &&
         !is_selected_segment(output_options.selection, entry->first))
+      continue;
+    if (data.remaining_letters && !fits_letters(remaining, entry->first))
       continue;
     ordered.push_back(entry);
     largest = std::max(largest, entry->second.count);

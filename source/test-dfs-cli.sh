@@ -53,7 +53,16 @@ grep -q '^usage: .* \[-i INDEX\] \[options\] letters$' \
 grep -q '^  -i, --idx INDEX  *read the completed Nutrimatic index' \
   "$test_dir/status.stdout" ||
   fail "help options are not presented in aligned columns"
+grep -q '^error: unexpected argument "abcd"$' \
+  "$test_dir/status.stderr" ||
+  fail "unexpected positional argument error is unclear"
 expect_status 2 "$dfs_anagrams" abcd
+grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
+  "$test_dir/status.stderr" ||
+  fail "missing index error is unclear"
+expect_status 2 "$dfs_anagrams" -i "$index_file"
+grep -q '^error: missing letters argument$' "$test_dir/status.stderr" ||
+  fail "missing letters error is unclear"
 
 "$dfs_anagrams" --idx "$index_file" abcd -m 2 -n 10 --word-bonus 0 \
   > "$test_dir/all.stdout" 2> "$test_dir/all.stderr"
