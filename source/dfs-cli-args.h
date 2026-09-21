@@ -50,7 +50,6 @@ inline constexpr int DFS_OPT_NO_SCORE = 312;
   { "pair-bonus", DFS_OPT_PAIR_BONUS, OPTPARSE_REQUIRED }, \
   { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED }, \
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE }, \
-  { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE }, \
   { "seed-pairs", DFS_OPT_SEED_PAIRS, OPTPARSE_REQUIRED }, \
   { "yes-pairs", DFS_OPT_YES_PAIRS, OPTPARSE_REQUIRED }, \
   { "best-pairs", DFS_OPT_BEST_PAIRS, OPTPARSE_REQUIRED }, \

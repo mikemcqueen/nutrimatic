@@ -44,7 +44,6 @@ struct Args {
   int num_words;
   int min_words;
   bool min_words_given;
-  bool csv;
   bool require_completable;
   bool score;
   bool near;
@@ -67,8 +66,9 @@ static void usage(char const* program) {
   dfs_help_top(DEFAULT_TOP);
   dfs_help_max_extract_words(0);
   dfs_help_option("-w, --num-words N",
-      "show only entries containing exactly N words (N must be positive; "
-      "cannot be combined with --min-words or --max-words)");
+      "show only entries containing exactly N words, walking at most N "
+      "words per entry unless --require-completable is given (N must be "
+      "positive; cannot be combined with --min-words or --max-words)");
   dfs_help_option("--min-words N",
       "show entries containing at least N words (default: 0; N cannot "
       "exceed a positive -x limit)");
@@ -114,9 +114,9 @@ static void usage(char const* program) {
   dfs_help_word_bonus();
   dfs_help_pair_bonus();
   dfs_help_option("--csv",
-      "print only multi-word entries, as comma-separated words, with no "
-      "count or score column");
-  dfs_help_no_score(/*has_segments_mode=*/false);
+      "omit the leading count or score from each result and print an "
+      "entry's words comma-separated; --score prints each query as given; "
+      "cannot be combined with --sd");
   dfs_help_option("--require-completable",
       "drop classes whose removal leaves a remainder phase 2 cannot fully "
       "turn into an anagram (subject to -m), using shared exact validation "
@@ -152,9 +152,14 @@ static void usage(char const* program) {
       "index entry");
 }
 
+static void put_csv(char const* text, size_t length) {
+  for (size_t i = 0; i < length; ++i)
+    putchar(text[i] == ' ' ? ',' : text[i]);
+  putchar('\n');
+}
+
 static int const OPT_REQUIRE_COMPLETABLE = 256;
 static int const OPT_SCORE = 257;
-static int const OPT_CSV = 258;
 static int const OPT_NEAR = 259;
 static int const OPT_PTM = 260;
 static int const OPT_MIN_WORDS = 261;
@@ -162,10 +167,10 @@ static int const OPT_SD = 262;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
+  { "csv", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
   { "idx", 'i', OPTPARSE_REQUIRED },
   { "num-words", 'w', OPTPARSE_REQUIRED },
   { "min-words", OPT_MIN_WORDS, OPTPARSE_REQUIRED },
-  { "csv", OPT_CSV, OPTPARSE_NONE },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "sd", OPT_SD, OPTPARSE_NONE },
   { "ptm", OPT_PTM, OPTPARSE_NONE },
@@ -212,7 +217,6 @@ static bool parse_args(char* argv[], Args* out) {
   out->num_words = 0;
   out->min_words = 0;
   out->min_words_given = false;
-  out->csv = false;
   out->require_completable = false;
   out->score = false;
   out->near = false;
@@ -259,11 +263,6 @@ static bool parse_args(char* argv[], Args* out) {
         out->min_words_given = true;
         mark_score_incompatible(out, "--min-words");
         mark_near_incompatible(out, "--min-words");
-        break;
-      case OPT_CSV:
-        out->csv = true;
-        mark_score_incompatible(out, "--csv");
-        mark_near_incompatible(out, "--csv");
         break;
       case OPT_SCORE:
         out->score = true;
@@ -340,6 +339,10 @@ static bool parse_args(char* argv[], Args* out) {
       return false;
     }
     out->score_sequence = letters;
+    if (out->sd && !out->common.show_score) {
+      fputs("error: --sd cannot be used with --csv\n", stderr);
+      return false;
+    }
     if (out->ptm && out->score_sequence != "-") {
       fputs("error: --ptm requires reading values from stdin, as -\n", stderr);
       return false;
@@ -362,6 +365,8 @@ static bool parse_args(char* argv[], Args* out) {
           "--max-words\n", stderr);
     return false;
   }
+  if (out->num_words != 0 && !out->require_completable)
+    out->common.max_extract_words = out->num_words;
   if (out->min_words > 0 && out->common.max_extract_words > 0 &&
       out->min_words > out->common.max_extract_words) {
     fprintf(stderr, "error: --min-words %d exceeds --max-words %d\n",
@@ -694,7 +699,7 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
     if (args.common.show_score)
       printf("%lld %s\n", (long long) rows[i].count, rows[i].phrase.c_str());
     else
-      puts(rows[i].phrase.c_str());
+      put_csv(rows[i].phrase.data(), rows[i].phrase.size());
   }
   return 0;
 }
@@ -1118,10 +1123,8 @@ int main(int argc, char* argv[]) {
   // The class -> member grouping has no reader left: phase 2 touched it once at
   // setup and its search is already destroyed, and printing needs only each
   // member's count and text.
-  DfsMemberFilter const filter = args.csv
-      ? DFS_RETAIN_PHRASES : DFS_RETAIN_ALL;
   DfsMemberSpan const survivors =
-      classes.retain_members(completable, filter);
+      classes.retain_members(completable, DFS_RETAIN_ALL);
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = args.num_words == 0 && args.min_words == 0
       ? first + survivors.count
@@ -1137,6 +1140,10 @@ int main(int argc, char* argv[]) {
       : std::min(survivor_count, size_t(args.common.top));
 
   auto const print_row = [&](DfsPackedMember const& row) {
+    if (!args.common.show_score) {
+      put_csv(row.text, row.text_length);
+      return;
+    }
     char const* partner = NULL;
     if (!args.common.hide_solo_words && solo_words != NULL &&
         row.word_count == 1 &&
@@ -1149,16 +1156,8 @@ int main(int argc, char* argv[]) {
       if (matching.solo_word_indexes[0] != DFS_NO_SOLO_WORD)
         partner = solo_words->word(matching.solo_word_indexes[0]).c_str();
     }
-    if (args.csv) {
-      for (size_t i = 0; i < row.text_length; ++i)
-        putchar(row.text[i] == ' ' ? ',' : row.text[i]);
-      putchar('\n');
-    } else if (!args.common.show_score) {
-      printf("%.*s%s%s%s\n", int(row.text_length), row.text,
-             partner != NULL ? " (" : "", partner != NULL ? partner : "",
-             partner != NULL ? ")" : "");
-    } else if (args.common.word_bonus == 0.0 &&
-               args.common.pair_bonus == 0.0 && weighted_pairs.empty())
+    if (args.common.word_bonus == 0.0 &&
+        args.common.pair_bonus == 0.0 && weighted_pairs.empty())
       printf("%lld %.*s%s%s%s\n", (long long) row.count,
              int(row.text_length), row.text,
              partner != NULL ? " (" : "", partner != NULL ? partner : "",

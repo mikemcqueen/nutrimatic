@@ -158,7 +158,7 @@ static void usage(char const* program) {
       "add one marker per segment between the score and anagram: W for word "
       "bonus, P for legacy pair bonus, S/Y/B for pair sources, and - for none; "
       "cannot be combined with --segments");
-  dfs_help_no_score(/*has_segments_mode=*/true);
+  dfs_help_no_score();
   dfs_help_option("--weighted",
       "sort and report each segment by best-score times result-count instead "
       "of best score alone; requires --segments");
@@ -210,6 +210,7 @@ static std::string normalize_repeat_value(char const* value) {
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
+  { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
   { "idx", 'i', OPTPARSE_REQUIRED },
   { "exclude-pairs", OPT_EXCLUDE_PAIRS, OPTPARSE_REQUIRED },
   { "num-segments", 'g', OPTPARSE_REQUIRED },

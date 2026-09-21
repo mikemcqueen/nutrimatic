@@ -42,9 +42,9 @@ grep -q '^options:$' "$test_dir/positional-index.stdout" ||
 grep -Eq '^  -i, --idx INDEX +read the completed Nutrimatic index' \
   "$test_dir/positional-index.stdout" ||
   fail "query-index help did not align option descriptions"
-grep -Eq '^  --no-score +omit the leading count or score from each result$' \
+grep -Eq '^  --csv +omit the leading count or score from each result' \
   "$test_dir/positional-index.stdout" ||
-  fail "query-index help did not describe --no-score"
+  fail "query-index help did not describe --csv"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
 grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
@@ -119,9 +119,9 @@ expect_near_failure() {
 [[ "$("$query_index" --idx "$synthetic_index" f --near ij)" == \
    "1 f gh ij" ]] ||
   fail "near query did not find the one-anchor intervening phrase"
-[[ "$("$query_index" --idx "$synthetic_index" f --near ij --no-score)" == \
-   "f gh ij" ]] ||
-  fail "near --no-score did not omit the leading count"
+[[ "$("$query_index" --idx "$synthetic_index" f --near ij --csv)" == \
+   "f,gh,ij" ]] ||
+  fail "near --csv did not print the phrase comma-separated without a count"
 [[ "$("$query_index" -i "$synthetic_index" ij --near f)" == \
    "1 f gh ij" ]] ||
   fail "near query did not search from the second argument's anchor"
@@ -167,8 +167,12 @@ done
 
 [[ "$(score_value 'ab, cd')" == "$(score_value 'ab,cd')" ]] ||
   fail "spaces adjacent to commas should not affect scoring"
-[[ "$("$query_index" -i "$synthetic_index" ab --score --no-score)" == ab ]] ||
-  fail "positional --score --no-score did not omit the leading score"
+[[ "$("$query_index" -i "$synthetic_index" ab --score --csv)" == ab ]] ||
+  fail "positional --score --csv did not omit the leading score"
+expect_score_failure - sd-with-csv --sd --csv
+grep -q -- '--sd cannot be used with --csv' \
+  "$test_dir/sd-with-csv.stderr" ||
+  fail "--sd should be rejected with --csv"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
   "$query_index" -i "$synthetic_index" - --score \
@@ -197,12 +201,12 @@ assert_close "$(awk '$2 == "ij,gh" { print $1 }' \
   fail "stdin scoring printed a pair absent in both orientations"
 
 printf 'gh,ij\nab\nmissing,pair\n' |
-  "$query_index" -i "$synthetic_index" - --score --no-score \
-    > "$test_dir/stdin-no-score.stdout" \
-    2> "$test_dir/stdin-no-score.stderr"
-[[ "$(cat "$test_dir/stdin-no-score.stdout")" == \
+  "$query_index" -i "$synthetic_index" - --score --csv \
+    > "$test_dir/stdin-csv.stdout" \
+    2> "$test_dir/stdin-csv.stderr"
+[[ "$(cat "$test_dir/stdin-csv.stdout")" == \
    $'ab\ngh,ij' ]] ||
-  fail "stdin --score --no-score printed a missing pair"
+  fail "stdin --score --csv printed a missing pair"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
   "$query_index" -i "$synthetic_index" - --score --sd \
@@ -483,13 +487,13 @@ grep -q ' uv$' "$test_dir/words-completed-by-phrase.stdout" ||
   > "$test_dir/extract-uncapped.stdout" \
   2> "$test_dir/extract-uncapped.stderr"
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 \
-  --word-bonus 0 --no-score \
-  > "$test_dir/extract-no-score.stdout" \
-  2> "$test_dir/extract-no-score.stderr"
-awk '{ $1 = ""; sub(/^ /, ""); print }' \
+  --word-bonus 0 --csv \
+  > "$test_dir/extract-csv.stdout" \
+  2> "$test_dir/extract-csv.stderr"
+awk '{ $1 = ""; sub(/^ /, ""); gsub(/ /, ","); print }' \
   "$test_dir/extract-uncapped.stdout" > "$test_dir/extract-text.stdout"
-cmp "$test_dir/extract-text.stdout" "$test_dir/extract-no-score.stdout" ||
-  fail "--no-score changed ordinary results beyond dropping the count"
+cmp "$test_dir/extract-text.stdout" "$test_dir/extract-csv.stdout" ||
+  fail "--csv changed ordinary results beyond dropping the count and commas"
 "$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 -x 2 \
   --word-bonus 0 \
   > "$test_dir/extract-x2.stdout" 2> "$test_dir/extract-x2.stderr"
@@ -814,9 +818,9 @@ assert_close "$(awk '$2 == "ab" && $3 == "cd" { print $1 }' \
 assert_close "$(awk 'NR == 1 { print $1 }' "$test_dir/pair-bonus.stdout")" \
   70000000 "query-index printed the wrong listed-pair score"
 [[ "$("$query_index" -i "$synthetic_index" abcdef -m 1 -n 1 \
-    --pairs "$test_dir/pairs.txt" --word-bonus 0 --no-score)" == \
-   'ab cd' ]] ||
-  fail "--no-score did not omit a computed listing score"
+    --pairs "$test_dir/pairs.txt" --word-bonus 0 --csv)" == \
+   'ab,cd' ]] ||
+  fail "--csv did not omit a computed listing score"
 
 # Solo words are external one-use partners. Index phrases work in either
 # order, asserted pairs work without index support, and an aggregate-only
@@ -875,24 +879,28 @@ expect_score_failure ab solo-negative-word \
 expect_score_failure ab solo-negative-pair \
   --solo-words cd --pair-bonus -1
 
-# --csv keeps exactly the multi-word entries of an ordinary run, printed as
-# their words with the count column dropped.
-"$query_index" -i "$synthetic_index" abcdef -m 1 -n 0 --word-bonus 0 --csv \
-  > "$test_dir/csv.stdout" 2> "$test_dir/csv.stderr"
-[[ -s "$test_dir/csv.stdout" ]] || fail "--csv printed nothing"
-grep -Ev '^[a-z0-9]+(,[a-z0-9]+)+$' "$test_dir/csv.stdout" &&
-  fail "--csv emitted a single-word entry or a non-CSV line"
-awk 'NF > 2 { $1 = ""; sub(/^ /, ""); gsub(/ /, ","); print }' \
-  "$test_dir/extract-uncapped.stdout" > "$test_dir/csv-expected.stdout"
-cmp "$test_dir/csv-expected.stdout" "$test_dir/csv.stdout" ||
-  fail "--csv does not match the ordinary run's multi-word entries"
-
-[[ -z $("$query_index" -i "$synthetic_index" abcdef --csv -w 1) ]] ||
-  fail "--csv -w 1 should have no matching phrases"
-expect_score_failure ab csv-with-score --csv
-grep -q -- '--csv cannot be used with --score' \
-  "$test_dir/csv-with-score.stderr" ||
-  fail "--csv should be rejected with --score"
+# -w N caps the phase 1 walk at N words, like -x N, unless
+# --require-completable needs the full-depth class list.
+phase1() {
+  grep -o 'phase 1 complete: .*' "$1"
+}
+for run in "x2:-x 2" "w2:-w 2" "uncapped:" "w2-complete:-w 2 --require-completable"; do
+  "$query_index" -i "$synthetic_index" abcdefghijklmn -m 1 -n 0 --csv \
+    ${run#*:} > "$test_dir/walk-${run%%:*}.stdout" \
+    2> "$test_dir/walk-${run%%:*}.stderr"
+done
+[[ $(phase1 "$test_dir/walk-w2.stderr") == \
+   $(phase1 "$test_dir/walk-x2.stderr") ]] ||
+  fail "-w 2 did not cap the phase 1 walk like -x 2"
+[[ $(phase1 "$test_dir/walk-uncapped.stderr") != \
+   $(phase1 "$test_dir/walk-x2.stderr") ]] ||
+  fail "the walk test letters do not reach a three-word entry"
+[[ $(phase1 "$test_dir/walk-w2-complete.stderr") == \
+   $(phase1 "$test_dir/walk-uncapped.stderr") ]] ||
+  fail "-w 2 --require-completable capped the phase 1 walk"
+grep , "$test_dir/walk-x2.stdout" > "$test_dir/walk-x2-pairs.stdout"
+cmp "$test_dir/walk-x2-pairs.stdout" "$test_dir/walk-w2.stdout" ||
+  fail "-w 2 does not match the two-word entries of -x 2"
 
 expect_score_failure ab extract-with-score -x 2
 grep -q -- '--max-words cannot be used with --score' \

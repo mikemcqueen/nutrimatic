@@ -13,7 +13,7 @@ segment count.
 
 Broadly, for a particular input and segment count, the process is:
 
-  1. Generate some large number of anagrams with --word-bonus 1 using the top
+  1. Generate some large number of anagrams with using the top
      10-15% (auto-classified) of all possible pairs that can be made from that
      sentence. 
   2. Determine the top N segments used in the output from 1. These need to be
@@ -22,7 +22,7 @@ Broadly, for a particular input and segment count, the process is:
      this by 1000 at a time is likely going to be helpful.
   3. Manualy classify the N segments from 2 - create notes, manualy check them,
      get and parse results - this is the BEST PAIRS list.
-  4. Run dfs-anagrams --word-bonus 1 --pairs BEST PAIRS. This should give the
+  4. Run dfs-anagrams --pairs BEST PAIRS. This should give the
      most meaningful full anagram results for a particlar input and segment count.
      
 A note on manual classification. With 9 sentences, and perhaps 3 segment count
@@ -58,28 +58,36 @@ The details:
 
     * build list of index-known pairs:
 
-      `query-index -i $IDX $S2 -x 2 --dict tmp/words.big -n 0  --csv |sort -u > idx/idx.2.s2.m4`
+      `query-index $S2 --wf -w 2  -n 0 --csv | sort -u > idx/idx.2.s2.m4`
       
-      QUESTION: is this guaranteed to be all pairs? is -x2 an upper limit or a lower limit or both?
-      NOTE: this will have reversed entries: "one,two" and "two,one", which is
-            desirable at this stage for p1_done filtering.
+      NOTE: can remove sort (replace with uniq) after pcomm is broadly incorporated into workflow.
 
-    * filter out already-auto-classified pairs:
+      NOTE: this will have reversed entries: "one,two" and "two,one". this might be desirable at
+            this stage for p1_done filtering because it's still using comm instead of pcomm. when
+            P1 filtering gets upgraded to use pcomm it may not longer be desirable.
+
+      IMPORTANT NOTE: this ignoring pairs present via cluer's query_index.py.  we need to:
+            * discover and save these pairs as `idx/cluer.s2.m4` or whatever
+            * merge them with `idx/idx.2.s2.m4`
+
+  * filter out already-auto-classified pairs:
+
+      TODO: use pcomm
 
       `comm -23 idx/idx.2.s2.m4 ../words/final/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
       
-      NOTE: this is dumb, need a better dedicated tool. need to think about it.
-
+      NOTE:   this is dumb, need a better dedicated tool. need to think about it.
       UPDATE: src.filter has the logic on how to approach this, that we can probably leverage in 
-              another tool.  load pairs in canonical form, check for membership in p1_done.pairs.
-              or, alternatively, just leverage src.filter itself, and add some freaky new option
-              to not filter on --pm/--pm at all, but stream *all* results and return all matches
-              whether YES or NO classified. normally you'd expect it to show matches, and -v to
-              show non-matches (like grep), but in our case maybe show non-matches by default is
-              better.  maybe --matches to "filter (out) matches". not thrilled with that option
-              name but that's the gist of it i think.
+            another tool.  load pairs in canonical form, check for membership in p1_done.pairs.
+            or, alternatively, just leverage src.filter itself, and add some freaky new option
+            to not filter on --pm/--pm at all, but stream *all* results and return all matches
+            whether YES or NO classified. normally you'd expect it to show matches, and -v to
+            show non-matches (like grep), but in our case maybe show non-matches by default is
+            better.  maybe --matches to "filter (out) matches". not thrilled with that option
+            name but that's the gist of it i think.
+      UPDATE: pcomm is probably the solution to this.
            
-     * if necessary (substantially more than 1M lines):
+      * if necessary (substantially more than 1M lines):
        `split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain`
 
     * seems i left out a step here, where i actually submit the .remain to p1 for auto-classification?
@@ -88,23 +96,23 @@ The details:
       extracting yes-probs from them, but i can't remember why i would do it that way.
       probably need to dig into the history log to refresh my memory.
       in any case, if i do end up using p1 submit/eval i need to fix it's "done filtering" to be
-      smarter than the dumb version it's using, which i think is the `comm` command directly above.
+      smarter than the dumb version it's using, which i think is to use the `pcomm` tool.
 
    From here, we need to run
-     * wf filter pairs idx/idx.2.s2.m4 -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes
+     `wf filter pairs idx/idx.2.s2.m4 -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes`
        input: the original (pre-filtered) pairs file
        output: top 15% of YES results.
        
-     * NOTE: wf filter is not a command.  maybe i renamed it to wf extract yes?
+     NOTE: wf filter is not a command.  maybe i renamed it to wf extract yes?
 
-     * NOTE: I'm losing the ".2" of the "using the 2-occurance wiki-merged index in the
-        filename here. Not ideal, but not sure it matters? I could prepend idx.2 i guess?
+     NOTE: I'm losing the ".2" of the "using the 2-occurance wiki-merged index in the
+           filename here. Not ideal, but not sure it matters? I could prepend idx.2 i guess?
        
    That will give us the --pairs file input to step 1.
 
 1. Generate the anagrams:
 
-   build/dfs-anagrams $IDX $S2 -m 4 -S 20 -p 10000000  -n 1000000 --word-bonus 1 --dict tmp/words.big --pairs results/s2/s2.m4.85.15.yes -x 2 -g 4 > results/s2/dfs.s2.m4.b1.bw.x2.g4.pairs.1000000
+   `dfs-anagrams $S2 -p 10000000  -n 1000000 --wf --pairs results/s2/s2.m4.85.15.yes -g 4 > results/s2/dfs.s2.m4.g4.pairs.1000000`
 
    * note the -g 4 here.  scores are relative to the number of segments, we'll
      need to run this command for every relevant segment-count per sentence.
