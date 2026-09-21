@@ -13,6 +13,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Most checks below pin exact pre-ptm scores; only the ptm check uses the
+# default.
+dfs_anagrams_ptm=$(realpath "$dfs_anagrams")
+dfs_anagrams=$test_dir/dfs-anagrams-no-ptm
+printf '#!/usr/bin/env bash\nexec %q --no-ptm "$@"\n' "$dfs_anagrams_ptm" \
+  > "$dfs_anagrams"
+chmod +x "$dfs_anagrams"
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -1012,23 +1020,24 @@ grep -q '^       use -C 1 or --allow-cache-fallback$' \
   fail "projected-cache recovery diagnostic is missing"
 expect_status 1 "$dfs_anagrams" -i "$test_dir/missing.index" abcd
 
-# --ptm recalibrates the base count before any bonus. The search and the output
-# assemble one score between them, so a remap carried by only one of them still
-# prints a plain one-segment result; this checks it reaches what is printed.
+# ptm, on by default, recalibrates the base count before any bonus. The search
+# and the output assemble one score between them, so a remap carried by only
+# one of them still prints a plain one-segment result; this checks it reaches
+# what is printed.
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 6 --word-bonus 0 \
   > "$test_dir/ptm-plain.stdout" 2> "$test_dir/ptm-plain.stderr"
-"$dfs_anagrams" -i "$index_file" abcd -m 2 -n 6 --word-bonus 0 --ptm \
+"$dfs_anagrams_ptm" -i "$index_file" abcd -m 2 -n 6 --word-bonus 0 \
   > "$test_dir/ptm.stdout" 2> "$test_dir/ptm.stderr"
 [[ "$(awk '{ sub(/^[^ ]* /, ""); print }' "$test_dir/ptm.stdout")" == \
    "$(awk '{ sub(/^[^ ]* /, ""); print }' "$test_dir/ptm-plain.stdout")" ]] ||
-  fail "--ptm changed which spellings were found"
+  fail "ptm changed which spellings were found"
 grep -q -- "${diagnostic_prefix}ptm: tail rate " "$test_dir/ptm.stderr" ||
-  fail "--ptm did not report the fitted tail"
+  fail "ptm did not report the fitted tail"
 ptm_plain_top=$(awk 'NR == 1 { print $1 }' "$test_dir/ptm-plain.stdout")
 ptm_top=$(awk 'NR == 1 { print $1 }' "$test_dir/ptm.stdout")
 awk -v plain="$ptm_plain_top" -v mapped="$ptm_top" \
   'BEGIN { exit (mapped > 0 && mapped < plain) ? 0 : 1 }' ||
-  fail "--ptm left the one-segment top score at $ptm_plain_top"
+  fail "ptm left the one-segment top score at $ptm_plain_top"
 
 # --no-repeat and --disable-repeats filter results after phase 3 picks each
 # class's member, so they see whole index entries rather than anagram classes.

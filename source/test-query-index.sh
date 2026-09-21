@@ -175,7 +175,7 @@ grep -q -- '--sd cannot be used with --csv' \
   fail "--sd should be rejected with --csv"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
-  "$query_index" -i "$synthetic_index" - --score \
+  "$query_index" -i "$synthetic_index" - --score --no-ptm \
     > "$test_dir/stdin-score.stdout" \
     2> "$test_dir/stdin-score.stderr"
 [[ "$(awk '{ print $2 }' "$test_dir/stdin-score.stdout")" == \
@@ -209,7 +209,7 @@ printf 'gh,ij\nab\nmissing,pair\n' |
   fail "stdin --score --csv printed a missing pair"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
-  "$query_index" -i "$synthetic_index" - --score --sd \
+  "$query_index" -i "$synthetic_index" - --score --sd --no-ptm \
     > "$test_dir/stdin-score-sd.stdout" \
     2> "$test_dir/stdin-score-sd.stderr"
 mean_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]$'
@@ -232,16 +232,16 @@ mean_score=$(awk 'NR == 1 { print $2 }' "$test_dir/stdin-score-sd.stdout")
   fail "the highest-scoring value was not above the mean"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
-  "$query_index" -i "$synthetic_index" - --score --sd --ptm \
+  "$query_index" -i "$synthetic_index" - --score --sd \
     > "$test_dir/stdin-score-ptm.stdout" \
     2> "$test_dir/stdin-score-ptm.stderr"
 ptm_line_pattern='^Mean: [0-9][0-9.e+-]*  1 sigma: x[0-9]+\.[0-9][0-9]'
 ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
 [[ "$(head -n 1 "$test_dir/stdin-score-ptm.stdout")" =~ $ptm_line_pattern ]] ||
-  fail "--ptm did not add the fitted tail rate to the summary line"
+  fail "ptm did not add the fitted tail rate to the summary line"
 [[ "$(awk 'NR > 1 { print $5 }' "$test_dir/stdin-score-ptm.stdout")" == \
    $'ab\nab,cd\ngh,ij\nij,gh\nqr,st\nf,gh,ij' ]] ||
-  fail "--ptm did not add two columns ahead of the value"
+  fail "ptm did not add two columns ahead of the value"
 [[ "$(awk 'NR > 1 && $3 != "-" {
        if (seen && $3 > previous) unsorted = 1
        previous = $3; seen = 1
@@ -250,7 +250,7 @@ ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
   fail "mapped deviations did not follow the score order"
 [[ -z $(awk '$5 == "missing,pair"' \
      "$test_dir/stdin-score-ptm.stdout") ]] ||
-  fail "--ptm printed a missing pair"
+  fail "ptm printed a missing pair"
 [[ "$(awk 'NR > 1 && $4 != "-" {
        if (seen && $4 > previous) unsorted = 1
        previous = $4; seen = 1
@@ -259,25 +259,15 @@ ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
   fail "mapped scores did not follow the score order"
 
 printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
-  "$query_index" -i "$synthetic_index" - --score --ptm \
+  "$query_index" -i "$synthetic_index" - --score \
     > "$test_dir/stdin-score-ptm-no-sd.stdout" \
     2> "$test_dir/stdin-score-ptm-no-sd.stderr"
 [[ "$(head -n 1 "$test_dir/stdin-score-ptm-no-sd.stdout")" != Mean:* ]] ||
-  fail "--ptm printed a score summary without --sd"
+  fail "ptm printed a score summary without --sd"
 [[ $(awk '{ print NF }' "$test_dir/stdin-score-ptm-no-sd.stdout" |
      sort -u) == 4 ]] ||
-  fail "--ptm did not hide only the deviation column without --sd"
+  fail "ptm did not hide only the deviation column without --sd"
 
-set +e
-"$query_index" -i "$synthetic_index" abcd --ptm \
-  > "$test_dir/ptm-listing.stdout" 2> "$test_dir/ptm-listing.stderr"
-ptm_listing_status=$?
-set -e
-[[ $ptm_listing_status -eq 2 ]] ||
-  fail "--ptm without --score should exit 2, got $ptm_listing_status"
-grep -q -- '^error: --ptm cannot be used without --score$' \
-  "$test_dir/ptm-listing.stderr" ||
-  fail "--ptm without --score diagnostic is unclear"
 set +e
 "$query_index" -i "$synthetic_index" abcd --sd \
   > "$test_dir/sd-listing.stdout" 2> "$test_dir/sd-listing.stderr"
@@ -288,10 +278,6 @@ set -e
 grep -q -- '^error: --sd cannot be used without --score$' \
   "$test_dir/sd-listing.stderr" ||
   fail "--sd without --score diagnostic is unclear"
-expect_score_failure ab ptm-sequence --ptm
-grep -q -- '^error: --ptm requires reading values from stdin, as -$' \
-  "$test_dir/ptm-sequence.stderr" ||
-  fail "--ptm on a literal sequence diagnostic is unclear"
 
 printf 'cd,ab\n' > "$test_dir/stdin-score-pair.txt"
 printf 'cd,ab\n' |

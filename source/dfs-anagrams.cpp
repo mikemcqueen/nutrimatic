@@ -162,15 +162,17 @@ static void usage(char const* program) {
   dfs_help_option("--weighted",
       "sort and report each segment by best-score times result-count instead "
       "of best score alone; requires --segments");
-  dfs_help_option("--ptm",
-      "recalibrate the base count of every index entry, before any bonus, "
-      "onto a scale whose upper tail is normal rather than exponential; phase "
-      "1 fits the spread of the counts this bag reaches and replaces each "
-      "log(count) with the log count carrying the same deviation in a normal "
-      "batch, so one very frequent entry no longer dominates a result; the "
-      "segment penalty and every bonus keep their meaning in the same "
-      "log-count units; the fit covers only entries this bag reaches, so "
-      "scores are comparable only within one run");
+  dfs_help_option("--no-ptm",
+      "turn off ptm, which is on by default; ptm recalibrates the base count "
+      "of every index entry, before any bonus, onto a scale whose upper tail "
+      "is normal rather than exponential; phase 1 fits the spread of the "
+      "counts this bag reaches and replaces each log(count) with the log "
+      "count carrying the same deviation in a normal batch, so one very "
+      "frequent entry no longer dominates a result; the segment penalty and "
+      "every bonus keep their meaning in the same log-count units; the fit "
+      "covers only entries this bag reaches, so scores are comparable only "
+      "within one run; counts with no fittable spread print a warning and "
+      "score without ptm");
   dfs_help_option("-F, --allow-cache-fallback",
       "allow score-cache fallback when the requested table does not fit");
   dfs_help_option("-v, --verbose", "report search task splitting");
@@ -180,7 +182,7 @@ static int const OPT_SEGMENTS = 256;
 static int const OPT_WEIGHTED = 257;
 static int const OPT_EXCLUDE_PAIRS = 258;
 static int const OPT_SHOW_BONUS = 259;
-static int const OPT_PTM = 261;
+static int const OPT_NO_PTM = 261;
 static int const OPT_NO_REPEAT = 262;
 static int const OPT_DISABLE_REPEATS = 263;
 static int const OPT_EXACT = 264;
@@ -222,7 +224,7 @@ static struct optparse_long const long_options[] = {
   { "segments", OPT_SEGMENTS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { "weighted", OPT_WEIGHTED, OPTPARSE_NONE },
-  { "ptm", OPT_PTM, OPTPARSE_NONE },
+  { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "no-repeat", OPT_NO_REPEAT, OPTPARSE_REQUIRED },
   { "disable-repeats", OPT_DISABLE_REPEATS, OPTPARSE_NONE },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
@@ -247,7 +249,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->segments = false;
   out->show_bonus = false;
   out->weighted = false;
-  out->ptm = false;
+  out->ptm = true;
   out->verbose = false;
 
   struct optparse options;
@@ -308,8 +310,8 @@ static bool parse_args(char* argv[], Args* out) {
       case OPT_WEIGHTED:
         out->weighted = true;
         break;
-      case OPT_PTM:
-        out->ptm = true;
+      case OPT_NO_PTM:
+        out->ptm = false;
         break;
       case OPT_NO_REPEAT: {
         if (strchr(options.optarg, ',') != NULL) {

@@ -30,7 +30,7 @@ struct Args {
   char const* results_file = NULL;
   int num_segments = 0;
   bool show_bonus = false;
-  bool ptm = false;
+  bool ptm = true;
 };
 
 void usage(char const* program) {
@@ -39,7 +39,7 @@ void usage(char const* program) {
       " [-r FILE]... [--best-pairs FILE | --one-best-pair PAIR]"
       " [--more-best-pairs FILE]..."
       " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
-      " [--show-bonus] [--no-score] [--ptm] [-n N] [FILE]\n"
+      " [--show-bonus] [--no-score] [--no-ptm] [-n N] [FILE]\n"
       "  revalidate, rescore, and sort an ordinary dfs-anagrams result file\n"
       "  --wf                 use the nonempty WFROOT environment variable\n"
       "  --wfroot DIR         use DIR as the workflow root\n"
@@ -59,10 +59,11 @@ void usage(char const* program) {
       "  --show-bonus         add the aligned S/Y/B/- marker column\n"
       "  --no-score           omit the leading score column; the output\n"
       "                       can't be filtered or reranked\n"
-      "  --ptm                recalibrate the base count of every index\n"
+      "  --no-ptm             turn off ptm, which is on by default; ptm\n"
+      "                       recalibrates the base count of every index\n"
       "                       entry, before any bonus, onto a scale whose\n"
-      "                       upper tail is normal, as dfs-anagrams --ptm\n"
-      "                       does; the fit covers the entries this bag\n"
+      "                       upper tail is normal, as dfs-anagrams does;\n"
+      "                       the fit covers the entries this bag\n"
       "                       reaches, so it reproduces a result file's own\n"
       "                       scores only when the bag, dictionary, pair\n"
       "                       inputs, and exclusions are the generator's\n"
@@ -74,7 +75,7 @@ void usage(char const* program) {
 
 inline constexpr int OPT_SHOW_BONUS = 256;
 inline constexpr int OPT_ONE_BEST_PAIR = 258;
-inline constexpr int OPT_PTM = 259;
+inline constexpr int OPT_NO_PTM = 259;
 
 struct optparse_long const long_options[] = {
   { "wf", DFS_OPT_WF, OPTPARSE_NONE },
@@ -88,7 +89,7 @@ struct optparse_long const long_options[] = {
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
   { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
-  { "ptm", OPT_PTM, OPTPARSE_NONE },
+  { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "top", 'n', OPTPARSE_REQUIRED },
   { NULL, 0, OPTPARSE_NONE },
 };
@@ -126,8 +127,8 @@ bool parse_args(char* argv[], Args* out) {
       case OPT_SHOW_BONUS:
         out->show_bonus = true;
         break;
-      case OPT_PTM:
-        out->ptm = true;
+      case OPT_NO_PTM:
+        out->ptm = false;
         break;
       case OPT_ONE_BEST_PAIR:
         if (out->common.best_pairs_given) {

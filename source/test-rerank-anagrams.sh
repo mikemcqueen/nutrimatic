@@ -70,15 +70,15 @@ cmp "$test_dir/dfs-bonus.stdout" "$test_dir/rerank-bonus.stdout" ||
   fail "bonus rerank output differs from dfs-anagrams --show-bonus"
 
 "$dfs_anagrams" abcd --wfroot "$workflow" -t "$target_name" \
-  -m 2 -g 2 -n 0 --ptm \
+  -m 2 -g 2 -n 0 --no-ptm \
   > "$test_dir/dfs-ptm.stdout" 2> "$test_dir/dfs-ptm.stderr"
-"$rerank" --wfroot "$workflow" -t "$target_name" --ptm \
+"$rerank" --wfroot "$workflow" -t "$target_name" --no-ptm \
   "$test_dir/dfs-ptm.stdout" \
   > "$test_dir/rerank-ptm.stdout" 2> "$test_dir/rerank-ptm.stderr"
 cmp "$test_dir/dfs-ptm.stdout" "$test_dir/rerank-ptm.stdout" ||
-  fail "--ptm rerank output differs from dfs-anagrams --ptm"
-grep -q 'ptm: tail rate ' "$test_dir/rerank-ptm.stderr" ||
-  fail "--ptm did not report the fitted tail"
+  fail "--no-ptm rerank output differs from dfs-anagrams --no-ptm"
+grep -q 'ptm: tail rate ' "$test_dir/rerank.stderr" ||
+  fail "default ptm did not report the fitted tail"
 
 "$dfs_anagrams" abcdefgh --used-letters efgh \
   --wfroot "$workflow" -t "$used_target_name" -m 2 -g 2 -n 0 \

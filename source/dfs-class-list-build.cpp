@@ -163,16 +163,18 @@ bool prepare_dfs_class_list(
       (long long) out->classes->nodes_visited());
   if (ptm) {
     out->base_remap.reset(new DfsBaseRemap);
-    if (!out->base_remap->fit(out->classes->member_log_counts())) {
-      fputs("error: --ptm found no fittable spread of index counts\n", stderr);
-      return false;
+    if (out->base_remap->fit(out->classes->member_log_counts())) {
+      out->model->set_base_remap(out->base_remap.get());
+      out->classes->resort_members(*out->model);
+      dfs_diagnostic(
+          "ptm: tail rate %.3f over %zu entries, mean %.3f, 1 sigma %.3f\n",
+          out->base_remap->rate(), out->base_remap->size(),
+          out->base_remap->mean(), out->base_remap->deviation());
+    } else {
+      out->base_remap.reset();
+      fputs("WARNING: ptm found no fittable spread of index counts; "
+            "scoring without it\n", stderr);
     }
-    out->model->set_base_remap(out->base_remap.get());
-    out->classes->resort_members(*out->model);
-    dfs_diagnostic(
-        "ptm: tail rate %.3f over %zu entries, mean %.3f, 1 sigma %.3f\n",
-        out->base_remap->rate(), out->base_remap->size(),
-        out->base_remap->mean(), out->base_remap->deviation());
   }
   if (out->solo_words != NULL)
     dfs_diagnostic(

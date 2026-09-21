@@ -138,12 +138,13 @@ static void usage(char const* program) {
       "with one standard deviation as a multiplicative factor, then add "
       "each value's distance from the mean in those deviations; any bonus "
       "withholds the whole summary; requires --score");
-  dfs_help_option("--ptm",
-      "add mapped-deviation and corresponding score columns, with a normal "
-      "rather than exponential upper tail; the top percent of log scores "
-      "uses a fitted exponential tail and the rest use their ranks; requires "
-      "stdin --score, is withheld by any bonus, needs three finite scores and "
-      "one below the tail, and adds the fitted tail rate to the --sd summary "
+  dfs_help_option("--no-ptm",
+      "turn off ptm, which is on by default and applies only to stdin "
+      "--score; ptm adds mapped-deviation and corresponding score columns, "
+      "with a normal rather than exponential upper tail; the top percent of "
+      "log scores uses a fitted exponential tail and the rest use their "
+      "ranks; it is withheld by any bonus, needs three finite scores and one "
+      "below the tail, and adds the fitted tail rate to the --sd summary "
       "line");
   dfs_help_option("--near WORD",
       "treat input and WORD as literal lowercase a-z0-9 entries; print "
@@ -161,7 +162,7 @@ static void put_csv(char const* text, size_t length) {
 static int const OPT_REQUIRE_COMPLETABLE = 256;
 static int const OPT_SCORE = 257;
 static int const OPT_NEAR = 259;
-static int const OPT_PTM = 260;
+static int const OPT_NO_PTM = 260;
 static int const OPT_MIN_WORDS = 261;
 static int const OPT_SD = 262;
 
@@ -173,7 +174,7 @@ static struct optparse_long const long_options[] = {
   { "min-words", OPT_MIN_WORDS, OPTPARSE_REQUIRED },
   { "score", OPT_SCORE, OPTPARSE_NONE },
   { "sd", OPT_SD, OPTPARSE_NONE },
-  { "ptm", OPT_PTM, OPTPARSE_NONE },
+  { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "near", OPT_NEAR, OPTPARSE_REQUIRED },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -221,7 +222,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->score = false;
   out->near = false;
   out->sd = false;
-  out->ptm = false;
+  out->ptm = true;
   out->score_incompatible_option = NULL;
   out->near_incompatible_option = NULL;
 
@@ -272,9 +273,8 @@ static bool parse_args(char* argv[], Args* out) {
         out->sd = true;
         mark_near_incompatible(out, "--sd");
         break;
-      case OPT_PTM:
-        out->ptm = true;
-        mark_near_incompatible(out, "--ptm");
+      case OPT_NO_PTM:
+        out->ptm = false;
         break;
       case OPT_NEAR:
         out->near = true;
@@ -343,17 +343,9 @@ static bool parse_args(char* argv[], Args* out) {
       fputs("error: --sd cannot be used with --csv\n", stderr);
       return false;
     }
-    if (out->ptm && out->score_sequence != "-") {
-      fputs("error: --ptm requires reading values from stdin, as -\n", stderr);
-      return false;
-    }
     return true;
   }
 
-  if (out->ptm) {
-    fputs("error: --ptm cannot be used without --score\n", stderr);
-    return false;
-  }
   if (out->sd) {
     fputs("error: --sd cannot be used without --score\n", stderr);
     return false;
