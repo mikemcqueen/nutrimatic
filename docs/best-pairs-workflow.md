@@ -58,7 +58,7 @@ The details:
 
     * build list of index-known pairs:
 
-      `query-index $S2 --wf -w 2  -n 0 --csv | sort -u > idx/idx.2.s2.m4`
+      `query-index $S2 --wf -w2 -n0 --csv | sort -u > idx/idx.2.s2.m4`
       
       NOTE: can remove sort (replace with uniq) after pcomm is broadly incorporated into workflow.
 
@@ -69,6 +69,21 @@ The details:
       IMPORTANT NOTE: this ignoring pairs present via cluer's query_index.py.  we need to:
             * discover and save these pairs as `idx/cluer.s2.m4` or whatever
             * merge them with `idx/idx.2.s2.m4`
+
+            pairs $S7 -u vindiesel > results/s7/pairs.big.s7
+            grep "w.*,.*w" results/s7/pairs.big.s7 > results/s7/pairs.big.s7.w.w
+            cat results/s7/pairs.big.s7.w.w | wc -l
+
+
+            python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.s7.w.w -j | wc -l
+            python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.s7.w.w -j | less
+            python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.s7.w.w -j | sort -u  > ../nutrimatic/results/s7/pairs.cluer.s7.w.w
+            python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done | wc -l
+            python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out | wc -l
+            python -m src.filter -y --pm .9 --pr .10 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out | wc -l
+            python -m src.filter -y --pm .9 --pr .10 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.90.10
+            python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.85.15
+
 
   * filter out already-auto-classified pairs:
 

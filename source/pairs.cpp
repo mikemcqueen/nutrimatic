@@ -5,39 +5,67 @@
 #include "optparse.h"
 #include "workflow-paths.h"
 
+#include <array>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
-static constexpr int ALPHA = 26;
+static constexpr size_t ALPHA = 26;
+static constexpr size_t COUNT_LANES = 32;
 
-using Counts = uint8_t[ALPHA];
+struct alignas(32) Counts {
+    std::array<uint8_t, COUNT_LANES> values{};
 
-static void letter_counts(const char* s, Counts out) {
-    memset(out, 0, ALPHA);
+    bool operator==(Counts const&) const = default;
+};
+
+static_assert(sizeof(Counts) == COUNT_LANES);
+static_assert(alignof(Counts) == COUNT_LANES);
+
+struct CountsHash {
+    size_t operator()(Counts const& counts) const {
+        uint64_t hash = UINT64_C(14695981039346656037);
+        for (uint8_t value : counts.values) {
+            hash ^= value;
+            hash *= UINT64_C(1099511628211);
+        }
+        return static_cast<size_t>(hash);
+    }
+};
+
+static Counts letter_counts(char const* s) {
+    Counts out{};
     for (; *s; ++s) {
         char c = *s;
         if (c >= 'A' && c <= 'Z') c += 32;
-        if (c >= 'a' && c <= 'z') out[c - 'a']++;
+        if (c >= 'a' && c <= 'z') ++out.values[c - 'a'];
     }
+    return out;
 }
 
-static bool subtract(const Counts pool, const Counts wc, Counts out) {
-    for (int i = 0; i < ALPHA; ++i) {
-        if (wc[i] > pool[i]) return false;
-        out[i] = pool[i] - wc[i];
+static bool subtract(
+    Counts const& pool, Counts const& word, Counts* out) {
+    Counts result{};
+    for (size_t i = 0; i < ALPHA; ++i) {
+        if (word.values[i] > pool.values[i]) return false;
+        result.values[i] = pool.values[i] - word.values[i];
     }
+    *out = result;
     return true;
 }
 
-static bool fits(const Counts pool, const Counts wc) {
-    for (int i = 0; i < ALPHA; ++i) {
-        if (wc[i] > pool[i]) return false;
-    }
-    return true;
+static bool fits(Counts const& pool, Counts const& word) {
+    uint8_t excess = 0;
+    for (size_t i = 0; i < COUNT_LANES; ++i)
+        excess |= static_cast<uint8_t>(word.values[i] > pool.values[i]);
+    return excess == 0;
 }
 
 namespace {
@@ -143,8 +171,7 @@ int main(int argc, char* argv[]) {
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
 
-    Counts sc;
-    letter_counts(args.letters.c_str(), sc);
+    Counts const bag = letter_counts(args.letters.c_str());
 
     // Read and filter wordlist
     FILE* wf = fopen(args.dictionary_file, "r");
@@ -152,42 +179,84 @@ int main(int argc, char* argv[]) {
 
     struct Word {
         std::string text;
-        Counts wc;
+        size_t ordinal;
     };
 
-    std::vector<Word> words;
+    struct Group {
+        Counts counts;
+        std::vector<Word> words;
+    };
+
+    std::vector<Group> groups;
+    std::unordered_map<Counts, size_t, CountsHash> group_indices;
+    std::unordered_set<std::string> accepted_words;
     char line[4096];
+    size_t ordinal = 0;
     while (fgets(line, sizeof(line), wf)) {
+        size_t const this_ordinal = ordinal++;
         size_t len = strlen(line);
         while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
             line[--len] = '\0';
         if ((int)len < args.min_word_length) continue;
-        Counts wc;
-        letter_counts(line, wc);
+        Counts const counts = letter_counts(line);
         Counts remaining;
-        if (subtract(sc, wc, remaining)) {
-            words.push_back({std::string(line), {}});
-            memcpy(words.back().wc, wc, ALPHA);
-        }
+        if (!subtract(bag, counts, &remaining)) continue;
+
+        std::string text(line);
+        if (!accepted_words.insert(text).second) continue;
+
+        auto const inserted = group_indices.emplace(counts, groups.size());
+        if (inserted.second) groups.push_back({counts, {}});
+        groups[inserted.first->second].words.push_back(
+            {std::move(text), this_ordinal});
     }
     fclose(wf);
 
-    const size_t n = words.size();
-    long long total = 0;
+    uint64_t total = 0;
     Counts remaining;
+    std::vector<size_t> matching_groups(groups.size());
 
-    for (size_t i = 0; i < n; ++i) {
-        const Word& w1 = words[i];
-        if (!subtract(sc, w1.wc, remaining)) continue;
-        for (size_t j = i + 1; j < n; ++j) {
-            const Word& w2 = words[j];
-            if (fits(remaining, w2.wc)) {
-                printf("%s,%s\n", w1.text.c_str(), w2.text.c_str());
-                ++total;
+    for (size_t a = 0; a < groups.size(); ++a) {
+        Group const& first_group = groups[a];
+        subtract(bag, first_group.counts, &remaining);
+
+        if (first_group.words.size() >= 2 &&
+            fits(remaining, first_group.counts)) {
+            size_t const size = first_group.words.size();
+            total += static_cast<uint64_t>(size) * (size - 1) / 2;
+            for (size_t i = 0; i < size; ++i) {
+                for (size_t j = i + 1; j < size; ++j) {
+                    printf("%s,%s\n", first_group.words[i].text.c_str(),
+                           first_group.words[j].text.c_str());
+                }
+            }
+        }
+
+        size_t matching_count = 0;
+        for (size_t b = a + 1; b < groups.size(); ++b) {
+            matching_groups[matching_count] = b;
+            matching_count += fits(remaining, groups[b].counts);
+        }
+
+        for (size_t match = 0; match < matching_count; ++match) {
+            Group const& second_group = groups[matching_groups[match]];
+            total += static_cast<uint64_t>(first_group.words.size()) *
+                second_group.words.size();
+            for (Word const& first : first_group.words) {
+                for (Word const& second : second_group.words) {
+                    Word const* left = &first;
+                    Word const* right = &second;
+                    if (right->ordinal < left->ordinal) {
+                        left = &second;
+                        right = &first;
+                    }
+                    printf("%s,%s\n", left->text.c_str(),
+                           right->text.c_str());
+                }
             }
         }
     }
 
-    printf("%lld\n", total);
+    printf("%" PRIu64 "\n", total);
     return 0;
 }

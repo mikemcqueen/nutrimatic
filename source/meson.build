@@ -200,7 +200,7 @@ executable('pfilter', 'pfilter.cpp',
   dependencies: thread_dep,
   install: true)
 
-executable('pairs', 'pairs.cpp',
+pairs = executable('pairs', 'pairs.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
@@ -369,6 +369,11 @@ test(
   'find-dupes',
   bash,
   args: [files('test-find-dupes.sh'), find_dupes],
+)
+test(
+  'pairs',
+  bash,
+  args: [files('test-pairs.sh'), pairs],
 )
 test(
   'first-segments',
