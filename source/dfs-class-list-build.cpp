@@ -23,7 +23,7 @@ bool row_fits_bag(std::array<int, 256> remaining, DfsPairRow const& row) {
 void warn_dictionary_drops(
     IndexReader const& reader, std::string const& letters,
     DfsCommonArgs const& args, DfsDictionary const& dictionary,
-    DfsPairSet const& exclude_pairs, std::vector<DfsPairRow> const& rows) {
+    DfsPairSet const& rejected, std::vector<DfsPairRow> const& rows) {
   std::array<int, 256> bag;
   bag.fill(0);
   for (size_t i = 0; i < letters.size(); ++i)
@@ -43,7 +43,7 @@ void warn_dictionary_drops(
     if (reported.count(entry) != 0) continue;
     if (pair) {
       if (args.max_extract_words == 1) continue;
-      if (exclude_pairs.count(row.left + " " + row.right) != 0) continue;
+      if (rejected.count(row.left + " " + row.right) != 0) continue;
     } else {
       int64_t count;
       if (!reader.aggregate_entry_count(row.left, &count)) continue;
@@ -74,6 +74,34 @@ void admit_best_words(
           tty ? "\033[33m" : "", word.c_str(), tty ? "\033[0m" : "");
     }
   }
+}
+
+bool remove_rejected_words(
+    DfsPairSet const& rejected, std::vector<DfsPairRow> const& best_rows,
+    DfsDictionary* dictionary) {
+  DfsPairSet best_words;
+  for (size_t i = 0; i < best_rows.size(); ++i) {
+    best_words.insert(best_rows[i].left);
+    if (!best_rows[i].right.empty()) best_words.insert(best_rows[i].right);
+  }
+  for (DfsPairSet::const_iterator it = rejected.begin();
+       it != rejected.end(); ++it) {
+    if (it->find(' ') != std::string::npos) continue;
+    if (best_words.count(*it) != 0) {
+      if (dictionary != NULL && dictionary->count(*it) != 0)
+        dfs_diagnostic("kept %s in dictionary: it is in BEST pairs\n",
+                       it->c_str());
+      continue;
+    }
+    if (dictionary == NULL) {
+      fprintf(stderr,
+          "error: rejected word \"%s\" needs a dictionary to remove it"
+          " from; supply --dict\n", it->c_str());
+      return false;
+    }
+    dictionary->erase(*it);
+  }
+  return true;
 }
 
 }  // namespace
@@ -121,8 +149,9 @@ bool prepare_dfs_scoring_inputs(
 bool prepare_dfs_class_list(
     IndexReader* reader, std::string const& letters,
     DfsCommonArgs const& args,
-    std::vector<std::string> const& exclude_pair_files,
-    size_t exact_segments, DfsPreparedClassList* out, bool ptm) {
+    std::vector<std::string> const& workflow_reject_files,
+    size_t exact_segments, DfsPreparedClassList* out, bool ptm,
+    std::vector<std::string> const* reject_files) {
   DfsDictionary const* dictionary_filter = NULL;
   if (args.dictionary_file != NULL) {
     if (!load_dictionary(args.dictionary_file, &out->dictionary)) return false;
@@ -132,17 +161,27 @@ bool prepare_dfs_class_list(
   if (!prepare_dfs_scoring_inputs(
           reader, args, /*score_mode=*/false, exact_segments, out))
     return false;
-  if (!load_exclude_pair_files(
-          exclude_pair_files, &out->exclude_pairs))
+  if (!load_reject_files(
+          workflow_reject_files, /*allow_single_words=*/false,
+          &out->rejected))
+    return false;
+  if (reject_files != NULL &&
+      !load_reject_files(
+          *reject_files, /*allow_single_words=*/true,
+          &out->rejected))
+    return false;
+  if (dictionary_filter != NULL && !args.workflow_root.empty())
+    admit_best_words(out->best_rows, &out->dictionary);
+  if (!remove_rejected_words(
+          out->rejected, out->best_rows,
+          dictionary_filter != NULL ? &out->dictionary : NULL))
     return false;
   if (dictionary_filter != NULL) {
-    if (!args.workflow_root.empty())
-      admit_best_words(out->best_rows, &out->dictionary);
     out->external_rows.insert(
         out->external_rows.end(),
         out->best_rows.begin(), out->best_rows.end());
     warn_dictionary_drops(*reader, letters, args, out->dictionary,
-                          out->exclude_pairs, out->external_rows);
+                          out->rejected, out->external_rows);
   }
 
   out->classes.reset(new DfsClassList(
@@ -152,7 +191,7 @@ bool prepare_dfs_class_list(
       !out->weighted_pairs.empty() ? &out->weighted_pairs : NULL,
       !out->exception_prefixes.empty() ? &out->exception_prefixes : NULL,
       out->solo_words.get(),
-      !exclude_pair_files.empty() ? &out->exclude_pairs : NULL,
+      !out->rejected.empty() ? &out->rejected : NULL,
       DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING));
   dfs_diagnostic(
       "phase 1 external pairs: %zu synthetic entries\n",

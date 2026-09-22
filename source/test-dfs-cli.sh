@@ -314,7 +314,7 @@ assert_close "$(awk '$2 == "ba" && $3 == "dc" { print $1 }' \
 # Existing phase-one eligibility gates apply before an absent pair is probed.
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 \
   --pairs "$test_dir/missing-index-pair.pairs" \
-  --exclude-pairs "$test_dir/missing-index-pair.pairs" \
+  --reject "$test_dir/missing-index-pair.pairs" \
   > "$test_dir/missing-index-excluded.stdout" \
   2> "$test_dir/missing-index-excluded.stderr"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 -g 1 -x 1 \
@@ -421,11 +421,11 @@ grep -q ' 2345 6789$' "$test_dir/short-shared-prefix.stdout" ||
   fail "an ordinary phrase sharing an exception prefix was rejected"
 "$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" \
-  --exclude-pairs "$test_dir/short-first.pairs" \
+  --reject "$test_dir/short-first.pairs" \
   > "$test_dir/short-excluded.stdout" \
   2> "$test_dir/short-excluded.stderr"
 [[ ! -s "$test_dir/short-excluded.stdout" ]] ||
-  fail "--exclude-pairs did not reject a short-pair exception"
+  fail "--reject did not reject a short-pair exception"
 printf '2345\n' > "$test_dir/short-dictionary"
 "$dfs_anagrams" -i "$index_file" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-first.pairs" --dict "$test_dir/short-dictionary" \
@@ -471,75 +471,75 @@ grep -q "^error: pair list \"$test_dir/normalized-short-word.pairs\" line 1: nor
   "$test_dir/status.stderr" ||
   fail "short normalized word diagnostic is wrong"
 
-# --exclude-pairs drops the whole "ab cd" index entry, in either written
+# --reject drops the whole "ab cd" index entry, in either written
 # order. The two-entry "ab,cd" answer survives: the exclusion is over index
 # entries, not over adjacency in a result.
 printf 'cd,ab\n' > "$test_dir/exclude.pairs"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --word-bonus 0 --exclude-pairs "$test_dir/exclude.pairs" \
+  --word-bonus 0 --reject "$test_dir/exclude.pairs" \
   > "$test_dir/excluded.stdout" 2> "$test_dir/excluded.stderr"
-grep -Eq "${diagnostic_prefix}exclude list: 1 pairs, 2 keys from $test_dir/exclude.pairs$" \
+grep -Eq "${diagnostic_prefix}reject list: 1 pairs, 0 solo words, 2 keys from $test_dir/exclude.pairs$" \
   "$test_dir/excluded.stderr" ||
   fail "the exclude-list diagnostic is missing from stderr"
 grep -q '^70\.00000 ab cd$' "$test_dir/all.stdout" ||
   fail "the unexcluded run should rank the \"ab cd\" entry first"
 [[ $(grep -c ' ab cd$' "$test_dir/excluded.stdout") -eq 0 ]] ||
-  fail "--exclude-pairs kept the excluded index entry"
+  fail "--reject kept the excluded index entry"
 grep -q ' ab,cd$' "$test_dir/excluded.stdout" ||
-  fail "--exclude-pairs dropped a result built from two separate entries"
+  fail "--reject dropped a result built from two separate entries"
 
 # Repeated files are unioned rather than replacing an earlier option.
 printf 'gh,ij\n' > "$test_dir/exclude-ghij.pairs"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/exclude.pairs" \
-  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
+  --reject "$test_dir/exclude.pairs" \
+  --reject "$test_dir/exclude-ghij.pairs" \
   > "$test_dir/excluded-multiple.stdout" \
   2> "$test_dir/excluded-multiple.stderr"
 cmp "$test_dir/excluded.stdout" "$test_dir/excluded-multiple.stdout" ||
-  fail "repeated --exclude-pairs did not combine both files"
+  fail "repeated --reject did not combine both files"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
-  --exclude-pairs "$test_dir/exclude.pairs" \
+  --reject "$test_dir/exclude-ghij.pairs" \
+  --reject "$test_dir/exclude.pairs" \
   > "$test_dir/excluded-multiple-reversed.stdout" \
   2> "$test_dir/excluded-multiple-reversed.stderr"
 cmp "$test_dir/excluded.stdout" \
     "$test_dir/excluded-multiple-reversed.stdout" ||
-  fail "reversed --exclude-pairs options did not combine both files"
+  fail "reversed --reject options did not combine both files"
 
 # The test is whole-entry equality, so a longer entry holding the excluded
 # pair -- here at its end -- is a different spelling and is kept.
 "$dfs_anagrams" -i "$index_file" fghij -m 1 -n 10 -x 0 \
-  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
+  --reject "$test_dir/exclude-ghij.pairs" \
   > "$test_dir/exclude-prefix.stdout" 2> "$test_dir/exclude-prefix.stderr"
 grep -q ' f gh ij$' "$test_dir/exclude-prefix.stdout" ||
-  fail "--exclude-pairs dropped a longer entry containing the excluded pair"
+  fail "--reject dropped a longer entry containing the excluded pair"
 
 # A workflow root resolves to its hard-NO aggregate; a directory with no .wf
 # is an error rather than an empty exclusion set.
 mkdir -p "$test_dir/wf/.wf/classified/no"
 cp "$test_dir/exclude.pairs" "$test_dir/wf/.wf/classified/no/no.pairs"
 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/exclude-ghij.pairs" \
-  --exclude-pairs "$test_dir/wf" \
+  --reject "$test_dir/exclude-ghij.pairs" \
+  --reject "$test_dir/wf" \
   > "$test_dir/exclude-wf.stdout" 2> "$test_dir/exclude-wf.stderr"
 cmp "$test_dir/excluded.stdout" "$test_dir/exclude-wf.stdout" ||
   fail "a file and workflow root did not combine their exclusion sets"
 mkdir -p "$test_dir/wf2/.wf/classified/no"
 cp "$test_dir/exclude.pairs" "$test_dir/wf2/.wf/classified/no/no.pairs"
 expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/wf" --exclude-pairs "$test_dir/wf2"
-grep -q '^error: only one --exclude-pairs argument may be a directory$' \
+  --reject "$test_dir/wf" --reject "$test_dir/wf2"
+grep -q '^error: only one --reject argument may be a directory$' \
   "$test_dir/status.stderr" ||
-  fail "multiple --exclude-pairs directories were not rejected clearly"
+  fail "multiple --reject directories were not rejected clearly"
 mkdir -p "$test_dir/not-wf"
 expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/not-wf"
-grep -q "^error: --exclude-pairs directory \"$test_dir/not-wf\" has no workflow metadata \"$test_dir/not-wf/.wf\"$" \
+  --reject "$test_dir/not-wf"
+grep -q "^error: --reject directory \"$test_dir/not-wf\" has no workflow metadata \"$test_dir/not-wf/.wf\"$" \
   "$test_dir/status.stderr" ||
   fail "the missing-workflow diagnostic did not name both paths"
 expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/missing-exclude.pairs"
-grep -q "^error: can't open exclude list \"$test_dir/missing-exclude.pairs\"$" \
+  --reject "$test_dir/missing-exclude.pairs"
+grep -q "^error: can't open reject list \"$test_dir/missing-exclude.pairs\"$" \
   "$test_dir/status.stderr" ||
   fail "the missing exclude-list diagnostic is unclear"
 
@@ -553,8 +553,8 @@ grep -Eq "${diagnostic_prefix}pair list: 0 pairs, 0 keys$" \
   "$test_dir/hyphen-bonus.stderr" ||
   fail "a '-' line should still be skipped in a bonus list"
 expect_status 1 "$dfs_anagrams" -i "$index_file" abcd -m 2 -n 10 \
-  --exclude-pairs "$test_dir/hyphen.pairs"
-grep -q "^error: exclude list \"$test_dir/hyphen.pairs\" line 1: '-' would silently skip this entry$" \
+  --reject "$test_dir/hyphen.pairs"
+grep -q "^error: reject list \"$test_dir/hyphen.pairs\" line 1: '-' would silently skip this entry$" \
   "$test_dir/status.stderr" ||
   fail "a '-' line in an exclusion list was not rejected"
 
@@ -767,7 +767,7 @@ grep -q 'workflow mode requires --target beginning with sN or an explicit --seed
   fail "workflow seed requirement diagnostic is unclear"
 
 # Workflow mode excludes its own classified NO pairs and a complete selected
-# target's no.pairs without an explicit --exclude-pairs.
+# target's no.pairs without an explicit --reject.
 mkdir -p "$workflow_root/.wf/classified/no"
 printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/no.pairs"
 "$dfs_anagrams" -i "$index_file" klmn -m 2 -n 2 --word-bonus 0 \
@@ -793,7 +793,7 @@ printf 'kl,mn\n' > "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"
 ! grep -q 'kl mn' "$test_dir/workflow-target-negative.stdout" ||
   fail "workflow mode kept the target's own NO pair"
 grep -Fq \
-  'exclude list: 1 pairs, 2 keys from best/s1/o-klmn/m2/g1/no.pairs' \
+  'reject list: 1 pairs, 0 solo words, 2 keys from best/s1/o-klmn/m2/g1/no.pairs' \
   "$test_dir/workflow-target-negative.stderr" ||
   fail "workflow target NO diagnostic did not identify its source"
 rm "$workflow_root/.wf/best/s1/o-klmn/m2/g1/no.pairs"

@@ -20,7 +20,7 @@ struct DfsPreparedClassList {
   DfsPairSet pairs;
   DfsPairBonusMap weighted_pairs;
   DfsPairSet exception_prefixes;
-  DfsPairSet exclude_pairs;
+  DfsPairSet rejected;
   // Rows in each pair file's own written order, as extraction mode loads
   // them; the dictionary reports below read these once every pair input is
   // in. Score mode leaves both empty, its loaders being symmetric and
@@ -54,8 +54,11 @@ bool prepare_dfs_scoring_inputs(
 // pair synthesis and exclusions. exact_segments selects descending BEST
 // scoring when nonzero and the fixed BEST tier otherwise. With a dictionary in
 // workflow mode, every BEST word outside the dictionary is first added to it
-// and reported once on stderr, in yellow when stderr is a terminal. Then
-// every --pairs, YES, or BEST row that fits letters and would otherwise
+// and reported once on stderr, in yellow when stderr is a terminal.
+// `workflow_reject_files` are pairs-only; `reject_files` may also hold
+// single words, each then removed from the dictionary unless a BEST row uses
+// it, which is reported instead. Removing one without a dictionary is an
+// error. Then every --pairs, YES, or BEST row that fits letters and would otherwise
 // reach phase 1, but has a word outside the dictionary, is reported once on
 // stderr as a WARNING, in red when stderr is a terminal.
 //
@@ -68,7 +71,8 @@ bool prepare_dfs_scoring_inputs(
 bool prepare_dfs_class_list(
     IndexReader* reader, std::string const& letters,
     DfsCommonArgs const& args,
-    std::vector<std::string> const& exclude_pair_files,
-    size_t exact_segments, DfsPreparedClassList* out, bool ptm = false);
+    std::vector<std::string> const& workflow_reject_files,
+    size_t exact_segments, DfsPreparedClassList* out, bool ptm = false,
+    std::vector<std::string> const* reject_files = NULL);
 
 #endif

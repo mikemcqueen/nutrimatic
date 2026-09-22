@@ -25,7 +25,8 @@ struct Args {
   std::string letters;
   DfsCommonArgs common;
   DfsRepeatPolicy repeats;
-  std::vector<std::string> exclude_pair_files;
+  std::vector<std::string> workflow_reject_files;
+  std::vector<std::string> reject_files;
   int max_combine_words;
   int num_segments;
   int64_t progress_factor;
@@ -94,16 +95,18 @@ static void usage(char const* program) {
   dfs_help_option("--wfroot DIR",
       "use DIR as a workflow root; loads DIR/%s as YES pairs and requires "
       "either --seed-pairs or -t beginning with sN; also excludes DIR/%s and "
-      "a complete target's %s as if each were an --exclude-pairs file, "
+      "a complete target's %s as if each were a pairs-only --reject file, "
       "skipping either when absent; BEST pair words missing from the "
       "dictionary are added to it, with a stderr notice for each",
       WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
       WORKFLOW_TARGET_NO_PAIRS_NAME);
   dfs_help_target();
-  dfs_help_option("--exclude-pairs FILE|WORKFLOW-DIR",
+  dfs_help_option("-r, --reject FILE|WORKFLOW-DIR",
       "load word pairs, one \"word,word\" line each, and drop every index "
       "entry spelled exactly like one in either order, so no result can "
-      "contain it; may be repeated, but only one argument may be a directory; "
+      "contain it; a file's single-word line removes that word from the "
+      "dictionary unless a BEST pair uses it; may be repeated, but only one "
+      "argument may be a directory; "
       "the test is whole-entry equality, so a longer entry containing the "
       "pair is kept, and -x 2 is what confines entries to the two words this "
       "compares; a directory resolves to DIR/%s and must hold a .wf "
@@ -180,7 +183,6 @@ static void usage(char const* program) {
 
 static int const OPT_SEGMENTS = 256;
 static int const OPT_WEIGHTED = 257;
-static int const OPT_EXCLUDE_PAIRS = 258;
 static int const OPT_SHOW_BONUS = 259;
 static int const OPT_NO_PTM = 261;
 static int const OPT_NO_REPEAT = 262;
@@ -214,7 +216,7 @@ static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
   { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
   { "idx", 'i', OPTPARSE_REQUIRED },
-  { "exclude-pairs", OPT_EXCLUDE_PAIRS, OPTPARSE_REQUIRED },
+  { "reject", 'r', OPTPARSE_REQUIRED },
   { "num-segments", 'g', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "cache-size", 'C', OPTPARSE_REQUIRED },
@@ -238,7 +240,8 @@ static bool parse_args(char* argv[], Args* out) {
   out->common.top = DEFAULT_TOP;
   out->common.max_extract_words = 2;
   out->common.search_threads = 0;
-  out->exclude_pair_files.clear();
+  out->workflow_reject_files.clear();
+  out->reject_files.clear();
   out->num_segments = 0;
   out->progress_factor = 1;
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
@@ -298,8 +301,8 @@ static bool parse_args(char* argv[], Args* out) {
                          &out->exact_letters))
           return false;
         break;
-      case OPT_EXCLUDE_PAIRS:
-        out->exclude_pair_files.push_back(options.optarg);
+      case 'r':
+        out->reject_files.push_back(options.optarg);
         break;
       case OPT_SEGMENTS:
         out->segments = true;
@@ -360,7 +363,7 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
-          &out->exclude_pair_files))
+          &out->workflow_reject_files))
     return false;
 
   if (out->weighted && !out->segments) {
@@ -443,8 +446,9 @@ int main(int argc, char* argv[]) {
   IndexReader reader(fp);
   DfsPreparedClassList prepared;
   if (!prepare_dfs_class_list(
-          &reader, args.letters, args.common, args.exclude_pair_files,
-          size_t(args.num_segments), &prepared, args.ptm))
+          &reader, args.letters, args.common, args.workflow_reject_files,
+          size_t(args.num_segments), &prepared, args.ptm,
+          &args.reject_files))
     return 1;
 
   dfs_diagnostic_letter_bag(args.letters);

@@ -40,7 +40,7 @@ struct Args {
   std::string near_input;
   std::string near_target;
   DfsCommonArgs common;
-  std::vector<std::string> exclude_pair_files;
+  std::vector<std::string> workflow_reject_files;
   int num_words;
   int min_words;
   bool min_words_given;
@@ -323,7 +323,7 @@ static bool parse_args(char* argv[], Args* out) {
 
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
-          out->score ? NULL : &out->exclude_pair_files,
+          out->score ? NULL : &out->workflow_reject_files,
           /*allow_targetless_workflow=*/true))
     return false;
   if (out->index_file == NULL) {
@@ -1073,7 +1073,7 @@ int main(int argc, char* argv[]) {
 
   DfsPreparedClassList prepared;
   if (!prepare_dfs_class_list(
-          &reader, args.letters, args.common, args.exclude_pair_files,
+          &reader, args.letters, args.common, args.workflow_reject_files,
           /*exact_segments=*/0, &prepared))
     return 1;
   DfsClassList& classes = *prepared.classes;

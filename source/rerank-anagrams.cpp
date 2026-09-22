@@ -4,7 +4,6 @@
 #include "dfs-output.h"
 #include "index.h"
 #include "optparse.h"
-#include "pair-exclusions.h"
 #include "segment-rows.h"
 
 #include <errno.h>
@@ -12,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <fstream>
@@ -24,7 +24,7 @@ namespace {
 struct Args {
   DfsCommonArgs common;
   std::vector<std::string> reject_files;
-  std::vector<std::string> exclude_pair_files;
+  std::vector<std::string> workflow_reject_files;
   std::string letters;
   char const* index_file = NULL;
   char const* results_file = NULL;
@@ -49,8 +49,12 @@ void usage(char const* program) {
       "  --one-best-pair PAIR replace it with one WORD,WORD pair\n"
       "  --more-best-pairs FILE\n"
       "                       add BEST pairs; may be repeated\n"
-      "  -r, --reject FILE    reject rows containing a listed word or exact\n"
-      "                       bidirectional pair; may be repeated\n"
+      "  -r, --reject FILE    reject as dfs-anagrams -r does: a pair drops\n"
+      "                       the index entry spelled like it in either\n"
+      "                       order, and a single word is removed from the\n"
+      "                       dictionary unless a BEST pair uses it; rows\n"
+      "                       using a rejected entry are dropped; may be\n"
+      "                       repeated\n"
       "  --solo-words WORD[,WORD...]\n"
       "                       score single-word segments against external\n"
       "                       partners as dfs-anagrams does; parenthesized\n"
@@ -170,9 +174,18 @@ bool parse_args(char* argv[], Args* out) {
     usage(argv[0]);
     return false;
   }
+  for (size_t i = 0; i < out->reject_files.size(); ++i) {
+    struct stat status;
+    if (stat(out->reject_files[i].c_str(), &status) == 0 &&
+        S_ISDIR(status.st_mode)) {
+      fprintf(stderr, "rerank-anagrams: -r takes a file, not directory"
+              " \"%s\"\n", out->reject_files[i].c_str());
+      return false;
+    }
+  }
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
-          &out->exclude_pair_files))
+          &out->workflow_reject_files))
     return false;
   DfsWorkflowTargetSettings target;
   if (!load_dfs_workflow_target_settings(
@@ -187,20 +200,9 @@ bool parse_args(char* argv[], Args* out) {
       &out->common.min_word_len);
 }
 
-bool load_rejections(
-    std::vector<std::string> const& paths, DfsPairSet* rejected) {
-  for (size_t i = 0; i < paths.size(); ++i)
-    if (!load_pair_file(
-            paths[i].c_str(), "reject list", rejected,
-            /*quiet=*/true, /*reject_hyphens=*/true,
-            /*allow_single_words=*/true))
-      return false;
-  return true;
-}
-
 bool rerank_stream(
     std::istream* input, char const* name, Args const& args,
-    DfsPairSet const& rejected, DfsPreparedClassList const& prepared) {
+    DfsPreparedClassList const& prepared) {
   DfsMemberIndex members;
   std::string duplicate;
   if (!dfs_index_members(*prepared.classes, &members, &duplicate)) {
@@ -220,7 +222,6 @@ bool rerank_stream(
     member_indexes.reserve(row.segments.size());
     bool keep = true;
     for (size_t i = 0; i < row.segments.size(); ++i) {
-      if (is_rejected_segment(rejected, row.segments[i])) keep = false;
       DfsMemberIndex::const_iterator const found =
           members.find(row.segments[i]);
       if (found == members.end()) {
@@ -257,9 +258,6 @@ int main(int argc, char* argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
 
-  DfsPairSet rejected;
-  if (!load_rejections(args.reject_files, &rejected)) return 1;
-
   std::ifstream results_input;
   std::istream* input = &std::cin;
   char const* input_name = "-";
@@ -286,10 +284,10 @@ int main(int argc, char* argv[]) {
     IndexReader reader(index);
     DfsPreparedClassList prepared;
     if (prepare_dfs_class_list(
-            &reader, args.letters, args.common, args.exclude_pair_files,
-            size_t(args.num_segments), &prepared, args.ptm)) {
-      status = rerank_stream(
-          input, input_name, args, rejected, prepared) ? 0 : 1;
+            &reader, args.letters, args.common, args.workflow_reject_files,
+            size_t(args.num_segments), &prepared, args.ptm,
+            &args.reject_files)) {
+      status = rerank_stream(input, input_name, args, prepared) ? 0 : 1;
     }
   }
   if (fclose(index) != 0 && status == 0) {

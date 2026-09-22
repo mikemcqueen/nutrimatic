@@ -56,7 +56,7 @@ The details:
    
    Steps for generating pairs to submit/eval in P1 workflow:
 
-    * build list of index-known pairs:
+    * build list of wiki index pairs:
 
       `query-index $S2 --wf -w2 -n0 --csv | sort -u > idx/idx.2.s2.m4`
       
@@ -66,30 +66,26 @@ The details:
             this stage for p1_done filtering because it's still using comm instead of pcomm. when
             P1 filtering gets upgraded to use pcomm it may not longer be desirable.
 
-      IMPORTANT NOTE: this ignoring pairs present via cluer's query_index.py.  we need to:
-            * discover and save these pairs as `idx/cluer.s2.m4` or whatever
-            * merge them with `idx/idx.2.s2.m4`
+    * build list of cluer index pairs:
+    
+      `pairs $S8 [-u subset] | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s8.m4`
 
-            pairs $S7 -u vindiesel > results/s7/pairs.big.s7
-            grep "w.*,.*w" results/s7/pairs.big.s7 > results/s7/pairs.big.s7.w.w
-            cat results/s7/pairs.big.s7.w.w | wc -l
+    * merge them int final pairs file:
 
+      `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4 > idx/pairs.s8.m4`
 
-            python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.s7.w.w -j | wc -l
-            python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.s7.w.w -j | less
-            python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.s7.w.w -j | sort -u  > ../nutrimatic/results/s7/pairs.cluer.s7.w.w
-            python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done | wc -l
-            python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out | wc -l
-            python -m src.filter -y --pm .9 --pr .10 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out | wc -l
-            python -m src.filter -y --pm .9 --pr .10 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.90.10
-            python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.85.15
+    * TBD: for fine tuning later with specific subsets:
+
+      `python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.big.s7.w.w -j | sort -u  > ../nutrimatic/results/s7/pairs.cluer.s7.w.w`
+      `python -m src.filter -y --pm .9 --pr .10 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.90.10`
+      `python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done.not.in.seed -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.85.15`
 
 
   * filter out already-auto-classified pairs:
 
       TODO: use pcomm
 
-      `comm -23 idx/idx.2.s2.m4 ../words/final/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
+      `pcomm -23 idx/pairs.s2.m4 $WFROOT/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
       
       NOTE:   this is dumb, need a better dedicated tool. need to think about it.
       UPDATE: src.filter has the logic on how to approach this, that we can probably leverage in 
@@ -114,7 +110,7 @@ The details:
       smarter than the dumb version it's using, which i think is to use the `pcomm` tool.
 
    From here, we need to run
-     `wf filter pairs idx/idx.2.s2.m4 -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes`
+     `wf extract p1 idx/idx.2.s2.m4 -d $WFROOT/.wf/p1/done/ -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes`
        input: the original (pre-filtered) pairs file
        output: top 15% of YES results.
        

@@ -152,7 +152,7 @@ class DfsClassList {
   // two-word positive keys absent from the index with corpus count 1. Member 0
   // is therefore the class's best member under the caller's admissible upper
   // score. solo_words is mutable only while phase 1 registers profiles.
-  // With no model that is raw count order. exclude_pairs drops any entry whose
+  // With no model that is raw count order. rejected drops any entry whose
   // whole spelling it holds, so no phase-2 result can contain one. The test is
   // whole-entry equality: a longer entry containing the pair anywhere is a
   // different spelling and survives, which is why the workflow pairs this with
@@ -166,7 +166,7 @@ class DfsClassList {
                DfsPairBonusMap const* weighted_pairs = NULL,
                DfsPairSet const* exception_prefixes = NULL,
                DfsSoloWords* solo_words = NULL,
-               DfsPairSet const* exclude_pairs = NULL,
+               DfsPairSet const* rejected = NULL,
                DfsExternalPairPolicy external_pair_policy =
                    DFS_EXTERNAL_PAIRS_INDEX_ONLY);
 

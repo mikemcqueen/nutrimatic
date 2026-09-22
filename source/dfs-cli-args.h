@@ -112,15 +112,15 @@ DfsOptionResult dfs_parse_common_option(
 // Resolves the common arguments after option parsing: raw scalar bonuses are
 // validated and the effective legacy pair bonus is normalized, then the
 // workflow defaults and weighted pair sources are resolved, then the
-// workflow's exclude-pair files are appended to `exclude_pair_files`.
-// A NULL `exclude_pair_files` skips that last step for a caller that excludes
+// workflow's reject files are appended to `workflow_reject_files`.
+// A NULL `workflow_reject_files` skips that last step for a caller that excludes
 // nothing. The order is fixed here because each step reads what the one
 // before it resolved. `allow_targetless_workflow` lets query-index use the
 // workflow without a target or seed, and skips its classified YES source
 // when no target is selected.
 bool finalize_dfs_common_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
-    std::vector<std::string>* exclude_pair_files,
+    std::vector<std::string>* workflow_reject_files,
     bool allow_targetless_workflow = false);
 
 struct DfsWorkflowTargetSettings {
@@ -282,7 +282,10 @@ bool load_weighted_pair_files(
 // DIR/.wf/classified/no/no.pairs. A directory without a .wf subdirectory is an
 // error, and so is a '-' line: asking for exclusions is explicit, so neither a
 // missing workflow nor an unreadable line quietly narrows the exclusion set.
-bool load_exclude_pair_files(
-    std::vector<std::string> const& paths, DfsPairSet* pairs);
+// With allow_single_words, a regular file's single-word line is kept as a
+// bare-word key; a workflow directory's no.pairs stays pairs-only either way.
+bool load_reject_files(
+    std::vector<std::string> const& paths, bool allow_single_words,
+    DfsPairSet* pairs);
 
 #endif

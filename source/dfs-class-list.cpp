@@ -211,7 +211,7 @@ class DfsExtractor {
                DfsPairSet const* pairs,
                DfsPairBonusMap const* weighted_pairs,
                DfsPairSet const* exception_prefixes,
-               DfsSoloWords* solo_words, DfsPairSet const* exclude_pairs,
+               DfsSoloWords* solo_words, DfsPairSet const* rejected,
                DfsExternalPairPolicy external_pair_policy):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
@@ -230,7 +230,7 @@ class DfsExtractor {
       has_exception_prefixes(
           exception_prefixes != NULL && !exception_prefixes->empty()),
       solo_words(solo_words),
-      exclude_pairs(exclude_pairs),
+      rejected(rejected),
       external_pair_policy(external_pair_policy),
       letters_left(int(letters.size())),
       nodes(0),
@@ -293,7 +293,7 @@ class DfsExtractor {
         key.find(' ', space + 1) != std::string::npos)
       return false;
     if (max_extract_words < 2) return false;
-    if (exclude_pairs != NULL && exclude_pairs->count(key) != 0) return false;
+    if (rejected != NULL && rejected->count(key) != 0) return false;
 
     std::array<int, 256> remaining = bag;
     uint64_t key_signature = 0;
@@ -343,11 +343,11 @@ class DfsExtractor {
 
   void emit(int64_t count, int word_count,
             IndexReader::Node continuation) {
-    if (exclude_pairs != NULL && word_count > 1) {
+    if (rejected != NULL && word_count > 1) {
       text.pop_back();
-      bool const excluded = exclude_pairs->count(text) != 0;
+      bool const is_rejected = rejected->count(text) != 0;
       text.push_back(' ');
-      if (excluded) return;
+      if (is_rejected) return;
     }
 
     if (count > int64_t(UINT32_MAX)) {
@@ -485,7 +485,7 @@ class DfsExtractor {
   DfsPairSet const* const exception_prefixes;
   bool const has_exception_prefixes;
   DfsSoloWords* const solo_words;
-  DfsPairSet const* const exclude_pairs;
+  DfsPairSet const* const rejected;
   DfsExternalPairPolicy const external_pair_policy;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
@@ -548,7 +548,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            DfsPairBonusMap const* weighted_pairs,
                            DfsPairSet const* exception_prefixes,
                            DfsSoloWords* solo_words,
-                           DfsPairSet const* exclude_pairs,
+                           DfsPairSet const* rejected,
                            DfsExternalPairPolicy external_pair_policy):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
@@ -579,7 +579,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
       max_extract_words, pairs, weighted_pairs, exception_prefixes, solo_words,
-      exclude_pairs, external_pair_policy);
+      rejected, external_pair_policy);
   extractor.run();
   if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();

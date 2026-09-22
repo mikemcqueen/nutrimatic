@@ -726,7 +726,7 @@ bool load_weighted_pair_files(
   return true;
 }
 
-static std::string exclude_diagnostic_source(char const* path) {
+static std::string reject_diagnostic_source(char const* path) {
   std::string const source(path);
   size_t const wf = source.find(".wf/");
   if (wf != std::string::npos &&
@@ -735,13 +735,28 @@ static std::string exclude_diagnostic_source(char const* path) {
   return source;
 }
 
-static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
+static bool load_reject_list(
+    char const* path, bool allow_single_words, DfsPairSet* pairs) {
+  std::vector<DfsPairRow> rows;
+  if (!load_pair_file(
+          path, "reject list", pairs, /*quiet=*/true, true,
+          allow_single_words, NULL, &rows))
+    return false;
+  size_t solo_words = 0;
+  for (size_t i = 0; i < rows.size(); ++i)
+    if (rows[i].right.empty()) ++solo_words;
+  std::string const source = reject_diagnostic_source(path);
+  dfs_diagnostic("reject list: %zu pairs, %zu solo words, %zu keys from %s\n",
+                 rows.size() - solo_words, solo_words, pairs->size(),
+                 source.c_str());
+  return true;
+}
+
+static bool load_reject_file(
+    char const* path, bool allow_single_words, DfsPairSet* pairs) {
   struct stat status;
-  if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode)) {
-    std::string const source = exclude_diagnostic_source(path);
-    return load_pair_file(
-        path, "exclude list", pairs, false, true, false, source.c_str());
-  }
+  if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
+    return load_reject_list(path, allow_single_words, pairs);
 
   fs::path const root(path);
   std::string const metadata = (root / WORKFLOW_DIR_PATH).string();
@@ -751,7 +766,7 @@ static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
     // so "create it" would be the wrong thing to tell the caller.
     if (errno != ENOENT) {
       fprintf(stderr,
-          "error: --exclude-pairs can't read workflow metadata \"%s\": %s\n",
+          "error: --reject can't read workflow metadata \"%s\": %s\n",
           metadata.c_str(), strerror(errno));
       return false;
     }
@@ -759,33 +774,33 @@ static bool load_exclude_pair_file(char const* path, DfsPairSet* pairs) {
   }
   if (!S_ISDIR(metadata_status.st_mode)) {
     fprintf(stderr,
-        "error: --exclude-pairs directory \"%s\" has no workflow metadata"
+        "error: --reject directory \"%s\" has no workflow metadata"
         " \"%s\"\n",
         path, metadata.c_str());
     return false;
   }
   std::string const resolved = (root / WORKFLOW_NO_PAIRS_PATH).string();
-  std::string const source = exclude_diagnostic_source(resolved.c_str());
-  return load_pair_file(
-      resolved.c_str(), "exclude list", pairs, false, true, false,
-      source.c_str());
+  return load_reject_list(resolved.c_str(), false, pairs);
 }
 
-bool load_exclude_pair_files(
-    std::vector<std::string> const& paths, DfsPairSet* pairs) {
+bool load_reject_files(
+    std::vector<std::string> const& paths, bool allow_single_words,
+    DfsPairSet* pairs) {
   size_t directories = 0;
   for (size_t i = 0; i < paths.size(); ++i) {
     struct stat status;
     if (stat(paths[i].c_str(), &status) == 0 && S_ISDIR(status.st_mode) &&
         ++directories > 1) {
-      fputs("error: only one --exclude-pairs argument may be a directory\n",
+      fputs("error: only one --reject argument may be a directory\n",
             stderr);
       return false;
     }
   }
 
   for (size_t i = 0; i < paths.size(); ++i) {
-    if (!load_exclude_pair_file(paths[i].c_str(), pairs)) return false;
+    if (!load_reject_file(
+            paths[i].c_str(), allow_single_words, pairs))
+      return false;
   }
   return true;
 }
@@ -1130,7 +1145,7 @@ bool load_dfs_workflow_target_settings(
 // anything NO yet. Abbreviated targets do not name a target-local no.pairs.
 // Without a workflow root nothing is appended. Call after
 // finalize_dfs_workflow_args(), which resolves the root and the target.
-static bool collect_workflow_exclude_pair_files(
+static bool collect_workflow_reject_files(
     DfsCommonArgs const& args, char const* program,
     std::vector<std::string>* paths) {
   if (args.workflow_root.empty()) return true;
@@ -1149,13 +1164,13 @@ static bool collect_workflow_exclude_pair_files(
 
 bool finalize_dfs_common_args(
     DfsCommonArgs* args, char const* program, char const** index_file,
-    std::vector<std::string>* exclude_pair_files,
+    std::vector<std::string>* workflow_reject_files,
     bool allow_targetless_workflow) {
   if (!finalize_dfs_bonuses(args)) return false;
   if (!finalize_dfs_workflow_args(
           args, program, index_file, allow_targetless_workflow))
     return false;
-  if (exclude_pair_files == NULL) return true;
-  return collect_workflow_exclude_pair_files(
-      *args, program, exclude_pair_files);
+  if (workflow_reject_files == NULL) return true;
+  return collect_workflow_reject_files(
+      *args, program, workflow_reject_files);
 }
