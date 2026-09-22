@@ -11,9 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <smmintrin.h>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -62,10 +62,12 @@ static bool subtract(
 }
 
 static bool fits(Counts const& pool, Counts const& word) {
-    uint8_t excess = 0;
-    for (size_t i = 0; i < COUNT_LANES; ++i)
-        excess |= static_cast<uint8_t>(word.values[i] > pool.values[i]);
-    return excess == 0;
+    __m128i const* p = reinterpret_cast<__m128i const*>(pool.values.data());
+    __m128i const* w = reinterpret_cast<__m128i const*>(word.values.data());
+    __m128i const excess = _mm_or_si128(
+        _mm_subs_epu8(_mm_load_si128(w), _mm_load_si128(p)),
+        _mm_subs_epu8(_mm_load_si128(w + 1), _mm_load_si128(p + 1)));
+    return _mm_testz_si128(excess, excess);
 }
 
 namespace {
@@ -183,13 +185,12 @@ int main(int argc, char* argv[]) {
     };
 
     struct Group {
-        Counts counts;
         std::vector<Word> words;
     };
 
+    std::vector<Counts> keys;
     std::vector<Group> groups;
     std::unordered_map<Counts, size_t, CountsHash> group_indices;
-    std::unordered_set<std::string> accepted_words;
     char line[4096];
     size_t ordinal = 0;
     while (fgets(line, sizeof(line), wf)) {
@@ -202,13 +203,16 @@ int main(int argc, char* argv[]) {
         Counts remaining;
         if (!subtract(bag, counts, &remaining)) continue;
 
-        std::string text(line);
-        if (!accepted_words.insert(text).second) continue;
-
         auto const inserted = group_indices.emplace(counts, groups.size());
-        if (inserted.second) groups.push_back({counts, {}});
-        groups[inserted.first->second].words.push_back(
-            {std::move(text), this_ordinal});
+        if (inserted.second) {
+            keys.push_back(counts);
+            groups.push_back({});
+        }
+        std::vector<Word>& words = groups[inserted.first->second].words;
+        bool duplicate = false;
+        for (Word const& word : words) duplicate |= word.text == line;
+        if (duplicate) continue;
+        words.push_back({line, this_ordinal});
     }
     fclose(wf);
 
@@ -218,10 +222,9 @@ int main(int argc, char* argv[]) {
 
     for (size_t a = 0; a < groups.size(); ++a) {
         Group const& first_group = groups[a];
-        subtract(bag, first_group.counts, &remaining);
+        subtract(bag, keys[a], &remaining);
 
-        if (first_group.words.size() >= 2 &&
-            fits(remaining, first_group.counts)) {
+        if (first_group.words.size() >= 2 && fits(remaining, keys[a])) {
             size_t const size = first_group.words.size();
             total += static_cast<uint64_t>(size) * (size - 1) / 2;
             for (size_t i = 0; i < size; ++i) {
@@ -235,7 +238,7 @@ int main(int argc, char* argv[]) {
         size_t matching_count = 0;
         for (size_t b = a + 1; b < groups.size(); ++b) {
             matching_groups[matching_count] = b;
-            matching_count += fits(remaining, groups[b].counts);
+            matching_count += fits(remaining, keys[b]);
         }
 
         for (size_t match = 0; match < matching_count; ++match) {
@@ -257,6 +260,5 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    printf("%" PRIu64 "\n", total);
     return 0;
 }
