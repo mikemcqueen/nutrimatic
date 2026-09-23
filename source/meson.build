@@ -193,7 +193,7 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
   dependencies: [segment_output_dep, thread_dep],
   install: true)
 
-executable('pcomm', 'pcomm.cpp', install: true)
+pcomm = executable('pcomm', 'pcomm.cpp', install: true)
 
 executable('pfilter', 'pfilter.cpp',
   link_with: dfs_class_list_lib,
@@ -374,6 +374,11 @@ test(
   'pairs',
   bash,
   args: [files('test-pairs.sh'), pairs],
+)
+test(
+  'pcomm',
+  bash,
+  args: [files('test-pcomm.sh'), pcomm],
 )
 test(
   'first-segments',

@@ -63,12 +63,11 @@
 * investigate p1 eval's "previously filtered pairs" check: it probably uses
   comm on ordered pair text, so reversed pair orderings are not recognized and
   some pairs are evaluated twice
-* make pcomm able to stream either input regardless of suppression flags or
-  argument position: always stream `-` when present; otherwise stream the
-  smaller file
 * pfilter and pairs should filter out pairs listed in
   $WFROOT/.wf/classified/no/no.pairs; eventually also filter target-local
   TARGET/no.pairs
 * add a tool to show the consonant/vowel (C/V) ratio for a letter bag, with
   -u/--used-letters support; consider a related option for pfilter
 * convert all enums to enum class where appropriate
+* best words/pairs have precedence over rejected words/pairs in dfs-anagrams
+  and rerank-anagrams but not in filter-segments

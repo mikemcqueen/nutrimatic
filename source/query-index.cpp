@@ -123,7 +123,7 @@ static void usage(char const* program) {
       "without a score cache");
   dfs_help_option("-S, --search-threads N",
       "set search threads (default: 1; 0 uses hardware threads)");
-  dfs_help_option("--score",
+  dfs_help_option("-s, --score",
       "treat a positional query without a comma as one exact index entry; "
       "with one comma, score it like a pair read from stdin by trying both "
       "word orderings and printing the higher score, or print nothing if "
@@ -160,7 +160,6 @@ static void put_csv(char const* text, size_t length) {
 }
 
 static int const OPT_REQUIRE_COMPLETABLE = 256;
-static int const OPT_SCORE = 257;
 static int const OPT_NEAR = 259;
 static int const OPT_NO_PTM = 260;
 static int const OPT_MIN_WORDS = 261;
@@ -172,7 +171,7 @@ static struct optparse_long const long_options[] = {
   { "idx", 'i', OPTPARSE_REQUIRED },
   { "num-words", 'w', OPTPARSE_REQUIRED },
   { "min-words", OPT_MIN_WORDS, OPTPARSE_REQUIRED },
-  { "score", OPT_SCORE, OPTPARSE_NONE },
+  { "score", 's', OPTPARSE_NONE },
   { "sd", OPT_SD, OPTPARSE_NONE },
   { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "near", OPT_NEAR, OPTPARSE_REQUIRED },
@@ -265,7 +264,7 @@ static bool parse_args(char* argv[], Args* out) {
         mark_score_incompatible(out, "--min-words");
         mark_near_incompatible(out, "--min-words");
         break;
-      case OPT_SCORE:
+      case 's':
         out->score = true;
         mark_near_incompatible(out, "--score");
         break;
