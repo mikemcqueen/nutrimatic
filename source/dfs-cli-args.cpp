@@ -982,29 +982,21 @@ static bool finalize_dfs_workflow_args(
   }
 
   if (args->workflow) {
-    char const* const root = workflow_root_from_env();
-    if (root == NULL) {
-      fprintf(stderr, "%s: --wf requires WFROOT to be set and nonempty\n",
-              program);
-      return false;
-    }
+    char const* const root = require_workflow_root(program);
+    if (root == NULL) return false;
     args->workflow_root = root;
-  }
-  if (args->workflow_root.empty()) {
+  } else if (args->workflow_root.empty()) {
     if (!args->target.empty()) {
       fprintf(stderr, "%s: --target requires --wf or --wfroot\n", program);
       return false;
     }
     return true;
+  } else if (!check_workflow_root(program, args->workflow_root.c_str())) {
+    return false;
   }
 
   fs::path const root(args->workflow_root);
   std::error_code error;
-  if (!fs::is_directory(root / WORKFLOW_DIR_PATH, error)) {
-    fprintf(stderr, "%s: workflow root \"%s\" has no .wf directory\n",
-            program, root.c_str());
-    return false;
-  }
 
   std::vector<std::string> target_parts;
   if (!parse_workflow_target(args->target, program, &target_parts))

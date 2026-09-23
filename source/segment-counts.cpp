@@ -1,9 +1,9 @@
 #include "segment-counts.h"
 #include "dfs-cli-args.h"
+#include "letter-bag.h"
 #include "segment-rows.h"
 
 #include <inttypes.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -229,17 +229,6 @@ static bool split_counts(
   return true;
 }
 
-static bool fits_letters(
-    int const (&remaining)[UCHAR_MAX + 1], std::string const& segment) {
-  int need[UCHAR_MAX + 1] = { 0 };
-  for (char ch : segment) {
-    if (ch == ' ') continue;
-    unsigned char const index = (unsigned char) ch;
-    if (++need[index] > remaining[index]) return false;
-  }
-  return true;
-}
-
 bool segment_counts_print_top(
     SegmentCountsData const& data, SegmentCountsOptions const& options) {
   SegmentOutputOptions const& output_options = options.output;
@@ -256,9 +245,7 @@ bool segment_counts_print_top(
           output_options.projection == SEGMENT_PROJECTION_WORDS
       ? split : data.segments;
 
-  int remaining[UCHAR_MAX + 1] = { 0 };
-  if (data.remaining_letters)
-    for (char ch : *data.remaining_letters) ++remaining[(unsigned char) ch];
+  LetterBag const remaining(data.remaining_letters.value_or(""));
 
   std::vector<SegmentStatsMap::const_iterator> ordered;
   ordered.reserve(rows.size());
@@ -271,7 +258,7 @@ bool segment_counts_print_top(
     if (output_options.projection == SEGMENT_PROJECTION_SEGMENTS &&
         !is_selected_segment(output_options.selection, entry->first))
       continue;
-    if (data.remaining_letters && !fits_letters(remaining, entry->first))
+    if (data.remaining_letters && !fits_letter_bag(remaining, entry->first))
       continue;
     ordered.push_back(entry);
     largest = std::max(largest, entry->second.count);

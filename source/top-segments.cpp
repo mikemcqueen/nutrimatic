@@ -1,9 +1,7 @@
-#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
-#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -13,6 +11,7 @@
 #include "dfs-cli-args.h"
 #include "option-value.h"
 #include "pair-exclusions.h"
+#include "row-input.h"
 #include "segment-counts.h"
 #include "segment-output.h"
 
@@ -233,20 +232,10 @@ int main(int argc, char* argv[]) {
   data.program = "top-segments";
   for (size_t i = 0; i < args.paths.size(); ++i) {
     char const* const path = args.paths[i];
-    if (strcmp(path, "-") == 0) {
-      if (!segment_counts_read(&std::cin, "-", filters, args.options, &data))
-        return 1;
-      continue;
-    }
-
-    errno = 0;
-    std::ifstream input(path);
-    if (!input.is_open()) {
-      fprintf(stderr, "top-segments: can't open \"%s\": %s\n",
-          path, strerror(errno));
-      return 1;
-    }
-    if (!segment_counts_read(&input, path, filters, args.options, &data))
+    if (!read_input_file("top-segments", path, [&](std::istream& input) {
+          return segment_counts_read(
+              &input, path, filters, args.options, &data);
+        }))
       return 1;
   }
 

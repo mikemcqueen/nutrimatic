@@ -8,7 +8,6 @@
 #include <string.h>
 
 #include <algorithm>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <string>
@@ -17,6 +16,7 @@
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "optparse.h"
+#include "row-input.h"
 
 namespace {
 
@@ -343,16 +343,10 @@ int main(int argc, char* argv[]) {
   }
 
   std::map<std::string, Entry> entries;
-  if (strcmp(args.dict, "-") == 0) {
-    if (!load(std::cin, args, &entries)) return 1;
-  } else {
-    std::ifstream input(args.dict, std::ios::binary);
-    if (!input.is_open()) {
-      fprintf(stderr, "freqsort: can't open \"%s\"\n", args.dict);
-      return 1;
-    }
-    if (!load(input, args, &entries)) return 1;
-  }
+  if (!read_input_file("freqsort", args.dict, [&](std::istream& input) {
+        return load(input, args, &entries);
+      }))
+    return 1;
 
   if (entries.empty()) {
     fputs("no results\n", stderr);

@@ -103,6 +103,9 @@ dfs_class_list_lib = library(
     'dfs-any-runner.cpp',
     'dfs-search-projected.cpp',
     'dfs-output.cpp',
+    'classified.cpp',
+    'letter-bag.cpp',
+    'row-input.cpp',
   ],
   link_with: index_lib,
   dependencies: thread_dep,
@@ -196,7 +199,7 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
 pcomm = executable('pcomm', 'pcomm.cpp', install: true)
 
 executable('pfilter', 'pfilter.cpp',
-  link_with: dfs_class_list_lib,
+  link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
 

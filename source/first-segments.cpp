@@ -1,10 +1,8 @@
-#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <algorithm>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <unordered_set>
@@ -12,6 +10,7 @@
 
 #include "pair-exclusions.h"
 #include "segment-output.h"
+#include "row-input.h"
 #include "segment-rows.h"
 
 static constexpr PairFilterSupport kSupport = {
@@ -192,15 +191,10 @@ int main(int argc, char* argv[]) {
           filter_options, "first-segments", kSupport, &filters))
     return 1;
 
-  if (results_path == NULL || strcmp(results_path, "-") == 0)
-    return find_segments(&std::cin, "-", filters, output_options) ? 0 : 1;
-
-  errno = 0;
-  std::ifstream input(results_path);
-  if (!input.is_open()) {
-    fprintf(stderr, "first-segments: can't open \"%s\": %s\n",
-        results_path, strerror(errno));
-    return 1;
-  }
-  return find_segments(&input, results_path, filters, output_options) ? 0 : 1;
+  if (results_path == NULL) results_path = "-";
+  return read_input_file("first-segments", results_path,
+      [&](std::istream& input) {
+        return find_segments(&input, results_path, filters, output_options);
+      })
+      ? 0 : 1;
 }

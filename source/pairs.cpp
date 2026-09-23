@@ -160,12 +160,8 @@ int main(int argc, char* argv[]) {
 
     std::string default_dictionary;
     if (args.dictionary_file == NULL) {
-        char const* const root = workflow_root_from_env();
-        if (root == NULL) {
-            fputs("pairs: WFROOT must be set and nonempty unless -d is given\n",
-                  stderr);
-            return 1;
-        }
+        char const* const root = require_workflow_root("pairs");
+        if (root == NULL) return 1;
         default_dictionary =
             (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
         args.dictionary_file = default_dictionary.c_str();

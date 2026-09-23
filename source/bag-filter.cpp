@@ -1,25 +1,20 @@
 // bag-filter.cpp - Print words and pairs that fit within a letter bag.
 
-#include <limits.h>
 #include <stdio.h>
-#include <string.h>
 
-#include <fstream>
 #include <iostream>
 #include <string>
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "letter-bag.h"
 #include "optparse.h"
+#include "row-input.h"
 
 namespace {
 
-struct Counts {
-  int values[UCHAR_MAX + 1] = { 0 };
-};
-
 struct Args {
-  Counts bag;
+  LetterBag bag;
   bool exact = false;
   char** files = NULL;
 };
@@ -68,50 +63,16 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   char const* const letters = optparse_arg(&options);
   if (letters == NULL) return false;
-  std::string bag;
-  std::string remove;
-  std::string remaining;
-  if (!clean_letters(letters, "letters", &bag) ||
-      !clean_letters(used_letters.c_str(), "used letters", &remove) ||
-      !subtract_letters(bag, remove, &remaining))
-    return false;
-  for (size_t i = 0; i < remaining.size(); ++i)
-    ++out->bag.values[(unsigned char) remaining[i]];
+  if (!make_letter_bag(letters, used_letters, &out->bag)) return false;
 
   out->files = argv + options.optind;
   return *out->files != NULL;
 }
 
 bool fits(Args const& args, DfsPairRow const& row) {
-  Counts left = args.bag;
-  for (std::string const* word : { &row.left, &row.right }) {
-    for (size_t i = 0; i < word->size(); ++i)
-      if (--left.values[(unsigned char) (*word)[i]] < 0) return false;
-  }
-  if (!args.exact) return true;
-  for (int value : left.values)
-    if (value != 0) return false;
-  return true;
-}
-
-bool filter(std::istream& input, char const* source, Args const& args) {
-  std::string line;
-  size_t number = 0;
-  while (std::getline(input, line)) {
-    ++number;
-    DfsPairRow row;
-    if (!parse_pair_row(line, "input", source, number, true, &row))
-      return false;
-    if (fits(args, row) && !(std::cout << line << '\n')) {
-      fputs("bag-filter: can't write output\n", stderr);
-      return false;
-    }
-  }
-  if (!input.eof()) {
-    fprintf(stderr, "bag-filter: can't read \"%s\"\n", source);
-    return false;
-  }
-  return true;
+  std::string const letters = row.left + row.right;
+  return fits_letter_bag(args.bag, letters) &&
+      (!args.exact || letters.size() == args.bag.size);
 }
 
 }  // namespace
@@ -130,16 +91,9 @@ int main(int argc, char* argv[]) {
   }
 
   for (char** file = args.files; *file != NULL; ++file) {
-    if (strcmp(*file, "-") == 0) {
-      if (!filter(std::cin, *file, args)) return 1;
-      continue;
-    }
-    std::ifstream input(*file, std::ios::binary);
-    if (!input.is_open()) {
-      fprintf(stderr, "bag-filter: can't open \"%s\"\n", *file);
+    if (!print_kept_rows("bag-filter", *file, "input", true,
+            [&](DfsPairRow const& row) { return fits(args, row); }))
       return 1;
-    }
-    if (!filter(input, *file, args)) return 1;
   }
   if (!(std::cout << std::flush)) {
     fputs("bag-filter: can't write output\n", stderr);

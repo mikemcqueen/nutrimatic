@@ -1,10 +1,8 @@
-#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <fstream>
 #include <iostream>
 #include <regex>
 #include <string>
@@ -13,6 +11,7 @@
 #include "option-value.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
+#include "row-input.h"
 #include "segment-rows.h"
 
 static constexpr PairFilterSupport kSupport = {.allow = true};
@@ -190,29 +189,18 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  bool const stdin_input = strcmp(args.results_path, "-") == 0;
-
   PairFilters filters;
   if (!load_pair_filters(
           args.filter_options, "filter-segments", kSupport, &filters))
     return 1;
 
-  std::ifstream input_file;
-  std::istream* input = &std::cin;
-  if (!stdin_input) {
-    errno = 0;
-    input_file.open(args.results_path);
-    if (!input_file.is_open()) {
-      fprintf(stderr, "filter-segments: can't open \"%s\": %s\n",
-          args.results_path, strerror(errno));
-      return 1;
-    }
-    input = &input_file;
-  }
   std::regex const* const with_regex_filter =
       args.use_regex ? &args.with_regex : NULL;
-  return filter_stream(
-      input, args.results_path, filters, with_regex_filter, args.show_score,
-      args.have_limit, args.limit)
+  return read_input_file("filter-segments", args.results_path,
+      [&](std::istream& input) {
+        return filter_stream(
+            &input, args.results_path, filters, with_regex_filter,
+            args.show_score, args.have_limit, args.limit);
+      })
       ? 0 : 1;
 }

@@ -1,10 +1,8 @@
-#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <algorithm>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
@@ -16,6 +14,7 @@
 #include "dfs-cli-args.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
+#include "row-input.h"
 #include "segment-rows.h"
 
 static constexpr PairFilterSupport kSupport = {
@@ -365,22 +364,12 @@ int main(int argc, char* argv[]) {
   }
 
   CommonOutput output;
-  if (strcmp(args.results_path, "-") == 0) {
-    if (!collect_common(
-            &std::cin, "-", filters, pairs, spellings, args.mode, &output))
-      return 1;
-  } else {
-    errno = 0;
-    std::ifstream input(args.results_path);
-    if (!input.is_open()) {
-      fprintf(stderr, "common-segments: can't open \"%s\": %s\n",
-          args.results_path, strerror(errno));
-      return 1;
-    }
-    if (!collect_common(&input, args.results_path, filters, pairs, spellings,
-            args.mode, &output))
-      return 1;
-  }
+  if (!read_input_file("common-segments", args.results_path,
+          [&](std::istream& input) {
+            return collect_common(&input, args.results_path, filters, pairs,
+                spellings, args.mode, &output);
+          }))
+    return 1;
 
   if (output.holding_rows == 0) {
     fputs("common-segments: no result row holds two or more pairs\n", stderr);

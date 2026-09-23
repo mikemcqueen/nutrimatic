@@ -235,7 +235,7 @@ if env -u WFROOT "$first_segments" -n 1 --wf "$input" \
     >/dev/null 2> "$diagnostics"; then
   fail "--wf with unset WFROOT succeeded"
 fi
-expected_diagnostics="first-segments: --wf requires WFROOT to be set and nonempty"
+expected_diagnostics="first-segments: WFROOT must be set and nonempty"
 actual=$(< "$diagnostics")
 [[ $actual == "$expected_diagnostics" ]] ||
   fail "unset WFROOT diagnostics are wrong: $actual"
