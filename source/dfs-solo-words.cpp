@@ -425,6 +425,11 @@ DfsPairBonusKind dfs_member_pair_bonus_kind(uint16_t score_flags) {
       ? DFS_PAIR_BONUS_LEGACY : DFS_PAIR_BONUS_NONE;
 }
 
+bool dfs_member_unlisted_pair(int word_count, uint16_t score_flags) {
+  return word_count > 1 &&
+      dfs_member_pair_bonus_kind(score_flags) == DFS_PAIR_BONUS_NONE;
+}
+
 DfsPairBonusKind dfs_member_solo_pair_bonus_kind(uint16_t score_flags) {
   uint16_t const encoded =
       (score_flags & DFS_MEMBER_SOLO_PAIR_KIND_MASK) >>

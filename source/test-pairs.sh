@@ -25,12 +25,12 @@ check_pairs() {
   "$pairs" -m 0 -d "$dictionary" "$letters" > "$output"
 
   local actual_count
-  actual_count=$(tail -n 1 "$output")
+  actual_count=$(wc -l < "$output")
   [[ $actual_count == "$expected_count" ]] ||
     fail "$name count is wrong: $actual_count"
 
   local actual_rows
-  actual_rows=$(sed '$d' "$output" | sort)
+  actual_rows=$(sort "$output")
   local sorted_expected
   sorted_expected=$(printf '%s\n' "$expected_rows" | sed '/^$/d' | sort)
   [[ $actual_rows == "$sorted_expected" ]] ||

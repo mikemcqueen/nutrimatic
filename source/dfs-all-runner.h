@@ -32,6 +32,7 @@ class DfsAllSolutionsRunner {
     uint32_t path_size;
     uint32_t entry_point;
     uint32_t letters_left;
+    uint32_t unlisted_pairs;
     double representative_log_score;
   };
 
@@ -42,6 +43,7 @@ class DfsAllSolutionsRunner {
     uint64_t bag_mask;
     uint64_t score_key;
     std::vector<size_t> path;
+    size_t unlisted_pairs;
     size_t split_depth;
     std::vector<SearchTask>* produced;
     int64_t next_progress;

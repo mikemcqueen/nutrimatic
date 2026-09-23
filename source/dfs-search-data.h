@@ -52,6 +52,12 @@ struct DfsSearchData {
   // affords; DfsClassList clamps it to at least 1.
   size_t exact_depth = 0;
   size_t min_word_length = 1;
+  // Nonempty only under a --max-unlisted-pairs limit: index-parallel to the
+  // classes, nonzero where every member is a multi-word entry in no pair list.
+  // Phase 2 caps those classes per path; a class with any other member passes,
+  // and phase 3 applies the exact per-spelling count.
+  std::span<uint8_t const> unlisted_classes;
+  size_t max_unlisted_pairs = 0;
   std::array<uint32_t, DFS_SYMBOL_COUNT> bag{};
   uint64_t bag_mask = 0;
   uint64_t score_key = 0;

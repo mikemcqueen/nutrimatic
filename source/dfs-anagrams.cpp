@@ -33,6 +33,7 @@ struct Args {
   size_t score_cache_bytes;
   int preprocess_threads;
   int exact_letters;
+  int max_unlisted_pairs;
   bool allow_cache_fallback;
   bool exact_remaining_depth;
   bool segments;
@@ -133,6 +134,9 @@ static void usage(char const* program) {
       "need not be in different entries, so a self-repeating entry like "
       "\"step by step\" is rejected on its own; only whole words count, so "
       "\"dog\" beside \"god\" or \"dogma\" is not a repeat");
+  dfs_help_option("--mup, --max-unlisted-pairs N",
+      "allow at most N multi-word entries per result that appear in no seed, "
+      "YES, or BEST pair list (default: -1, no limit)");
   dfs_help_option("-p, --progress-factor N",
       "report search progress every 100000 * N operations (default: 1; must "
       "be at least 1)");
@@ -188,6 +192,7 @@ static int const OPT_NO_PTM = 261;
 static int const OPT_NO_REPEAT = 262;
 static int const OPT_DISABLE_REPEATS = 263;
 static int const OPT_EXACT = 264;
+static int const OPT_MAX_UNLISTED_PAIRS = 265;
 
 // Normalizes a --no-repeat value the way the dictionary loader normalizes a
 // line, keeping the word boundaries load_dictionary() has no use for.
@@ -229,6 +234,8 @@ static struct optparse_long const long_options[] = {
   { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "no-repeat", OPT_NO_REPEAT, OPTPARSE_REQUIRED },
   { "disable-repeats", OPT_DISABLE_REPEATS, OPTPARSE_NONE },
+  { "mup", OPT_MAX_UNLISTED_PAIRS, OPTPARSE_REQUIRED },
+  { "max-unlisted-pairs", OPT_MAX_UNLISTED_PAIRS, OPTPARSE_REQUIRED },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
@@ -247,6 +254,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->score_cache_bytes = DFS_DEFAULT_SCORE_CACHE_MIB * DFS_MIB;
   out->preprocess_threads = 0;
   out->exact_letters = -1;
+  out->max_unlisted_pairs = -1;
   out->allow_cache_fallback = false;
   out->exact_remaining_depth = false;
   out->segments = false;
@@ -342,6 +350,13 @@ static bool parse_args(char* argv[], Args* out) {
         break;
       case OPT_EXACT:
         out->exact_remaining_depth = true;
+        break;
+      case OPT_MAX_UNLISTED_PAIRS:
+        if (strcmp(options.optarg, "-1") == 0)
+          out->max_unlisted_pairs = -1;
+        else if (!parse_count(options.optarg, "--max-unlisted-pairs",
+                              &out->max_unlisted_pairs))
+          return false;
         break;
       case 'F':
         out->allow_cache_fallback = true;
@@ -489,11 +504,11 @@ int main(int argc, char* argv[]) {
       prepared.classes.get(), args.letters, *prepared.model,
       args.score_cache_bytes, preprocess_threads,
       search_threads, size_t(args.num_segments),
-      args.exact_remaining_depth);
+      args.exact_remaining_depth, args.max_unlisted_pairs);
   DfsTopN output(
       prepared.classes.get(), prepared.model.get(), size_t(args.common.top),
       prepared.solo_words.get(),
-      args.show_bonus, &args.repeats);
+      args.show_bonus, &args.repeats, args.max_unlisted_pairs);
   DfsSearchStats stats;
   if (!search.run(&output, &stats,
                   args.progress_factor, args.allow_cache_fallback,

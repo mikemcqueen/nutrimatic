@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
 import re
 import signal
 import subprocess
@@ -14,8 +13,6 @@ from typing import Any, IO
 
 
 PROGRAM = "select-segment"
-SENTENCE_RE = re.compile(r"(?:^|\.)s([1-9]\d*)(?=\.|$)")
-LETTER_SET_RE = re.compile(r"(?:^|\.)([ou])-([a-z]+)(?=\.|$)")
 SEGMENT_RE = re.compile(r"[a-z]+(?:[ ,][a-z]+)?")
 
 
@@ -42,64 +39,6 @@ def parse_segment(text: str) -> str:
             "separated by one space or comma"
         )
     return text
-
-
-def one_filename_match(
-    pattern: re.Pattern[str], filename: str, description: str
-) -> re.Match[str]:
-    matches = list(pattern.finditer(filename))
-    if len(matches) != 1:
-        raise DiagnosticError(
-            f'cannot parse {description} from result filename "{filename}"'
-        )
-    return matches[0]
-
-
-def parse_result_filename(path: Path) -> tuple[str, str, str]:
-    filename = path.name
-    sentence_match = one_filename_match(
-        SENTENCE_RE, filename, "sentence number"
-    )
-    letter_set_match = one_filename_match(
-        LETTER_SET_RE, filename, "used/only letters"
-    )
-    return (
-        f"s{sentence_match.group(1)}",
-        letter_set_match.group(1),
-        letter_set_match.group(2),
-    )
-
-
-def workflow_root() -> Path:
-    value = os.environ.get("WFROOT")
-    if value is None:
-        raise DiagnosticError("WFROOT is not set")
-    if not value:
-        raise DiagnosticError("WFROOT is empty")
-    root = Path(value)
-    if not root.is_dir():
-        raise DiagnosticError(f'WFROOT is not a directory: "{root}"')
-    return root
-
-
-def sentence_letters(root: Path, sentence: str) -> str:
-    path = root / ".wf" / "best" / sentence / "letters"
-    try:
-        status = path.stat()
-    except OSError as error:
-        detail = error.strerror or str(error)
-        raise DiagnosticError(f'cannot stat letters file "{path}": {detail}') \
-            from error
-    if not path.is_file():
-        raise DiagnosticError(f'letters file is not a plain file: "{path}"')
-    if status.st_size == 0:
-        raise DiagnosticError(f'letters file is empty: "{path}"')
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise DiagnosticError(f'cannot read letters file "{path}": {error}') \
-            from error
-    return "".join(character for character in text if character.isalpha())
 
 
 def subtract_letters(letters: str, used: str) -> str:
@@ -164,8 +103,7 @@ def _display_segment_hierarchy(
     )
     print(
         f'{"  " * depth}{selected_segment} '
-        f'({len(segment_letter_map)}/{total})',
-        file=sys.stderr,
+        f'({len(segment_letter_map)}/{total})'
     )
 
     compatible_segments = list(segment_letter_map)
@@ -264,39 +202,46 @@ def _display_result_hierarchy(
     result_count: int,
     depth: int,
     *,
+    by_count: bool,
     quiet: bool,
 ) -> None:
     if result_count == 0:
         return
 
     print(
-        f'{"  " * depth}{selected_segment} ({result_count})',
-        file=sys.stderr,
+        f'{"  " * depth}{selected_segment} ({result_count})'
     )
 
     segment_letter_map = build_segment_letter_map(
         segment_list, remaining_letters, quiet=quiet
     )
     compatible_segments = list(segment_letter_map)
-    for segment, child_remaining_letters in segment_letter_map.items():
-        child_segment_list = remove_segment(
-            compatible_segments, segment
-        )
-        child_results, child_count = grep_segment_results(
-            dfs_results, segment
-        )
-        try:
+    children = []
+    try:
+        for segment, child_remaining_letters in segment_letter_map.items():
+            child_results, child_count = grep_segment_results(
+                dfs_results, segment
+            )
+            children.append(
+                (segment, child_remaining_letters, child_results, child_count)
+            )
+        if by_count:
+            children.sort(key=lambda child: child[3], reverse=True)
+        for segment, child_remaining_letters, child_results, child_count \
+                in children:
             _display_result_hierarchy(
                 segment,
-                child_segment_list,
+                remove_segment(compatible_segments, segment),
                 child_remaining_letters,
                 child_results,
                 child_count,
                 depth + 1,
+                by_count=by_count,
                 quiet=quiet,
             )
-        finally:
-            Path(child_results).unlink(missing_ok=True)
+    finally:
+        for child in children:
+            Path(child[2]).unlink(missing_ok=True)
 
 
 def display_result_hierarchy(
@@ -305,6 +250,7 @@ def display_result_hierarchy(
     selected_segment: str,
     remaining_letters: str,
     *,
+    by_count: bool,
     quiet: bool = True,
 ) -> None:
     segment_list = remove_segment(segment_list, selected_segment)
@@ -329,19 +275,11 @@ def display_result_hierarchy(
             selected_results,
             result_count,
             0,
+            by_count=by_count,
             quiet=quiet,
         )
     finally:
         Path(selected_results).unlink(missing_ok=True)
-
-
-def remaining_letters(
-    root: Path, sentence: str, form: str, named_letters: str
-) -> str:
-    letters = sentence_letters(root, sentence)
-    if form == "o":
-        return named_letters
-    return subtract_letters(letters, named_letters)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -356,7 +294,8 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
-        "result_file", metavar="RESULT-FILE", help="dfs-anagrams result file"
+        "result_file", metavar="RESULT-FILE",
+        help="dfs-anagrams result file; - reads standard input",
     )
     result.add_argument(
         "-s", "--segment", required=True, type=parse_segment,
@@ -435,24 +374,29 @@ def generate_segments(
     return selected.stdout.splitlines()
 
 
+def result_letters(dfs_results: str) -> str:
+    with open(dfs_results, encoding="utf-8") as results:
+        line = results.readline()
+    return "".join(sorted(segment_letters(line.partition(" ")[2])))
+
+
 def _select_segments_impl(
-    dfs_results: str, args: argparse.Namespace, selected_segment: str,
-    remaining: str
+    dfs_results: str, args: argparse.Namespace, selected_segment: str
 ) -> None:
+    remaining = result_letters(dfs_results)
     segment_list = generate_segments(dfs_results, args)
     display_result_hierarchy(
-        dfs_results, segment_list, selected_segment, remaining
+        dfs_results, segment_list, selected_segment, remaining,
+        by_count=args.selector == "top-segments",
     )
 
 
 def select_segments(
-    args: argparse.Namespace, selected_segment: str, remaining: str
+    args: argparse.Namespace, selected_segment: str
 ) -> None:
     dfs_results = filter_dfs_results(args)
     try:
-        _select_segments_impl(
-            dfs_results, args, selected_segment, remaining
-        )
+        _select_segments_impl(dfs_results, args, selected_segment)
     finally:
         Path(dfs_results).unlink(missing_ok=True)
 
@@ -460,14 +404,7 @@ def select_segments(
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        sentence, form, named_letters = parse_result_filename(
-            Path(args.result_file)
-        )
-        root = workflow_root()
-        remaining = remaining_letters(
-            root, sentence, form, named_letters
-        )
-        select_segments(args, args.segment, remaining)
+        select_segments(args, args.segment)
     except DiagnosticError as error:
         print(f"{PROGRAM}: {error}", file=sys.stderr)
         return 1

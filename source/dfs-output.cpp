@@ -269,12 +269,14 @@ DfsSpelling dfs_build_spelling(
 DfsTopN::DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
                  size_t limit, DfsSoloWords const* solo_words,
                  bool retain_segment_bonuses,
-                 DfsRepeatPolicy const* repeats):
+                 DfsRepeatPolicy const* repeats,
+                 int max_unlisted_pairs):
     class_list(classes),
     score_model(model),
     solo_words(solo_words),
     repeat_policy(
         repeats != NULL && !repeats->admits_everything() ? repeats : NULL),
+    max_unlisted_pairs(max_unlisted_pairs),
     result_limit(limit),
     retain_segment_bonuses(retain_segment_bonuses),
     expanded(0),
@@ -396,6 +398,20 @@ bool DfsTopN::admits(std::vector<size_t> const& class_indexes,
   return true;
 }
 
+bool DfsTopN::unlisted_pairs_fit(
+    std::vector<size_t> const& class_indexes,
+    std::vector<size_t> const& member_indexes) const {
+  int seen = 0;
+  for (size_t i = 0; i < class_indexes.size(); ++i) {
+    DfsMemberView const view =
+        class_list->member(class_indexes[i], member_indexes[i]);
+    if (dfs_member_unlisted_pair(view.word_count, view.score_flags) &&
+        ++seen > max_unlisted_pairs)
+      return false;
+  }
+  return true;
+}
+
 void DfsTopN::emit(std::vector<size_t> const& class_indexes,
                    double representative_upper_log_score) {
   if (class_indexes.empty()) return;
@@ -420,8 +436,10 @@ void DfsTopN::emit(std::vector<size_t> const& class_indexes,
 
     // A rejected candidate is skipped, not pruned: its successors still go on
     // the queue, since a repeat at this member can vanish at the next one.
-    if (repeat_policy == NULL ||
-        admits(class_indexes, current.member_indexes)) {
+    if ((repeat_policy == NULL ||
+         admits(class_indexes, current.member_indexes)) &&
+        (max_unlisted_pairs < 0 ||
+         unlisted_pairs_fit(class_indexes, current.member_indexes))) {
       DfsSpelling spelling = dfs_build_spelling(
           *class_list, *score_model, solo_words, class_indexes,
           current.member_indexes, representative_upper_log_score,

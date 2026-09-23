@@ -1102,3 +1102,12 @@ expect_status 2 "$dfs_anagrams" -i "$index_file" abab -m 2 --no-repeat='!!'
 grep -q '^error: --no-repeat value is empty after normalization: !!$' \
   "$test_dir/status.stderr" ||
   fail "empty --no-repeat value diagnostic is unclear"
+
+# --max-unlisted-pairs counts multi-word entries named by no pair list.
+[[ "$(results abcdab -m 2 --mup 0)" != *" "* ]] ||
+  fail "--mup 0 kept an unlisted multi-word entry"
+printf 'ab,cd\n' > "$test_dir/mup-seed.pairs"
+[[ "$(results abcdab -m 2 --mup 0 --seed-pairs "$test_dir/mup-seed.pairs" |
+      head -n 1)" == "ab cd,ab" ]] ||
+  fail "--mup 0 rejected a listed pair"
+expect_status 2 "$dfs_anagrams" -i "$index_file" abab -m 2 --mup=-2

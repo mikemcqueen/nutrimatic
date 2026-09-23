@@ -131,6 +131,7 @@ void DfsAllSolutionsRunner::visit_fitting_class(
     task.path_size = uint32_t(worker->path.size());
     task.entry_point = class_index;
     task.letters_left = uint32_t(next_letters_left);
+    task.unlisted_pairs = uint32_t(worker->unlisted_pairs);
     task.representative_log_score = next_log_score;
     assert(worker->produced != NULL);
     worker->produced->push_back(task);
@@ -157,8 +158,15 @@ bool DfsAllSolutionsRunner::visit_fitting_range(
                data.packed_letters.get() + fit.metadata.letters_offset,
                fit.metadata.packed_length_and_count, worker->bag.data()))
       continue;
+    bool const unlisted = !data.unlisted_classes.empty()
+        && data.unlisted_classes[id] != 0;
+    if (unlisted) {
+      if (worker->unlisted_pairs == data.max_unlisted_pairs) continue;
+      ++worker->unlisted_pairs;
+    }
     visit_fitting_class(
         worker, id, fit.metadata, letters_left, representative_log_score, sink);
+    if (unlisted) --worker->unlisted_pairs;
     if (DFS_UNLIKELY(sink != NULL && sink->should_stop())) return true;
   }
   return false;
@@ -232,6 +240,7 @@ void DfsAllSolutionsRunner::start_worker(Worker* worker) {
   worker->score_key = data.score_key;
   worker->path.clear();
   worker->path.reserve(data.letter_count);
+  worker->unlisted_pairs = 0;
   worker->stats = DfsSearchStats::AllSolutions();
   worker->certificate = DfsSearchStats::Certificate::Counters();
   worker->split_depth = 0;
@@ -281,6 +290,7 @@ void DfsAllSolutionsRunner::run_parallel(
     seed.bag_mask = task.bag_mask;
     seed.score_key = task.score_key;
     seed.path.assign(task.path.begin(), task.path.begin() + task.path_size);
+    seed.unlisted_pairs = task.unlisted_pairs;
     seed.split_depth = task.path_size + 1;
     seed.produced = &children;
     walk(&seed, task.letters_left, task.entry_point,
@@ -327,6 +337,7 @@ void DfsAllSolutionsRunner::run_parallel(
       worker.bag_mask = task.bag_mask;
       worker.score_key = task.score_key;
       worker.path.assign(task.path.begin(), task.path.begin() + task.path_size);
+      worker.unlisted_pairs = task.unlisted_pairs;
       walk(&worker, task.letters_left, task.entry_point,
           task.representative_log_score, sink);
     }

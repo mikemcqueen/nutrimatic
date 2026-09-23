@@ -143,11 +143,14 @@ class DfsTopN: public DfsSolutionSink {
   // profiles used to correct a concrete spelling before retention. Bonus
   // metadata is retained only when retain_segment_bonuses is true. A borrowed
   // `repeats` rejects candidates before they are built; a NULL policy, or one
-  // that admits everything, costs nothing.
+  // that admits everything, costs nothing. A nonnegative max_unlisted_pairs
+  // likewise rejects candidates with more multi-word entries that no pair
+  // list names.
   DfsTopN(DfsClassList const* classes, DfsScoreModel const* model,
           size_t limit, DfsSoloWords const* solo_words = NULL,
           bool retain_segment_bonuses = false,
-          DfsRepeatPolicy const* repeats = NULL);
+          DfsRepeatPolicy const* repeats = NULL,
+          int max_unlisted_pairs = -1);
 
   void emit(std::vector<size_t> const& class_indexes,
             double representative_upper_log_score);
@@ -170,6 +173,8 @@ class DfsTopN: public DfsSolutionSink {
   // repeat_policy is non-NULL.
   bool admits(std::vector<size_t> const& class_indexes,
               std::vector<size_t> const& member_indexes) const;
+  bool unlisted_pairs_fit(std::vector<size_t> const& class_indexes,
+                          std::vector<size_t> const& member_indexes) const;
   bool offer(DfsSpelling spelling);
   void swap_heap_entries(size_t a, size_t b);
   void sift_up(size_t position);
@@ -180,6 +185,7 @@ class DfsTopN: public DfsSolutionSink {
   DfsScoreModel const* const score_model;
   DfsSoloWords const* const solo_words;
   DfsRepeatPolicy const* const repeat_policy;
+  int const max_unlisted_pairs;
   size_t const result_limit;
   bool const retain_segment_bonuses;
   size_t expanded;

@@ -41,6 +41,9 @@ inline constexpr uint16_t DFS_MEMBER_SOLO_PAIR_KIND_MASK = uint16_t(7) << 6;
 uint16_t dfs_pair_bonus_score_flags(DfsPairBonusKind kind);
 DfsPairBonusKind dfs_member_pair_bonus_kind(uint16_t score_flags);
 DfsPairBonusKind dfs_member_solo_pair_bonus_kind(uint16_t score_flags);
+// A multi-word entry no pair list names, whatever its word count: what
+// --max-unlisted-pairs counts.
+bool dfs_member_unlisted_pair(int word_count, uint16_t score_flags);
 
 inline constexpr uint8_t DFS_NO_SOLO_WORD = UINT8_MAX;
 

@@ -205,6 +205,11 @@ executable('bag-filter', 'bag-filter.cpp',
   dependencies: thread_dep,
   install: true)
 
+executable('freqsort', 'freqsort.cpp',
+  link_with: [dfs_class_list_lib, optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
 pairs = executable('pairs', 'pairs.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,

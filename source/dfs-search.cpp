@@ -179,11 +179,14 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
                                    size_t preprocess_threads,
                                    size_t search_threads,
                                    size_t exact_segments,
-                                   bool exact_remaining_depth):
+                                   bool exact_remaining_depth,
+                                   int max_unlisted_pairs):
     class_list(classes),
     letters(letters),
     segment_boundary_log_score(
         score_model.segment_boundary_log_score()),
+    max_unlisted_pairs(
+        max_unlisted_pairs >= 0 ? size_t(max_unlisted_pairs) : SIZE_MAX),
     exact_segments(exact_segments),
     exact_remaining_depth(exact_remaining_depth),
     // A target below the letters' natural depth limit is itself the limit;
@@ -211,6 +214,16 @@ DfsAnagramSearch::DfsAnagramSearch(DfsClassList const* classes,
         score_model.member_upper_log_score(
             first.count, first.word_count > 1, first.score_flags));
   }
+  if (max_unlisted_pairs < 0) return;
+  unlisted_classes.assign(all_classes.size(), 1);
+  for (size_t i = 0; i < all_classes.size(); ++i)
+    for (size_t mi = 0; mi < class_list->member_count(i); ++mi) {
+      DfsMemberView const member = class_list->member(i, mi);
+      if (!dfs_member_unlisted_pair(member.word_count, member.score_flags)) {
+        unlisted_classes[i] = 0;
+        break;
+      }
+    }
 }
 
 bool DfsAnagramSearch::prepare_hot_classes(
@@ -496,6 +509,8 @@ bool DfsAnagramSearch::prepare_phase_two(
   data->max_depth = max_depth;
   data->exact_depth = exact_segments;
   data->min_word_length = size_t(class_list->min_word_length());
+  data->unlisted_classes = std::span<uint8_t const>(unlisted_classes);
+  data->max_unlisted_pairs = max_unlisted_pairs;
   data->support_scan_vector = support_scan_vector;
   data->requested_search_threads = requested_search_threads;
   bool certificate_requested = false;
