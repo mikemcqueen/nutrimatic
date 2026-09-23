@@ -23,8 +23,10 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -57,7 +59,7 @@ static void usage(char const* program) {
   fprintf(stdout,
       "usage: %s [-i INDEX] [options] letters\n"
       "       %s [-i INDEX] [options] query|- --score\n"
-      "       %s -i INDEX input --near WORD [-n N]\n\noptions:\n",
+      "       %s [-i INDEX] input --near WORD [-n N]\n\noptions:\n",
       program, program, program);
   dfs_help_index(true);
   dfs_help_used_letters();
@@ -210,6 +212,23 @@ static bool validate_literal_entry(std::string const& entry) {
   return true;
 }
 
+static bool index_from_env(char const* program, char const* missing_hint,
+                           char const** index_file) {
+  char const* idx = getenv("IDX");
+  if (idx == NULL || *idx == '\0') {
+    fprintf(stderr, "error: missing index; use %s or set IDX\n", missing_hint);
+    usage(program);
+    return false;
+  }
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(idx, ec)) {
+    fprintf(stderr, "error: IDX \"%s\" is not a file\n", idx);
+    return false;
+  }
+  *index_file = idx;
+  return true;
+}
+
 static bool parse_args(char* argv[], Args* out) {
   out->index_file = NULL;
   out->common = DfsCommonArgs();
@@ -310,11 +329,9 @@ static bool parse_args(char* argv[], Args* out) {
               out->near_incompatible_option);
       return false;
     }
-    if (out->index_file == NULL) {
-      fputs("error: missing index; use -i INDEX\n", stderr);
-      usage(argv[0]);
+    if (out->index_file == NULL &&
+        !index_from_env(argv[0], "-i INDEX", &out->index_file))
       return false;
-    }
     out->near_input = letters;
     return validate_literal_entry(out->near_input) &&
         validate_literal_entry(out->near_target);
@@ -325,11 +342,9 @@ static bool parse_args(char* argv[], Args* out) {
           out->score ? NULL : &out->workflow_reject_files,
           /*allow_targetless_workflow=*/true))
     return false;
-  if (out->index_file == NULL) {
-    fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
-    usage(argv[0]);
+  if (out->index_file == NULL &&
+      !index_from_env(argv[0], "-i INDEX or --wfroot DIR", &out->index_file))
     return false;
-  }
 
   if (out->score) {
     if (out->score_incompatible_option != NULL) {

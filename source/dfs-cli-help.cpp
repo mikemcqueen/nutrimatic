@@ -54,11 +54,13 @@ void dfs_help_option(char const* option, char const* format, ...) {
   fputs("\n\n", stdout);
 }
 
-void dfs_help_index(bool require_for_near) {
+void dfs_help_index(bool env_default) {
   dfs_help_option("-i, --idx INDEX",
       "read the completed Nutrimatic index from INDEX; workflow mode "
-      "defaults to DIR/%s; required otherwise%s",
-      WORKFLOW_INDEX_PATH, require_for_near ? " and with --near" : "");
+      "defaults to DIR/%s; %s",
+      WORKFLOW_INDEX_PATH,
+      env_default ? "otherwise defaults to $IDX, which must name a file"
+                  : "required otherwise");
 }
 
 void dfs_help_used_letters() {

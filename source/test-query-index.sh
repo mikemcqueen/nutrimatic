@@ -24,7 +24,7 @@ set +e
   > "$test_dir/positional-index.stdout" \
   2> "$test_dir/positional-index.stderr"
 positional_index_status=$?
-"$query_index" abcd \
+env -u IDX "$query_index" abcd \
   > "$test_dir/missing-index.stdout" 2> "$test_dir/missing-index.stderr"
 missing_index_status=$?
 "$query_index" -i "$synthetic_index" \
@@ -47,7 +47,7 @@ grep -Eq '^  --csv +omit the leading count or score from each result' \
   fail "query-index help did not describe --csv"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
-grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
+grep -q '^error: missing index; use -i INDEX or --wfroot DIR or set IDX$' \
   "$test_dir/missing-index.stderr" ||
   fail "missing index error is unclear"
 [[ $missing_letters_status -eq 2 ]] ||
@@ -55,6 +55,15 @@ grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
 grep -q '^error: missing letters argument$' \
   "$test_dir/missing-letters.stderr" ||
   fail "missing letters error is unclear"
+
+idx_dir_status=0
+IDX="$test_dir" "$query_index" abcd > /dev/null 2> "$test_dir/idx-dir.stderr" ||
+  idx_dir_status=$?
+[[ $idx_dir_status -eq 2 ]] || fail "IDX naming a directory should exit 2"
+grep -q "^error: IDX \"$test_dir\" is not a file$" "$test_dir/idx-dir.stderr" ||
+  fail "IDX directory error is unclear"
+IDX="$synthetic_index" "$query_index" abcd -n 1 > /dev/null ||
+  fail "query-index did not read the index from IDX"
 
 "$query_index" -i "$synthetic_index" abcd -u ab -m 2 -n 1 \
   --word-bonus 0 > /dev/null 2> "$test_dir/letter-bag.stderr"

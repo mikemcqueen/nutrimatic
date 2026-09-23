@@ -3,7 +3,7 @@
 
 // Help formatting and descriptions shared by dfs-anagrams and query-index.
 void dfs_help_option(char const* option, char const* format, ...);
-void dfs_help_index(bool require_for_near = false);
+void dfs_help_index(bool env_default = false);
 void dfs_help_used_letters();
 void dfs_help_dictionary();
 void dfs_help_min_word_length();
