@@ -30,6 +30,7 @@ void usage(FILE* out) {
   if (out != stdout) return;
 
   fputs("  print pairs whose two words are in $WFROOT/.wf/dict/words.filtered\n"
+        "  and not in $WFROOT/.wf/classified/no/no.pairs\n"
         "  PAIRS-FILE contains word,word lines; '-' reads standard input\n"
         "\noptions:\n", stdout);
   dfs_help_option("-l, --letters LETTERS",
@@ -125,6 +126,7 @@ int main(int argc, char* argv[]) {
   if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
 
   DfsPairSet rejected;
+  if (!load_global_no_pairs("pfilter", root, &rejected)) return 1;
   if (args.sentence != CLASSIFIED_NO_SENTENCE &&
       !load_classified_no_pairs("pfilter", root, args.sentence, &rejected))
     return 1;

@@ -21,6 +21,13 @@ bool parse_classified_sentence(char const* arg, int* sentence);
 // $WFROOT/.wf/classified/sN for `root` and `sentence`.
 std::filesystem::path classified_sentence_dir(char const* root, int sentence);
 
+// Loads $WFROOT/.wf/classified/no/no.pairs into `pairs`, both word orders. A
+// workflow need not have classified anything NO yet, so an absent file is
+// warned about and loads nothing; other errors are diagnosed, prefixed by
+// `program`.
+bool load_global_no_pairs(
+    char const* program, char const* root, DfsPairSet* pairs);
+
 // Loads sentence N's no/no.pairs into `pairs`, both word orders. The file must
 // exist; errors are diagnosed, prefixed by `program`.
 bool load_classified_no_pairs(

@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "classified.h"
 #include "dfs-cli-args.h"
 #include "log.h"
 #include "option-value.h"
@@ -474,10 +475,10 @@ bool load_pair_filters(
       return false;
   }
   if (wfroot != NULL) {
-    if (!load_workflow_pair_file(
-            workflow_path(wfroot, WORKFLOW_NO_PAIRS_PATH), program,
-            "reject list", &out->rejected, &out->sources.classified_no))
+    if (!load_global_no_pairs(program, wfroot, &out->sources.classified_no))
       return false;
+    out->rejected.insert(
+        out->sources.classified_no.begin(), out->sources.classified_no.end());
     if (!load_target_pair_file(wfroot, target, program, &out->rejected,
             &out->sources.target_no))
       return false;

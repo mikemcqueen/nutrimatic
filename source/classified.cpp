@@ -7,6 +7,7 @@
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "workflow-paths.h"
 
 void classified_help_sentence() {
@@ -32,6 +33,18 @@ bool load_classified_no_pairs(
   if (!std::filesystem::is_regular_file(path, error)) {
     fprintf(stderr, "%s: \"%s\" is not a file\n", program, path.c_str());
     return false;
+  }
+  return load_pair_file(path.c_str(), "reject list", pairs, true, true);
+}
+
+bool load_global_no_pairs(
+    char const* program, char const* root, DfsPairSet* pairs) {
+  std::filesystem::path const path =
+      std::filesystem::path(root) / WORKFLOW_NO_PAIRS_PATH;
+  std::error_code error;
+  if (!std::filesystem::exists(path, error) && !error) {
+    warn(program, "classified pair file \"%s\" is not present", path.c_str());
+    return true;
   }
   return load_pair_file(path.c_str(), "reject list", pairs, true, true);
 }

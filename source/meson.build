@@ -104,17 +104,12 @@ dfs_class_list_lib = library(
     'dfs-search-projected.cpp',
     'dfs-output.cpp',
     'classified.cpp',
+    'log.cpp',
     'letter-bag.cpp',
     'row-input.cpp',
   ],
   link_with: index_lib,
   dependencies: thread_dep,
-)
-
-# Diagnostic output shared by the pair-selecting CLIs, so every warning and
-# resolution line looks the same.
-log_dep = declare_dependency(
-  sources: files('log.cpp'),
 )
 
 # Shared source dependency for small pair-selecting CLIs. Each consumer
@@ -123,7 +118,7 @@ log_dep = declare_dependency(
 pair_exclusions_dep = declare_dependency(
   sources: files('pair-exclusions.cpp'),
   link_with: dfs_class_list_lib,
-  dependencies: [thread_dep, log_dep],
+  dependencies: thread_dep,
 )
 
 segment_output_dep = declare_dependency(
@@ -246,7 +241,7 @@ custom_target(
 
 query_index = executable('query-index', 'query-index.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib],
-  dependencies: [thread_dep, log_dep],
+  dependencies: thread_dep,
   install: true)
 
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
