@@ -8,23 +8,31 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "dfs-cli-args.h"
+#include "index.h"
 #include "optparse.h"
 #include "segment-output.h"
 #include "segment-rows.h"
 
 struct Args {
   char const* input_path = NULL;
+  char const* index_path = NULL;
   std::vector<std::string> allow_paths;
 };
 
 struct RowCounts {
   size_t pair_segments = 0;
   size_t allowed_pair_segments = 0;
+};
+
+struct WordLengths {
+  uint64_t words = 0;
+  uint64_t letters = 0;
 };
 
 struct Stats {
@@ -39,6 +47,10 @@ struct Stats {
   size_t unique_pair_segments = 0;
   size_t unique_solo_word_segments = 0;
   size_t allowed_unique_pair_segments = 0;
+  std::vector<int64_t> pair_scores;
+  std::vector<int64_t> solo_scores;
+  WordLengths pair_word_lengths;
+  WordLengths solo_word_lengths;
   std::unordered_set<std::string> unique_segments;
   std::unordered_set<std::string> unique_words;
   std::vector<uint64_t> words_by_length;
@@ -47,11 +59,14 @@ struct Stats {
 
 static void usage(char const* program) {
   fprintf(stdout,
-      "usage: %s [-a FILE]... [FILE]\n"
+      "usage: %s [-i INDEX] [-a FILE]... [FILE]\n"
       "  calculate segment and word statistics for dfs-anagrams output\n"
       "  -a, --allow-pairs FILE  also report how many unique pair segments\n"
       "                          are listed in FILE; pairs match in either\n"
       "                          word order; may be repeated\n"
+      "  -i, --idx INDEX         report the median score of unique pair\n"
+      "                          and solo segments, as query-index --score;\n"
+      "                          defaults to $IDX, omitted without either\n"
       "  with no FILE, or when FILE is -, read standard input\n",
       program);
 }
@@ -65,9 +80,31 @@ static bool increment(uint64_t* count, char const* description) {
   return true;
 }
 
+static void add_score(
+    IndexReader const& index, std::string const& segment,
+    std::vector<int64_t>* scores) {
+  std::vector<std::string> const words = split_segment_words(segment);
+  int64_t best = 0;
+  int64_t count;
+  if (index.aggregate_entry_count(segment, &count)) best = count;
+  if (words.size() == 2 &&
+      index.aggregate_entry_count(words[1] + " " + words[0], &count))
+    best = std::max(best, count);
+  if (best == 0) return;
+  scores->push_back(best);
+}
+
+static void add_word_lengths(
+    std::string const& segment, WordLengths* lengths) {
+  for (std::string const& word : split_segment_words(segment)) {
+    ++lengths->words;
+    lengths->letters += word.size();
+  }
+}
+
 static bool add_segment(
-    std::string const& segment, DfsPairSet const* allowed, Stats* stats,
-    RowCounts* row) {
+    std::string const& segment, DfsPairSet const* allowed,
+    IndexReader const* index, Stats* stats, RowCounts* row) {
   if (!increment(&stats->total_segments, "segment count")) return false;
   bool const pair = is_pair_segment(segment);
   bool const allowed_pair =
@@ -84,8 +121,12 @@ static bool add_segment(
     if (pair) {
       ++stats->unique_pair_segments;
       if (allowed_pair) ++stats->allowed_unique_pair_segments;
+      add_word_lengths(segment, &stats->pair_word_lengths);
+      if (index != NULL) add_score(*index, segment, &stats->pair_scores);
     } else {
       ++stats->unique_solo_word_segments;
+      add_word_lengths(segment, &stats->solo_word_lengths);
+      if (index != NULL) add_score(*index, segment, &stats->solo_scores);
     }
   }
 
@@ -108,14 +149,14 @@ static bool add_segment(
 
 static bool read_stats(
     std::istream* input, char const* name, DfsPairSet const* allowed,
-    Stats* stats) {
+    IndexReader const* index, Stats* stats) {
   SegmentRowReader reader = {input, name, "segment-stats"};
   SegmentRow result_row;
   while (segment_rows_next(&reader, &result_row)) {
     if (!increment(&stats->total_rows, "row count")) return false;
     RowCounts row;
     for (std::string const& segment : result_row.segments)
-      if (!add_segment(segment, allowed, stats, &row)) return false;
+      if (!add_segment(segment, allowed, index, stats, &row)) return false;
 
     if (row.pair_segments > 0) {
       if (row.allowed_pair_segments == row.pair_segments &&
@@ -161,9 +202,42 @@ static void print_percentage_count(
       label_width, label.c_str(), count_width, count, share, basis);
 }
 
-static bool print_stats(Stats const& stats, bool show_allowed) {
-  int const segment_label_width = 14;
-  int const segment_count_width = decimal_width(stats.total_segments);
+static std::string format_median_score(std::vector<int64_t> scores) {
+  if (scores.empty()) return "-";
+  size_t const middle = scores.size() / 2;
+  std::nth_element(scores.begin(), scores.begin() + middle, scores.end());
+  double median = double(scores[middle]);
+  if (scores.size() % 2 == 0) {
+    median = (median + double(*std::max_element(
+        scores.begin(), scores.begin() + middle))) / 2.0;
+  }
+  char buffer[32];
+  snprintf(buffer, sizeof buffer, "%.1f", median);
+  return buffer;
+}
+
+static std::string format_mean_word_length(WordLengths const& lengths) {
+  if (lengths.words == 0) return "-";
+  char buffer[32];
+  snprintf(buffer, sizeof buffer, "%.1f",
+      double(lengths.letters) / double(lengths.words));
+  return buffer;
+}
+
+static bool print_stats(
+    Stats const& stats, bool show_allowed, bool show_score) {
+  int const segment_label_width = int(strlen("mean word length"));
+  std::string const pair_length =
+      format_mean_word_length(stats.pair_word_lengths);
+  std::string const solo_length =
+      format_mean_word_length(stats.solo_word_lengths);
+  std::string const pair_score = format_median_score(stats.pair_scores);
+  std::string const solo_score = format_median_score(stats.solo_scores);
+  int segment_count_width = std::max({decimal_width(stats.total_segments),
+      int(pair_length.size()), int(solo_length.size())});
+  if (show_score)
+    segment_count_width = std::max({segment_count_width,
+        int(pair_score.size()), int(solo_score.size())});
   print_count("total rows", segment_label_width,
       stats.total_rows, segment_count_width);
   if (show_allowed) {
@@ -192,12 +266,18 @@ static bool print_stats(Stats const& stats, bool show_allowed) {
       stats.unique_pair_segments, segment_count_width,
       percentage(stats.unique_pair_segments, stats.unique_segments.size()),
       "unique");
+  printf("%*s: %*s\n", segment_label_width, "mean word length",
+      segment_count_width, pair_length.c_str());
+  if (show_score)
+    printf("%*s: %*s\n", segment_label_width, "median score",
+        segment_count_width, pair_score.c_str());
   if (show_allowed)
     print_percentage_count("allowed", segment_label_width,
         stats.allowed_unique_pair_segments, segment_count_width,
         percentage(
             stats.allowed_unique_pair_segments, stats.unique_pair_segments),
         "unique pair segments");
+  putchar('\n');
   print_percentage_count("solo segments", segment_label_width,
       stats.solo_word_segments, segment_count_width,
       percentage(stats.solo_word_segments, stats.total_segments), "total");
@@ -206,6 +286,11 @@ static bool print_stats(Stats const& stats, bool show_allowed) {
       percentage(
           stats.unique_solo_word_segments, stats.unique_segments.size()),
       "unique");
+  printf("%*s: %*s\n", segment_label_width, "mean word length",
+      segment_count_width, solo_length.c_str());
+  if (show_score)
+    printf("%*s: %*s\n", segment_label_width, "median score",
+        segment_count_width, solo_score.c_str());
 
   size_t const maximum_length = stats.words_by_length.empty()
       ? 0 : stats.words_by_length.size() - 1;
@@ -240,6 +325,7 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
   };
   static struct optparse_long const long_options[] = {
     {"allow-pairs", 'a', OPTPARSE_REQUIRED},
+    {"idx", 'i', OPTPARSE_REQUIRED},
     {"help", OPT_HELP, OPTPARSE_NONE},
     {NULL, 'h', OPTPARSE_NONE},
     {NULL, 0, OPTPARSE_NONE},
@@ -259,6 +345,13 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
         }
         out->allow_paths.push_back(options.optarg);
         break;
+      case 'i':
+        if (options.optarg[0] == '\0') {
+          fputs("segment-stats: -i/--idx requires a file\n", stderr);
+          return false;
+        }
+        out->index_path = options.optarg;
+        break;
       case 'h':
       case OPT_HELP:
         *requested_help = true;
@@ -273,6 +366,10 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
   if (out->input_path != NULL && optparse_arg(&options) != NULL) {
     fputs("segment-stats: at most one FILE may be given\n", stderr);
     return false;
+  }
+  if (out->index_path == NULL) {
+    char const* idx = getenv("IDX");
+    if (idx != NULL && idx[0] != '\0') out->index_path = idx;
   }
   return true;
 }
@@ -300,19 +397,43 @@ int main(int argc, char* argv[]) {
   DfsPairSet const* const allowed_pairs =
       args.allow_paths.empty() ? NULL : &allowed;
 
-  Stats stats;
-  if (args.input_path == NULL || strcmp(args.input_path, "-") == 0) {
-    if (!read_stats(&std::cin, "-", allowed_pairs, &stats)) return 1;
-  } else {
-    errno = 0;
-    std::ifstream input(args.input_path);
-    if (!input.is_open()) {
+  FILE* index_file = NULL;
+  if (args.index_path != NULL) {
+    index_file = fopen(args.index_path, "rb");
+    if (index_file == NULL) {
       fprintf(stderr, "segment-stats: can't open \"%s\": %s\n",
-          args.input_path, strerror(errno));
+          args.index_path, strerror(errno));
       return 1;
     }
-    if (!read_stats(&input, args.input_path, allowed_pairs, &stats)) return 1;
   }
 
-  return print_stats(stats, allowed_pairs != NULL) ? 0 : 1;
+  bool ok;
+  Stats stats;
+  {
+    std::unique_ptr<IndexReader> index;
+    if (index_file != NULL) index.reset(new IndexReader(index_file));
+    if (args.input_path == NULL || strcmp(args.input_path, "-") == 0) {
+      ok = read_stats(&std::cin, "-", allowed_pairs, index.get(), &stats);
+    } else {
+      errno = 0;
+      std::ifstream input(args.input_path);
+      if (!input.is_open()) {
+        fprintf(stderr, "segment-stats: can't open \"%s\": %s\n",
+            args.input_path, strerror(errno));
+        ok = false;
+      } else {
+        ok = read_stats(
+            &input, args.input_path, allowed_pairs, index.get(), &stats);
+      }
+    }
+  }
+  if (index_file != NULL && fclose(index_file) != 0 && ok) {
+    fprintf(stderr, "segment-stats: can't close index \"%s\"\n",
+        args.index_path);
+    ok = false;
+  }
+  if (!ok) return 1;
+
+  return print_stats(stats, allowed_pairs != NULL, index_file != NULL)
+      ? 0 : 1;
 }
