@@ -2,6 +2,7 @@
 // letter bag, or with -r that fit once it is removed.
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include <algorithm>
@@ -126,10 +127,47 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   return out->source != NULL && optparse_arg(&options) == NULL;
 }
 
-bool fits(Counts const& need, Counts const& have) {
-  for (size_t i = 0; i < need.size(); ++i)
-    if (need[i] > have[i]) return false;
+int const SLOT_IGNORED = -2;
+int const SLOT_MISSING = -1;
+
+// Fills `need` with the letters `line` spells as clean_word() reads them, and
+// whether they fit within `bag`; stops at the first letter that does not.
+bool line_fits(
+    std::string const& line, int const* slot, Counts const& bag,
+    Counts* need) {
+  std::fill(need->begin(), need->end(), 0);
+  for (char ch : line) {
+    int const i = slot[(unsigned char) ch];
+    if (i == SLOT_IGNORED) continue;
+    if (i == SLOT_MISSING || ++(*need)[i] > bag[i]) return false;
+  }
   return true;
+}
+
+// One letter of a subset: the entry column it is read from and the count
+// each entry must reach, or with -r not exceed.
+struct LetterCheck {
+  uint16_t const* column;
+  uint16_t limit;
+};
+
+template <bool REVERSE>
+size_t count_matches(
+    std::vector<LetterCheck> const& checks,
+    std::vector<size_t> const& numbers) {
+  size_t count = 0;
+  for (size_t g = 0; g < numbers.size(); ++g) {
+    bool match = true;
+    for (LetterCheck const& check : checks) {
+      uint16_t const need = check.column[g];
+      if (REVERSE ? need > check.limit : need < check.limit) {
+        match = false;
+        break;
+      }
+    }
+    if (match) count += numbers[g];
+  }
+  return count;
 }
 
 void each_subset(
@@ -182,46 +220,65 @@ int main(int argc, char* argv[]) {
   std::vector<char> letters;
   Counts bag;
   int slot[UCHAR_MAX + 1];
-  std::fill(slot, slot + UCHAR_MAX + 1, -1);
+  std::fill(slot, slot + UCHAR_MAX + 1, SLOT_IGNORED);
   for (int ch = 0; ch <= UCHAR_MAX; ++ch) {
-    if (args.bag.counts[ch] == 0) continue;
+    bool const upper = ch >= 'A' && ch <= 'Z';
+    if (!upper && !(ch >= 'a' && ch <= 'z') && !(ch >= '0' && ch <= '9'))
+      continue;
+    slot[ch] = SLOT_MISSING;
+    if (upper || args.bag.counts[ch] == 0) continue;
     slot[ch] = int(letters.size());
     letters.push_back(char(ch));
     bag.push_back(args.bag.counts[ch]);
   }
+  for (int ch = 'A'; ch <= 'Z'; ++ch) slot[ch] = slot[ch - 'A' + 'a'];
 
   std::map<Counts, size_t> entries;
-  if (!read_rows("bag-subset", args.source, "input", true,
-          [&](DfsPairRow const& row, std::string const&) {
-            std::string const text = row.left + row.right;
+  Counts need(letters.size(), 0);
+  if (!read_lines("bag-subset", args.source,
+          [&](std::string const& line, size_t number) {
+            if (line.find('-') == std::string::npos &&
+                std::count(line.begin(), line.end(), ',') <= 1 &&
+                !line_fits(line, slot, bag, &need))
+              return true;
+            DfsPairRow row;
+            if (!parse_pair_row(
+                    line, "input", args.source, number, true, &row))
+              return false;
             if ((args.max_letters != 0 &&
-                    text.size() > size_t(args.max_letters)) ||
+                    row.left.size() + row.right.size() >
+                        size_t(args.max_letters)) ||
                 !dictionary.contains(row.left) ||
                 (!row.right.empty() && !dictionary.contains(row.right)) ||
                 rejected.contains(row.entry()))
               return true;
-            Counts need(letters.size(), 0);
-            for (char ch : text) {
-              int const i = slot[(unsigned char) ch];
-              if (i < 0 || ++need[i] > bag[i]) return true;
-            }
             ++entries[need];
             return true;
           }))
     return 1;
 
+  std::vector<std::vector<uint16_t>> columns(letters.size());
+  std::vector<size_t> numbers;
+  for (auto const& [counts, number] : entries) {
+    for (size_t i = 0; i < counts.size(); ++i)
+      columns[i].push_back(uint16_t(counts[i]));
+    numbers.push_back(number);
+  }
+
   std::vector<SubsetCount> results;
   Counts subset(letters.size(), 0);
-  Counts candidate(letters.size(), 0);
+  std::vector<LetterCheck> checks;
   std::string text;
   each_subset(letters, bag, args.length, 0, &subset, &text,
       [&](Counts const& chosen, std::string const& name) {
-        for (size_t i = 0; i < bag.size(); ++i)
-          candidate[i] = bag[i] - chosen[i];
-        size_t count = 0;
-        for (auto const& [need, number] : entries)
-          if (args.reverse ? fits(need, candidate) : fits(chosen, need))
-            count += number;
+        checks.clear();
+        for (size_t i = 0; i < chosen.size(); ++i)
+          if (chosen[i] != 0)
+            checks.push_back({ columns[i].data(), uint16_t(
+                args.reverse ? bag[i] - chosen[i] : chosen[i]) });
+        size_t const count = args.reverse
+            ? count_matches<true>(checks, numbers)
+            : count_matches<false>(checks, numbers);
         results.push_back({ name, count });
       });
 

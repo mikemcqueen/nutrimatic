@@ -22,27 +22,33 @@ bool read_input_file(
   return read(input);
 }
 
-bool read_rows(
-    char const* program, char const* path, char const* what,
-    bool allow_single_words,
-    std::function<bool(DfsPairRow const&, std::string const&)> const& visit) {
+bool read_lines(
+    char const* program, char const* path,
+    std::function<bool(std::string const&, size_t)> const& visit) {
   return read_input_file(program, path, [&](std::istream& input) {
     std::string line;
     size_t number = 0;
-    while (std::getline(input, line)) {
-      ++number;
-      DfsPairRow row;
-      if (!parse_pair_row(
-              line, what, path, number, allow_single_words, &row) ||
-          !visit(row, line))
-        return false;
-    }
+    while (std::getline(input, line))
+      if (!visit(line, ++number)) return false;
     if (!input.eof()) {
       fprintf(stderr, "%s: can't read \"%s\"\n", program, path);
       return false;
     }
     return true;
   });
+}
+
+bool read_rows(
+    char const* program, char const* path, char const* what,
+    bool allow_single_words,
+    std::function<bool(DfsPairRow const&, std::string const&)> const& visit) {
+  return read_lines(program, path,
+      [&](std::string const& line, size_t number) {
+        DfsPairRow row;
+        return parse_pair_row(
+                   line, what, path, number, allow_single_words, &row) &&
+            visit(row, line);
+      });
 }
 
 bool print_kept_rows(
