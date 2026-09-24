@@ -116,6 +116,18 @@ void dfs_help_best_pairs() {
       "mark BEST entries; may be given once");
 }
 
+void dfs_help_tier_bonuses() {
+  dfs_help_option("--sb, --seed-bonus N",
+      "use N, at least 0, as the seed pair-bonus exponent (default: %.2f)",
+      DFS_SEED_PAIR_BONUS);
+  dfs_help_option("--yb, --yes-bonus N",
+      "use N, at least 0, as the YES pair-bonus exponent (default: %.2f)",
+      DFS_YES_PAIR_BONUS);
+  dfs_help_option("--bb, --best-bonus N",
+      "multiply the descending BEST exponents, from the segment count down "
+      "to 1, by N, at least 0 (default: 1.00)");
+}
+
 void dfs_help_wf() {
   dfs_help_option("--wf",
       "use the nonempty WFROOT environment variable as the workflow root");

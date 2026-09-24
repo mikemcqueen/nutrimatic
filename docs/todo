@@ -84,3 +84,4 @@
     there, not just names under .wf/best/
   - check the local folder, or $TARGETROOT, for a workflow target
     alternate/override
+* change bonuses: SB 0.5 YB 0.75 BB 1.0

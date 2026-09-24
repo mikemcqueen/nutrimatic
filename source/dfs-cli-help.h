@@ -13,6 +13,7 @@ void dfs_help_max_extract_words(int default_max);
 void dfs_help_seed_pairs();
 void dfs_help_yes_pairs();
 void dfs_help_best_pairs();
+void dfs_help_tier_bonuses();
 void dfs_help_wf();
 void dfs_help_target();
 void dfs_help_segment_penalty();

@@ -41,6 +41,8 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     out->segments_start = space + 1;
   }
 
+  bool const infer_letters =
+      reader->infer_letters && reader->required_letters.empty();
   bool const check_letters = !reader->required_letters.empty();
   std::string row_letters;
   out->segments.clear();
@@ -78,7 +80,7 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
         }
         after_space = true;
       } else if (segment_char(ch)) {
-        if (check_letters) row_letters.push_back(ch);
+        if (check_letters || infer_letters) row_letters.push_back(ch);
         after_space = false;
       } else {
         fprintf(stderr,
@@ -92,13 +94,26 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     start = end + 1;
   }
 
-  if (reader->required_segments != 0 &&
-      out->segments.size() != size_t(reader->required_segments)) {
-    fprintf(stderr,
-        "%s: %s:%" PRIu64 ": expected %d segments, found %zu\n",
-        reader->program, reader->name, reader->line_number,
-        reader->required_segments, out->segments.size());
+  if (reader->infer_segments && reader->required_segments == 0) {
+    reader->required_segments = int(out->segments.size());
+  } else if (reader->required_segments != 0 &&
+             out->segments.size() != size_t(reader->required_segments)) {
+    if (reader->infer_segments)
+      fprintf(stderr,
+          "%s: %s:%" PRIu64 ": found %zu segments, but the first row has %d;"
+          " pass -g0 to accept mixed counts\n",
+          reader->program, reader->name, reader->line_number,
+          out->segments.size(), reader->required_segments);
+    else
+      fprintf(stderr,
+          "%s: %s:%" PRIu64 ": expected %d segments, found %zu\n",
+          reader->program, reader->name, reader->line_number,
+          reader->required_segments, out->segments.size());
     return reject_row(reader);
+  }
+  if (infer_letters) {
+    reader->required_letters = row_letters;
+    return true;
   }
   if (!check_letters) return true;
   std::string bag = reader->required_letters;

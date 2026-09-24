@@ -203,6 +203,11 @@ executable('bag-filter', 'bag-filter.cpp',
   dependencies: thread_dep,
   install: true)
 
+bag_subset = executable('bag-subset', 'bag-subset.cpp',
+  link_with: [dfs_class_list_lib, optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
 executable('freqsort', 'freqsort.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
@@ -382,6 +387,11 @@ test(
   'pairs',
   bash,
   args: [files('test-pairs.sh'), pairs],
+)
+test(
+  'bag-subset',
+  bash,
+  args: [files('test-bag-subset.sh'), bag_subset],
 )
 test(
   'pcomm',

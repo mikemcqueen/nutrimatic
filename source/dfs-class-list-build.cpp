@@ -106,9 +106,10 @@ bool remove_rejected_words(
 
 }  // namespace
 
-DfsBestBonusPolicy dfs_best_bonus_policy(size_t exact_segments) {
+DfsBestBonusPolicy dfs_best_bonus_policy(
+    size_t exact_segments, double best_bonus_scale) {
   return exact_segments > 0
-      ? DfsBestBonusPolicy::descending(exact_segments)
+      ? DfsBestBonusPolicy::descending(exact_segments, best_bonus_scale)
       : DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS);
 }
 
@@ -132,10 +133,10 @@ bool prepare_dfs_scoring_inputs(
     return false;
 
   DfsBestBonusPolicy const best_bonus =
-      dfs_best_bonus_policy(exact_segments);
+      dfs_best_bonus_policy(exact_segments, args.best_bonus_scale);
   out->model.reset(new DfsScoreModel(
       args.segment_penalty, reader->count(), args.word_bonus,
-      args.pair_bonus, best_bonus));
+      args.pair_bonus, best_bonus, args.seed_bonus, args.yes_bonus));
   if (!args.solo_words.empty() &&
       (args.word_bonus != 0.0 || args.pair_bonus != 0.0 ||
        !out->weighted_pairs.empty()))

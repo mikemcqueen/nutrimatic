@@ -33,6 +33,9 @@ inline constexpr int DFS_OPT_WF = 309;
 inline constexpr int DFS_OPT_WFROOT = 310;
 inline constexpr int DFS_OPT_MORE_BEST_PAIRS = 311;
 inline constexpr int DFS_OPT_NO_SCORE = 312;
+inline constexpr int DFS_OPT_SEED_BONUS = 313;
+inline constexpr int DFS_OPT_YES_BONUS = 314;
+inline constexpr int DFS_OPT_BEST_BONUS = 315;
 
 // The rows both CLIs contribute to their optparse_long table. A macro rather
 // than a shared array because optparse terminates on a NULL row, so each CLI
@@ -58,6 +61,15 @@ inline constexpr int DFS_OPT_NO_SCORE = 312;
   { "wfroot", DFS_OPT_WFROOT, OPTPARSE_REQUIRED }, \
   { "target", 't', OPTPARSE_REQUIRED }
 
+// The weighted-tier bonus overrides, for a CLI that offers them.
+#define DFS_TIER_BONUS_LONG_OPTIONS \
+  { "seed-bonus", DFS_OPT_SEED_BONUS, OPTPARSE_REQUIRED }, \
+  { "sb", DFS_OPT_SEED_BONUS, OPTPARSE_REQUIRED }, \
+  { "yes-bonus", DFS_OPT_YES_BONUS, OPTPARSE_REQUIRED }, \
+  { "yb", DFS_OPT_YES_BONUS, OPTPARSE_REQUIRED }, \
+  { "best-bonus", DFS_OPT_BEST_BONUS, OPTPARSE_REQUIRED }, \
+  { "bb", DFS_OPT_BEST_BONUS, OPTPARSE_REQUIRED }
+
 // What the shared options parsed into. `top` has no shared default because the
 // two CLIs disagree on it; each sets its own before the option loop.
 struct DfsCommonArgs {
@@ -71,6 +83,10 @@ struct DfsCommonArgs {
   double segment_penalty = DFS_DEFAULT_SEGMENT_PENALTY;
   double word_bonus = DFS_DEFAULT_WORD_BONUS;
   double pair_bonus = DFS_DEFAULT_PAIR_BONUS;
+  double seed_bonus = DFS_SEED_PAIR_BONUS;
+  double yes_bonus = DFS_YES_PAIR_BONUS;
+  // Scales the descending BEST schedule; the fixed exponent is unaffected.
+  double best_bonus_scale = 1.0;
   std::vector<std::string> seed_pair_files;
   std::vector<std::string> yes_pair_files;
   std::vector<std::string> best_pair_files;

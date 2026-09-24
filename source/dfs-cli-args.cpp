@@ -326,6 +326,15 @@ bool parse_double(char const* in, char const* what, double* out) {
   return true;
 }
 
+static bool parse_tier_bonus(char const* in, char const* what, double* out) {
+  if (!parse_double(in, what, out)) return false;
+  if (*out < 0.0) {
+    fprintf(stderr, "error: %s must be at least 0\n", what);
+    return false;
+  }
+  return true;
+}
+
 bool parse_segment_penalty(char const* in, double* out) {
   if (!parse_double(in, "--segment-penalty", out)) return false;
   if (*out < 1.0) {
@@ -870,6 +879,26 @@ DfsOptionResult dfs_parse_common_option(
       if (!parse_double(options->optarg, "--pair-bonus", &out->pair_bonus))
         return DFS_OPTION_ERROR;
       info.name = "--pair-bonus";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_SEED_BONUS:
+      if (!parse_tier_bonus(
+              options->optarg, "--seed-bonus", &out->seed_bonus))
+        return DFS_OPTION_ERROR;
+      info.name = "--seed-bonus";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_YES_BONUS:
+      if (!parse_tier_bonus(options->optarg, "--yes-bonus", &out->yes_bonus))
+        return DFS_OPTION_ERROR;
+      info.name = "--yes-bonus";
+      info.score_incompatible = false;
+      break;
+    case DFS_OPT_BEST_BONUS:
+      if (!parse_tier_bonus(
+              options->optarg, "--best-bonus", &out->best_bonus_scale))
+        return DFS_OPTION_ERROR;
+      info.name = "--best-bonus";
       info.score_incompatible = false;
       break;
     case DFS_OPT_SEED_PAIRS:

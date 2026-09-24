@@ -56,14 +56,18 @@ assert_close() {
 
 expect_status 2 "$dfs_anagrams" "$index_file" abcd
 grep -q '^usage: .* \[-i INDEX\] \[options\] letters$' \
-  "$test_dir/status.stdout" ||
+  "$test_dir/status.stderr" ||
   fail "positional index rejection did not show the new synopsis"
-grep -q '^  -i, --idx INDEX  *read the completed Nutrimatic index' \
-  "$test_dir/status.stdout" ||
-  fail "help options are not presented in aligned columns"
+[[ ! -s "$test_dir/status.stdout" ]] ||
+  fail "positional index rejection wrote to stdout"
 grep -q '^error: unexpected argument "abcd"$' \
   "$test_dir/status.stderr" ||
   fail "unexpected positional argument error is unclear"
+expect_status 0 "$dfs_anagrams" --help
+[[ ! -s "$test_dir/status.stderr" ]] || fail "--help wrote to stderr"
+grep -q '^  -i, --idx INDEX  *read the completed Nutrimatic index' \
+  "$test_dir/status.stdout" ||
+  fail "help options are not presented in aligned columns"
 expect_status 2 "$dfs_anagrams" abcd
 grep -q '^error: missing index; use -i INDEX or --wfroot DIR$' \
   "$test_dir/status.stderr" ||

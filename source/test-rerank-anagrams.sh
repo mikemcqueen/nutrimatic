@@ -69,6 +69,29 @@ cmp "$test_dir/dfs.stdout" "$test_dir/rerank-wf.stdout" ||
 cmp "$test_dir/dfs-bonus.stdout" "$test_dir/rerank-bonus.stdout" ||
   fail "bonus rerank output differs from dfs-anagrams --show-bonus"
 
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --sb 1 --yes-bonus 1.05 --bb 1 "$test_dir/dfs.stdout" \
+  > "$test_dir/rerank-defaults.stdout" 2> /dev/null
+cmp "$test_dir/dfs.stdout" "$test_dir/rerank-defaults.stdout" ||
+  fail "explicit default bonuses changed the output"
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --seed-bonus 0 --yb 0 --best-bonus 0 "$test_dir/dfs.stdout" \
+  > "$test_dir/rerank-zero.stdout" 2> /dev/null
+! cmp -s "$test_dir/dfs.stdout" "$test_dir/rerank-zero.stdout" ||
+  fail "zero bonuses did not change the scores"
+expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
+  --bb -0.5 "$test_dir/dfs.stdout"
+"$dfs_anagrams" abcd --wfroot "$workflow" -t "$target_name" \
+  -m 2 -g 2 -n 0 --sb 3 --yb 0 --bb 0.5 \
+  > "$test_dir/dfs-tiers.stdout" 2> /dev/null
+"$rerank" --wfroot "$workflow" -t "$target_name" \
+  --sb 3 --yb 0 --bb 0.5 "$test_dir/dfs-tiers.stdout" \
+  > "$test_dir/rerank-tiers.stdout" 2> /dev/null
+cmp "$test_dir/dfs-tiers.stdout" "$test_dir/rerank-tiers.stdout" ||
+  fail "rerank did not reproduce dfs-anagrams tier bonuses"
+! cmp -s "$test_dir/dfs.stdout" "$test_dir/dfs-tiers.stdout" ||
+  fail "dfs-anagrams tier bonuses did not change the scores"
+
 "$dfs_anagrams" abcd --wfroot "$workflow" -t "$target_name" \
   -m 2 -g 2 -n 0 --no-ptm \
   > "$test_dir/dfs-ptm.stdout" 2> "$test_dir/dfs-ptm.stderr"
@@ -144,14 +167,27 @@ new_score=$(awk 'NR == 2 { print $1 }' "$test_dir/changed.stdout")
 expect_status 2 "$rerank" -t "$target_name" "$test_dir/dfs.stdout"
 expect_status 2 "$rerank" --wfroot "$workflow" \
   "$test_dir/dfs.stdout"
-expect_status 2 "$rerank" --wfroot "$workflow" -t s1/o-abcd \
-  "$test_dir/dfs.stdout"
+"$rerank" --wfroot "$workflow" -m 2 \
+  --seed-pairs "$workflow/.wf/best/s1/seed.m2.pairs" \
+  --best-pairs "$target/best.pairs" "$test_dir/dfs.stdout" \
+  > "$test_dir/rerank-seed.stdout" 2> /dev/null
+cmp "$test_dir/dfs.stdout" "$test_dir/rerank-seed.stdout" ||
+  fail "--seed-pairs without -t did not take the bag and -g from row 1"
+printf '1.000 ab,cd\n1.000 abcd\n' > "$test_dir/mixed.rows"
+expect_status 1 "$rerank" --wfroot "$workflow" -t s1 -m 2 \
+  "$test_dir/mixed.rows"
+grep -q 'pass -g0' "$test_dir/status.stderr" ||
+  fail "mixed segment counts did not suggest -g0"
+expect_status 0 "$rerank" --wfroot "$workflow" -t s1 -m 2 -g 0 \
+  "$test_dir/mixed.rows"
 expect_status 2 "$rerank" --wfroot "$workflow" -t s9/o-abcd/m2/g2 \
   "$test_dir/dfs.stdout"
 expect_status 2 env WFROOT="$workflow" "$rerank" --wf \
   --wfroot "$workflow" -t "$target_name" "$test_dir/dfs.stdout"
 expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
-  -m 2 "$test_dir/dfs.stdout"
+  -m 3 "$test_dir/dfs.stdout"
+expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \
+  -g 3 "$test_dir/dfs.stdout"
 
 mkdir "$target/no.pairs"
 expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" \

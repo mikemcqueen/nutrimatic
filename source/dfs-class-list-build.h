@@ -34,7 +34,8 @@ struct DfsPreparedClassList {
   std::unique_ptr<DfsClassList> classes;
 };
 
-DfsBestBonusPolicy dfs_best_bonus_policy(size_t exact_segments);
+DfsBestBonusPolicy dfs_best_bonus_policy(
+    size_t exact_segments, double best_bonus_scale = 1.0);
 
 // Loads the positive scoring evidence and builds the score model and, when
 // solo words are supplied and a bonus can apply, the solo-word context. It

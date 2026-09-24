@@ -55,12 +55,15 @@ struct Args {
   char const* near_incompatible_option;
 };
 
-static void usage(char const* program) {
-  fprintf(stdout,
+static void usage(char const* program, FILE* out) {
+  fprintf(out,
       "usage: %s [-i INDEX] [options] letters\n"
       "       %s [-i INDEX] [options] query|- --score\n"
-      "       %s [-i INDEX] input --near WORD [-n N]\n\noptions:\n",
+      "       %s [-i INDEX] input --near WORD [-n N]\n",
       program, program, program);
+  if (out != stdout) return;
+
+  fputs("\noptions:\n", stdout);
   dfs_help_index(true);
   dfs_help_used_letters();
   dfs_help_dictionary();
@@ -153,6 +156,7 @@ static void usage(char const* program) {
       "aggregate phrases spanning the endpoints with at least one complete "
       "intervening word, searching each endpoint that is an aggregate "
       "index entry");
+  dfs_help_option("-h, --help", "show this help");
 }
 
 static void put_csv(char const* text, size_t length) {
@@ -178,6 +182,7 @@ static struct optparse_long const long_options[] = {
   { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "near", OPT_NEAR, OPTPARSE_REQUIRED },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
+  { "help", 'h', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
 
@@ -217,7 +222,7 @@ static bool index_from_env(char const* program, char const* missing_hint,
   char const* idx = getenv("IDX");
   if (idx == NULL || *idx == '\0') {
     fprintf(stderr, "error: missing index; use %s or set IDX\n", missing_hint);
-    usage(program);
+    usage(program, stderr);
     return false;
   }
   std::error_code ec;
@@ -229,7 +234,7 @@ static bool index_from_env(char const* program, char const* missing_hint,
   return true;
 }
 
-static bool parse_args(char* argv[], Args* out) {
+static bool parse_args(char* argv[], Args* out, bool* help) {
   out->index_file = NULL;
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
@@ -304,9 +309,12 @@ static bool parse_args(char* argv[], Args* out) {
         mark_score_incompatible(out, "--require-completable");
         mark_near_incompatible(out, "--require-completable");
         break;
+      case 'h':
+        *help = true;
+        return true;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
-        usage(argv[0]);
+        usage(argv[0], stderr);
         return false;
     }
   }
@@ -314,13 +322,13 @@ static bool parse_args(char* argv[], Args* out) {
   if (letters == NULL) {
     fprintf(stderr, "error: missing %s argument\n",
             out->near ? "input" : (out->score ? "query" : "letters"));
-    usage(argv[0]);
+    usage(argv[0], stderr);
     return false;
   }
   char const* extra = optparse_arg(&options);
   if (extra != NULL) {
     fprintf(stderr, "error: unexpected argument \"%s\"\n", extra);
-    usage(argv[0]);
+    usage(argv[0], stderr);
     return false;
   }
   if (out->near) {
@@ -1038,7 +1046,12 @@ int main(int argc, char* argv[]) {
   dfs_set_diagnostic_stream(stderr);
 
   Args args;
-  if (!parse_args(argv, &args)) return 2;
+  bool help = false;
+  if (!parse_args(argv, &args, &help)) return 2;
+  if (help) {
+    usage(argv[0], stdout);
+    return 0;
+  }
   if (!args.common.workflow_root.empty() && args.common.target.empty())
     warn(argv[0],
         "no target supplied; only dictionary and classified-no filtering "

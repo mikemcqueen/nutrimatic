@@ -62,9 +62,11 @@ static void report_segments(std::vector<DfsSpelling> const& results,
       stdout, weighted ? segment_report_weighted(report) : report);
 }
 
-static void usage(char const* program) {
-  fprintf(stdout, "usage: %s [-i INDEX] [options] letters\n\noptions:\n",
-          program);
+static void usage(char const* program, FILE* out) {
+  fprintf(out, "usage: %s [-i INDEX] [options] letters\n", program);
+  if (out != stdout) return;
+
+  fputs("\noptions:\n", stdout);
   dfs_help_index();
   dfs_help_used_letters();
   dfs_help_dictionary();
@@ -94,6 +96,7 @@ static void usage(char const* program) {
       "and reversed pairs retain the strongest tier; weighted pair options "
       "cannot be combined with legacy --pairs",
       DFS_BEST_PAIR_BONUS);
+  dfs_help_tier_bonuses();
   dfs_help_wf();
   dfs_help_option("--wfroot DIR",
       "use DIR as a workflow root; loads DIR/%s as YES pairs and requires "
@@ -185,6 +188,7 @@ static void usage(char const* program) {
   dfs_help_option("-F, --allow-cache-fallback",
       "allow score-cache fallback when the requested table does not fit");
   dfs_help_option("-v, --verbose", "report search task splitting");
+  dfs_help_option("-h, --help", "show this help");
 }
 
 static int const OPT_SEGMENTS = 256;
@@ -221,6 +225,7 @@ static std::string normalize_repeat_value(char const* value) {
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
+  DFS_TIER_BONUS_LONG_OPTIONS,
   { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
   { "idx", 'i', OPTPARSE_REQUIRED },
   { "reject", 'r', OPTPARSE_REQUIRED },
@@ -241,10 +246,11 @@ static struct optparse_long const long_options[] = {
   { "max-unlisted-pairs", OPT_MAX_UNLISTED_PAIRS, OPTPARSE_REQUIRED },
   { "allow-cache-fallback", 'F', OPTPARSE_NONE },
   { "verbose", 'v', OPTPARSE_NONE },
+  { "help", 'h', OPTPARSE_NONE },
   { NULL, 0, OPTPARSE_NONE },
 };
 
-static bool parse_args(char* argv[], Args* out) {
+static bool parse_args(char* argv[], Args* out, bool* help) {
   out->index_file = NULL;
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
@@ -372,9 +378,12 @@ static bool parse_args(char* argv[], Args* out) {
       case 'v':
         out->verbose = true;
         break;
+      case 'h':
+        *help = true;
+        return true;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
-        usage(argv[0]);
+        usage(argv[0], stderr);
         return false;
     }
   }
@@ -414,18 +423,18 @@ static bool parse_args(char* argv[], Args* out) {
   char const* letters = optparse_arg(&options);
   if (letters == NULL) {
     fputs("error: missing letters argument\n", stderr);
-    usage(argv[0]);
+    usage(argv[0], stderr);
     return false;
   }
   char const* extra = optparse_arg(&options);
   if (extra != NULL) {
     fprintf(stderr, "error: unexpected argument \"%s\"\n", extra);
-    usage(argv[0]);
+    usage(argv[0], stderr);
     return false;
   }
   if (out->index_file == NULL) {
     fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
-    usage(argv[0]);
+    usage(argv[0], stderr);
     return false;
   }
 
@@ -457,7 +466,12 @@ int main(int argc, char* argv[]) {
   dfs_set_diagnostic_stream(stderr);
 
   Args args;
-  if (!parse_args(argv, &args)) return 2;
+  bool help = false;
+  if (!parse_args(argv, &args, &help)) return 2;
+  if (help) {
+    usage(argv[0], stdout);
+    return 0;
+  }
 
   size_t const preprocess_threads = resolve_preprocess_threads(
       args.preprocess_threads, args.letters.size());

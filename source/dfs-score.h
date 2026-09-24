@@ -35,7 +35,8 @@ enum DfsBestBonusMode : uint8_t {
 class DfsBestBonusPolicy {
  public:
   static DfsBestBonusPolicy fixed(double exponent);
-  static DfsBestBonusPolicy descending(size_t exact_segments);
+  static DfsBestBonusPolicy descending(
+      size_t exact_segments, double scale = 1.0);
 
   bool is_descending() const {
     return mode_ == DFS_BEST_BONUS_DESCENDING;
@@ -46,10 +47,11 @@ class DfsBestBonusPolicy {
 
  private:
   DfsBestBonusPolicy(
-      DfsBestBonusMode mode, double fixed_exponent, size_t exact_segments);
+      DfsBestBonusMode mode, double exponent, size_t exact_segments);
 
   DfsBestBonusMode mode_;
-  double fixed_exponent_;
+  // The fixed exponent, or the scale on the descending schedule.
+  double exponent_;
   size_t exact_segments_;
 };
 
@@ -94,7 +96,9 @@ class DfsScoreModel {
   DfsScoreModel(double segment_penalty, int64_t corpus_total,
                 double word_bonus, double pair_bonus = 0.0,
                 DfsBestBonusPolicy best_bonus =
-                    DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS));
+                    DfsBestBonusPolicy::fixed(DFS_BEST_PAIR_BONUS),
+                double seed_bonus = DFS_SEED_PAIR_BONUS,
+                double yes_bonus = DFS_YES_PAIR_BONUS);
 
   double segment_log_score(
       int64_t count, bool multi_word, bool known_pair = false) const;

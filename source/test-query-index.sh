@@ -35,15 +35,20 @@ set -e
 [[ $positional_index_status -eq 2 ]] ||
   fail "positional index should exit 2, got $positional_index_status"
 grep -q '^usage: .* \[-i INDEX\] \[options\] letters$' \
-  "$test_dir/positional-index.stdout" ||
+  "$test_dir/positional-index.stderr" ||
   fail "positional index rejection did not show the new synopsis"
-grep -q '^options:$' "$test_dir/positional-index.stdout" ||
+[[ ! -s "$test_dir/positional-index.stdout" ]] ||
+  fail "positional index rejection wrote to stdout"
+"$query_index" --help > "$test_dir/help.stdout" 2> "$test_dir/help.stderr" ||
+  fail "query-index --help should exit 0"
+[[ ! -s "$test_dir/help.stderr" ]] || fail "query-index --help wrote to stderr"
+grep -q '^options:$' "$test_dir/help.stdout" ||
   fail "query-index help did not show the options section"
 grep -Eq '^  -i, --idx INDEX +read the completed Nutrimatic index' \
-  "$test_dir/positional-index.stdout" ||
+  "$test_dir/help.stdout" ||
   fail "query-index help did not align option descriptions"
 grep -Eq '^  --csv +omit the leading count or score from each result' \
-  "$test_dir/positional-index.stdout" ||
+  "$test_dir/help.stdout" ||
   fail "query-index help did not describe --csv"
 [[ $missing_index_status -eq 2 ]] ||
   fail "missing -i should exit 2, got $missing_index_status"
@@ -104,7 +109,6 @@ expect_score_failure() {
   [[ $status -eq 2 ]] ||
     fail "$name should exit 2, got $status"
   [[ ! -s "$test_dir/$name.stdout" ]] ||
-    grep -q "^usage: " "$test_dir/$name.stdout" ||
     fail "$name printed output before rejecting the sequence"
 }
 
@@ -121,7 +125,6 @@ expect_near_failure() {
   [[ $status -eq 2 ]] ||
     fail "$name should exit 2, got $status"
   [[ ! -s "$test_dir/$name.stdout" ]] ||
-    grep -q "^usage: " "$test_dir/$name.stdout" ||
     fail "$name printed output before rejecting the query"
 }
 
