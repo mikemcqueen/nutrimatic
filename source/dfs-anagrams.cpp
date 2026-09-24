@@ -16,7 +16,6 @@
 #include <string.h>
 
 #include <algorithm>
-#include <charconv>
 #include <string>
 #include <vector>
 
@@ -105,11 +104,7 @@ static void usage(char const* program) {
       WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
       WORKFLOW_TARGET_NO_PAIRS_NAME);
   dfs_help_target();
-  dfs_help_option("-s, --sentence N",
-      "load $WFROOT/%s/sN/yes/yes.pairs as YES pairs and exclude "
-      "sN/no/no.pairs as if it were a pairs-only --reject file; both must "
-      "exist; --wfroot DIR replaces $WFROOT; does not require --wf",
-      WORKFLOW_CLASSIFIED_PATH);
+  classified_help_sentence_pairs();
   dfs_help_option("-r, --reject FILE|WORKFLOW-DIR",
       "load word pairs, one \"word,word\" line each, and drop every index "
       "entry spelled exactly like one in either order, so no result can "
@@ -128,8 +123,7 @@ static void usage(char const* program) {
       "pair also earns its source's pair bonus; each solo word can be used "
       "once per answer; both bonuses must be non-negative, and the aggregate "
       "phrase test matches phase 1");
-  dfs_help_option("--hide-solo-words",
-      "omit parenthesized solo partners from output");
+  dfs_help_hide_solo_words();
   dfs_help_option("--no-repeat WORD|PAIR",
       "limit one entry to a single use per result; may be repeated; a value "
       "with no space is a word and is counted wherever it falls, including "
@@ -390,33 +384,19 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
-  if (out->sentence != CLASSIFIED_NO_SENTENCE) {
-    if (out->common.pair_file != NULL) {
-      fputs("error: --pairs cannot be combined with --sentence\n", stderr);
-      return false;
-    }
-    if (!add_classified_sentence_pairs(
-            argv[0], out->sentence, &out->common,
-            &out->workflow_reject_files))
-      return false;
-  }
+  if (out->sentence != CLASSIFIED_NO_SENTENCE &&
+      !add_classified_sentence_pairs(
+          argv[0], out->sentence, &out->common, &out->workflow_reject_files))
+    return false;
 
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
           &out->workflow_reject_files))
     return false;
 
-  if (out->sentence != CLASSIFIED_NO_SENTENCE && !out->common.target.empty()) {
-    std::string const& target = out->common.target;
-    int target_sentence = 0;
-    std::from_chars(
-        target.data() + 1, target.data() + target.size(), target_sentence);
-    if (target_sentence != out->sentence) {
-      fprintf(stderr, "error: --sentence %d does not match --target \"%s\"\n",
-              out->sentence, out->common.target.c_str());
-      return false;
-    }
-  }
+  if (!check_classified_sentence_target(
+          argv[0], out->sentence, out->common.target))
+    return false;
 
   if (out->weighted && !out->segments) {
     fputs("error: --weighted requires --segments\n", stderr);

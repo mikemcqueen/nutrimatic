@@ -334,6 +334,17 @@ void print_allow_pairs_option_help(FILE* fp, int description_column) {
     fprintf(fp, "%*s%s\n", description_column, "", lines[i]);
 }
 
+void print_sentence_option_help(FILE* fp, int description_column) {
+  fprintf(fp, "%-*s%s\n", description_column, "  -s, --sentence N",
+      "also discard rows with a segment listed in");
+  fprintf(fp, "%*sDIR/%s/sN/no/no.pairs, which must\n", description_column,
+      "", WORKFLOW_CLASSIFIED_PATH);
+  fprintf(fp, "%*s%s\n", description_column, "",
+      "exist; requires --wf or --wfroot, and the");
+  fprintf(fp, "%*s%s\n", description_column, "",
+      "selected target must be in sentence N");
+}
+
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
     PairFilterSupport support, PairFilterOptions* out) {
@@ -383,6 +394,15 @@ PairFilterOptionResult parse_pair_filter_option(
     out->workflow_yes = true;
     return PAIR_FILTER_OPTION_HANDLED;
   }
+  if (support.sentence &&
+      match_option_value(argc, argv, index, "-s", "--sentence", &value)) {
+    if (value == NULL) {
+      fprintf(stderr, "%s: %s requires N\n", program, option);
+      return PAIR_FILTER_OPTION_ERROR;
+    }
+    return parse_classified_sentence(value, &out->sentence)
+        ? PAIR_FILTER_OPTION_HANDLED : PAIR_FILTER_OPTION_ERROR;
+  }
 
   std::vector<std::string>* paths;
   if (support.allow &&
@@ -416,6 +436,10 @@ bool check_pair_filter_options(
     fprintf(stderr, "%s: --target requires --wf or --wfroot\n", program);
     return false;
   }
+  if (options.sentence != CLASSIFIED_NO_SENTENCE) {
+    fprintf(stderr, "%s: --sentence requires --wf or --wfroot\n", program);
+    return false;
+  }
   return true;
 }
 
@@ -425,6 +449,7 @@ bool load_pair_filters(
   assert(support.allow || options.allow_paths.empty());
   assert(support.ignore || options.ignore_paths.empty());
   assert(support.workflow_yes || !options.workflow_yes);
+  assert(support.sentence || options.sentence == CLASSIFIED_NO_SENTENCE);
   (void) support;
 
   char const* wfroot = NULL;
@@ -441,7 +466,8 @@ bool load_pair_filters(
     std::string const name = options.target.empty()
         ? default_target_name(options, wfroot) : options.target;
     if (!resolve_target_name(wfroot, name, program, &target)) return false;
-    if (!target_agrees_with_input(options, wfroot, target, program))
+    if (!target_agrees_with_input(options, wfroot, target, program) ||
+        !check_classified_sentence_target(program, options.sentence, target))
       return false;
     success(program, "TARGET resolved to %s", target.c_str());
     out->sources.target = target;
@@ -476,6 +502,10 @@ bool load_pair_filters(
   }
   if (wfroot != NULL) {
     if (!load_global_no_pairs(program, wfroot, &out->sources.classified_no))
+      return false;
+    if (options.sentence != CLASSIFIED_NO_SENTENCE &&
+        !load_sentence_no_pairs(program, wfroot, options.sentence,
+            &out->sources.classified_no))
       return false;
     out->rejected.insert(
         out->sources.classified_no.begin(), out->sources.classified_no.end());

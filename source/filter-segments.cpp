@@ -14,7 +14,8 @@
 #include "row-input.h"
 #include "segment-rows.h"
 
-static constexpr PairFilterSupport kSupport = {.allow = true};
+static constexpr PairFilterSupport kSupport = {
+    .allow = true, .sentence = true};
 
 struct Args {
   PairFilterOptions filter_options;
@@ -32,7 +33,7 @@ static void usage(char const* program) {
       "          [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
       "          [-d PATH]\n"
-      "          [--wf | --wfroot DIR] [-t TARGET] [FILE]\n"
+      "          [--wf | --wfroot DIR] [-t TARGET] [-s N] [FILE]\n"
       "  print dfs-anagrams result lines that contain no rejected segment\n"
       "  -n N                 print at most N result lines\n"
       "  --with-regex REGEX   keep only lines with a segment REGEX matches\n"
@@ -53,10 +54,11 @@ static void usage(char const* program) {
       "                       DIR/.wf/best/TARGET; defaults to the target\n"
       "                       FILE names of its own, by its directory or by\n"
       "                       its name, and otherwise to %s; an explicit\n"
-      "                       TARGET must be that same target: %s\n"
-      "  with no FILE, or when FILE is -, read standard input\n",
+      "                       TARGET must be that same target: %s\n",
       WORKFLOW_DICT_PATH, WORKFLOW_NO_PAIRS_PATH, WORKFLOW_TARGET_NO_PAIRS_PATH,
       WORKFLOW_DEFAULT_TARGET, WORKFLOW_RESULTS_NAME);
+  print_sentence_option_help(stdout, 23);
+  fputs("  with no FILE, or when FILE is -, read standard input\n", stdout);
 }
 
 static bool parse_args(

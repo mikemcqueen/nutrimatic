@@ -1,5 +1,7 @@
+#include "classified.h"
 #include "dfs-class-list-build.h"
 #include "dfs-cli-args.h"
+#include "dfs-cli-help.h"
 #include "dfs-diagnostic.h"
 #include "dfs-output.h"
 #include "index.h"
@@ -29,52 +31,55 @@ struct Args {
   char const* index_file = NULL;
   char const* results_file = NULL;
   int num_segments = 0;
+  int sentence = CLASSIFIED_NO_SENTENCE;
   bool show_bonus = false;
   bool ptm = true;
 };
 
 void usage(char const* program) {
   fprintf(stdout,
-      "usage: %s (--wf | --wfroot DIR) -t FULL-TARGET"
+      "usage: %s (--wf | --wfroot DIR) -t FULL-TARGET [-s N]"
       " [-r FILE]... [--best-pairs FILE | --one-best-pair PAIR]"
       " [--more-best-pairs FILE]..."
       " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
       " [--show-bonus] [--no-score] [--no-ptm] [-n N] [FILE]\n"
       "  revalidate, rescore, and sort an ordinary dfs-anagrams result file\n"
-      "  --wf                 use the nonempty WFROOT environment variable\n"
-      "  --wfroot DIR         use DIR as the workflow root\n"
-      "  -t, --target TARGET  require sN/[ou]-letters/mN/gN and derive the\n"
-      "                       working bag, minimum, and segment count\n"
-      "  --best-pairs FILE    replace the target's implicit best.pairs\n"
-      "  --one-best-pair PAIR replace it with one WORD,WORD pair\n"
-      "  --more-best-pairs FILE\n"
-      "                       add BEST pairs; may be repeated\n"
-      "  -r, --reject FILE    reject as dfs-anagrams -r does: a pair drops\n"
-      "                       the index entry spelled like it in either\n"
-      "                       order, and a single word is removed from the\n"
-      "                       dictionary unless a BEST pair uses it; rows\n"
-      "                       using a rejected entry are dropped; may be\n"
-      "                       repeated\n"
-      "  --solo-words WORD[,WORD...]\n"
-      "                       score single-word segments against external\n"
-      "                       partners as dfs-anagrams does; parenthesized\n"
-      "                       partners in the input are ignored\n"
-      "  --hide-solo-words    omit parenthesized solo partners from output\n"
-      "  --show-bonus         add the aligned S/Y/B/- marker column\n"
-      "  --no-score           omit the leading score column; the output\n"
-      "                       can't be filtered or reranked\n"
-      "  --no-ptm             turn off ptm, which is on by default; ptm\n"
-      "                       recalibrates the base count of every index\n"
-      "                       entry, before any bonus, onto a scale whose\n"
-      "                       upper tail is normal, as dfs-anagrams does;\n"
-      "                       the fit covers the entries this bag\n"
-      "                       reaches, so it reproduces a result file's own\n"
-      "                       scores only when the bag, dictionary, pair\n"
-      "                       inputs, and exclusions are the generator's\n"
-      "  -n, --top N          print only the best N rows; 0, the default,\n"
-      "                       prints every surviving row\n"
-      "  with no FILE, or when FILE is -, read standard input\n",
+      "  with no FILE, or when FILE is -, read standard input\n"
+      "\noptions:\n",
       program);
+  dfs_help_wf();
+  dfs_help_option("--wfroot DIR", "use DIR as the workflow root");
+  dfs_help_option("-t, --target TARGET",
+      "require sN/[ou]-letters/mN/gN and derive the working bag, minimum, "
+      "and segment count");
+  classified_help_sentence_pairs();
+  dfs_help_option("--best-pairs FILE",
+      "replace the target's implicit best.pairs");
+  dfs_help_option("--one-best-pair PAIR",
+      "replace it with one WORD,WORD pair");
+  dfs_help_option("--more-best-pairs FILE", "add BEST pairs; may be repeated");
+  dfs_help_option("-r, --reject FILE",
+      "reject as dfs-anagrams -r does: a pair drops the index entry spelled "
+      "like it in either order, and a single word is removed from the "
+      "dictionary unless a BEST pair uses it; rows using a rejected entry "
+      "are dropped; may be repeated");
+  dfs_help_option("--solo-words WORD[,WORD...]",
+      "score single-word segments against external partners as "
+      "dfs-anagrams does; parenthesized partners in the input are ignored");
+  dfs_help_hide_solo_words();
+  dfs_help_option("--show-bonus", "add the aligned S/Y/B/- marker column");
+  dfs_help_option("--no-score",
+      "omit the leading score column; the output can't be filtered or "
+      "reranked");
+  dfs_help_option("--no-ptm",
+      "turn off ptm, which is on by default; ptm recalibrates the base count "
+      "of every index entry, before any bonus, onto a scale whose upper tail "
+      "is normal, as dfs-anagrams does; the fit covers the entries this bag "
+      "reaches, so it reproduces a result file's own scores only when the "
+      "bag, dictionary, pair inputs, and exclusions are the generator's");
+  dfs_help_option("-n, --top N",
+      "print only the best N rows; 0, the default, prints every surviving "
+      "row");
 }
 
 inline constexpr int OPT_SHOW_BONUS = 256;
@@ -89,6 +94,7 @@ struct optparse_long const long_options[] = {
   { "more-best-pairs", DFS_OPT_MORE_BEST_PAIRS, OPTPARSE_REQUIRED },
   { "one-best-pair", OPT_ONE_BEST_PAIR, OPTPARSE_REQUIRED },
   { "reject", 'r', OPTPARSE_REQUIRED },
+  CLASSIFIED_SENTENCE_LONG_OPTION,
   { "solo-words", DFS_OPT_SOLO_WORDS, OPTPARSE_REQUIRED },
   { "hide-solo-words", DFS_OPT_HIDE_SOLO_WORDS, OPTPARSE_NONE },
   { "show-bonus", OPT_SHOW_BONUS, OPTPARSE_NONE },
@@ -127,6 +133,10 @@ bool parse_args(char* argv[], Args* out) {
     switch (option) {
       case 'r':
         out->reject_files.push_back(options.optarg);
+        break;
+      case 's':
+        if (!parse_classified_sentence(options.optarg, &out->sentence))
+          return false;
         break;
       case OPT_SHOW_BONUS:
         out->show_bonus = true;
@@ -183,9 +193,16 @@ bool parse_args(char* argv[], Args* out) {
       return false;
     }
   }
+  if (out->sentence != CLASSIFIED_NO_SENTENCE &&
+      !add_classified_sentence_pairs(
+          argv[0], out->sentence, &out->common, &out->workflow_reject_files))
+    return false;
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
           &out->workflow_reject_files))
+    return false;
+  if (!check_classified_sentence_target(
+          argv[0], out->sentence, out->common.target))
     return false;
   DfsWorkflowTargetSettings target;
   if (!load_dfs_workflow_target_settings(

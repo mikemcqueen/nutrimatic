@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 
+#include <charconv>
 #include <string>
 #include <system_error>
 
@@ -10,9 +11,18 @@
 #include "log.h"
 #include "workflow-paths.h"
 
-void classified_help_sentence() {
+void classified_help_sentence_no() {
   dfs_help_option("-s, --sentence N",
       "drop pairs listed in $WFROOT/%s/sN/no/no.pairs",
+      WORKFLOW_CLASSIFIED_PATH);
+}
+
+void classified_help_sentence_pairs() {
+  dfs_help_option("-s, --sentence N",
+      "load $WFROOT/%s/sN/yes/yes.pairs as YES pairs and exclude "
+      "sN/no/no.pairs as if it were a pairs-only --reject file; both must "
+      "exist; --wfroot DIR replaces $WFROOT; does not require --wf; a "
+      "--target must be in sentence N",
       WORKFLOW_CLASSIFIED_PATH);
 }
 
@@ -69,6 +79,11 @@ bool load_sentence_no_pairs(
 bool add_classified_sentence_pairs(
     char const* program, int sentence, DfsCommonArgs* args,
     std::vector<std::string>* reject_files) {
+  if (args->pair_file != NULL) {
+    fprintf(stderr, "%s: --pairs cannot be combined with --sentence\n",
+            program);
+    return false;
+  }
   char const* root;
   if (args->workflow_root.empty()) {
     root = require_workflow_root(program);
@@ -85,4 +100,17 @@ bool add_classified_sentence_pairs(
   args->yes_pair_files.push_back(yes);
   reject_files->push_back(no);
   return true;
+}
+
+bool check_classified_sentence_target(
+    char const* program, int sentence, std::string const& target) {
+  if (sentence == CLASSIFIED_NO_SENTENCE || target.empty()) return true;
+  int target_sentence = -1;
+  if (target[0] == 's')
+    std::from_chars(
+        target.data() + 1, target.data() + target.size(), target_sentence);
+  if (target_sentence == sentence) return true;
+  fprintf(stderr, "%s: --sentence %d does not match target \"%s\"\n",
+          program, sentence, target.c_str());
+  return false;
 }

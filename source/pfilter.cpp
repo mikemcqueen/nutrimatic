@@ -41,7 +41,7 @@ void usage(FILE* out) {
   dfs_help_option("-m, --max-letters N",
       "print only pairs of at most N letters; 0 for no limit (default: %d)",
       DEFAULT_MAX_LETTERS);
-  classified_help_sentence();
+  classified_help_sentence_no();
   dfs_help_option("-y, --yes",
       "also drop pairs listed in $WFROOT/%s/yes/yes.pairs, and with -s N "
       "in $WFROOT/%s/sN/yes/yes.pairs",

@@ -149,6 +149,11 @@ void dfs_help_pair_bonus() {
       DFS_PAIR_BONUS_BASE, DFS_DEFAULT_PAIR_BONUS);
 }
 
+void dfs_help_hide_solo_words() {
+  dfs_help_option("--hide-solo-words",
+      "omit parenthesized solo partners from output");
+}
+
 void dfs_help_no_score() {
   dfs_help_option("--no-score",
       "omit the leading score from each result; the output cannot be read "

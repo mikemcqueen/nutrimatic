@@ -154,6 +154,19 @@ actual=$(WFROOT=$test_dir/not-the-root \
   "$filter_segments" --wfroot "$wfroot" -r "$reject" "$input")
 [[ $actual == "$expected" ]] || fail "--wfroot rejections are wrong: $actual"
 
+mkdir -p "$wfroot/.wf/classified/s2/no"
+printf 'zeta,eta\n' > "$wfroot/.wf/classified/s2/no/no.pairs"
+expected='9 alpha beta,beta gamma
+7 theta iota,kappa lambda'
+actual=$("$filter_segments" --wfroot "$wfroot" -s 2 "$input")
+[[ $actual == "$expected" ]] || fail "-s sentence rejections are wrong: $actual"
+if "$filter_segments" --wfroot "$wfroot" -s 3 "$input" >/dev/null 2>&1; then
+  fail "-s outside the target's sentence succeeded"
+fi
+if "$filter_segments" -s 2 "$input" >/dev/null 2>&1; then
+  fail "-s without a workflow root succeeded"
+fi
+
 mkdir -p "$wfroot/.wf/dict"
 cat > "$wfroot/.wf/dict/words.filtered" <<'EOF'
 alpha

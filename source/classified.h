@@ -16,7 +16,12 @@ inline constexpr int CLASSIFIED_NO_SENTENCE = -1;
 #define CLASSIFIED_SENTENCE_LONG_OPTION \
   { "sentence", 's', OPTPARSE_REQUIRED }
 
-void classified_help_sentence();
+// Help for -s, --sentence N in tools that only drop sentence N's NO pairs.
+void classified_help_sentence_no();
+
+// Help for -s, --sentence N in tools that load sentence N's YES and NO pairs
+// through add_classified_sentence_pairs().
+void classified_help_sentence_pairs();
 
 // Parses the --sentence argument into `sentence`. Errors are diagnosed.
 bool parse_classified_sentence(char const* arg, int* sentence);
@@ -48,9 +53,15 @@ bool load_sentence_no_pairs(
 // Adds sentence N's classified YES pairs to `args`' YES pair files and its NO
 // pairs to `reject_files`, as the workflow root's global files are. The root
 // is `args`' --wfroot DIR when given, otherwise $WFROOT, so --wf is not
-// needed. Both files must exist; errors are diagnosed, prefixed by `program`.
+// needed. Both files must exist, and --pairs cannot be combined with it;
+// errors are diagnosed, prefixed by `program`.
 bool add_classified_sentence_pairs(
     char const* program, int sentence, DfsCommonArgs* args,
     std::vector<std::string>* reject_files);
+
+// Diagnoses a workflow `target`, sN/..., whose sentence is not `sentence`.
+// CLASSIFIED_NO_SENTENCE and an empty target always agree.
+bool check_classified_sentence_target(
+    char const* program, int sentence, std::string const& target);
 
 #endif

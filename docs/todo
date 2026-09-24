@@ -71,3 +71,16 @@
 * convert all enums to enum class where appropriate
 * best words/pairs have precedence over rejected words/pairs in dfs-anagrams
   and rerank-anagrams but not in filter-segments
+
+* filter-segments (and the other pair-exclusions tools) always resolve a
+  target under --wf/--wfroot, falling back to .wf/best/current when there
+  is no -t and FILE names none. dfs-anagrams and rerank-anagrams never fall
+  back to current (rerank requires an explicit full -t; dfs-anagrams' -t is
+  optional). probably filter-segments is wrong, especially now with -s N:
+  -s N errors unless the silently chosen target happens to be in sN.
+
+* target rethinking:
+  - -t results/s8 (a directory) should load best.pairs and no.pairs from
+    there, not just names under .wf/best/
+  - check the local folder, or $TARGETROOT, for a workflow target
+    alternate/override

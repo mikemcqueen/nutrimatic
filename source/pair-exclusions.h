@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "classified.h"
 #include "dfs-class-list.h"
 #include "workflow-paths.h"
 
@@ -19,6 +20,7 @@ struct PairFilterOptions {
   bool workflow = false;
   std::string workflow_root;
   bool workflow_yes = false;
+  int sentence = CLASSIFIED_NO_SENTENCE;
   // The -t/--target value, or empty to take the target from `input_path`.
   // Named rather than resolved here: what it addresses is known only once a
   // workflow root is selected.
@@ -35,6 +37,7 @@ struct PairFilterSupport {
   bool ignore = false;        // -i/--ignore
   bool allow = false;         // -a/--allow-pairs
   bool workflow_yes = false;  // -y/--yes
+  bool sentence = false;      // -s/--sentence
 };
 
 // The workflow-owned portions of the aggregate ignore and reject sets.
@@ -82,20 +85,23 @@ enum PairFilterOptionResult {
 // help text.
 void print_reject_option_help(FILE* fp, int description_column);
 
+// Prints the shared -s/--sentence detailed-help block.
+void print_sentence_option_help(FILE* fp, int description_column);
+
 // Prints the shared -a/--allow-pairs detailed-help block.
 void print_allow_pairs_option_help(FILE* fp, int description_column);
 
 // Parses -a/--allow-pairs FILE, -i/--ignore FILE, -r/--reject FILE,
-// -d/--dict PATH, --wf, --wfroot DIR, -t/--target TARGET, and -y/--yes.
-// Allow, ignore, and -y/--yes options are returned as OTHER when `support`
-// does not list them. `index` points to the current argument and advances
+// -d/--dict PATH, --wf, --wfroot DIR, -t/--target TARGET, -y/--yes, and
+// -s/--sentence N. Allow, ignore, -y/--yes, and -s/--sentence options are
+// returned as OTHER when `support` does not list them. `index` points to the current argument and advances
 // over a consumed FILE, DIR or TARGET. Errors are diagnosed already.
 PairFilterOptionResult parse_pair_filter_option(
     int argc, char* const argv[], int* index, char const* program,
     PairFilterSupport support, PairFilterOptions* out);
 
-// Diagnoses the options that need a workflow root without one: -y/--yes and
-// -t/--target. Tools call this once their arguments are parsed, before
+// Diagnoses the options that need a workflow root without one: -y/--yes,
+// -t/--target, and -s/--sentence. Tools call this once their arguments are parsed, before
 // load_pair_filters().
 bool check_pair_filter_options(
     PairFilterOptions const& options, char const* program);
@@ -107,8 +113,8 @@ bool check_pair_filter_options(
 // containing no pairs leaves it as an active empty set. `support` states which
 // options the calling tool accepts, and has to agree with `options`, which the
 // tool's own parsing guarantees. With --wf or --wfroot, classified NO
-// pairs below the selected workflow root are rejected, and with -y/--yes,
-// classified YES pairs are ignored. -d/--dict selects the dictionary whether
+// pairs below the selected workflow root are rejected, as are sentence N's
+// with -s/--sentence N, and with -y/--yes, classified YES pairs are ignored. -d/--dict selects the dictionary whether
 // or not there is a workflow root; otherwise workflow mode defaults to the
 // root's .wf/dict/words.filtered. A missing inferred workflow dictionary warns
 // and leaves `dictionary` empty. Without either a workflow root or an explicit
@@ -122,7 +128,8 @@ bool check_pair_filter_options(
 // belongs to, by its directory or by its name, and WORKFLOW_DEFAULT_TARGET
 // only when the input names none. However it was arrived at, the selection
 // is announced and has to resolve to a target directory, and a named input
-// that disagrees with an explicit -t/--target is an error. A target with no
+// that disagrees with an explicit -t/--target is an error, as is a target
+// outside the -s/--sentence N sentence. A target with no
 // no.pairs is silent, because having none is the ordinary case.
 bool load_pair_filters(
     PairFilterOptions const& options, char const* program,

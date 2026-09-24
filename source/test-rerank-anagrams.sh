@@ -196,4 +196,23 @@ if grep -q ' (zz)' "$test_dir/rerank-solo-hidden.stdout"; then
   fail "--hide-solo-words kept partner annotations"
 fi
 
+mkdir -p "$workflow/.wf/classified/s1/yes" "$workflow/.wf/classified/s1/no"
+printf 'ab,dc\n' > "$workflow/.wf/classified/s1/yes/yes.pairs"
+printf 'ba,cd\n' > "$workflow/.wf/classified/s1/no/no.pairs"
+"$dfs_anagrams" abcd --wfroot "$workflow" -t "$target_name" -s 1 \
+  -m 2 -g 2 -n 0 \
+  > "$test_dir/dfs-sentence.stdout" 2> "$test_dir/dfs-sentence.stderr"
+"$rerank" --wfroot "$workflow" -t "$target_name" -s 1 \
+  "$test_dir/dfs.stdout" \
+  > "$test_dir/rerank-sentence.stdout" 2> "$test_dir/rerank-sentence.stderr"
+cmp "$test_dir/dfs-sentence.stdout" "$test_dir/rerank-sentence.stdout" ||
+  fail "-s rerank output differs from dfs-anagrams -s"
+mkdir -p "$workflow/.wf/classified/s2/yes" "$workflow/.wf/classified/s2/no"
+printf 'ab,dc\n' > "$workflow/.wf/classified/s2/yes/yes.pairs"
+printf 'ba,cd\n' > "$workflow/.wf/classified/s2/no/no.pairs"
+expect_status 2 "$rerank" --wfroot "$workflow" -t "$target_name" -s 2 \
+  "$test_dir/dfs.stdout"
+grep -q -- '--sentence 2 does not match target' "$test_dir/status.stderr" ||
+  fail "sentence/target mismatch diagnostic is missing"
+
 echo PASS
