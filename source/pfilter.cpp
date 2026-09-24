@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
   DfsPairSet rejected;
   if (!load_global_no_pairs("pfilter", root, &rejected)) return 1;
   if (args.sentence != CLASSIFIED_NO_SENTENCE &&
-      !load_classified_no_pairs("pfilter", root, args.sentence, &rejected))
+      !load_sentence_no_pairs("pfilter", root, args.sentence, &rejected))
     return 1;
 
   if (!print_kept_rows("pfilter", args.source, "pair list", false,

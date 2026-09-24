@@ -20,31 +20,69 @@ bool parse_classified_sentence(char const* arg, int* sentence) {
   return parse_count(arg, "--sentence", sentence);
 }
 
-std::filesystem::path classified_sentence_dir(char const* root, int sentence) {
-  return std::filesystem::path(root) / WORKFLOW_CLASSIFIED_PATH /
-      ("s" + std::to_string(sentence));
-}
-
-bool load_classified_no_pairs(
-    char const* program, char const* root, int sentence, DfsPairSet* pairs) {
-  std::filesystem::path const path =
-      classified_sentence_dir(root, sentence) / "no" / "no.pairs";
+bool classified_pair_file(
+    char const* program, char const* root, int sentence, char const* kind,
+    std::string* path) {
+  std::filesystem::path dir =
+      std::filesystem::path(root) / WORKFLOW_CLASSIFIED_PATH;
+  if (sentence != CLASSIFIED_NO_SENTENCE)
+    dir /= "s" + std::to_string(sentence);
+  std::filesystem::path const file =
+      dir / kind / (std::string(kind) + ".pairs");
+  path->clear();
   std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error)) {
-    fprintf(stderr, "%s: \"%s\" is not a file\n", program, path.c_str());
+  if (sentence == CLASSIFIED_NO_SENTENCE) {
+    if (!std::filesystem::exists(file, error) && !error) {
+      warn(program, "classified pair file \"%s\" is not present",
+          file.c_str());
+      return true;
+    }
+  } else if (!std::filesystem::is_regular_file(file, error)) {
+    fprintf(stderr, "%s: \"%s\" is not a file\n", program, file.c_str());
     return false;
   }
-  return load_pair_file(path.c_str(), "reject list", pairs, true, true);
+  *path = file.string();
+  return true;
+}
+
+bool load_classified_pairs(
+    char const* program, char const* root, int sentence, char const* kind,
+    DfsPairSet* pairs) {
+  std::string path;
+  if (!classified_pair_file(program, root, sentence, kind, &path))
+    return false;
+  return path.empty() ||
+      load_pair_file(path.c_str(), "classified pair list", pairs, true, true);
 }
 
 bool load_global_no_pairs(
     char const* program, char const* root, DfsPairSet* pairs) {
-  std::filesystem::path const path =
-      std::filesystem::path(root) / WORKFLOW_NO_PAIRS_PATH;
-  std::error_code error;
-  if (!std::filesystem::exists(path, error) && !error) {
-    warn(program, "classified pair file \"%s\" is not present", path.c_str());
-    return true;
+  return load_classified_pairs(
+      program, root, CLASSIFIED_NO_SENTENCE, "no", pairs);
+}
+
+bool load_sentence_no_pairs(
+    char const* program, char const* root, int sentence, DfsPairSet* pairs) {
+  return load_classified_pairs(program, root, sentence, "no", pairs);
+}
+
+bool add_classified_sentence_pairs(
+    char const* program, int sentence, DfsCommonArgs* args,
+    std::vector<std::string>* reject_files) {
+  char const* root;
+  if (args->workflow_root.empty()) {
+    root = require_workflow_root(program);
+    if (root == NULL) return false;
+  } else {
+    root = args->workflow_root.c_str();
+    if (!check_workflow_root(program, root)) return false;
   }
-  return load_pair_file(path.c_str(), "reject list", pairs, true, true);
+  std::string yes;
+  std::string no;
+  if (!classified_pair_file(program, root, sentence, "yes", &yes) ||
+      !classified_pair_file(program, root, sentence, "no", &no))
+    return false;
+  args->yes_pair_files.push_back(yes);
+  reject_files->push_back(no);
+  return true;
 }

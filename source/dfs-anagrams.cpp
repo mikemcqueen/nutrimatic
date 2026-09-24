@@ -1,3 +1,4 @@
+#include "classified.h"
 #include "dfs-class-list-build.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
@@ -15,6 +16,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <charconv>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,7 @@ struct Args {
   int preprocess_threads;
   int exact_letters;
   int max_unlisted_pairs;
+  int sentence;
   bool allow_cache_fallback;
   bool exact_remaining_depth;
   bool segments;
@@ -102,6 +105,11 @@ static void usage(char const* program) {
       WORKFLOW_YES_PAIRS_PATH, WORKFLOW_NO_PAIRS_PATH,
       WORKFLOW_TARGET_NO_PAIRS_NAME);
   dfs_help_target();
+  dfs_help_option("-s, --sentence N",
+      "load $WFROOT/%s/sN/yes/yes.pairs as YES pairs and exclude "
+      "sN/no/no.pairs as if it were a pairs-only --reject file; both must "
+      "exist; --wfroot DIR replaces $WFROOT; does not require --wf",
+      WORKFLOW_CLASSIFIED_PATH);
   dfs_help_option("-r, --reject FILE|WORKFLOW-DIR",
       "load word pairs, one \"word,word\" line each, and drop every index "
       "entry spelled exactly like one in either order, so no result can "
@@ -222,6 +230,7 @@ static struct optparse_long const long_options[] = {
   { "no-score", DFS_OPT_NO_SCORE, OPTPARSE_NONE },
   { "idx", 'i', OPTPARSE_REQUIRED },
   { "reject", 'r', OPTPARSE_REQUIRED },
+  CLASSIFIED_SENTENCE_LONG_OPTION,
   { "num-segments", 'g', OPTPARSE_REQUIRED },
   { "progress-factor", 'p', OPTPARSE_REQUIRED },
   { "cache-size", 'C', OPTPARSE_REQUIRED },
@@ -255,6 +264,7 @@ static bool parse_args(char* argv[], Args* out) {
   out->preprocess_threads = 0;
   out->exact_letters = -1;
   out->max_unlisted_pairs = -1;
+  out->sentence = CLASSIFIED_NO_SENTENCE;
   out->allow_cache_fallback = false;
   out->exact_remaining_depth = false;
   out->segments = false;
@@ -311,6 +321,10 @@ static bool parse_args(char* argv[], Args* out) {
         break;
       case 'r':
         out->reject_files.push_back(options.optarg);
+        break;
+      case 's':
+        if (!parse_classified_sentence(options.optarg, &out->sentence))
+          return false;
         break;
       case OPT_SEGMENTS:
         out->segments = true;
@@ -376,10 +390,33 @@ static bool parse_args(char* argv[], Args* out) {
     return false;
   }
 
+  if (out->sentence != CLASSIFIED_NO_SENTENCE) {
+    if (out->common.pair_file != NULL) {
+      fputs("error: --pairs cannot be combined with --sentence\n", stderr);
+      return false;
+    }
+    if (!add_classified_sentence_pairs(
+            argv[0], out->sentence, &out->common,
+            &out->workflow_reject_files))
+      return false;
+  }
+
   if (!finalize_dfs_common_args(
           &out->common, argv[0], &out->index_file,
           &out->workflow_reject_files))
     return false;
+
+  if (out->sentence != CLASSIFIED_NO_SENTENCE && !out->common.target.empty()) {
+    std::string const& target = out->common.target;
+    int target_sentence = 0;
+    std::from_chars(
+        target.data() + 1, target.data() + target.size(), target_sentence);
+    if (target_sentence != out->sentence) {
+      fprintf(stderr, "error: --sentence %d does not match --target \"%s\"\n",
+              out->sentence, out->common.target.c_str());
+      return false;
+    }
+  }
 
   if (out->weighted && !out->segments) {
     fputs("error: --weighted requires --segments\n", stderr);
