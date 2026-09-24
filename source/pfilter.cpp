@@ -26,7 +26,7 @@ struct Args {
 };
 
 void usage(FILE* out) {
-  fputs("usage: pfilter [-l LETTERS [-u LETTERS]...] [-m N] [-s N] [-y] "
+  fputs("usage: pfilter [-l LETTERS [-u LETTERS]...] [-x N] [-s N] [-y] "
         "PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
@@ -38,7 +38,7 @@ void usage(FILE* out) {
       "print only pairs that fit within LETTERS; may be given once");
   dfs_help_option("-u, --used-letters LETTERS",
       "subtract letters already used from the -l letters; may be repeated");
-  dfs_help_option("-m, --max-letters N",
+  dfs_help_option("-x, --max-letters N",
       "print only pairs of at most N letters; 0 for no limit (default: %d)",
       DEFAULT_MAX_LETTERS);
   classified_help_sentence_no();
@@ -53,7 +53,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   static struct optparse_long const long_options[] = {
     { "letters", 'l', OPTPARSE_REQUIRED },
     { "used-letters", 'u', OPTPARSE_REQUIRED },
-    { "max-letters", 'm', OPTPARSE_REQUIRED },
+    { "max-letters", 'x', OPTPARSE_REQUIRED },
     CLASSIFIED_SENTENCE_LONG_OPTION,
     { "yes", 'y', OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
@@ -80,7 +80,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         used_letters += options.optarg;
         have_used_letters = true;
         break;
-      case 'm':
+      case 'x':
         if (!parse_count(options.optarg, "--max-letters", &out->max_letters))
           return false;
         break;
