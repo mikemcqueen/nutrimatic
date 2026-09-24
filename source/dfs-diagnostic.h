@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 
+#include "log.h"
+
 void dfs_reset_diagnostic_clock();
 
 // Returns the previous stream, so callers that want to restore it can do so
@@ -28,6 +30,12 @@ void dfs_diagnostic(char const* format, ...)
 // diagnostics are disabled, and unlike dfs_set_diagnostic_stream() it mutates
 // no shared state, which matters because worker threads can abort concurrently.
 void dfs_diagnostic_to_stream(FILE* stream, char const* format, ...)
+    __attribute__((format(printf, 2, 3)));
+
+// Writes a timestamped line to stderr as log_line_v() does for `level`,
+// whatever the current diagnostic stream. The format takes no trailing
+// newline.
+void dfs_diagnostic_log(LogLevel level, char const* format, ...)
     __attribute__((format(printf, 2, 3)));
 
 // Invariant check that survives NDEBUG. The release build sets b_ndebug=true,

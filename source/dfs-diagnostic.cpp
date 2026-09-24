@@ -6,6 +6,8 @@
 
 #include <chrono>
 
+#include "log.h"
+
 namespace {
 
 typedef std::chrono::steady_clock DiagnosticClock;
@@ -18,19 +20,26 @@ FILE* g_diagnostic_stream = NULL;
 // abort() paths, including ones reached because an allocation just failed.
 size_t const DIAGNOSTIC_LINE_MAX = 256;
 
-void diagnostic_v(FILE* stream, char const* format, va_list args) {
-  if (stream == NULL) return;
-
+// Writes the "[HH:MM:SS] " elapsed-time prefix into `line`, returning its
+// length, or -1 if it does not fit.
+int elapsed_prefix(char* line, size_t size) {
   uint64_t const elapsed_seconds =
       uint64_t(std::chrono::duration_cast<std::chrono::seconds>(
           DiagnosticClock::now() - diagnostic_start).count());
-  char line[DIAGNOSTIC_LINE_MAX];
   int const prefix_size = snprintf(
-      line, sizeof(line), "[%02llu:%02llu:%02llu] ",
+      line, size, "[%02llu:%02llu:%02llu] ",
       (unsigned long long) (elapsed_seconds / 3600),
       (unsigned long long) ((elapsed_seconds / 60) % 60),
       (unsigned long long) (elapsed_seconds % 60));
-  if (prefix_size < 0 || size_t(prefix_size) >= sizeof(line)) return;
+  return prefix_size < 0 || size_t(prefix_size) >= size ? -1 : prefix_size;
+}
+
+void diagnostic_v(FILE* stream, char const* format, va_list args) {
+  if (stream == NULL) return;
+
+  char line[DIAGNOSTIC_LINE_MAX];
+  int const prefix_size = elapsed_prefix(line, sizeof(line));
+  if (prefix_size < 0) return;
 
   vsnprintf(
       line + prefix_size, sizeof(line) - size_t(prefix_size), format, args);
@@ -72,5 +81,14 @@ void dfs_diagnostic_to_stream(FILE* stream, char const* format, ...) {
   va_list args;
   va_start(args, format);
   diagnostic_v(stream, format, args);
+  va_end(args);
+}
+
+void dfs_diagnostic_log(LogLevel level, char const* format, ...) {
+  char prefix[DIAGNOSTIC_LINE_MAX];
+  if (elapsed_prefix(prefix, sizeof(prefix)) < 0) return;
+  va_list args;
+  va_start(args, format);
+  log_line_v(prefix, level, format, args);
   va_end(args);
 }

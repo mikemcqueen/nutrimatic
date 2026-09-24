@@ -17,6 +17,7 @@
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "row-input.h"
 #include "workflow-paths.h"
@@ -161,6 +162,9 @@ int main(int argc, char* argv[]) {
     usage(stdout);
     return 0;
   }
+
+  if (args.sentence == CLASSIFIED_NO_SENTENCE)
+    alert("bag-subset", "--sentence not supplied");
 
   char const* const root = require_workflow_root("bag-subset");
   if (root == NULL) return 1;

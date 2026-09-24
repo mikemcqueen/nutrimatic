@@ -1,7 +1,6 @@
 #include "dfs-class-list-build.h"
 
 #include <stdio.h>
-#include <unistd.h>
 
 #include <array>
 
@@ -29,7 +28,6 @@ void warn_dictionary_drops(
   for (size_t i = 0; i < letters.size(); ++i)
     ++bag[(unsigned char) letters[i]];
 
-  bool const tty = isatty(fileno(stderr));
   DfsPairSet reported;
   for (size_t i = 0; i < rows.size(); ++i) {
     DfsPairRow const& row = rows[i];
@@ -54,24 +52,21 @@ void warn_dictionary_drops(
     std::string const missing = both
         ? row.left + " and " + row.right
         : (left_missing ? row.left : row.right);
-    dfs_diagnostic_to_stream(stderr,
-        "%sWARNING: %s dropped because %s %s not in dictionary%s\n",
-        tty ? "\033[31m" : "", entry.c_str(), missing.c_str(),
-        both ? "are" : "is", tty ? "\033[0m" : "");
+    dfs_diagnostic_log(LogLevel::ALERT,
+        "%s dropped because %s %s not in dictionary",
+        entry.c_str(), missing.c_str(), both ? "are" : "is");
   }
 }
 
 void admit_best_words(
     std::vector<DfsPairRow> const& rows, DfsDictionary* dictionary) {
-  bool const tty = isatty(fileno(stderr));
   for (size_t i = 0; i < rows.size(); ++i) {
     std::string const* const words[] = { &rows[i].left, &rows[i].right };
     for (size_t w = 0; w < 2; ++w) {
       std::string const& word = *words[w];
       if (word.empty() || !dictionary->insert(word).second) continue;
-      dfs_diagnostic_to_stream(stderr,
-          "%sadded %s to dictionary from BEST pairs%s\n",
-          tty ? "\033[33m" : "", word.c_str(), tty ? "\033[0m" : "");
+      dfs_diagnostic_log(LogLevel::INFO,
+          "added %s to dictionary from BEST pairs", word.c_str());
     }
   }
 }
