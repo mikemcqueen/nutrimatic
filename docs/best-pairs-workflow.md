@@ -70,7 +70,7 @@ The details:
     
       `pairs $S8 [-u subset] | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s8.m4`
 
-    * merge them int final pairs file:
+    * merge them into final pairs file:
 
       `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4 > idx/pairs.s8.m4`
 

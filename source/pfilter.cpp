@@ -2,11 +2,13 @@
 
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include "classified.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "index.h"
 #include "letter-bag.h"
 #include "log.h"
 #include "optparse.h"
@@ -16,6 +18,7 @@
 namespace {
 
 int const DEFAULT_MAX_LETTERS = 15;
+int const OPT_NO_DICT = 256;
 
 struct Args {
   bool have_bag = false;
@@ -23,15 +26,18 @@ struct Args {
   int max_letters = DEFAULT_MAX_LETTERS;
   int sentence = CLASSIFIED_NO_SENTENCE;
   bool drop_yes = false;
+  char const* index_file = NULL;
+  char const* dictionary_file = NULL;
+  bool no_dict = false;
   char const* source = NULL;
 };
 
 void usage(FILE* out) {
   fputs("usage: pfilter [-l LETTERS [-u LETTERS]...] [-x N] [-s N] [-y] "
-        "PAIRS-FILE|-\n", out);
+        "[-d FILE | --no-dict] [-i INDEX] PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
-  fputs("  print pairs whose two words are in $WFROOT/.wf/dict/words.filtered\n"
+  fputs("  print pairs whose two words are in the dictionary\n"
         "  and not in $WFROOT/.wf/classified/no/no.pairs\n"
         "  PAIRS-FILE contains word,word lines; '-' reads standard input\n"
         "\noptions:\n", stdout);
@@ -47,6 +53,11 @@ void usage(FILE* out) {
       "also drop pairs listed in $WFROOT/%s/yes/yes.pairs, and with -s N "
       "in $WFROOT/%s/sN/yes/yes.pairs",
       WORKFLOW_CLASSIFIED_PATH, WORKFLOW_CLASSIFIED_PATH);
+  dfs_help_option("-d, --dict FILE",
+      "dictionary FILE (default: $WFROOT/%s)", WORKFLOW_DICT_PATH);
+  dfs_help_option("--no-dict", "skip the dictionary check");
+  dfs_help_option("-i, --idx INDEX",
+      "print only pairs with \"word1 word2\" or \"word2 word1\" in INDEX");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -57,6 +68,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "max-letters", 'x', OPTPARSE_REQUIRED },
     CLASSIFIED_SENTENCE_LONG_OPTION,
     { "yes", 'y', OPTPARSE_NONE },
+    { "dict", 'd', OPTPARSE_REQUIRED },
+    { "no-dict", OPT_NO_DICT, OPTPARSE_NONE },
+    { "idx", 'i', OPTPARSE_REQUIRED },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -92,6 +106,15 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case 'y':
         out->drop_yes = true;
         break;
+      case 'd':
+        out->dictionary_file = options.optarg;
+        break;
+      case OPT_NO_DICT:
+        out->no_dict = true;
+        break;
+      case 'i':
+        out->index_file = options.optarg;
+        break;
       case 'h':
         *help = true;
         return true;
@@ -109,8 +132,19 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
+  if (out->no_dict && out->dictionary_file != NULL) {
+    fputs("pfilter: --dict and --no-dict can't be combined\n", stderr);
+    return false;
+  }
+
   out->source = optparse_arg(&options);
   return out->source != NULL && optparse_arg(&options) == NULL;
+}
+
+bool in_index(IndexReader const& reader, DfsPairRow const& row) {
+  IndexReader::EntryPosition position;
+  return reader.aggregate_entry_position(row.entry(), &position) ||
+      reader.aggregate_entry_position(row.entry(/*reverse=*/true), &position);
 }
 
 }  // namespace
@@ -133,10 +167,13 @@ int main(int argc, char* argv[]) {
 
   char const* const root = require_workflow_root("pfilter");
   if (root == NULL) return 1;
-  std::filesystem::path const dict_path =
-      std::filesystem::path(root) / WORKFLOW_DICT_PATH;
   DfsDictionary dictionary;
-  if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
+  if (!args.no_dict) {
+    std::string const dict_path = args.dictionary_file != NULL
+        ? std::string(args.dictionary_file)
+        : (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
+    if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
+  }
 
   DfsPairSet rejected;
   if (!load_global_no_pairs("pfilter", root, &rejected)) return 1;
@@ -152,16 +189,27 @@ int main(int argc, char* argv[]) {
           &rejected))
     return 1;
 
+  std::unique_ptr<IndexReader> reader;
+  if (args.index_file != NULL) {
+    FILE* fp = fopen(args.index_file, "rb");
+    if (fp == NULL) {
+      fprintf(stderr, "pfilter: can't open \"%s\"\n", args.index_file);
+      return 1;
+    }
+    reader.reset(new IndexReader(fp));
+  }
+
   if (!print_kept_rows("pfilter", args.source, "pair list", false,
           [&](DfsPairRow const& row) {
             return (args.max_letters == 0 ||
                        row.left.size() + row.right.size() <=
                            size_t(args.max_letters)) &&
-                dictionary.contains(row.left) &&
-                dictionary.contains(row.right) &&
+                (args.no_dict || (dictionary.contains(row.left) &&
+                    dictionary.contains(row.right))) &&
                 !rejected.contains(row.entry()) &&
                 (!args.have_bag ||
-                    fits_letter_bag(args.bag, row.left + row.right));
+                    fits_letter_bag(args.bag, row.left + row.right)) &&
+                (reader == nullptr || in_index(*reader, row));
           }))
     return 1;
   if (!(std::cout << std::flush)) {

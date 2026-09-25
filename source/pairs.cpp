@@ -85,7 +85,9 @@ void usage(char const* program, FILE* out) {
             program);
     if (out != stdout) return;
 
-    fputs("\noptions:\n", stdout);
+    fputs("  print word,word pairs of distinct dictionary words that fit\n"
+          "  together within LETTERS\n"
+          "\noptions:\n", stdout);
     dfs_help_option("-d, --dict FILE",
         "read words from FILE (default: $WFROOT/%s)",
         WORKFLOW_DICT_PATH);
