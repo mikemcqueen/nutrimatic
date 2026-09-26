@@ -54,11 +54,11 @@ struct Entry {
 
 void usage(FILE* out) {
   fputs("usage: freqsort [-i] [-w] [-n|-p|-a] [-v VALUE] [-m COUNT] LETTERS "
-        "DICT [IGNORE...]\n", out);
+        "FILE|- [IGNORE...]\n", out);
   if (out != stdout) return;
 
   fputs(
-      "  find every entry in DICT that can be spelled from LETTERS and rank\n"
+      "  find every entry in FILE that can be spelled from LETTERS and rank\n"
       "  them by how unusual their letters are\n"
       "\n"
       "  The letters of each IGNORE are removed from LETTERS first. Each\n"
@@ -70,7 +70,7 @@ void usage(FILE* out) {
       "\narguments:\n", stdout);
   dfs_help_option("LETTERS", "the available letters; case and non-letters "
                   "are ignored");
-  dfs_help_option("DICT", "word list, one entry per line; '-' reads standard "
+  dfs_help_option("FILE", "word list, one entry per line; '-' reads standard "
                   "input. A leading uppercase letter marks a proper noun. "
                   "Comma-separated word pairs (e.g. \"blue,origin\") are "
                   "allowed; only letters are matched, and the line prints "
