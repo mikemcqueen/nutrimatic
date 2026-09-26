@@ -23,4 +23,9 @@ bool make_letter_bag(
 // Whether the letters of `text`, spaces skipped, fit within `bag`.
 bool fits_letter_bag(LetterBag const& bag, std::string const& text);
 
+// The consonant/vowel ratio of `counts`, the number of each letter a through
+// z; y is a consonant. 0 when there are no consonants, and infinity when there
+// are consonants but no vowels.
+double cv_ratio(int const counts[26]);
+
 #endif

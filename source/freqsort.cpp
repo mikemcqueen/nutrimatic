@@ -15,6 +15,7 @@
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "letter-bag.h"
 #include "optparse.h"
 #include "row-input.h"
 
@@ -216,20 +217,6 @@ double g_statistic(Counts const& counts, int total) {
   return 2 * g;
 }
 
-double cv_ratio(Counts const& counts) {
-  int vowels = 0;
-  int consonants = 0;
-  for (int i = 0; i < 26; ++i) {
-    if (strchr("aeiou", 'a' + i) != NULL)
-      vowels += counts.values[i];
-    else
-      consonants += counts.values[i];
-  }
-  if (consonants == 0) return 0;
-  if (vowels == 0) return INFINITY;
-  return double(consonants) / vowels;
-}
-
 bool score(Args const& args, std::string const& word, double* out) {
   Counts left = args.letters;
   double sum = 0;
@@ -259,7 +246,7 @@ bool score(Args const& args, std::string const& word, double* out) {
   if (args.mode == SCORE_LOG) {
     *out = log_sum;
   } else if (args.mode == SCORE_CV) {
-    *out = cv_ratio(left);
+    *out = cv_ratio(left.values);
   } else if (args.mode == SCORE_GLOG) {
     *out = g_statistic(args.letters, args.total) -
         g_statistic(left, args.total - count);
