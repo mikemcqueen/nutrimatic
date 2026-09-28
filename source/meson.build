@@ -193,8 +193,11 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
 
 pcomm = executable('pcomm', 'pcomm.cpp', install: true)
 
+pfilter_lib = static_library('pfilter', 'pfilter-impl.cpp',
+  link_with: dfs_class_list_lib)
+
 executable('pfilter', 'pfilter.cpp',
-  link_with: [dfs_class_list_lib, optparse_lib],
+  link_with: [pfilter_lib, dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
 
@@ -213,8 +216,11 @@ combine_pairs = executable('combine-pairs', 'combine-pairs.cpp',
   dependencies: thread_dep,
   install: true)
 
+freqsort_lib = static_library('freqsort', 'freqsort-impl.cpp',
+  link_with: dfs_class_list_lib)
+
 executable('freqsort', 'freqsort.cpp',
-  link_with: [dfs_class_list_lib, optparse_lib],
+  link_with: [freqsort_lib, dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
 

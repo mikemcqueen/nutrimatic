@@ -2,31 +2,24 @@
 
 #include <filesystem>
 #include <iostream>
-#include <memory>
 #include <string>
 
 #include "classified.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
-#include "index.h"
 #include "letter-bag.h"
 #include "log.h"
 #include "optparse.h"
+#include "pfilter-impl.h"
 #include "row-input.h"
 #include "workflow-paths.h"
 
 namespace {
 
-int const DEFAULT_MAX_LETTERS = 15;
 int const OPT_NO_DICT = 256;
 
 struct Args {
-  bool have_bag = false;
-  LetterBag bag;
-  int max_letters = DEFAULT_MAX_LETTERS;
-  int sentence = CLASSIFIED_NO_SENTENCE;
-  bool drop_yes = false;
-  char const* index_file = NULL;
+  PfilterOptions options;
   char const* dictionary_file = NULL;
   bool no_dict = false;
   char const* source = NULL;
@@ -47,7 +40,7 @@ void usage(FILE* out) {
       "subtract letters already used from the -l letters; may be repeated");
   dfs_help_option("-x, --max-letters N",
       "print only pairs of at most N letters; 0 for no limit (default: %d)",
-      DEFAULT_MAX_LETTERS);
+      PFILTER_DEFAULT_MAX_LETTERS);
   classified_help_sentence_no();
   dfs_help_option("-y, --yes",
       "also drop pairs listed in $WFROOT/%s/yes/yes.pairs, and with -s N "
@@ -96,15 +89,16 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         have_used_letters = true;
         break;
       case 'x':
-        if (!parse_count(options.optarg, "--max-letters", &out->max_letters))
+        if (!parse_count(options.optarg, "--max-letters",
+                &out->options.max_letters))
           return false;
         break;
       case 's':
-        if (!parse_classified_sentence(options.optarg, &out->sentence))
+        if (!parse_classified_sentence(options.optarg, &out->options.sentence))
           return false;
         break;
       case 'y':
-        out->drop_yes = true;
+        out->options.drop_yes = true;
         break;
       case 'd':
         out->dictionary_file = options.optarg;
@@ -113,7 +107,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         out->no_dict = true;
         break;
       case 'i':
-        out->index_file = options.optarg;
+        out->options.index_file = options.optarg;
         break;
       case 'h':
         *help = true;
@@ -125,8 +119,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   }
 
   if (letters != NULL) {
-    if (!make_letter_bag(letters, used_letters, &out->bag)) return false;
-    out->have_bag = true;
+    LetterBag bag;
+    if (!make_letter_bag(letters, used_letters, &bag)) return false;
+    out->options.bag = bag;
   } else if (have_used_letters) {
     fputs("pfilter: --used-letters requires --letters\n", stderr);
     return false;
@@ -139,12 +134,6 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   out->source = optparse_arg(&options);
   return out->source != NULL && optparse_arg(&options) == NULL;
-}
-
-bool in_index(IndexReader const& reader, DfsPairRow const& row) {
-  IndexReader::EntryPosition position;
-  return reader.aggregate_entry_position(row.entry(), &position) ||
-      reader.aggregate_entry_position(row.entry(/*reverse=*/true), &position);
 }
 
 }  // namespace
@@ -162,55 +151,27 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  if (args.sentence == CLASSIFIED_NO_SENTENCE)
+  if (args.options.sentence == CLASSIFIED_NO_SENTENCE)
     alert("pfilter", "--sentence not supplied");
 
-  char const* const root = require_workflow_root("pfilter");
-  if (root == NULL) return 1;
   DfsDictionary dictionary;
   if (!args.no_dict) {
-    std::string const dict_path = args.dictionary_file != NULL
-        ? std::string(args.dictionary_file)
-        : (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
-    if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
-  }
-
-  DfsPairSet rejected;
-  if (!load_global_no_pairs("pfilter", root, &rejected)) return 1;
-  if (args.sentence != CLASSIFIED_NO_SENTENCE &&
-      !load_sentence_no_pairs("pfilter", root, args.sentence, &rejected))
-    return 1;
-  if (args.drop_yes &&
-      !load_classified_pairs("pfilter", root, CLASSIFIED_NO_SENTENCE, "yes",
-          &rejected))
-    return 1;
-  if (args.drop_yes && args.sentence != CLASSIFIED_NO_SENTENCE &&
-      !load_classified_pairs("pfilter", root, args.sentence, "yes",
-          &rejected))
-    return 1;
-
-  std::unique_ptr<IndexReader> reader;
-  if (args.index_file != NULL) {
-    FILE* fp = fopen(args.index_file, "rb");
-    if (fp == NULL) {
-      fprintf(stderr, "pfilter: can't open \"%s\"\n", args.index_file);
-      return 1;
+    std::string dict_path;
+    if (args.dictionary_file != NULL) {
+      dict_path = args.dictionary_file;
+    } else {
+      char const* const root = require_workflow_root("pfilter");
+      if (root == NULL) return 1;
+      dict_path = (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
     }
-    reader.reset(new IndexReader(fp));
+    if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
+    args.options.dictionary = std::cref(dictionary);
   }
 
+  Pfilter filter;
+  if (!filter.load("pfilter", args.options)) return 1;
   if (!print_kept_rows("pfilter", args.source, "pair list", false,
-          [&](DfsPairRow const& row) {
-            return (args.max_letters == 0 ||
-                       row.left.size() + row.right.size() <=
-                           size_t(args.max_letters)) &&
-                (args.no_dict || (dictionary.contains(row.left) &&
-                    dictionary.contains(row.right))) &&
-                !rejected.contains(row.entry()) &&
-                (!args.have_bag ||
-                    fits_letter_bag(args.bag, row.left + row.right)) &&
-                (reader == nullptr || in_index(*reader, row));
-          }))
+          [&](DfsPairRow const& row) { return filter.keep(row); }))
     return 1;
   if (!(std::cout << std::flush)) {
     fputs("pfilter: can't write output\n", stderr);
