@@ -309,6 +309,8 @@ void print(Args const& args, std::map<std::string, Entry> const& entries) {
   for (Entry const& entry : sorted) {
     if (args.words_only)
       printf("%s\n", entry.line.c_str());
+    else if (args.mode == SCORE_CV)
+      printf("%-*s  %.2f\n", int(width), entry.line.c_str(), entry.score);
     else
       printf("%-*s  %#.5g\n", int(width), entry.line.c_str(), entry.score);
   }

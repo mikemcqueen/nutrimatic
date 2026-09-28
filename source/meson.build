@@ -437,3 +437,5 @@ test_expr = executable('test-expr', 'test-expr.cpp',
   link_with: [expr_lib, search_lib, index_lib],
   dependencies: fst_dep, install: false)
 test('expr', test_expr)
+
+subdir('gui')

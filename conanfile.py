@@ -13,7 +13,8 @@ class NutrimaticConan(conan.ConanFile):
     options = {"shared": [True, False]}
     default_options = {"shared": False}
 
-    requires = ["openfst/1.8.4", "libxml2/2.12.4", "tre/cci.20230717"]
+    requires = ["openfst/1.8.4", "libxml2/2.12.4", "tre/cci.20230717",
+                "imgui/1.92.8"]
     tool_requires = ["meson/1.7.2", "ninja/1.13.2", "pkgconf/2.5.1"]
     generators = ["MesonToolchain", "PkgConfigDeps", "VirtualBuildEnv"]
 
@@ -32,6 +33,12 @@ class NutrimaticConan(conan.ConanFile):
         self.folders.source = "source"
         self.folders.build = "build"
         self.folders.generators = "build/dep-info"
+
+    def generate(self):
+        bindings = self.dependencies["imgui"].package_folder + "/res/bindings"
+        dest = self.generators_folder + "/imgui-backends"
+        for name in ["imgui_impl_sdl2", "imgui_impl_sdlrenderer2"]:
+            conan.tools.files.copy(self, name + ".*", bindings, dest)
 
     def build(self):
         meson = conan.tools.meson.Meson(self)

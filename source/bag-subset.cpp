@@ -52,7 +52,7 @@ void usage(FILE* out) {
   fputs("  for each subset of LETTERS up to LENGTH letters, count the words\n"
         "  and word,word pairs in FILE that fit within LETTERS and contain\n"
         "  every letter of the subset; print SUBSET COUNT lines by ascending\n"
-        "  COUNT\n"
+        "  COUNT, omitting subsets with a COUNT of 0\n"
         "  entries must be in $WFROOT/.wf/dict/words.filtered, and pairs not\n"
         "  in $WFROOT/.wf/classified/no/no.pairs; '-' reads standard input\n"
         "\noptions:\n", stdout);
@@ -279,7 +279,7 @@ int main(int argc, char* argv[]) {
         size_t const count = args.reverse
             ? count_matches<true>(checks, numbers)
             : count_matches<false>(checks, numbers);
-        results.push_back({ name, count });
+        if (count != 0) results.push_back({ name, count });
       });
 
   std::sort(results.begin(), results.end(),

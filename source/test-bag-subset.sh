@@ -29,8 +29,7 @@ a  4'
 [[ $actual == "$expected" ]] || fail "output is wrong: $actual"
 
 actual=$(WFROOT=$test_dir "$bag_subset" -r -l 2 abc "$test_dir/input" 2>/dev/null)
-expected='ab 0
-a  1
+expected='a  1
 ac 1
 bc 1
 b  2

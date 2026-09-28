@@ -20,7 +20,7 @@ struct Args {
 };
 
 void usage(FILE* out) {
-  fputs("usage: bag-filter [-e] [-u LETTERS] LETTERS FILE...\n", out);
+  fputs("usage: bag-filter [-e] [-u LETTERS] LETTERS FILE|-...\n", out);
   if (out != stdout) return;
 
   fputs("  print the words and word,word pairs in each FILE that fit within\n"

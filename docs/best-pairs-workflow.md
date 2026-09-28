@@ -70,6 +70,23 @@ The details:
     
       `pairs $S8 [-u subset] | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s8.m4`
 
+    * making 3-letter word pairs:
+    
+      index:   `query-index $S9 --wf -w2 -n0 --csv -m3 --dict idx/words.big.l3-10 > idx/idx.2.s9.m3`
+
+      NOTE: for cluer, i should build a dictionary that combines words.filtered & a filtered 3-letter
+            wordlist (idx/words.3.bowie.filtered is a start).  and use that as pair's --dict.
+
+      cluer:   `pairs $S9 -m3 | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s9.m3`
+      combine: `pcomm idx/cluer.s9.m3 idx/idx.2.s9.m3 > idx/all.s9.m3`
+
+    * calculate and auto-classify emaining:
+
+       `cat $WFROOT/.wf/p1/done/p1_done.pairs | pcomm -23 idx/all.s9.m3 - > tmp/s9/all.s9.m3.remain`
+       
+       edit juniper.sh, run it.
+
+
     * merge them into final pairs file:
 
       `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4 > idx/pairs.s8.m4`
@@ -82,8 +99,6 @@ The details:
 
 
   * filter out already-auto-classified pairs:
-
-      TODO: use pcomm
 
       `pcomm -23 idx/pairs.s2.m4 $WFROOT/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
       
@@ -110,7 +125,7 @@ The details:
       smarter than the dumb version it's using, which i think is to use the `pcomm` tool.
 
    From here, we need to run
-     `wf extract p1 idx/idx.2.s2.m4 -d $WFROOT/.wf/p1/done/ -y --pm .85 --pr .15 > results/s2/s2.m4.85.15.yes`
+     `wf extract p1 yes idx/idx.2.s2.m4 --pm .85 --pr .15 > seed.s2.m4.85.15.pairs`
        input: the original (pre-filtered) pairs file
        output: top 15% of YES results.
        
@@ -121,9 +136,35 @@ The details:
        
    That will give us the --pairs file input to step 1.
 
+NEW WAY:
+
+1. Find letter bag subsets for over-represented and/or high-count letters.
+
+    `cat seed.pairs | bag-subset $S9 - -s9 [-u letters] | less`
+    
+    generally i look for a subset ~400 words or less as that fits into a single p2 review
+    note and 
+    
+2. Find pairs with letters of that subset.
+
+    start with all letters or choose some word/pair you're biased towards as -u, and use the
+    solution to or abbreviation of that as a prefix
+
+    e.g., for prefix 'bowie', subset 'llo':
+
+    `cat seed.pairs | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > resutls/s8/pairs/bowie.llo`
+
+2. manual  review
+
+    `./wf review p2 results/s9/pairs/pairs.ooo --as s9.pairs.ooo -s9 --checked no`
+    ** manual review **
+    `./wf complete p2 s9.pairs.ooo`
+
+OLD WAY:
+
 1. Generate the anagrams:
 
-   `dfs-anagrams $S2 -p 10000000  -n 1000000 --wf --pairs results/s2/s2.m4.85.15.yes -g 4 > results/s2/dfs.s2.m4.g4.pairs.1000000`
+   `dfs-anagrams $S2 -p 10000000  -n 1000000 --wf --pairs idx/seed.s2.m4.85.15.pairs -g 4 > results/s2/dfs.s2.m4.g4.pairs.1000000`
 
    * note the -g 4 here.  scores are relative to the number of segments, we'll
      need to run this command for every relevant segment-count per sentence.
