@@ -22,6 +22,7 @@ if sdl2_dep.found()
   # build root alongside the other tools.
   pgui_src = files('pgui.cpp', 'column.cpp', 'list-box.cpp',
     'input-source.cpp', 'pair-filter.cpp', 'window.cpp',
-    'app-state.cpp', 'command.cpp', 'freq-sort.cpp', 'widgets.cpp')
+    'app-state.cpp', 'command.cpp', 'freq-sort.cpp', 'find-pairs.cpp',
+    'widgets.cpp')
   pgui_inc = include_directories('..')
 endif

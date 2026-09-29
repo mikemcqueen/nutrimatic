@@ -101,11 +101,11 @@ class Command {
 };
 
 // The names every Column's dropdown offers, in order; "" names no command.
-inline constexpr std::array<char const*, 3> command_names = {"", "pfilter",
-                                                             "freqsort"};
+inline constexpr std::array<char const*, 4> command_names = {
+    "", "pfilter", "freqsort", "pairs"};
 
 // The command a Column's dropdown names: PairFilter for "pfilter", FreqSort
-// for "freqsort", none otherwise.
+// for "freqsort", FindPairs for "pairs", none otherwise.
 std::optional<Command> make_command(std::string const& name);
 
 #endif
