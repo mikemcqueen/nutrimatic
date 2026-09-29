@@ -1,26 +1,46 @@
 #include "list-box.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
+#include <algorithm>
 #include <utility>
 
 ListBox::ListBox(SharedLines items) : items_(std::move(items)) {}
 
 void ListBox::render() {
   if (!ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN))) return;
+  sideways_ = 0;
+  if (ImGui::Shortcut(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat)) sideways_ = -1;
+  if (ImGui::Shortcut(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat)) sideways_ = 1;
   Lines const& items = *items_;
+  int const count = static_cast<int>(shown_count());
+  int const focus_row = focus_requested_ ? shown_row(selected_) : -1;
+  bool focus_top = focus_requested_ && focus_row < 0;
+  focus_requested_ = false;
+  float const top = ImGui::GetCurrentWindow()->InnerRect.Min.y - 1;
   auto const row = [&](int i) {
     ImGui::PushID(i);
     if (ImGui::Selectable(items[i].c_str(), selected_ == i,
-                          ImGuiSelectableFlags_SelectOnNav))
-      selected_ = selected_ == i ? -1 : i;
+                          ImGuiSelectableFlags_SelectOnNav)) {
+      bool const navigated = GImGui->NavJustMovedToId == ImGui::GetItemID();
+      selected_ = selected_ == i && !navigated ? -1 : i;
+    }
     ImGui::PopID();
   };
   ImGuiListClipper clipper;
-  clipper.Begin(static_cast<int>(shown_count()));
+  clipper.Begin(count);
+  if (focus_row >= 0) clipper.IncludeItemByIndex(focus_row);
   while (clipper.Step()) {
-    for (int n = clipper.DisplayStart; n < clipper.DisplayEnd; ++n)
+    for (int n = clipper.DisplayStart; n < clipper.DisplayEnd; ++n) {
       row(filter_ ? shown_[n] : n);
+      if (n == focus_row ||
+          (focus_top && ImGui::GetItemRectMin().y >= top)) {
+        ImGui::FocusItem();
+        ImGui::SetNavCursorVisibleAfterMove();
+        focus_top = false;
+      }
+    }
   }
   ImGui::EndListBox();
 }
@@ -43,6 +63,13 @@ bool ListBox::set_filter(std::string const& pattern) {
   }
   apply_filter();
   return ok;
+}
+
+int ListBox::shown_row(int item) const {
+  if (item < 0 || !filter_) return item;
+  auto const it = std::lower_bound(shown_.begin(), shown_.end(), item);
+  return it != shown_.end() && *it == item ? static_cast<int>(it - shown_.begin())
+                                           : -1;
 }
 
 size_t ListBox::shown_count() const {

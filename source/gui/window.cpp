@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "app-state.h"
+#include "widgets.h"
 
 Window::Window() : sentence_(app_state().sentence) {
   AppState const& state = app_state();
@@ -50,9 +51,7 @@ void Window::render() {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("u:");
     ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    entered |= ImGui::InputText("##used", used_letters_, sizeof used_letters_,
-                                ImGuiInputTextFlags_EnterReturnsTrue);
+    entered |= clearable_input("used", used_letters_, sizeof used_letters_);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("s:");
@@ -100,6 +99,16 @@ void Window::render() {
       column.render();
     }
     ImGui::EndTable();
+  }
+  for (int i = 0; i < column_count(); ++i) {
+    int const step = columns_[i].shows_list() ? columns_[i].list_.sideways() : 0;
+    if (step == 0) continue;
+    for (int j = i + step; j >= 0 && j < column_count(); j += step) {
+      if (columns_[j].shows_list()) {
+        columns_[j].list_.focus();
+        break;
+      }
+    }
   }
   ImGui::End();
 }

@@ -88,6 +88,10 @@ class Column {
   // "src:" and the source dropdown, which sets source_, then "ltr_src:" and
   // the letter source dropdown, which sets letter_source_.
   void render_sources();
+  // Whether render() shows the ListBox: the source isn't std::monostate.
+  bool shows_list() const {
+    return !std::holds_alternative<std::monostate>(source_);
+  }
   // The source column, or null when the source isn't one.
   Column const* source_column() const;
   // The letters column, or null when there isn't one.

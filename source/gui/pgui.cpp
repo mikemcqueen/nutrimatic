@@ -90,6 +90,28 @@ void measure_window_frame() {
   geometry.frame_top = y - geometry.y;
 }
 
+// Turns a keypad key pressed with NumLock off into the navigation key it
+// stands for, as SDL leaves it a keypad key and ImGui navigation ignores
+// keypad keys. Some keyboards (and WSLg) send PageUp/PageDown this way.
+void keypad_to_navigation(SDL_Event& event) {
+  if (event.type != SDL_KEYDOWN && event.type != SDL_KEYUP) return;
+  SDL_Keysym& key = event.key.keysym;
+  if (key.mod & KMOD_NUM) return;
+  switch (key.sym) {
+    case SDLK_KP_1: key.sym = SDLK_END; break;
+    case SDLK_KP_2: key.sym = SDLK_DOWN; break;
+    case SDLK_KP_3: key.sym = SDLK_PAGEDOWN; break;
+    case SDLK_KP_4: key.sym = SDLK_LEFT; break;
+    case SDLK_KP_6: key.sym = SDLK_RIGHT; break;
+    case SDLK_KP_7: key.sym = SDLK_HOME; break;
+    case SDLK_KP_8: key.sym = SDLK_UP; break;
+    case SDLK_KP_9: key.sym = SDLK_PAGEUP; break;
+    case SDLK_KP_0: key.sym = SDLK_INSERT; break;
+    case SDLK_KP_PERIOD: key.sym = SDLK_DELETE; break;
+    default: break;
+  }
+}
+
 }  // namespace
 
 int main(int, char**) {
@@ -143,6 +165,7 @@ int main(int, char**) {
     SDL_Event event;
     if (frames_due > 0 ? SDL_PollEvent(&event) : SDL_WaitEvent(&event)) {
       do {
+        keypad_to_navigation(event);
         ImGui_ImplSDL2_ProcessEvent(&event);
         if (event.type == SDL_QUIT) running = false;
         if (event.type == SDL_WINDOWEVENT &&

@@ -13,7 +13,9 @@
 // name typed. The letters fields start from app_state(), and Enter in either
 // stores both there. The buttons start from app_state()'s sentence; clicking
 // one selects it alone, or deselects it when already selected, and stores the
-// result there.
+// result there. Left and Right, while a column's ListBox has keyboard focus,
+// move it to the ListBox of the nearest column that shows one on that side
+// (see ListBox::focus()).
 class Window {
  public:
   Window();

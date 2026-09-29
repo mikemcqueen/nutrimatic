@@ -159,7 +159,7 @@ void Column::render() {
     ImGui::TextDisabled("%zu items", output()->size());
   }
 
-  if (!std::holds_alternative<std::monostate>(source_)) {
+  if (shows_list()) {
     int const selected = list_.selected();
     list_.render();
     if (list_.selected() != selected) ++version_;
