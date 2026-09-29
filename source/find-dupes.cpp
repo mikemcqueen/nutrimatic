@@ -20,7 +20,9 @@ static void usage(char const* program) {
       "usage: %s PAIRS\n"
       "  print each pair of PAIRS that also appears in the opposite word\n"
       "  order, once per pair, spelled as its second occurrence wrote it\n"
-      "  PAIRS  word,word lines, as in best.pairs\n",
+      "  PAIRS  word,word lines, as in best.pairs\n"
+      "  stderr gets N/TOTAL duplicate pairs found, where TOTAL counts\n"
+      "  distinct unordered pairs\n",
       program);
 }
 
@@ -58,6 +60,7 @@ int main(int argc, char* argv[]) {
     return 1;
 
   std::unordered_map<std::string, FirstOccurrence> seen;
+  size_t duplicates = 0;
   for (size_t i = 0; i < rows.size(); ++i) {
     if (rows[i].right.empty()) continue;
 
@@ -69,9 +72,12 @@ int main(int argc, char* argv[]) {
       continue;
 
     first.reported = true;
+    ++duplicates;
     printf("%s\n", format_pair_segment(spelling).c_str());
     if (ferror(stdout)) return 1;
   }
 
-  return fflush(stdout) == 0 ? 0 : 1;
+  if (fflush(stdout) != 0) return 1;
+  fprintf(stderr, "%zu/%zu duplicate pairs found\n", duplicates, seen.size());
+  return 0;
 }

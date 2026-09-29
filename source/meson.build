@@ -445,3 +445,9 @@ test_expr = executable('test-expr', 'test-expr.cpp',
 test('expr', test_expr)
 
 subdir('gui')
+if sdl2_dep.found()
+  executable('pgui', pgui_src,
+    include_directories: pgui_inc,
+    link_with: [pfilter_lib, freqsort_lib, dfs_class_list_lib],
+    dependencies: imgui_backends_dep, install: true)
+endif

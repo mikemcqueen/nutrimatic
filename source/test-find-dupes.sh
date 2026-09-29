@@ -30,8 +30,10 @@ EOF
 expected='well,aged
 hero,anti
 wish,death'
-actual=$("$find_dupes" "$pairs")
+actual=$("$find_dupes" "$pairs" 2> "$test_dir/stderr")
 [[ $actual == "$expected" ]] || fail "duplicate report is wrong: $actual"
+[[ $(< "$test_dir/stderr") == "3/3 duplicate pairs found" ]] ||
+  fail "summary is wrong: $(< "$test_dir/stderr")"
 
 clean=$test_dir/clean.pairs
 cat > "$clean" <<'EOF'
@@ -39,7 +41,7 @@ aged,well
 anti,hero
 EOF
 
-actual=$("$find_dupes" "$clean")
+actual=$("$find_dupes" "$clean" 2>/dev/null)
 [[ -z $actual ]] || fail "clean file produced output: $actual"
 
 "$find_dupes" "$test_dir/missing.pairs" 2>/dev/null &&

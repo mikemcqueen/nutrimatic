@@ -18,10 +18,10 @@ if sdl2_dep.found()
     include_directories: include_directories(backends_dir, is_system: true),
     dependencies: [imgui_dep, sdl2_dep])
 
-  executable('pgui', 'pgui.cpp', 'column.cpp', 'list-box.cpp',
+  # The pgui executable is declared in ../meson.build so it lands in the
+  # build root alongside the other tools.
+  pgui_src = files('pgui.cpp', 'column.cpp', 'list-box.cpp',
     'input-source.cpp', 'pair-filter.cpp', 'window.cpp',
-    'app-state.cpp', 'command.cpp', 'freq-sort.cpp', 'widgets.cpp',
-    include_directories: include_directories('..'),
-    link_with: [pfilter_lib, freqsort_lib, dfs_class_list_lib],
-    dependencies: imgui_backends_dep, install: true)
+    'app-state.cpp', 'command.cpp', 'freq-sort.cpp', 'widgets.cpp')
+  pgui_inc = include_directories('..')
 endif
