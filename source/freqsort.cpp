@@ -2,7 +2,6 @@
 // unusual their letters are.
 
 #include <stdio.h>
-#include <string.h>
 
 #include <iostream>
 #include <string>
@@ -70,29 +69,6 @@ void usage(FILE* out) {
   dfs_help_option("-h, --help", "show this help");
 }
 
-bool parse_value(char const* in, FreqsortOptions* out) {
-  if (strcmp(in, "log") == 0) {
-    out->mode = FREQSORT_SCORE_LOG;
-    return true;
-  }
-  if (strcmp(in, "glog") == 0 || strcmp(in, "g") == 0) {
-    out->mode = FREQSORT_SCORE_GLOG;
-    return true;
-  }
-  if (strcmp(in, "cv") == 0) {
-    out->mode = FREQSORT_SCORE_CV;
-    return true;
-  }
-  char const* number = in;
-  if (*number == '+') {
-    out->mode = FREQSORT_SCORE_ADD;
-    ++number;
-  }
-  if (!parse_double(number, "-v value", &out->value)) return false;
-  if (out->mode == FREQSORT_SCORE_MULTIPLY && out->value == 0) out->value = 1;
-  return true;
-}
-
 bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
                 bool* help) {
   static struct optparse_long const long_options[] = {
@@ -132,7 +108,7 @@ bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
         out->match = FREQSORT_MATCH_ALL;
         break;
       case 'v':
-        if (!parse_value(options.optarg, out)) return false;
+        if (!freqsort_parse_value(options.optarg, out)) return false;
         break;
       case 'm':
         if (!parse_count(options.optarg, "-m value", &out->min_letters))

@@ -1,10 +1,13 @@
 #include "pair-filter.h"
 
+#include <imgui.h>
+
 #include <cstdio>
 #include <functional>
 #include <utility>
 
 #include "letter-bag.h"
+#include "widgets.h"
 
 bool PairFilter::run(std::vector<SharedLines> const& inputs,
                      GlobalSettings const& settings, Lines* output) const {
@@ -40,5 +43,15 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
     if (filter.keep(row)) kept.push_back(lines[i]);
   }
   *output = std::move(kept);
+  return true;
+}
+
+bool PairFilter::render_options() {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("u:");
+  ImGui::SameLine();
+  if (!clearable_input("u", used_text, sizeof used_text) || used == used_text)
+    return false;
+  used = used_text;
   return true;
 }

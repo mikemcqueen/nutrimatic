@@ -9,6 +9,7 @@
 
 Window::Window() : sentence_(app_state().sentence) {
   AppState const& state = app_state();
+  std::snprintf(seed_, sizeof seed_, "%s", state.seed_name.c_str());
   std::snprintf(letters_, sizeof letters_, "%s", state.visual_letters.c_str());
   std::snprintf(used_letters_, sizeof used_letters_, "%s",
                 state.used_letters.c_str());
@@ -20,6 +21,25 @@ void Window::render() {
   ImGui::SetNextWindowSize(vp->WorkSize);
   ImGui::Begin("pgui", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+
+  if (ImGui::BeginTable("seed", 3)) {
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("seed:");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    bool const entered = ImGui::InputText(
+        "##seed", seed_, sizeof seed_, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    if (!app_state().seed_readable) ImGui::TextDisabled("unreadable");
+    ImGui::EndTable();
+    if (entered) app_state().load_seed(seed_);
+  }
 
   if (ImGui::BeginTable("letters", 5)) {
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);

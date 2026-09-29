@@ -9,10 +9,14 @@
 // Index of a Column in pgui's Window.
 using ColumnIdentifier = int;
 
-// Where a Column's items come from: nothing, the lines of a word or
-// word,word pair file, or another Column's items.
-using InputSource =
-    std::variant<std::monostate, std::string, ColumnIdentifier>;
+// app_state()'s seed lines as a Column's input source.
+struct Seed {
+  bool operator==(Seed const&) const = default;
+};
+
+// Where a Column's items come from: nothing, app_state()'s seed, or another
+// Column's items.
+using InputSource = std::variant<std::monostate, Seed, ColumnIdentifier>;
 
 // A list of items, shared unchanged between a Column, the columns reading it,
 // and the commands running on it.

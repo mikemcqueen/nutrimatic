@@ -32,6 +32,10 @@ struct FreqsortOptions {
   int min_letters = 4;                                // -m
 };
 
+// Sets out's mode and value from a -v argument: log, glog, g, cv, NUMBER, or
+// +NUMBER. Returns false, with the error diagnosed, when it can't be parsed.
+bool freqsort_parse_value(char const* in, FreqsortOptions* out);
+
 // The a-z letters of `in`, lowercased.
 std::string freqsort_letters(char const* in);
 

@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <algorithm>
 #include <iterator>
@@ -38,6 +39,30 @@ int count_letters(std::string const& word) {
 }
 
 }  // namespace
+
+bool freqsort_parse_value(char const* in, FreqsortOptions* out) {
+  out->mode = FREQSORT_SCORE_MULTIPLY;
+  if (strcmp(in, "log") == 0) {
+    out->mode = FREQSORT_SCORE_LOG;
+    return true;
+  }
+  if (strcmp(in, "glog") == 0 || strcmp(in, "g") == 0) {
+    out->mode = FREQSORT_SCORE_GLOG;
+    return true;
+  }
+  if (strcmp(in, "cv") == 0) {
+    out->mode = FREQSORT_SCORE_CV;
+    return true;
+  }
+  char const* number = in;
+  if (*number == '+') {
+    out->mode = FREQSORT_SCORE_ADD;
+    ++number;
+  }
+  if (!parse_double(number, "-v value", &out->value)) return false;
+  if (out->mode == FREQSORT_SCORE_MULTIPLY && out->value == 0) out->value = 1;
+  return true;
+}
 
 std::string freqsort_letters(char const* in) {
   std::string out;
