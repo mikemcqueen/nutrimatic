@@ -9,8 +9,11 @@
 
 // A freqsort call on one input, taking its letters and used letters from the
 // GlobalSettings in place of those in options. Its option widget is a "v:"
-// field; entering a -v argument there sets options' mode and value.
+// field; entering a -v argument there sets options' mode and value. It reads
+// dictionaries as well as seeds and columns.
 struct FreqSort {
+  static constexpr bool reads_dictionaries = true;
+
   FreqSort();
 
   bool run(std::vector<SharedLines> const& inputs,

@@ -28,7 +28,7 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   }
   options.sentence = settings.sentence;
   options.drop_yes = yes;
-  options.dictionary = std::cref(app_state().dictionary);
+  options.dictionary = std::cref(app_state().dictionaries.at("big_dict").words);
 
   Pfilter filter;
   if (!filter.load("pgui", options)) return false;

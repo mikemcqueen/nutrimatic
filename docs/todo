@@ -85,3 +85,8 @@
   - check the local folder, or $TARGETROOT, for a workflow target
     alternate/override
 * change bonuses: SB 0.5 YB 0.75 BB 1.0
+* pgui: running multiple freqsort/pfilter commands in one process reloads
+  shared inputs per command -- .wf/classified/no/sN/no.pairs and probably
+  the dict file are read again for each column. consider holding them in
+  shared app state so every freqsort/pfilter run in the same process reuses
+  the same loaded data

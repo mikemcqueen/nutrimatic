@@ -6,12 +6,13 @@
 #include "column.h"
 #include "input-source.h"
 
-// The top-level pane filling the viewport: a seed field, a row of letters
-// and used-letters fields and sentence buttons S1-S9 spanning all columns,
-// then the columns side by side. The seed field starts from app_state()'s
-// seed_name, and Enter in it reloads the seed from the name typed. The fields start from app_state(), and Enter in either stores
-// both there. The buttons start from app_state()'s sentence; clicking one
-// selects it alone, or deselects it when already selected, and stores the
+// The top-level pane filling the viewport: a line of seed, letters (l), and
+// used-letters (u) fields splitting its width evenly, followed by sentence
+// buttons S1-S9 (s), then the columns side by side. The seed field starts
+// from app_state()'s seed_name, and Enter in it reloads the seed from the
+// name typed. The letters fields start from app_state(), and Enter in either
+// stores both there. The buttons start from app_state()'s sentence; clicking
+// one selects it alone, or deselects it when already selected, and stores the
 // result there.
 class Window {
  public:

@@ -25,7 +25,11 @@
 // may have
 //   std::string used_letters() const
 // returning the letters it adds to the used letters it runs with, and those
-// of the Columns downstream of it; commands without it add none.
+// of the Columns downstream of it; commands without it add none. And it may
+// have
+//   static constexpr bool reads_dictionaries
+// true when its Column's source dropdown offers app_state()'s dictionaries;
+// commands without it read none.
 // Holds its value by copy.
 class Command {
  public:
@@ -49,6 +53,8 @@ class Command {
 
   std::string used_letters() const { return self_->used_letters(); }
 
+  bool reads_dictionaries() const { return self_->reads_dictionaries(); }
+
  private:
   struct Concept {
     virtual ~Concept() = default;
@@ -57,6 +63,7 @@ class Command {
                      GlobalSettings const& settings, Lines* output) const = 0;
     virtual bool render_options() = 0;
     virtual std::string used_letters() const = 0;
+    virtual bool reads_dictionaries() const = 0;
   };
 
   template <typename T>
@@ -80,6 +87,12 @@ class Command {
         return data.used_letters();
       else
         return std::string();
+    }
+    bool reads_dictionaries() const override {
+      if constexpr (requires { T::reads_dictionaries; })
+        return T::reads_dictionaries;
+      else
+        return false;
     }
     T data;
   };

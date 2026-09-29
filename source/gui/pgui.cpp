@@ -99,9 +99,9 @@ int main(int, char**) {
 
   if (!load_app_state(seed)) return 1;
   Window& top = main_window();
-  ColumnIdentifier const first = top.add_column(Column(Seed()));
-  ColumnIdentifier const second = top.add_column(Column(first));
-  top.add_column(Column(second));
+  ColumnIdentifier previous = top.add_column(Column(Seed{app_state().seed_key}, std::nullopt));
+  for (int i = 1; i < 5; ++i)
+    previous = top.add_column(Column(previous, previous));
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();

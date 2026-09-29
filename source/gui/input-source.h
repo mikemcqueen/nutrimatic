@@ -2,6 +2,7 @@
 #define NUTRIMATIC_GUI_INPUT_SOURCE_H
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -9,14 +10,28 @@
 // Index of a Column in pgui's Window.
 using ColumnIdentifier = int;
 
-// app_state()'s seed lines as a Column's input source.
+// The lines of the seed file under `key` in app_state()'s seed_map as a
+// Column's input source.
 struct Seed {
+  std::string key;
   bool operator==(Seed const&) const = default;
 };
 
-// Where a Column's items come from: nothing, app_state()'s seed, or another
-// Column's items.
-using InputSource = std::variant<std::monostate, Seed, ColumnIdentifier>;
+// The words of the dictionary under `key` in app_state()'s dictionaries as a
+// Column's input source.
+struct Dict {
+  std::string key;
+  bool operator==(Dict const&) const = default;
+};
+
+// Where a Column's items come from: nothing, one of app_state()'s seed files
+// or dictionaries, or another Column's items.
+using InputSource =
+    std::variant<std::monostate, Seed, Dict, ColumnIdentifier>;
+
+// Where a Column's used letters come from: another Column, or none ("all"),
+// taking app_state()'s used letters from its letters.
+using LetterSource = std::optional<ColumnIdentifier>;
 
 // A list of items, shared unchanged between a Column, the columns reading it,
 // and the commands running on it.

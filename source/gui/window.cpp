@@ -22,49 +22,40 @@ void Window::render() {
   ImGui::Begin("pgui", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
 
-  if (ImGui::BeginTable("seed", 3)) {
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+  if (ImGui::BeginTable("fields", 8)) {
+    for (int i = 0; i < 8; ++i) {
+      ImGui::TableSetupColumn("", i == 1 || i == 4 || i == 6
+                                      ? ImGuiTableColumnFlags_WidthStretch
+                                      : ImGuiTableColumnFlags_WidthFixed);
+    }
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("seed:");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    bool const entered = ImGui::InputText(
+    bool const seed_entered = ImGui::InputText(
         "##seed", seed_, sizeof seed_, ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     if (!app_state().seed_readable) ImGui::TextDisabled("unreadable");
-    ImGui::EndTable();
-    if (entered) app_state().load_seed(seed_);
-  }
-
-  if (ImGui::BeginTable("letters", 5)) {
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
-    ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("letters:");
+    ImGui::TextUnformatted("l:");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-FLT_MIN);
     bool entered = ImGui::InputText("##letters", letters_, sizeof letters_,
                                     ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("used:");
+    ImGui::TextUnformatted("u:");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-FLT_MIN);
     entered |= ImGui::InputText("##used", used_letters_, sizeof used_letters_,
                                 ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("sentence:");
+    ImGui::TextUnformatted("s:");
     float const side = ImGui::GetFrameHeight();
     for (int i = 1; i <= 9; ++i) {
       ImGui::SameLine();
@@ -85,15 +76,16 @@ void Window::render() {
       }
     }
     ImGui::EndTable();
+    if (seed_entered) app_state().load_seed(seed_);
     AppState& state = app_state();
-    if (state.sentence != sentence_) {
-      state.sentence = sentence_;
-      ++state.generation;
-    }
     if (entered && (state.visual_letters != letters_ ||
                     state.used_letters != used_letters_)) {
       state.set_letters(letters_);
       state.used_letters = used_letters_;
+      ++state.generation;
+    }
+    if (state.sentence != sentence_) {
+      state.sentence = sentence_;
       ++state.generation;
     }
   }
@@ -113,6 +105,7 @@ void Window::render() {
 }
 
 ColumnIdentifier Window::add_column(Column column) {
+  column.id_ = column_count();
   columns_.push_back(std::move(column));
   return static_cast<ColumnIdentifier>(columns_.size() - 1);
 }

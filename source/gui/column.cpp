@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "app-state.h"
 #include "widgets.h"
@@ -64,13 +66,20 @@ std::string remaining_letters(std::string const& letters,
   return text;
 }
 
-// The source dropdown's label for `source`: "seed", or a column's number
-// counting from 1.
+// The source dropdown's label for `source`: a seed or dictionary key, or a
+// column's number counting from 1.
 std::string source_label(InputSource const& source) {
   if (auto const* id = std::get_if<ColumnIdentifier>(&source))
     return std::to_string(*id + 1);
-  if (std::holds_alternative<Seed>(source)) return "seed";
+  if (auto const* seed = std::get_if<Seed>(&source)) return seed->key;
+  if (auto const* dict = std::get_if<Dict>(&source)) return dict->key;
   return "none";
+}
+
+// The letter source dropdown's label for `source`: a column's number
+// counting from 1, or "all".
+std::string letter_source_label(LetterSource const& source) {
+  return source ? std::to_string(*source + 1) : "all";
 }
 
 void wake_main_loop() {
@@ -81,16 +90,18 @@ void wake_main_loop() {
 
 }  // namespace
 
-Column::Column(InputSource source)
-    : source_(std::move(source)), list_(empty_lines()) {
+Column::Column(InputSource source, LetterSource letter_source)
+    : source_(std::move(source)),
+      letter_source_(letter_source),
+      list_(empty_lines()) {
   for (char const* const name : command_names)
     commands_.push_back(make_command(name));
 }
 
 void Column::render() {
   ImGui::PushID(this);
-  render_source();
-  ImGui::SameLine();
+  render_sources();
+  ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("filter:");
   ImGui::SameLine();
   if (clearable_input("filter", filter_, sizeof filter_))
@@ -117,7 +128,13 @@ void Column::render() {
 
   if (job_ && job_->done.load(std::memory_order_acquire)) finish();
   Column const* source = source_column();
-  bool const waiting = source && source->pending();
+  Column const* letters = letters_column();
+  std::optional<ColumnIdentifier> waiting_for;
+  if (source && source->pending())
+    waiting_for = std::get<ColumnIdentifier>(source_);
+  else if (letters && letters->pending())
+    waiting_for = letter_source_;
+  bool const waiting = waiting_for.has_value();
   Key const want = wanted_key();
   if (!job_ && want != made_key_ && !waiting) start(want);
 
@@ -129,9 +146,8 @@ void Column::render() {
 
   if (job_) {
     ImGui::TextDisabled("running");
-  } else if (want != made_key_) {
-    ImGui::TextDisabled("waiting for column %d",
-                        std::get<ColumnIdentifier>(source_) + 1);
+  } else if (waiting) {
+    ImGui::TextDisabled("waiting for column %d", *waiting_for + 1);
   } else if (failed_) {
     ImGui::TextDisabled("failed");
   } else if (bad_filter_) {
@@ -151,31 +167,54 @@ void Column::render() {
   ImGui::PopID();
 }
 
-void Column::render_source() {
-  Window& window = main_window();
+void Column::render_sources() {
+  static std::vector<std::string> const no_keys;
+  std::vector<std::string> const& keys = app_state().seed_keys;
+  std::vector<std::string> const& dict_keys =
+      commands_[choice_] && commands_[choice_]->reads_dictionaries()
+          ? app_state().dictionary_keys
+          : no_keys;
+  std::string const label = source_label(source_);
+  std::vector<char const*> widest = {label.c_str()};
+  for (std::string const& key : keys) widest.push_back(key.c_str());
+  for (std::string const& key : dict_keys) widest.push_back(key.c_str());
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("src:");
   ImGui::SameLine();
-  static constexpr char const* widest[] = {"seed"};
   ImGui::SetNextItemWidth(combo_width(widest));
-  if (!ImGui::BeginCombo("##source", source_label(source_).c_str())) return;
-  if (ImGui::Selectable("seed", std::holds_alternative<Seed>(source_)))
-    source_ = Seed();
-  for (ColumnIdentifier id = 0; id < window.column_count(); ++id) {
-    bool const cycle = window.get_column(id).reads_from(this);
-    InputSource const choice = id;
-    if (ImGui::Selectable(source_label(choice).c_str(), source_ == choice,
-                          cycle ? ImGuiSelectableFlags_Disabled : 0))
-      source_ = choice;
+  if (ImGui::BeginCombo("##source", label.c_str())) {
+    for (std::string const& key : keys) {
+      InputSource const choice = Seed{key};
+      if (ImGui::Selectable(key.c_str(), source_ == choice)) source_ = choice;
+    }
+    for (std::string const& key : dict_keys) {
+      InputSource const choice = Dict{key};
+      if (ImGui::Selectable(key.c_str(), source_ == choice)) source_ = choice;
+    }
+    for (ColumnIdentifier id = 0; id < id_; ++id) {
+      InputSource const choice = id;
+      if (ImGui::Selectable(source_label(choice).c_str(), source_ == choice))
+        source_ = choice;
+    }
+    ImGui::EndCombo();
   }
-  ImGui::EndCombo();
-}
 
-bool Column::reads_from(Column const* column) const {
-  for (Column const* c = this; c; c = c->source_column()) {
-    if (c == column) return true;
+  ImGui::SameLine();
+  ImGui::TextUnformatted("ltr_src:");
+  ImGui::SameLine();
+  static constexpr char const* letters_widest[] = {"all"};
+  ImGui::SetNextItemWidth(combo_width(letters_widest));
+  if (ImGui::BeginCombo("##letter_source",
+                        letter_source_label(letter_source_).c_str())) {
+    if (ImGui::Selectable("all", !letter_source_)) letter_source_.reset();
+    for (ColumnIdentifier id = 0; id < id_; ++id) {
+      LetterSource const choice = id;
+      if (ImGui::Selectable(letter_source_label(choice).c_str(),
+                            letter_source_ == choice))
+        letter_source_ = choice;
+    }
+    ImGui::EndCombo();
   }
-  return false;
 }
 
 bool Column::pending() const {
@@ -195,25 +234,38 @@ Column const* Column::source_column() const {
   return &window.get_column(*id);
 }
 
-Column::Key Column::wanted_key() const {
-  Column const* source = source_column();
-  return {choice_, options_version_, app_state().generation,
-          source ? source->version() : 0, source_};
+Column const* Column::letters_column() const {
+  Window& window = main_window();
+  if (!letter_source_ || *letter_source_ < 0 ||
+      *letter_source_ >= window.column_count())
+    return nullptr;
+  return &window.get_column(*letter_source_);
 }
 
-std::string Column::chain_letters() const {
+Column::Key Column::wanted_key() const {
   Column const* source = source_column();
-  std::string chain = source ? source->chain_used_letters() : std::string();
-  if (commands_[choice_]) chain += commands_[choice_]->used_letters();
-  return chain;
+  Column const* letters = letters_column();
+  return {choice_,
+          options_version_,
+          app_state().generation,
+          source ? source->version() : 0,
+          source_,
+          letters ? letters->version() : 0,
+          letter_source_};
 }
 
 std::string Column::used_letters() const {
-  std::string used = app_state().used_letters + chain_letters();
-  if (Column const* source = source_column()) {
-    for (char const c : source->selected_item()) {
-      if (std::isalpha(static_cast<unsigned char>(c))) used += c;
-    }
+  Column const* letters = letters_column();
+  std::string used =
+      letters ? letters->output_used_letters() : app_state().used_letters;
+  if (commands_[choice_]) used += commands_[choice_]->used_letters();
+  return used;
+}
+
+std::string Column::output_used_letters() const {
+  std::string used = used_letters();
+  for (char const c : selected_item()) {
+    if (std::isalpha(static_cast<unsigned char>(c))) used += c;
   }
   return used;
 }
@@ -221,7 +273,7 @@ std::string Column::used_letters() const {
 void Column::start(Key key) {
   std::optional<Command> command = commands_[key.choice];
   if (!command) {
-    publish(key, true, empty_lines(), "");
+    publish(key, true, empty_lines());
     return;
   }
 
@@ -230,12 +282,14 @@ void Column::start(Key key) {
     Column const* source = source_column();
     if (!source) {
       fprintf(stderr, "pgui: no column %d\n", *id);
-      publish(key, false, empty_lines(), "");
+      publish(key, false, empty_lines());
       return;
     }
     input = source->output();
-  } else if (std::holds_alternative<Seed>(source_)) {
-    input = app_state().seed;
+  } else if (auto const* seed = std::get_if<Seed>(&source_)) {
+    input = app_state().seed_lines(seed->key);
+  } else if (auto const* dict = std::get_if<Dict>(&source_)) {
+    input = app_state().dictionary_lines(dict->key);
   } else {
     input = empty_lines();
   }
@@ -245,7 +299,6 @@ void Column::start(Key key) {
                              state.sentence};
   auto job = std::make_shared<Job>();
   job->key = key;
-  job->chain_used_letters = chain_letters();
   job_ = job;
   worker_ = std::jthread([job, command = std::move(*command),
                           settings = std::move(settings),
@@ -262,15 +315,12 @@ void Column::finish() {
   worker_.join();
   std::shared_ptr<Job> const job = std::move(job_);
   if (job->key == wanted_key()) {
-    publish(job->key, job->ok, job->ok ? job->output : empty_lines(),
-            job->chain_used_letters);
+    publish(job->key, job->ok, job->ok ? job->output : empty_lines());
   }
 }
 
-void Column::publish(Key key, bool ok, SharedLines output,
-                     std::string chain_used_letters) {
+void Column::publish(Key key, bool ok, SharedLines output) {
   list_.set_items(std::move(output));
-  chain_used_letters_ = std::move(chain_used_letters);
   ++version_;
   made_key_ = key;
   failed_ = !ok;
