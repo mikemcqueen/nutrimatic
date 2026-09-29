@@ -11,7 +11,8 @@ void ListBox::render() {
   Lines const& items = *items_;
   auto const row = [&](int i) {
     ImGui::PushID(i);
-    if (ImGui::Selectable(items[i].c_str(), selected_ == i))
+    if (ImGui::Selectable(items[i].c_str(), selected_ == i,
+                          ImGuiSelectableFlags_SelectOnNav))
       selected_ = selected_ == i ? -1 : i;
     ImGui::PopID();
   };

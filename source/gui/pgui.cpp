@@ -130,6 +130,7 @@ int main(int, char**) {
   ImGui::GetIO().Fonts->AddFontDefaultVector();
   ImGui::GetStyle().FontSizeBase = 20.0f;
   ImGui::GetIO().ConfigInputTextCursorBlink = false;
+  ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
   ImGui_ImplSDLRenderer2_Init(renderer);
 
