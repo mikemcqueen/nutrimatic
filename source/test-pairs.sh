@@ -20,9 +20,10 @@ check_pairs() {
   local letters=$3
   local expected_count=$4
   local expected_rows=$5
+  shift 5
   local output=$test_dir/$name.out
 
-  "$pairs" -m 0 -d "$dictionary" "$letters" > "$output"
+  "$pairs" "$@" -m 0 -d "$dictionary" "$letters" > "$output"
 
   local actual_count
   actual_count=$(wc -l < "$output")
@@ -47,7 +48,7 @@ aa
 EOF
 check_pairs cross-groups "$cross_groups" abcd 4 'ab,cd
 ab,dc
-cd,ba
+ba,cd
 ba,dc'
 
 same_group=$test_dir/same-group.txt
@@ -68,3 +69,22 @@ ab
 cd
 EOF
 check_pairs duplicate "$duplicate" abcd 1 'ab,cd'
+
+exact=$test_dir/exact.txt
+cat > "$exact" <<'EOF'
+ab
+
+1234
+cd
+c
+abc
+bca
+EOF
+check_pairs exact "$exact" abcd 1 'ab,cd' -x
+check_pairs exact-same-group "$exact" aabbcc 1 'abc,bca' -x
+check_pairs exact-solo "$exact" abc 3 'abc
+bca
+ab,c' -x --allow-solo
+if "$pairs" --allow-solo -d "$exact" abc 2>/dev/null; then
+  fail "--allow-solo without -x was accepted"
+fi

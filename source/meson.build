@@ -224,8 +224,11 @@ executable('freqsort', 'freqsort.cpp',
   dependencies: thread_dep,
   install: true)
 
+pairs_lib = static_library('pairs', 'pairs-impl.cpp',
+  link_with: dfs_class_list_lib)
+
 pairs = executable('pairs', 'pairs.cpp',
-  link_with: [dfs_class_list_lib, optparse_lib],
+  link_with: [pairs_lib, dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
 
@@ -448,6 +451,6 @@ subdir('gui')
 if sdl2_dep.found()
   executable('pgui', pgui_src,
     include_directories: pgui_inc,
-    link_with: [pfilter_lib, freqsort_lib, dfs_class_list_lib],
+    link_with: [pfilter_lib, freqsort_lib, pairs_lib, dfs_class_list_lib],
     dependencies: imgui_backends_dep, install: true)
 endif
