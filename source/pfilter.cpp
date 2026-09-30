@@ -1,8 +1,11 @@
 #include <stdio.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "classified.h"
 #include "dfs-cli-args.h"
@@ -17,17 +20,21 @@
 namespace {
 
 int const OPT_NO_DICT = 256;
+int const OPT_CV = 257;
+int const OPT_CSV = 258;
 
 struct Args {
   PfilterOptions options;
   char const* dictionary_file = NULL;
   bool no_dict = false;
+  bool cv = false;
+  bool csv = false;
   char const* source = NULL;
 };
 
 void usage(FILE* out) {
   fputs("usage: pfilter [-l LETTERS [-u LETTERS]...] [-x N] [-s N] [-y] "
-        "[-d FILE | --no-dict] [-i INDEX] PAIRS-FILE|-\n", out);
+        "[-d FILE | --no-dict] [-i INDEX] [--cv [--csv]] PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
   fputs("  print pairs whose two words are in the dictionary\n"
@@ -51,6 +58,13 @@ void usage(FILE* out) {
   dfs_help_option("--no-dict", "skip the dictionary check");
   dfs_help_option("-i, --idx INDEX",
       "print only pairs with \"word1 word2\" or \"word2 word1\" in INDEX");
+  dfs_help_option("--cv",
+      "print after each pair the consonant/vowel ratio of the -l letters "
+      "left once the pair's letters are removed; y is a consonant. inf "
+      "when only consonants are left. Pairs print sorted by it, lowest "
+      "first. Requires -l");
+  dfs_help_option("--csv",
+      "with --cv, sort as --cv does but print only the pairs");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -64,6 +78,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "dict", 'd', OPTPARSE_REQUIRED },
     { "no-dict", OPT_NO_DICT, OPTPARSE_NONE },
     { "idx", 'i', OPTPARSE_REQUIRED },
+    { "cv", OPT_CV, OPTPARSE_NONE },
+    { "csv", OPT_CSV, OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -109,6 +125,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case 'i':
         out->options.index_file = options.optarg;
         break;
+      case OPT_CV:
+        out->cv = true;
+        break;
+      case OPT_CSV:
+        out->csv = true;
+        break;
       case 'h':
         *help = true;
         return true;
@@ -127,6 +149,16 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
+  if (out->cv && letters == NULL) {
+    fputs("pfilter: --cv requires --letters\n", stderr);
+    return false;
+  }
+
+  if (out->csv && !out->cv) {
+    fputs("pfilter: --csv requires --cv\n", stderr);
+    return false;
+  }
+
   if (out->no_dict && out->dictionary_file != NULL) {
     fputs("pfilter: --dict and --no-dict can't be combined\n", stderr);
     return false;
@@ -134,6 +166,37 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   out->source = optparse_arg(&options);
   return out->source != NULL && optparse_arg(&options) == NULL;
+}
+
+// Prints the lines of `source` that `filter` keeps, each padded and followed
+// by the remaining_cv_ratio() of its pair against `bag`, lowest ratio first.
+// With `csv`, prints only the lines, unpadded, in the same order.
+bool print_kept_rows_with_cv(char const* source, Pfilter const& filter,
+                             LetterBag const& bag, bool csv) {
+  std::vector<std::pair<std::string, double>> kept;
+  size_t width = 0;
+  if (!read_rows("pfilter", source, "pair list", false,
+          [&](DfsPairRow const& row, std::string const& line) {
+            if (!filter.keep(row)) return true;
+            kept.emplace_back(line,
+                remaining_cv_ratio(bag, row.left + row.right));
+            width = std::max(width, line.size());
+            return true;
+          }))
+    return false;
+  std::stable_sort(kept.begin(), kept.end(),
+      [](auto const& a, auto const& b) { return a.second < b.second; });
+  for (auto const& [line, cv] : kept) {
+    if (csv)
+      printf("%s\n", line.c_str());
+    else
+      printf("%-*s  %.2f\n", int(width), line.c_str(), cv);
+  }
+  if (fflush(stdout) != 0) {
+    fputs("pfilter: can't write output\n", stderr);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -170,6 +233,9 @@ int main(int argc, char* argv[]) {
 
   Pfilter filter;
   if (!filter.load("pfilter", args.options)) return 1;
+  if (args.cv)
+    return print_kept_rows_with_cv(args.source, filter, *args.options.bag,
+               args.csv) ? 0 : 1;
   if (!print_kept_rows("pfilter", args.source, "pair list", false,
           [&](DfsPairRow const& row) { return filter.keep(row); }))
     return 1;

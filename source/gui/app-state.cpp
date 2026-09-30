@@ -92,7 +92,7 @@ bool load_app_state(std::string const& seed_path) {
   std::string const path =
       (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
   AppState& state = app_state();
-  state.set_letters("");
+  state.set_letters("$S2");
   state.used_letters.clear();
   state.dictionaries.clear();
   state.dictionary_words.clear();

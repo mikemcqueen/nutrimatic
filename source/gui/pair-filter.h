@@ -9,8 +9,12 @@
 #include "pfilter-impl.h"
 
 // A pfilter call on one input, taking its dictionary from app_state() and its
-// sentence from the GlobalSettings. Its option widget is a "u:" field with a
+// sentence from the GlobalSettings. Its option widgets are a "cv" toggle
+// button, setting cv, and a "u:" field with a
 // clear button; entering letters there, or clearing it, sets used, which the Column adds to its used letters.
+// With cv, which requires letters, each kept line is followed by a space and
+// the consonant/vowel ratio of the letters its pair leaves (see
+// remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
 struct PairFilter {
   bool run(std::vector<SharedLines> const& inputs,
            GlobalSettings const& settings, Lines* output) const;
@@ -18,6 +22,7 @@ struct PairFilter {
   std::string used_letters() const { return used; }
 
   bool yes = false;  // -y
+  bool cv = false;   // --cv
   std::string used;
   char used_text[64] = {};
 };

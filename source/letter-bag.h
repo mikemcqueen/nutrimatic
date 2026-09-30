@@ -28,4 +28,8 @@ bool fits_letter_bag(LetterBag const& bag, std::string const& text);
 // are consonants but no vowels.
 double cv_ratio(int const counts[26]);
 
+// cv_ratio() of the a-z letters left in `bag` once those of `text` are
+// removed. `text` must fit within `bag`.
+double remaining_cv_ratio(LetterBag const& bag, std::string const& text);
+
 #endif

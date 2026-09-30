@@ -66,7 +66,7 @@ struct AppState {
   std::string visual_letters;
   std::string actual_letters;
   std::string used_letters;
-  int sentence = 9;
+  int sentence = 2;
   std::string seed_directory;
   std::string seed_name;
   bool seed_readable = false;
@@ -88,7 +88,7 @@ struct GlobalSettings {
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
-// "sml_dict", not loaded yet, with empty letters and used letters, and the
+// "sml_dict", not loaded yet, with letters "$S2", empty used letters, and the
 // seed at `seed_path` (see AppState::load_seed()). Returns false, with the
 // error diagnosed, when the dictionary can't be read; a seed that can't be
 // read is left empty.

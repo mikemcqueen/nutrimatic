@@ -56,7 +56,7 @@ The details:
    
    Steps for generating pairs to submit/eval in P1 workflow:
 
-    * build list of wiki index pairs:
+    * build list of 4-letter wiki index pairs:
 
       `query-index $S2 --wf -w2 -n0 --csv | sort -u > idx/idx.2.s2.m4`
       
@@ -66,7 +66,7 @@ The details:
             this stage for p1_done filtering because it's still using comm instead of pcomm. when
             P1 filtering gets upgraded to use pcomm it may not longer be desirable.
 
-    * build list of cluer index pairs:
+    * build list of 4-letter cluer index pairs:
     
       `pairs $S8 [-u subset] | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s8.m4`
 
@@ -159,6 +159,13 @@ NEW WAY:
     `./wf review p2 results/s9/pairs/pairs.ooo --as s9.pairs.ooo -s9 --checked no`
     ** manual review **
     `./wf complete p2 s9.pairs.ooo`
+
+
+
+
+
+
+
 
 OLD WAY:
 

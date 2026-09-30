@@ -55,24 +55,13 @@ void Window::render() {
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("s:");
-    float const side = ImGui::GetFrameHeight();
     for (int i = 1; i <= 9; ++i) {
       ImGui::SameLine();
       bool const selected = sentence_ == i;
-      if (selected) {
-        ImGui::PushStyleColor(ImGuiCol_Button,
-                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32_WHITE);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-      }
       char label[4];
       std::snprintf(label, sizeof label, "S%d", i);
-      if (ImGui::Button(label, ImVec2(side, side)))
+      if (toggle_button(label, selected))
         sentence_ = selected ? CLASSIFIED_NO_SENTENCE : i;
-      if (selected) {
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(2);
-      }
     }
     ImGui::EndTable();
     if (seed_entered) app_state().load_seed(seed_);

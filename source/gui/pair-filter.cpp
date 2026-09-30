@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <utility>
@@ -25,6 +26,9 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   } else if (!settings.used_letters.empty()) {
     fputs("pgui: pfilter used letters require letters\n", stderr);
     return false;
+  } else if (cv) {
+    fputs("pgui: pfilter cv requires letters\n", stderr);
+    return false;
   }
   options.sentence = settings.sentence;
   options.drop_yes = yes;
@@ -35,23 +39,42 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
 
   Lines const& lines = *inputs[0];
   Lines kept;
+  std::vector<std::pair<double, size_t>> ratios;
   for (size_t i = 0; i < lines.size(); ++i) {
     DfsPairRow row;
     if (!parse_pair_row(lines[i], "pair list", "pfilter input", i + 1, false,
             &row))
       return false;
-    if (filter.keep(row)) kept.push_back(lines[i]);
+    if (!filter.keep(row)) continue;
+    if (cv)
+      ratios.emplace_back(
+          remaining_cv_ratio(*options.bag, row.left + row.right), i);
+    else
+      kept.push_back(lines[i]);
+  }
+  if (cv) {
+    std::ranges::stable_sort(ratios, {},
+                             &std::pair<double, size_t>::first);
+    kept.reserve(ratios.size());
+    for (auto const& [ratio, i] : ratios) {
+      char text[32];
+      snprintf(text, sizeof text, " %.2f", ratio);
+      kept.push_back(lines[i] + text);
+    }
   }
   *output = std::move(kept);
   return true;
 }
 
 bool PairFilter::render_options() {
+  bool const cv_changed = toggle_button("cv", cv);
+  if (cv_changed) cv = !cv;
+  ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
   ImGui::SameLine();
   if (!clearable_input("u", used_text, sizeof used_text) || used == used_text)
-    return false;
+    return cv_changed;
   used = used_text;
   return true;
 }

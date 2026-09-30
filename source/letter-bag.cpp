@@ -46,3 +46,11 @@ double cv_ratio(int const counts[26]) {
   if (vowels == 0) return INFINITY;
   return double(consonants) / vowels;
 }
+
+double remaining_cv_ratio(LetterBag const& bag, std::string const& text) {
+  int counts[26];
+  for (int i = 0; i < 26; ++i) counts[i] = bag.counts['a' + i];
+  for (char ch : text)
+    if (ch >= 'a' && ch <= 'z') --counts[ch - 'a'];
+  return cv_ratio(counts);
+}

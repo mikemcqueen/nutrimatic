@@ -9,20 +9,22 @@
 #include "input-source.h"
 
 // A single-selection list filling the remaining space of its container, where
-// clicking the selected item deselects it. Holds its items by sharing, never
-// copying them, and drawing only those scrolled into view. A filter hides the items it doesn't match without changing
+// clicking the selected item deselects it. Holds its items, and a value for
+// each shown right-aligned on its row, by sharing, never copying them, and
+// drawing only those scrolled into view. A filter hides the items it doesn't match without changing
 // the items or the selection. While the list has keyboard focus, Left and
 // Right don't move ImGui navigation; sideways() reports them instead.
 class ListBox {
  public:
-  explicit ListBox(SharedLines items);
+  ListBox(SharedLines items, SharedLines values);
 
   void render();
 
   SharedLines const& items() const { return items_; }
 
-  // Replaces the items and clears the selection.
-  void set_items(SharedLines items);
+  // Replaces the items and their values and clears the selection. `values` is
+  // either empty or holds one entry, possibly empty, per item.
+  void set_items(SharedLines items, SharedLines values);
 
   // Shows only the items `pattern` (ECMAScript) matches part of; empty shows
   // every item. Returns false, and shows every item, when `pattern` is
@@ -49,6 +51,7 @@ class ListBox {
   int shown_row(int item) const;
 
   SharedLines items_;
+  SharedLines values_;
   std::optional<std::regex> filter_;
   std::vector<int> shown_;
   int selected_ = -1;

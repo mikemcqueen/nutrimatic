@@ -6,7 +6,8 @@
 #include <algorithm>
 #include <utility>
 
-ListBox::ListBox(SharedLines items) : items_(std::move(items)) {}
+ListBox::ListBox(SharedLines items, SharedLines values)
+    : items_(std::move(items)), values_(std::move(values)) {}
 
 void ListBox::render() {
   if (!ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN))) return;
@@ -14,6 +15,8 @@ void ListBox::render() {
   if (ImGui::Shortcut(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat)) sideways_ = -1;
   if (ImGui::Shortcut(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat)) sideways_ = 1;
   Lines const& items = *items_;
+  Lines const& values = *values_;
+  float const right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
   int const count = static_cast<int>(shown_count());
   int const focus_row = focus_requested_ ? shown_row(selected_) : -1;
   bool focus_top = focus_requested_ && focus_row < 0;
@@ -28,25 +31,33 @@ void ListBox::render() {
     }
     ImGui::PopID();
   };
+  auto const value = [&](int i) {
+    if (values.empty() || values[i].empty()) return;
+    ImGui::SameLine(right - ImGui::CalcTextSize(values[i].c_str()).x);
+    ImGui::TextDisabled("%s", values[i].c_str());
+  };
   ImGuiListClipper clipper;
   clipper.Begin(count);
   if (focus_row >= 0) clipper.IncludeItemByIndex(focus_row);
   while (clipper.Step()) {
     for (int n = clipper.DisplayStart; n < clipper.DisplayEnd; ++n) {
-      row(filter_ ? shown_[n] : n);
+      int const i = filter_ ? shown_[n] : n;
+      row(i);
       if (n == focus_row ||
           (focus_top && ImGui::GetItemRectMin().y >= top)) {
         ImGui::FocusItem();
         ImGui::SetNavCursorVisibleAfterMove();
         focus_top = false;
       }
+      value(i);
     }
   }
   ImGui::EndListBox();
 }
 
-void ListBox::set_items(SharedLines items) {
+void ListBox::set_items(SharedLines items, SharedLines values) {
   items_ = std::move(items);
+  values_ = std::move(values);
   selected_ = -1;
   apply_filter();
 }

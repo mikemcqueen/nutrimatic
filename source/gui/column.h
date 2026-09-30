@@ -47,7 +47,9 @@ class Column {
 
   // The command's output, shared rather than copied by readers: empty before
   // the first run completes, when the choice names no command, and when the
-  // command fails.
+  // command fails. When any line the command printed has a space, each is cut
+  // at its first space, and the rest, trimmed, becomes its value, shown
+  // beside it in the ListBox but left out of output().
   SharedLines const& output() const { return list_.items(); }
 
   // The selected item of output(), or empty when nothing is selected.
@@ -77,12 +79,13 @@ class Column {
     bool operator==(Key const&) const = default;
   };
 
-  // A run on the worker thread; done is set once ok and output are.
+  // A run on the worker thread; done is set once ok, output, and values are.
   struct Job {
     Key key;
     std::atomic<bool> done = false;
     bool ok = false;
     SharedLines output;
+    SharedLines values;
   };
 
   // "src:" and the source dropdown, which sets source_, then "ltr_src:" and
@@ -103,7 +106,7 @@ class Column {
   std::string used_letters() const;
   void start(Key key);
   void finish();
-  void publish(Key key, bool ok, SharedLines output);
+  void publish(Key key, bool ok, SharedLines output, SharedLines values);
 
   friend class Window;
 

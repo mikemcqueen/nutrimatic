@@ -25,6 +25,33 @@ SharedLines const& empty_lines() {
   return lines;
 }
 
+// Cuts each of `lines` at its first space and returns what followed, trimmed
+// of whitespace, one entry per line, empty for lines without a space. Returns
+// empty_lines(), leaving `lines` as they are, when none has a space.
+SharedLines split_values(Lines* lines) {
+  if (std::ranges::none_of(*lines, [](std::string const& line) {
+        return line.find(' ') != std::string::npos;
+      }))
+    return empty_lines();
+  Lines values;
+  values.reserve(lines->size());
+  for (std::string& line : *lines) {
+    size_t const space = line.find(' ');
+    if (space == std::string::npos) {
+      values.emplace_back();
+      continue;
+    }
+    size_t const begin = line.find_first_not_of(" \t\r", space);
+    if (begin == std::string::npos)
+      values.emplace_back();
+    else
+      values.push_back(
+          line.substr(begin, line.find_last_not_of(" \t\r") + 1 - begin));
+    line.resize(space);
+  }
+  return std::make_shared<Lines const>(std::move(values));
+}
+
 // A dropdown's width: the longest of `labels`, framed, and its arrow.
 float combo_width(std::span<char const* const> labels) {
   float longest = 0;
@@ -100,7 +127,7 @@ void wake_main_loop() {
 Column::Column(InputSource source, LetterSource letter_source)
     : source_(std::move(source)),
       letter_source_(letter_source),
-      list_(empty_lines()) {
+      list_(empty_lines(), empty_lines()) {
   for (char const* const name : command_names)
     commands_.push_back(make_command(name));
 }
@@ -292,7 +319,7 @@ std::string Column::output_used_letters() const {
 void Column::start(Key key) {
   std::optional<Command> command = commands_[key.choice];
   if (!command) {
-    publish(key, true, empty_lines());
+    publish(key, true, empty_lines(), empty_lines());
     return;
   }
 
@@ -301,7 +328,7 @@ void Column::start(Key key) {
     Column const* source = source_column();
     if (!source) {
       fprintf(stderr, "pgui: no column %d\n", *id);
-      publish(key, false, empty_lines());
+      publish(key, false, empty_lines(), empty_lines());
       return;
     }
     input = source->output();
@@ -324,6 +351,7 @@ void Column::start(Key key) {
                           input = std::move(input)] {
     Lines output;
     job->ok = command.run({input}, settings, &output);
+    job->values = split_values(&output);
     job->output = std::make_shared<Lines const>(std::move(output));
     job->done.store(true, std::memory_order_release);
     wake_main_loop();
@@ -334,12 +362,14 @@ void Column::finish() {
   worker_.join();
   std::shared_ptr<Job> const job = std::move(job_);
   if (job->key == wanted_key()) {
-    publish(job->key, job->ok, job->ok ? job->output : empty_lines());
+    publish(job->key, job->ok, job->ok ? job->output : empty_lines(),
+            job->ok ? job->values : empty_lines());
   }
 }
 
-void Column::publish(Key key, bool ok, SharedLines output) {
-  list_.set_items(std::move(output));
+void Column::publish(Key key, bool ok, SharedLines output,
+                     SharedLines values) {
+  list_.set_items(std::move(output), std::move(values));
   ++version_;
   made_key_ = key;
   failed_ = !ok;
