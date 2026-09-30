@@ -29,7 +29,10 @@
 // have
 //   static constexpr bool reads_dictionaries
 // true when its Column's source dropdown offers app_state()'s dictionaries;
-// commands without it read none.
+// commands without it read none. And it may have
+//   static constexpr bool reads_pairs
+// true when it reads pairs, so choosing it moves its Column's source off a
+// dictionary; commands without it don't.
 // Holds its value by copy.
 class Command {
  public:
@@ -55,6 +58,8 @@ class Command {
 
   bool reads_dictionaries() const { return self_->reads_dictionaries(); }
 
+  bool reads_pairs() const { return self_->reads_pairs(); }
+
  private:
   struct Concept {
     virtual ~Concept() = default;
@@ -64,6 +69,7 @@ class Command {
     virtual bool render_options() = 0;
     virtual std::string used_letters() const = 0;
     virtual bool reads_dictionaries() const = 0;
+    virtual bool reads_pairs() const = 0;
   };
 
   template <typename T>
@@ -91,6 +97,12 @@ class Command {
     bool reads_dictionaries() const override {
       if constexpr (requires { T::reads_dictionaries; })
         return T::reads_dictionaries;
+      else
+        return false;
+    }
+    bool reads_pairs() const override {
+      if constexpr (requires { T::reads_pairs; })
+        return T::reads_pairs;
       else
         return false;
     }

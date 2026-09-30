@@ -23,9 +23,9 @@ void Window::render() {
   ImGui::Begin("pgui", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
 
-  if (ImGui::BeginTable("fields", 8)) {
-    for (int i = 0; i < 8; ++i) {
-      ImGui::TableSetupColumn("", i == 1 || i == 4 || i == 6
+  if (ImGui::BeginTable("fields", 5)) {
+    for (int i = 0; i < 5; ++i) {
+      ImGui::TableSetupColumn("", i == 0 || i == 2 || i == 3
                                       ? ImGuiTableColumnFlags_WidthStretch
                                       : ImGuiTableColumnFlags_WidthFixed);
     }
@@ -33,7 +33,7 @@ void Window::render() {
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("seed:");
-    ImGui::TableNextColumn();
+    ImGui::SameLine(0, 0);
     ImGui::SetNextItemWidth(-FLT_MIN);
     bool const seed_entered = ImGui::InputText(
         "##seed", seed_, sizeof seed_, ImGuiInputTextFlags_EnterReturnsTrue);
@@ -43,14 +43,14 @@ void Window::render() {
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("l:");
-    ImGui::TableNextColumn();
+    ImGui::SameLine(0, 0);
     ImGui::SetNextItemWidth(-FLT_MIN);
     bool entered = ImGui::InputText("##letters", letters_, sizeof letters_,
                                     ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("u:");
-    ImGui::TableNextColumn();
+    ImGui::SameLine(0, 0);
     entered |= clearable_input("used", used_letters_, sizeof used_letters_);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();

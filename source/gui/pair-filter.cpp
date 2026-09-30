@@ -72,7 +72,7 @@ bool PairFilter::render_options() {
   ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
-  ImGui::SameLine();
+  ImGui::SameLine(0, 0);
   if (!clearable_input("u", used_text, sizeof used_text) || used == used_text)
     return cv_changed;
   used = used_text;

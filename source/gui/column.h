@@ -88,7 +88,7 @@ class Column {
     SharedLines values;
   };
 
-  // "src:" and the source dropdown, which sets source_, then "ltr_src:" and
+  // "src:" and the source dropdown, which sets source_, then "ltrs:" and
   // the letter source dropdown, which sets letter_source_.
   void render_sources();
   // Whether render() shows the ListBox: the source isn't std::monostate.

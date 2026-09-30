@@ -137,7 +137,7 @@ void Column::render() {
   render_sources();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("filter:");
-  ImGui::SameLine();
+  ImGui::SameLine(0, 0);
   if (clearable_input("filter", filter_, sizeof filter_))
     bad_filter_ = !list_.set_filter(filter_);
 
@@ -155,6 +155,13 @@ void Column::render() {
         if (commands_[choice_] && commands_[choice_]->reads_dictionaries() &&
             !std::holds_alternative<Dict>(source_))
           source_ = Dict{"sml_dict"};
+        if (commands_[choice_] && commands_[choice_]->reads_pairs() &&
+            std::holds_alternative<Dict>(source_)) {
+          if (id_ > 0)
+            source_ = id_ - 1;
+          else if (app_state().seed_map.contains("seed85"))
+            source_ = Seed{"seed85"};
+        }
       }
       ImGui::EndCombo();
     }
@@ -226,7 +233,7 @@ void Column::render_sources() {
   for (std::string const& key : dict_keys) widest.push_back(key.c_str());
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("src:");
-  ImGui::SameLine();
+  ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(combo_width(widest));
   if (ImGui::BeginCombo("##source", label.c_str())) {
     for (std::string const& key : keys) {
@@ -246,8 +253,8 @@ void Column::render_sources() {
   }
 
   ImGui::SameLine();
-  ImGui::TextUnformatted("ltr_src:");
-  ImGui::SameLine();
+  ImGui::TextUnformatted("ltrs:");
+  ImGui::SameLine(0, 0);
   static constexpr char const* letters_widest[] = {"all"};
   ImGui::SetNextItemWidth(combo_width(letters_widest));
   if (ImGui::BeginCombo("##letter_source",

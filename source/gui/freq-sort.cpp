@@ -6,10 +6,10 @@
 #include <cstdio>
 
 #include "dfs-cli-args.h"
+#include "widgets.h"
 
 FreqSort::FreqSort() {
-  std::snprintf(value, sizeof value, "cv");
-  freqsort_parse_value(value, &options);
+  options.mode = FREQSORT_SCORE_CV;
   options.min_cv = 1.0;
   std::snprintf(min_cv, sizeof min_cv, "%.1f", options.min_cv);
 }
@@ -36,17 +36,10 @@ bool FreqSort::render_options() {
   float const width = ImGui::CalcTextSize("00.0").x +
                       2 * ImGui::GetStyle().FramePadding.x;
   bool changed = false;
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("v:");
-  ImGui::SameLine(0, 0);
-  ImGui::SetNextItemWidth(width);
-  if (ImGui::InputText("##v", value, sizeof value,
-                       ImGuiInputTextFlags_EnterReturnsTrue)) {
-    FreqsortOptions parsed = options;
-    if (freqsort_parse_value(value, &parsed)) {
-      options = parsed;
-      changed = true;
-    }
+  bool const cv = options.mode == FREQSORT_SCORE_CV;
+  if (toggle_button("cv", cv)) {
+    options.mode = cv ? FreqsortOptions{}.mode : FREQSORT_SCORE_CV;
+    changed = true;
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(options.mode != FREQSORT_SCORE_CV);

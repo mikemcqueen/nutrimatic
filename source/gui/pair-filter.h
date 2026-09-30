@@ -16,6 +16,8 @@
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
 struct PairFilter {
+  static constexpr bool reads_pairs = true;
+
   bool run(std::vector<SharedLines> const& inputs,
            GlobalSettings const& settings, Lines* output) const;
   bool render_options();
