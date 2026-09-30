@@ -2,10 +2,16 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cstdio>
 
+#include "dfs-cli-args.h"
+
 FreqSort::FreqSort() {
-  std::snprintf(value, sizeof value, "%g", options.value);
+  std::snprintf(value, sizeof value, "cv");
+  freqsort_parse_value(value, &options);
+  options.min_cv = 1.0;
+  std::snprintf(min_cv, sizeof min_cv, "%.1f", options.min_cv);
 }
 
 bool FreqSort::run(std::vector<SharedLines> const& inputs,
@@ -27,15 +33,48 @@ bool FreqSort::run(std::vector<SharedLines> const& inputs,
 }
 
 bool FreqSort::render_options() {
+  float const width = ImGui::CalcTextSize("00.0").x +
+                      2 * ImGui::GetStyle().FramePadding.x;
+  bool changed = false;
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("v:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::InputText("##v", value, sizeof value,
+                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+    FreqsortOptions parsed = options;
+    if (freqsort_parse_value(value, &parsed)) {
+      options = parsed;
+      changed = true;
+    }
+  }
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(-FLT_MIN);
-  if (!ImGui::InputText("##v", value, sizeof value,
-                        ImGuiInputTextFlags_EnterReturnsTrue))
-    return false;
-  FreqsortOptions parsed = options;
-  if (!freqsort_parse_value(value, &parsed)) return false;
-  options = parsed;
-  return true;
+  ImGui::BeginDisabled(options.mode != FREQSORT_SCORE_CV);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("min:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(width);
+  if (ImGui::InputText("##min_cv", min_cv, sizeof min_cv,
+                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+    double parsed;
+    if (parse_double(min_cv, "min: value", &parsed)) {
+      options.min_cv = parsed;
+      changed = true;
+    }
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("m:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
+                          2 * ImGui::GetStyle().FramePadding.x);
+  int letters = options.min_letters;
+  if (ImGui::InputInt("##m", &letters, 0, 0,
+                      ImGuiInputTextFlags_EnterReturnsTrue)) {
+    letters = std::max(letters, 0);
+    changed |= letters != options.min_letters;
+    options.min_letters = letters;
+  }
+  return changed;
 }

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app-state.h"
+#include "letter-bag.h"
 #include "widgets.h"
 #include "window.h"
 
@@ -35,10 +36,10 @@ float combo_width(std::span<char const* const> labels) {
 
 // "(N): letters" for the N letters of `letters` left once `used` is removed,
 // in the order typed, then "  over: letters" for those of `used` that
-// weren't there to remove. Characters other than letters and digits are
-// skipped.
+// weren't there to remove, and sets `cv` to the consonant/vowel ratio of
+// the letters left. Characters other than letters and digits are skipped.
 std::string remaining_letters(std::string const& letters,
-                              std::string const& used) {
+                              std::string const& used, double* cv) {
   int counts[UCHAR_MAX + 1] = {};
   for (char const c : used) {
     if (std::isalnum(static_cast<unsigned char>(c)))
@@ -61,6 +62,12 @@ std::string remaining_letters(std::string const& letters,
       --count;
     }
   }
+  int letter_counts[26] = {};
+  for (char const c : left) {
+    if (std::isalpha(static_cast<unsigned char>(c)))
+      ++letter_counts[std::tolower(static_cast<unsigned char>(c)) - 'a'];
+  }
+  *cv = cv_ratio(letter_counts);
   std::string text = "(" + std::to_string(left.size()) + "): " + left;
   if (!over.empty()) text += "  over: " + over;
   return text;
@@ -116,7 +123,11 @@ void Column::render() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##choice", command_names[choice_])) {
       for (int i = 0; i < static_cast<int>(command_names.size()); ++i) {
-        if (ImGui::Selectable(command_names[i], choice_ == i)) choice_ = i;
+        if (!ImGui::Selectable(command_names[i], choice_ == i)) continue;
+        choice_ = i;
+        if (commands_[choice_] && commands_[choice_]->reads_dictionaries() &&
+            !std::holds_alternative<Dict>(source_))
+          source_ = Dict{"sml_dict"};
       }
       ImGui::EndCombo();
     }
@@ -139,7 +150,8 @@ void Column::render() {
   if (!job_ && want != made_key_ && !waiting) start(want);
 
   if (want != remaining_key_) {
-    remaining_ = remaining_letters(app_state().actual_letters, used_letters());
+    remaining_ = remaining_letters(app_state().actual_letters, used_letters(),
+                                   &remaining_cv_);
     remaining_key_ = want;
   }
   ImGui::TextDisabled("%s", remaining_.c_str());
@@ -158,6 +170,13 @@ void Column::render() {
   } else {
     ImGui::TextDisabled("%zu items", output()->size());
   }
+  char cv_text[32];
+  std::snprintf(cv_text, sizeof cv_text, "CV: %.2f", remaining_cv_);
+  float const cv_width = ImGui::CalcTextSize(cv_text).x;
+  ImGui::SameLine();
+  float const cv_gap = ImGui::GetContentRegionAvail().x - cv_width;
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, cv_gap));
+  ImGui::TextDisabled("%s", cv_text);
 
   if (shows_list()) {
     int const selected = list_.selected();

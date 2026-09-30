@@ -15,8 +15,8 @@
 namespace {
 
 void usage(FILE* out) {
-  fputs("usage: freqsort [-i] [-w] [-n|-p|-a] [-v VALUE] [-m COUNT] LETTERS "
-        "FILE|- [IGNORE...]\n", out);
+  fputs("usage: freqsort [-i] [-w] [-n|-p|-a] [-v VALUE] [--min-cv RATIO] "
+        "[-m COUNT] LETTERS FILE|- [IGNORE...]\n", out);
   if (out != stdout) return;
 
   fputs(
@@ -64,6 +64,8 @@ void usage(FILE* out) {
   dfs_help_option("  cv", "consonant/vowel ratio of the letters left once "
                   "the entry's letters are removed; y is a consonant. inf "
                   "when only consonants are left");
+  dfs_help_option("--min-cv RATIO", "skip entries whose cv score is below "
+                  "RATIO, default 0.0; only valid with -v cv");
   dfs_help_option("-m COUNT", "skip entries with fewer than COUNT letters, "
                   "default 4");
   dfs_help_option("-h, --help", "show this help");
@@ -71,6 +73,7 @@ void usage(FILE* out) {
 
 bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
                 bool* help) {
+  enum { OPT_MIN_CV = 256 };
   static struct optparse_long const long_options[] = {
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 'i', OPTPARSE_NONE },
@@ -80,12 +83,14 @@ bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
     { NULL, 'a', OPTPARSE_NONE },
     { NULL, 'v', OPTPARSE_REQUIRED },
     { NULL, 'm', OPTPARSE_REQUIRED },
+    { "min-cv", OPT_MIN_CV, OPTPARSE_REQUIRED },
     { NULL, 0, OPTPARSE_NONE },
   };
 
   struct optparse options;
   optparse_init(&options, argv);
 
+  bool seen_min_cv = false;
   int option;
   while ((option = optparse_long(&options, long_options, NULL)) != -1) {
     switch (option) {
@@ -114,10 +119,20 @@ bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
         if (!parse_count(options.optarg, "-m value", &out->min_letters))
           return false;
         break;
+      case OPT_MIN_CV:
+        if (!parse_double(options.optarg, "--min-cv value", &out->min_cv))
+          return false;
+        seen_min_cv = true;
+        break;
       default:
         fprintf(stderr, "error: %s\n", options.errmsg);
         return false;
     }
+  }
+
+  if (seen_min_cv && out->mode != FREQSORT_SCORE_CV) {
+    fputs("error: --min-cv is only valid with -v cv\n", stderr);
+    return false;
   }
 
   char const* const letters = optparse_arg(&options);

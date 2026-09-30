@@ -142,6 +142,7 @@ void Freqsort::add(std::string line) {
 
   double value;
   if (!score(line, &value)) return;
+  if (options_.mode == FREQSORT_SCORE_CV && value < options_.min_cv) return;
   char rounded[32];
   snprintf(rounded, sizeof rounded, "%.4e", value);
   entries_[line] = { line, strtod(rounded, NULL), letters };

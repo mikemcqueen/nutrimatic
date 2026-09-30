@@ -120,6 +120,8 @@ class Column {
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
   Key remaining_key_ = {-1, 0, 0, 0, {}, 0, {}};
+  // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
+  double remaining_cv_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;
   std::shared_ptr<Job> job_;

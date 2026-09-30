@@ -30,6 +30,7 @@ struct FreqsortOptions {
   FreqsortScoreMode mode = FREQSORT_SCORE_MULTIPLY;   // -v
   double value = 1.1;                                 // -v
   int min_letters = 4;                                // -m
+  double min_cv = 0.0;                                // --min-cv
 };
 
 // Sets out's mode and value from a -v argument: log, glog, g, cv, NUMBER, or

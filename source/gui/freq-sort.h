@@ -9,8 +9,10 @@
 
 // A freqsort call on one input, taking its letters and used letters from the
 // GlobalSettings in place of those in options. Its option widget is a "v:"
-// field; entering a -v argument there sets options' mode and value. It reads
-// dictionaries as well as seeds and columns.
+// field, starting at "cv"; entering a -v argument there sets options' mode
+// and value. Beside it a "min:" field, starting at 1.0 and greyed out unless
+// the mode is cv, sets options' min_cv, and an "m:" field sets its
+// min_letters. It reads dictionaries as well as seeds and columns.
 struct FreqSort {
   static constexpr bool reads_dictionaries = true;
 
@@ -22,6 +24,7 @@ struct FreqSort {
 
   FreqsortOptions options;
   char value[32];
+  char min_cv[32];
 };
 
 #endif
