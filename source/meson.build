@@ -211,6 +211,11 @@ bag_subset = executable('bag-subset', 'bag-subset.cpp',
   dependencies: thread_dep,
   install: true)
 
+bad_bags = executable('bad-bags', 'bad-bags.cpp',
+  link_with: [dfs_class_list_lib, optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
 combine_pairs = executable('combine-pairs', 'combine-pairs.cpp',
   link_with: [dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
@@ -406,6 +411,11 @@ test(
   'bag-subset',
   bash,
   args: [files('test-bag-subset.sh'), bag_subset],
+)
+test(
+  'bad-bags',
+  bash,
+  args: [files('test-bad-bags.sh'), bad_bags],
 )
 test(
   'combine-pairs',
