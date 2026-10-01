@@ -106,6 +106,9 @@ void Window::render() {
   for (int i = 0; i < column_count(); ++i) {
     if (columns_[i].shows_list() && columns_[i].list_.judge_pressed())
       toggle_judge(i);
+    if (columns_[i].shows_list() && columns_[i].list_.bad_pressed() &&
+        judge_ && !columns_[*judge_].remaining_sorted_.empty())
+      app_state().add_judged_bad(columns_[*judge_].remaining_sorted_);
     int const step =
         columns_[i].shows_list() ? columns_[i].list_.sideways_pressed() : 0;
     if (step == 0) continue;

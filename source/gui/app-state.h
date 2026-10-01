@@ -3,6 +3,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "classified.h"
@@ -48,6 +49,11 @@ struct AppState {
   // diagnosed.
   SharedLines dictionary_lines(std::string const& key);
 
+  // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't
+  // there already, bumps judged_bad_version, and appends it as a line to the
+  // judged-bad file in seed_directory. A failed append is diagnosed.
+  void add_judged_bad(std::string letters);
+
   // A word list file, and its words once loaded.
   struct Dictionary {
     std::string path;
@@ -77,6 +83,12 @@ struct AppState {
   // The lines read by seed_lines(), by key.
   std::unordered_map<std::string, SharedLines> seeds;
   unsigned generation = 0;
+  // Remaining letters judged bad, each lowercase a-z and sorted, whatever
+  // letters, used letters, seed, or sentence they were judged under; loaded
+  // by load_app_state() from the judged-bad file in seed_directory.
+  std::unordered_set<std::string> judged_bad;
+  // Goes up whenever judged_bad changes.
+  unsigned judged_bad_version = 0;
 };
 
 // A copy of app_state()'s actual letters, used letters, and sentence, taken
@@ -88,8 +100,10 @@ struct GlobalSettings {
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
-// "sml_dict", not loaded yet, with letters "$S2", empty used letters, and the
-// seed at `seed_path` (see AppState::load_seed()). Returns false, with the
+// "sml_dict", not loaded yet, with letters "$S2", empty used letters, the
+// seed at `seed_path` (see AppState::load_seed()), and judged_bad from the
+// judged-bad file beside it, one entry per nonblank line, empty when there is
+// none. Returns false, with the
 // error diagnosed, when the dictionary can't be read; a seed that can't be
 // read is left empty.
 bool load_app_state(std::string const& seed_path);

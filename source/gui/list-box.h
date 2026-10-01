@@ -14,7 +14,8 @@
 // drawing only those scrolled into view. A filter hides the items it doesn't match without changing
 // the items or the selection. While the list has keyboard focus, Left and
 // Right don't move ImGui navigation; sideways_pressed() reports them
-// instead, and judge_pressed() reports J. Its items are drawn in
+// instead, judge_pressed() reports J, and bad_pressed() reports D. Items can
+// also be hidden by set_hidden(), apart from the filter. Its items are drawn in
 // light gray on a muted blue background, both lighter while it has keyboard
 // focus.
 class ListBox {
@@ -36,7 +37,23 @@ class ListBox {
   // invalid.
   bool set_filter(std::string const& pattern);
 
-  // How many items the filter shows.
+  // Hides the items whose entry in `hidden` is nonzero, alongside the
+  // filter, without changing the selection. `hidden` is either empty, hiding
+  // none, or holds one entry per item. set_items() clears it.
+  void set_hidden(std::vector<char> hidden);
+
+  // Whether the selected item is hidden by set_hidden().
+  bool selected_hidden() const;
+
+  // When selected_hidden(), selects the next shown item, else the last one
+  // shown, else none, and moves keyboard focus to it (see focus()) when the
+  // list has keyboard focus.
+  void step_off_hidden();
+
+  // When selected_hidden(), clears the selection.
+  void deselect_hidden();
+
+  // How many items the filter and set_hidden() show.
   size_t shown_count() const;
 
   // Index into the items, or -1 when nothing is selected.
@@ -50,23 +67,32 @@ class ListBox {
   // render().
   bool judge_pressed() const { return judge_pressed_; }
 
+  // Whether D was pressed while the list had keyboard focus during the last
+  // render().
+  bool bad_pressed() const { return bad_pressed_; }
+
   // Moves keyboard focus, at the next render(), to the selected item when it
   // is shown, else to the top item in view, else to the list itself, without
   // changing the selection.
   void focus() { focus_requested_ = true; }
 
  private:
+  // Whether shown_ lists the items shown, rather than every item being shown.
+  bool filtering() const { return filter_ || !hidden_.empty(); }
   void apply_filter();
-  // The row showing items_[item], or -1 when `item` is -1 or filtered out.
+  // The row showing items_[item], or -1 when `item` is -1 or not shown.
   int shown_row(int item) const;
 
   SharedLines items_;
   SharedLines values_;
   std::optional<std::regex> filter_;
+  // Empty when set_hidden() hides no item.
+  std::vector<char> hidden_;
   std::vector<int> shown_;
   int selected_ = -1;
   int sideways_pressed_ = 0;
   bool judge_pressed_ = false;
+  bool bad_pressed_ = false;
   // Whether the list had keyboard focus during the last render().
   bool focused_ = false;
   bool focus_requested_ = false;

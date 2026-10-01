@@ -30,7 +30,12 @@
 // column (see output_used_letters()), or app_state()'s (the window's u:
 // field) for "all", plus its own (see Command::used_letters()). A status line
 // shows the letters left once those used letters are removed from
-// app_state()'s letters (the window's l: field). Pressing Enter in the filter field
+// app_state()'s letters (the window's l: field). Items that would leave
+// letters in app_state()'s judged_bad, were they taken from the letters left,
+// are hidden from the ListBox (see ListBox::set_hidden()), once output() is
+// up to date. A selected item hidden this way is deselected when it was kept
+// across a rerun, or stepped off (see ListBox::step_off_hidden()) when
+// judged_bad grew. Pressing Enter in the filter field
 // applies it as a regex to the ListBox (see ListBox::set_filter()), and the X
 // button beside it clears and applies it; the filter changes only what is
 // shown, never output(), selected_item(), or version(). Widget IDs are scoped
@@ -104,6 +109,9 @@ class Column {
   // output_used_letters(), or app_state()'s when there is none, plus the
   // command's own.
   std::string used_letters() const;
+  // Hides the ListBox items leaving judged_bad letters, and deselects or
+  // steps off a hidden selection; see the class comment.
+  void update_hidden();
   void start(Key key);
   void finish();
   void publish(Key key, bool ok, SharedLines output, SharedLines values);
@@ -125,6 +133,13 @@ class Column {
   Key remaining_key_ = {-1, 0, 0, 0, {}, 0, {}};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
+  // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
+  // empty when some used letters weren't in app_state()'s letters.
+  std::string remaining_sorted_;
+  // The made_key_ and app_state()'s judged_bad_version as of the last
+  // update_hidden().
+  Key hidden_key_ = {-1, 0, 0, 0, {}, 0, {}};
+  unsigned hidden_judged_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;
   std::shared_ptr<Job> job_;

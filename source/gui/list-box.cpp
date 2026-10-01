@@ -11,6 +11,7 @@ ListBox::ListBox(SharedLines items, SharedLines values)
 
 void ListBox::render() {
   judge_pressed_ = false;
+  bad_pressed_ = false;
   ImGui::PushStyleColor(ImGuiCol_FrameBg, focused_ ? IM_COL32(0x31, 0x3b, 0x4a, 0xff)
                                                    : IM_COL32(0x2a, 0x33, 0x40, 0xff));
   bool const open = ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN));
@@ -23,6 +24,7 @@ void ListBox::render() {
   if (ImGui::Shortcut(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat))
     sideways_pressed_ = 1;
   judge_pressed_ = ImGui::Shortcut(ImGuiKey_J);
+  bad_pressed_ = ImGui::Shortcut(ImGuiKey_D);
   Lines const& items = *items_;
   Lines const& values = *values_;
   float const right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -54,7 +56,7 @@ void ListBox::render() {
   if (focus_row >= 0) clipper.IncludeItemByIndex(focus_row);
   while (clipper.Step()) {
     for (int n = clipper.DisplayStart; n < clipper.DisplayEnd; ++n) {
-      int const i = filter_ ? shown_[n] : n;
+      int const i = filtering() ? shown_[n] : n;
       row(i);
       if (n == focus_row ||
           (focus_top && ImGui::GetItemRectMin().y >= top)) {
@@ -75,6 +77,7 @@ void ListBox::set_items(SharedLines items, SharedLines values) {
   items_ = std::move(items);
   values_ = std::move(values);
   selected_ = -1;
+  hidden_.clear();
   if (selected) {
     auto const found = std::ranges::find(*items_, *selected);
     if (found != items_->end())
@@ -97,22 +100,47 @@ bool ListBox::set_filter(std::string const& pattern) {
   return ok;
 }
 
+void ListBox::set_hidden(std::vector<char> hidden) {
+  hidden_ = std::move(hidden);
+  if (std::ranges::none_of(hidden_, [](char h) { return h; })) hidden_.clear();
+  apply_filter();
+}
+
+bool ListBox::selected_hidden() const {
+  return selected_ >= 0 && !hidden_.empty() && hidden_[selected_];
+}
+
+void ListBox::step_off_hidden() {
+  if (!selected_hidden()) return;
+  auto const next = std::ranges::lower_bound(shown_, selected_);
+  if (next != shown_.end())
+    selected_ = *next;
+  else
+    selected_ = shown_.empty() ? -1 : shown_.back();
+  if (focused_) focus_requested_ = true;
+}
+
+void ListBox::deselect_hidden() {
+  if (selected_hidden()) selected_ = -1;
+}
+
 int ListBox::shown_row(int item) const {
-  if (item < 0 || !filter_) return item;
+  if (item < 0 || !filtering()) return item;
   auto const it = std::lower_bound(shown_.begin(), shown_.end(), item);
   return it != shown_.end() && *it == item ? static_cast<int>(it - shown_.begin())
                                            : -1;
 }
 
 size_t ListBox::shown_count() const {
-  return filter_ ? shown_.size() : items_->size();
+  return filtering() ? shown_.size() : items_->size();
 }
 
 void ListBox::apply_filter() {
   shown_.clear();
-  if (!filter_) return;
+  if (!filtering()) return;
   Lines const& items = *items_;
   for (int i = 0; i < static_cast<int>(items.size()); ++i) {
-    if (std::regex_search(items[i], *filter_)) shown_.push_back(i);
+    if (!hidden_.empty() && hidden_[i]) continue;
+    if (!filter_ || std::regex_search(items[i], *filter_)) shown_.push_back(i);
   }
 }

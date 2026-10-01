@@ -63,10 +63,13 @@ float combo_width(std::span<char const* const> labels) {
 
 // "(N): letters" for the N letters of `letters` left once `used` is removed,
 // in the order typed, then "  over: letters" for those of `used` that
-// weren't there to remove, and sets `cv` to the consonant/vowel ratio of
-// the letters left. Characters other than letters and digits are skipped.
+// weren't there to remove; sets `cv` to the consonant/vowel ratio of the
+// letters left, and `sorted` to their a-z letters, lowercase and sorted, or
+// empty when some of `used` weren't there. Characters other than letters and
+// digits are skipped.
 std::string remaining_letters(std::string const& letters,
-                              std::string const& used, double* cv) {
+                              std::string const& used, double* cv,
+                              std::string* sorted) {
   int counts[UCHAR_MAX + 1] = {};
   for (char const c : used) {
     if (std::isalnum(static_cast<unsigned char>(c)))
@@ -95,6 +98,10 @@ std::string remaining_letters(std::string const& letters,
       ++letter_counts[std::tolower(static_cast<unsigned char>(c)) - 'a'];
   }
   *cv = cv_ratio(letter_counts);
+  sorted->clear();
+  if (over.empty()) {
+    for (int i = 0; i < 26; ++i) sorted->append(letter_counts[i], 'a' + i);
+  }
   std::string text = "(" + std::to_string(left.size()) + "): " + left;
   if (!over.empty()) text += "  over: " + over;
   return text;
@@ -185,9 +192,13 @@ void Column::render() {
 
   if (want != remaining_key_) {
     remaining_ = remaining_letters(app_state().actual_letters, used_letters(),
-                                   &remaining_cv_);
+                                   &remaining_cv_, &remaining_sorted_);
     remaining_key_ = want;
   }
+  if (made_key_ == remaining_key_ &&
+      (made_key_ != hidden_key_ ||
+       app_state().judged_bad_version != hidden_judged_version_))
+    update_hidden();
   ImVec2 const status_min = ImGui::GetCursorScreenPos();
   float const status_width = ImGui::GetContentRegionAvail().x;
   Window const& window = main_window();
@@ -336,6 +347,45 @@ std::string Column::output_used_letters() const {
     if (std::isalpha(static_cast<unsigned char>(c))) used += c;
   }
   return used;
+}
+
+void Column::update_hidden() {
+  bool const rerun = made_key_ != hidden_key_;
+  hidden_key_ = made_key_;
+  AppState const& state = app_state();
+  hidden_judged_version_ = state.judged_bad_version;
+  std::vector<char> hidden;
+  if (!state.judged_bad.empty() && !remaining_sorted_.empty()) {
+    int left[26] = {};
+    for (char const c : remaining_sorted_) ++left[c - 'a'];
+    Lines const& items = *output();
+    std::string key;
+    for (size_t i = 0; i < items.size(); ++i) {
+      int counts[26];
+      std::ranges::copy(left, counts);
+      bool fits = true;
+      for (char const c : items[i]) {
+        if (!std::isalpha(static_cast<unsigned char>(c))) continue;
+        if (--counts[std::tolower(static_cast<unsigned char>(c)) - 'a'] < 0) {
+          fits = false;
+          break;
+        }
+      }
+      if (!fits) continue;
+      key.clear();
+      for (int j = 0; j < 26; ++j) key.append(counts[j], 'a' + j);
+      if (!state.judged_bad.contains(key)) continue;
+      if (hidden.empty()) hidden.resize(items.size());
+      hidden[i] = 1;
+    }
+  }
+  list_.set_hidden(std::move(hidden));
+  int const selected = list_.selected();
+  if (rerun)
+    list_.deselect_hidden();
+  else
+    list_.step_off_hidden();
+  if (list_.selected() != selected) ++version_;
 }
 
 void Column::start(Key key) {

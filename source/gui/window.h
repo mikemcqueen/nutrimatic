@@ -17,7 +17,10 @@
 // result there. Left and Right, while a column's ListBox has keyboard focus,
 // move it to the ListBox of the nearest column that shows one on that side
 // (see ListBox::focus()). J, while a column's ListBox has keyboard focus,
-// calls toggle_judge() on that column.
+// calls toggle_judge() on that column. D, while a column's ListBox has
+// keyboard focus and there is a judge, adds the judge's remaining letters to
+// app_state()'s judged_bad (see AppState::add_judged_bad()), unless they're
+// empty or some of its used letters weren't in app_state()'s letters.
 class Window {
  public:
   Window();

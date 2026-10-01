@@ -1,8 +1,10 @@
 #include "app-state.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -75,6 +77,11 @@ void add_other_seed_files(SeedMap& map, std::string const& directory,
   add_seed_if_exists(map, directory, "all", build_seed_name(name, "all"));
 }
 
+// The judged-bad file in `directory`.
+std::string judged_bad_path(std::string const& directory) {
+  return (std::filesystem::path(directory) / "judged-bad").string();
+}
+
 // The keys of `map`, sorted.
 template <typename Map>
 std::vector<std::string> sorted_keys(Map const& map) {
@@ -105,6 +112,15 @@ bool load_app_state(std::string const& seed_path) {
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
   state.load_seed(seed.filename().string());
+  state.judged_bad.clear();
+  std::string const judged = judged_bad_path(state.seed_directory);
+  Lines lines;
+  if (std::filesystem::exists(judged) && read_file_lines(judged, &lines)) {
+    for (std::string& line : lines) {
+      if (!line.empty()) state.judged_bad.insert(std::move(line));
+    }
+  }
+  ++state.judged_bad_version;
   return true;
 }
 
@@ -153,6 +169,16 @@ SharedLines AppState::dictionary_lines(std::string const& key) {
     std::ranges::sort(*lines);
   }
   return dictionary_words.emplace(key, std::move(lines)).first->second;
+}
+
+void AppState::add_judged_bad(std::string letters) {
+  if (!judged_bad.insert(letters).second) return;
+  ++judged_bad_version;
+  std::string const path = judged_bad_path(seed_directory);
+  std::ofstream file(path, std::ios::app);
+  file << letters << '\n';
+  file.close();
+  if (!file) std::fprintf(stderr, "pgui: can't append to %s\n", path.c_str());
 }
 
 void AppState::set_letters(std::string letters) {
