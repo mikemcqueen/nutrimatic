@@ -13,7 +13,9 @@
 // each shown right-aligned on its row, by sharing, never copying them, and
 // drawing only those scrolled into view. A filter hides the items it doesn't match without changing
 // the items or the selection. While the list has keyboard focus, Left and
-// Right don't move ImGui navigation; sideways() reports them instead.
+// Right don't move ImGui navigation; sideways_pressed() reports them
+// instead, and judge_pressed() reports J. Its background is the frame
+// background lightened, more so while it has keyboard focus.
 class ListBox {
  public:
   ListBox(SharedLines items, SharedLines values);
@@ -39,10 +41,15 @@ class ListBox {
 
   // -1 when Left, or 1 when Right, was pressed while the list had keyboard
   // focus during the last render(), else 0.
-  int sideways() const { return sideways_; }
+  int sideways_pressed() const { return sideways_pressed_; }
+
+  // Whether J was pressed while the list had keyboard focus during the last
+  // render().
+  bool judge_pressed() const { return judge_pressed_; }
 
   // Moves keyboard focus, at the next render(), to the selected item when it
-  // is shown, else to the top item in view, without changing the selection.
+  // is shown, else to the top item in view, else to the list itself, without
+  // changing the selection.
   void focus() { focus_requested_ = true; }
 
  private:
@@ -55,7 +62,10 @@ class ListBox {
   std::optional<std::regex> filter_;
   std::vector<int> shown_;
   int selected_ = -1;
-  int sideways_ = 0;
+  int sideways_pressed_ = 0;
+  bool judge_pressed_ = false;
+  // Whether the list had keyboard focus during the last render().
+  bool focused_ = false;
   bool focus_requested_ = false;
 };
 

@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_GUI_WINDOW_H
 #define NUTRIMATIC_GUI_WINDOW_H
 
+#include <optional>
 #include <vector>
 
 #include "column.h"
@@ -15,7 +16,8 @@
 // one selects it alone, or deselects it when already selected, and stores the
 // result there. Left and Right, while a column's ListBox has keyboard focus,
 // move it to the ListBox of the nearest column that shows one on that side
-// (see ListBox::focus()).
+// (see ListBox::focus()). J, while a column's ListBox has keyboard focus,
+// calls toggle_judge() on that column.
 class Window {
  public:
   Window();
@@ -32,12 +34,27 @@ class Window {
   // The column with identifier `id`, which must be less than column_count().
   Column& get_column(ColumnIdentifier id) { return columns_[id]; }
 
+  // The judge column, of which there is at most one.
+  std::optional<ColumnIdentifier> judge() const { return judge_; }
+
+  // Makes column `id` the judge when there is none, or none when it is the
+  // judge. When another column is the judge, leaves it so and flashes it
+  // instead (see judge_flashing()).
+  void toggle_judge(ColumnIdentifier id);
+
+  // Whether the judge is flashing, which it does for a moment after a
+  // refused toggle_judge().
+  bool judge_flashing() const;
+
  private:
   std::vector<Column> columns_;
   char seed_[256] = {};
   char letters_[256] = {};
   char used_letters_[256] = {};
   int sentence_;
+  std::optional<ColumnIdentifier> judge_;
+  // When the judge stops flashing, in ImGui::GetTime() seconds.
+  double judge_flash_until_ = 0;
 };
 
 // pgui's one Window, constructed on first use, which must follow

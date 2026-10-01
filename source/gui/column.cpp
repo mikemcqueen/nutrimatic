@@ -188,7 +188,22 @@ void Column::render() {
                                    &remaining_cv_);
     remaining_key_ = want;
   }
-  ImGui::TextDisabled("%s", remaining_.c_str());
+  ImVec2 const status_min = ImGui::GetCursorScreenPos();
+  float const status_width = ImGui::GetContentRegionAvail().x;
+  Window const& window = main_window();
+  bool const judge = window.judge() == id_;
+  if (!judge) {
+    ImGui::TextDisabled("%s", remaining_.c_str());
+  } else {
+    ImGui::TextColored(ImVec4(1, 1, 1, 1), "%s", remaining_.c_str());
+    float const pad = ImGui::GetStyle().ItemSpacing.y / 2;
+    ImU32 const color = window.judge_flashing() ? IM_COL32(255, 0, 0, 255)
+                                                : IM_COL32(0, 255, 0, 255);
+    ImGui::GetWindowDrawList()->AddRect(
+        ImVec2(status_min.x - 2, status_min.y - pad),
+        ImVec2(status_min.x + status_width + 2, ImGui::GetItemRectMax().y + pad),
+        color, 0.0f, 0, 1.0f);
+  }
 
   if (job_) {
     ImGui::TextDisabled("running");

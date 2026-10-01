@@ -10,10 +10,23 @@ ListBox::ListBox(SharedLines items, SharedLines values)
     : items_(std::move(items)), values_(std::move(values)) {}
 
 void ListBox::render() {
-  if (!ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN))) return;
-  sideways_ = 0;
-  if (ImGui::Shortcut(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat)) sideways_ = -1;
-  if (ImGui::Shortcut(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat)) sideways_ = 1;
+  judge_pressed_ = false;
+  float const brightness = focused_ ? 1.45f : 1.25f;
+  ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+  bg.x *= brightness;
+  bg.y *= brightness;
+  bg.z *= brightness;
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, bg);
+  bool const open = ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN));
+  ImGui::PopStyleColor();
+  focused_ = open && ImGui::IsWindowFocused();
+  if (!open) return;
+  sideways_pressed_ = 0;
+  if (ImGui::Shortcut(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat))
+    sideways_pressed_ = -1;
+  if (ImGui::Shortcut(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat))
+    sideways_pressed_ = 1;
+  judge_pressed_ = ImGui::Shortcut(ImGuiKey_J);
   Lines const& items = *items_;
   Lines const& values = *values_;
   float const right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -52,6 +65,7 @@ void ListBox::render() {
       value(i);
     }
   }
+  if (focus_top) ImGui::SetWindowFocus();
   ImGui::EndListBox();
 }
 

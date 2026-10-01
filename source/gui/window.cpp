@@ -1,5 +1,6 @@
 #include "window.h"
 
+#include <SDL.h>
 #include <imgui.h>
 
 #include <cstdio>
@@ -7,6 +8,19 @@
 
 #include "app-state.h"
 #include "widgets.h"
+
+namespace {
+
+constexpr Uint32 judge_flash_ms = 200;
+
+Uint32 end_judge_flash(Uint32, void*) {
+  SDL_Event event = {};
+  event.type = SDL_USEREVENT;
+  SDL_PushEvent(&event);
+  return 0;
+}
+
+}  // namespace
 
 Window::Window() : sentence_(app_state().sentence) {
   AppState const& state = app_state();
@@ -90,7 +104,10 @@ void Window::render() {
     ImGui::EndTable();
   }
   for (int i = 0; i < column_count(); ++i) {
-    int const step = columns_[i].shows_list() ? columns_[i].list_.sideways() : 0;
+    if (columns_[i].shows_list() && columns_[i].list_.judge_pressed())
+      toggle_judge(i);
+    int const step =
+        columns_[i].shows_list() ? columns_[i].list_.sideways_pressed() : 0;
     if (step == 0) continue;
     for (int j = i + step; j >= 0 && j < column_count(); j += step) {
       if (columns_[j].shows_list()) {
@@ -100,6 +117,21 @@ void Window::render() {
     }
   }
   ImGui::End();
+}
+
+void Window::toggle_judge(ColumnIdentifier id) {
+  if (!judge_) {
+    judge_ = id;
+  } else if (*judge_ == id) {
+    judge_.reset();
+  } else {
+    judge_flash_until_ = ImGui::GetTime() + judge_flash_ms / 1000.0;
+    SDL_AddTimer(judge_flash_ms, end_judge_flash, nullptr);
+  }
+}
+
+bool Window::judge_flashing() const {
+  return ImGui::GetTime() < judge_flash_until_;
 }
 
 ColumnIdentifier Window::add_column(Column column) {
