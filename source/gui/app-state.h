@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_GUI_APP_STATE_H
 #define NUTRIMATIC_GUI_APP_STATE_H
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -37,6 +38,14 @@ struct AppState {
   // seed_directory under keys not already taken; and bumps generation. An
   // unreadable seed is diagnosed.
   void load_seed(std::string name);
+
+  // load_seed()s `name`, diagnosing a name whose sN component,
+  // <prefix>.sN.<suffix>, is missing or isn't s and one digit. When that
+  // component differs from bad_bags_sentence, sets bad_bags_sentence to it,
+  // empties judged_bad, loads it from the judged-bad file in seed_directory
+  // and, for a valid component, the bad.sN file there too, and bumps
+  // judged_bad_version. A missing file is diagnosed and adds nothing.
+  void load_seed_and_bad_bags(std::string name);
 
   // The lines of the seed file under `key` in seed_map, read the first time
   // they're asked for since load_seed(); none when `key` isn't in seed_map
@@ -85,8 +94,12 @@ struct AppState {
   unsigned generation = 0;
   // Remaining letters judged bad, each lowercase a-z and sorted, whatever
   // letters, used letters, seed, or sentence they were judged under; loaded
-  // by load_app_state() from the judged-bad file in seed_directory.
+  // by load_seed_and_bad_bags() from the judged-bad and bad.sN files in
+  // seed_directory.
   std::unordered_set<std::string> judged_bad;
+  // The sN component of the seed whose bad.sN judged_bad holds, set by
+  // load_seed_and_bad_bags(); none before the first.
+  std::optional<std::string> bad_bags_sentence;
   // Goes up whenever judged_bad changes.
   unsigned judged_bad_version = 0;
 };
@@ -101,11 +114,10 @@ struct GlobalSettings {
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
 // "sml_dict", not loaded yet, with letters "$S2", empty used letters, the
-// seed at `seed_path` (see AppState::load_seed()), and judged_bad from the
-// judged-bad file beside it, one entry per nonblank line, empty when there is
-// none. Returns false, with the
-// error diagnosed, when the dictionary can't be read; a seed that can't be
-// read is left empty.
+// seed at `seed_path` and judged_bad from the judged-bad and bad.sN files
+// beside it (see AppState::load_seed_and_bad_bags()), one entry per nonblank
+// line. Returns false, with the error diagnosed, when the dictionary can't be
+// read; a seed that can't be read is left empty.
 bool load_app_state(std::string const& seed_path);
 
 AppState& app_state();

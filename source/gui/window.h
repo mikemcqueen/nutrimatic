@@ -11,8 +11,9 @@
 // used-letters (u) fields splitting its width evenly, followed by sentence
 // buttons S1-S9 (s), then the columns side by side. The seed field starts
 // from app_state()'s seed_name, and Enter in it reloads the seed from the
-// name typed. The letters fields start from app_state(), and Enter in either
-// stores both there. The buttons start from app_state()'s sentence; clicking
+// name typed, with its bad bags (see AppState::load_seed_and_bad_bags()).
+// The letters fields start from app_state(), and Enter in either stores both
+// there. The buttons start from app_state()'s sentence; clicking
 // one selects it alone, or deselects it when already selected, and stores the
 // result there. Left and Right, while a column's ListBox has keyboard focus,
 // move it to the ListBox of the nearest column that shows one on that side

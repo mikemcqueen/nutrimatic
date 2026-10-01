@@ -78,7 +78,7 @@ void Window::render() {
         sentence_ = selected ? CLASSIFIED_NO_SENTENCE : i;
     }
     ImGui::EndTable();
-    if (seed_entered) app_state().load_seed(seed_);
+    if (seed_entered) app_state().load_seed_and_bad_bags(seed_);
     AppState& state = app_state();
     if (entered && (state.visual_letters != letters_ ||
                     state.used_letters != used_letters_)) {

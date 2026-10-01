@@ -7,6 +7,7 @@
 #include <fstream>
 #include <optional>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -82,6 +83,34 @@ std::string judged_bad_path(std::string const& directory) {
   return (std::filesystem::path(directory) / "judged-bad").string();
 }
 
+// The sN component of the seed file `name`, <prefix>.sN.<suffix>; empty
+// when `name` has no '.'.
+std::string_view get_seed_sentence(std::string_view name) {
+  std::vector<std::string_view> const pieces = split(name, '.');
+  return pieces.size() > 1 ? pieces[1] : std::string_view();
+}
+
+// Whether `sentence` is s followed by one digit.
+bool valid_seed_sentence(std::string_view sentence) {
+  return sentence.size() == 2 && sentence[0] == 's' &&
+         sentence[1] >= '0' && sentence[1] <= '9';
+}
+
+// Adds each nonblank line of the file at `path` to `bags`; a missing file is
+// diagnosed and adds nothing.
+void load_bags(std::string const& path,
+               std::unordered_set<std::string>& bags) {
+  if (!std::filesystem::exists(path)) {
+    std::fprintf(stderr, "pgui: skipping missing %s\n", path.c_str());
+    return;
+  }
+  Lines lines;
+  if (!read_file_lines(path, &lines)) return;
+  for (std::string& line : lines) {
+    if (!line.empty()) bags.insert(std::move(line));
+  }
+}
+
 // The keys of `map`, sorted.
 template <typename Map>
 std::vector<std::string> sorted_keys(Map const& map) {
@@ -111,16 +140,8 @@ bool load_app_state(std::string const& seed_path) {
   state.dictionary_keys = sorted_keys(state.dictionaries);
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
-  state.load_seed(seed.filename().string());
-  state.judged_bad.clear();
-  std::string const judged = judged_bad_path(state.seed_directory);
-  Lines lines;
-  if (std::filesystem::exists(judged) && read_file_lines(judged, &lines)) {
-    for (std::string& line : lines) {
-      if (!line.empty()) state.judged_bad.insert(std::move(line));
-    }
-  }
-  ++state.judged_bad_version;
+  state.bad_bags_sentence.reset();
+  state.load_seed_and_bad_bags(seed.filename().string());
   return true;
 }
 
@@ -139,6 +160,29 @@ void AppState::load_seed(std::string name) {
   seeds.clear();
   seeds.emplace(seed_key, std::move(lines));
   ++generation;
+}
+
+void AppState::load_seed_and_bad_bags(std::string name) {
+  load_seed(std::move(name));
+  std::string const sentence(get_seed_sentence(seed_name));
+  bool const valid = valid_seed_sentence(sentence);
+  if (sentence.empty()) {
+    std::fprintf(stderr, "missing sentence in seed filename: %s\n",
+                 seed_name.c_str());
+  } else if (!valid) {
+    std::fprintf(stderr, "invalid sentence '%s' in seed filename %s\n",
+                 sentence.c_str(), seed_name.c_str());
+  }
+  if (sentence == bad_bags_sentence) return;
+  bad_bags_sentence = sentence;
+  judged_bad.clear();
+  load_bags(judged_bad_path(seed_directory), judged_bad);
+  if (valid) {
+    load_bags((std::filesystem::path(seed_directory) / ("bad." + sentence))
+                  .string(),
+              judged_bad);
+  }
+  ++judged_bad_version;
 }
 
 SharedLines AppState::seed_lines(std::string const& key) {
