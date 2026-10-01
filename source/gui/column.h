@@ -31,17 +31,17 @@
 // field) for "all", plus its own (see Command::used_letters()). A status line
 // shows the letters left once those used letters are removed from
 // app_state()'s letters (the window's l: field). Items that would leave
-// letters in app_state()'s judged_bad, were they taken from the letters left,
-// are hidden from the ListBox (see ListBox::set_hidden()), once output() is
-// up to date. A selected item hidden this way is deselected when it was kept
-// across a rerun, or stepped off (see ListBox::step_off_hidden()) when
-// judged_bad grew. Pressing Enter in the filter field
-// applies it as a regex to the ListBox (see ListBox::set_filter()), and the X
-// button beside it clears and applies it; the filter changes only what is
-// shown, never output(), selected_item(), or version(). Widget IDs are scoped
-// to the Column, so any number can be rendered side by side in a Window.
-// Both dropdowns offer only columns before this one, so sources never form a
-// cycle.
+// letters judged bad (see AppState::is_judged_bad()), were they taken from
+// the letters left, are hidden from the ListBox (see ListBox::set_hidden()),
+// once output() is up to date. A selected item hidden this way is deselected
+// when it was kept across a rerun, or stepped off (see
+// ListBox::step_off_hidden()) when judged_bad_version went up. Pressing Enter
+// in the filter field applies it as a regex to the ListBox (see
+// ListBox::set_filter()), and the X button beside it clears and applies it;
+// the filter changes only what is shown, never output(), selected_item(), or
+// version(). Widget IDs are scoped to the Column, so any number can be
+// rendered side by side in a Window. Both dropdowns offer only columns before
+// this one, so sources never form a cycle.
 class Column {
  public:
   Column(InputSource source, LetterSource letter_source);
@@ -109,7 +109,7 @@ class Column {
   // output_used_letters(), or app_state()'s when there is none, plus the
   // command's own.
   std::string used_letters() const;
-  // Hides the ListBox items leaving judged_bad letters, and deselects or
+  // Hides the ListBox items leaving letters judged bad, and deselects or
   // steps off a hidden selection; see the class comment.
   void update_hidden();
   void start(Key key);

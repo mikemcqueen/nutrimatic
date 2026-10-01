@@ -179,7 +179,7 @@ class Combiner {
       if (!combination.entries.empty()) combination.entries += ',';
       combination.entries += entries_[i].text;
     }
-    int counts[26] = { 0 };
+    LetterCounts counts = {};
     for (size_t s = 0; s < letters_.size(); ++s) {
       combination.remaining.append(size_t(remaining_[s]), letters_[s]);
       if (letters_[s] >= 'a' && letters_[s] <= 'z')

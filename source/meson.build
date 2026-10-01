@@ -107,6 +107,8 @@ dfs_class_list_lib = library(
     'log.cpp',
     'letter-bag.cpp',
     'row-input.cpp',
+    'sub-bag-index.cpp',
+    'bad-bag-bitmap.cpp',
   ],
   link_with: index_lib,
   dependencies: thread_dep,

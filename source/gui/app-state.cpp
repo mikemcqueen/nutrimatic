@@ -1,16 +1,20 @@
 #include "app-state.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "bad-bag-bitmap.h"
 #include "dfs-cli-args.h"
 #include "input-source.h"
 #include "workflow-paths.h"
@@ -96,19 +100,33 @@ bool valid_seed_sentence(std::string_view sentence) {
          sentence[1] >= '0' && sentence[1] <= '9';
 }
 
-// Adds each nonblank line of the file at `path` to `bags`; a missing file is
-// diagnosed and adds nothing.
-void load_bags(std::string const& path,
-               std::unordered_set<std::string>& bags) {
-  if (!std::filesystem::exists(path)) {
-    std::fprintf(stderr, "pgui: skipping missing %s\n", path.c_str());
+// Adds each nonblank line of the file at `path` to `bags`, or, given
+// `bitmap` and a file starting with BAD_BAG_BITMAP_MAGIC's line, sets
+// `*bitmap` to the bad-bag bitmap in it. A missing file is diagnosed and adds
+// nothing.
+void load_bags(std::string const& path, std::unordered_set<std::string>& bags,
+               std::optional<BadBagBitmap>* bitmap = NULL) {
+  std::unique_ptr<FILE, int (*)(FILE*)> const in(
+      std::fopen(path.c_str(), "rb"), std::fclose);
+  if (!in) {
+    if (errno == ENOENT)
+      std::fprintf(stderr, "pgui: skipping missing %s\n", path.c_str());
+    else
+      std::fprintf(stderr, "pgui: can't open %s: %s\n", path.c_str(),
+                   std::strerror(errno));
     return;
   }
-  Lines lines;
-  if (!read_file_lines(path, &lines)) return;
-  for (std::string& line : lines) {
-    if (!line.empty()) bags.insert(std::move(line));
+  std::string line;
+  if (!read_line(in.get(), &line)) return;
+  if (bitmap && line == BAD_BAG_BITMAP_MAGIC) {
+    *bitmap = read_bad_bag_bitmap(in.get(), path);
+    return;
   }
+  do {
+    if (!line.empty()) bags.insert(line);
+  } while (read_line(in.get(), &line));
+  if (std::ferror(in.get()))
+    std::fprintf(stderr, "pgui: can't read %s\n", path.c_str());
 }
 
 // The keys of `map`, sorted.
@@ -176,11 +194,12 @@ void AppState::load_seed_and_bad_bags(std::string name) {
   if (sentence == bad_bags_sentence) return;
   bad_bags_sentence = sentence;
   judged_bad.clear();
+  bad_bags_bitmap.reset();
   load_bags(judged_bad_path(seed_directory), judged_bad);
   if (valid) {
-    load_bags((std::filesystem::path(seed_directory) / ("bad." + sentence))
-                  .string(),
-              judged_bad);
+    load_bags(
+        (std::filesystem::path(seed_directory) / ("bad." + sentence)).string(),
+        judged_bad, &bad_bags_bitmap);
   }
   ++judged_bad_version;
 }
@@ -213,6 +232,12 @@ SharedLines AppState::dictionary_lines(std::string const& key) {
     std::ranges::sort(*lines);
   }
   return dictionary_words.emplace(key, std::move(lines)).first->second;
+}
+
+bool AppState::is_judged_bad(std::string const& letters,
+                             LetterCounts const& letter_counts) const {
+  return judged_bad.contains(letters) ||
+         (bad_bags_bitmap && bad_bags_bitmap->is_bad(letter_counts));
 }
 
 void AppState::add_judged_bad(std::string letters) {

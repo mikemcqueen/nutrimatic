@@ -33,7 +33,7 @@ bool fits_letter_bag(LetterBag const& bag, std::string const& text) {
   return true;
 }
 
-double cv_ratio(int const counts[26]) {
+double cv_ratio(LetterCounts const& counts) {
   int vowels = 0;
   int consonants = 0;
   for (int i = 0; i < 26; ++i) {
@@ -48,7 +48,7 @@ double cv_ratio(int const counts[26]) {
 }
 
 double remaining_cv_ratio(LetterBag const& bag, std::string const& text) {
-  int counts[26];
+  LetterCounts counts;
   for (int i = 0; i < 26; ++i) counts[i] = bag.counts['a' + i];
   for (char ch : text)
     if (ch >= 'a' && ch <= 'z') --counts[ch - 'a'];

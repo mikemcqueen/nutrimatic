@@ -92,7 +92,7 @@ std::string remaining_letters(std::string const& letters,
       --count;
     }
   }
-  int letter_counts[26] = {};
+  LetterCounts letter_counts = {};
   for (char const c : left) {
     if (std::isalpha(static_cast<unsigned char>(c)))
       ++letter_counts[std::tolower(static_cast<unsigned char>(c)) - 'a'];
@@ -355,14 +355,14 @@ void Column::update_hidden() {
   AppState const& state = app_state();
   hidden_judged_version_ = state.judged_bad_version;
   std::vector<char> hidden;
-  if (!state.judged_bad.empty() && !remaining_sorted_.empty()) {
-    int left[26] = {};
+  if ((!state.judged_bad.empty() || state.bad_bags_bitmap) &&
+      !remaining_sorted_.empty()) {
+    LetterCounts left = {};
     for (char const c : remaining_sorted_) ++left[c - 'a'];
     Lines const& items = *output();
     std::string key;
     for (size_t i = 0; i < items.size(); ++i) {
-      int counts[26];
-      std::ranges::copy(left, counts);
+      LetterCounts counts = left;
       bool fits = true;
       for (char const c : items[i]) {
         if (!std::isalpha(static_cast<unsigned char>(c))) continue;
@@ -374,7 +374,7 @@ void Column::update_hidden() {
       if (!fits) continue;
       key.clear();
       for (int j = 0; j < 26; ++j) key.append(counts[j], 'a' + j);
-      if (!state.judged_bad.contains(key)) continue;
+      if (!state.is_judged_bad(key, counts)) continue;
       if (hidden.empty()) hidden.resize(items.size());
       hidden[i] = 1;
     }

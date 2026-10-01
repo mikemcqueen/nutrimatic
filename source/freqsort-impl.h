@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "letter-bag.h"
+
 enum FreqsortMatch {
   FREQSORT_MATCH_ALL,
   FREQSORT_MATCH_PROPER,
@@ -67,7 +69,7 @@ class Freqsort {
   bool score(std::string const& word, double* out) const;
 
   FreqsortOptions options_;
-  int counts_[26] = {};
+  LetterCounts counts_ = {};
   int total_ = 0;
   std::map<std::string, Entry> entries_;
 };

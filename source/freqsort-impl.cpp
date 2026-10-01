@@ -20,7 +20,7 @@ double const ENGLISH_PERCENT[26] = {
   6.327, 9.056, 2.758, 0.978, 2.360, 0.150, 1.974, 0.074,
 };
 
-double g_statistic(int const counts[26], int total) {
+double g_statistic(LetterCounts const& counts, int total) {
   double g = 0;
   for (int i = 0; i < 26; ++i) {
     int const observed = counts[i];
@@ -75,7 +75,7 @@ std::string freqsort_letters(char const* in) {
 
 bool Freqsort::load(FreqsortOptions const& options) {
   options_ = options;
-  std::fill(std::begin(counts_), std::end(counts_), 0);
+  counts_.fill(0);
   total_ = 0;
   entries_.clear();
 
@@ -89,8 +89,7 @@ bool Freqsort::load(FreqsortOptions const& options) {
 }
 
 bool Freqsort::score(std::string const& word, double* out) const {
-  int left[26];
-  std::copy(std::begin(counts_), std::end(counts_), left);
+  LetterCounts left = counts_;
   double sum = 0;
   double mean = 1;
   double log_sum = 0;

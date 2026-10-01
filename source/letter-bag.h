@@ -4,7 +4,11 @@
 #include <limits.h>
 #include <stddef.h>
 
+#include <array>
 #include <string>
+
+// How many of each letter a through z a bag holds, 'a' + j at j.
+using LetterCounts = std::array<int, 26>;
 
 // A multiset of letters that words and segments are checked against.
 struct LetterBag {
@@ -26,7 +30,7 @@ bool fits_letter_bag(LetterBag const& bag, std::string const& text);
 // The consonant/vowel ratio of `counts`, the number of each letter a through
 // z; y is a consonant. 0 when there are no consonants, and infinity when there
 // are consonants but no vowels.
-double cv_ratio(int const counts[26]);
+double cv_ratio(LetterCounts const& counts);
 
 // cv_ratio() of the a-z letters left in `bag` once those of `text` are
 // removed. `text` must fit within `bag`.
