@@ -31,9 +31,7 @@ struct Args {
 };
 
 // One node of the word trie, whose paths spell words' letters in slot order.
-// offset is the sub-bag index of the path's letters.
 struct TrieNode {
-  size_t offset;
   uint32_t first_edge;
   uint32_t edge_count;
   bool terminal;
@@ -128,7 +126,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 class BadBags {
  public:
   BadBags(std::string const& letters, size_t min_length, size_t max_length)
-      : min_length(min_length), max_length(max_length) {
+      : min_length(min_length),
+        max_length(std::min(max_length, letters.size())) {
     for (char ch : letters) {
       if (symbols.empty() || symbols.back() != ch) {
         symbols.push_back(ch);
@@ -140,14 +139,29 @@ class BadBags {
     for (size_t i = 0; i < symbols.size(); ++i)
       slot_of[(unsigned char) symbols[i]] = int(i);
 
-    for (int count : counts) sub_bags *= count + 1;
+    size_t const width = symbols.size();
+    std::vector<long double> below((width + 1) * (max_length + 1), 1);
+    for (size_t i = width; i-- > 0;)
+      for (size_t r = 0; r <= max_length; ++r) {
+        long double sum = 0;
+        for (size_t d = 0; d <= std::min(size_t(counts[i]), r); ++d)
+          sum += below[(i + 1) * (max_length + 1) + r - d];
+        below[i * (max_length + 1) + r] = sum;
+      }
+    sub_bags = below[max_length];
     if (!fits()) return;
-    strides.resize(symbols.size());
-    total = 1;
-    for (size_t i = symbols.size(); i-- > 0;) {
-      strides[i] = total;
-      total *= size_t(counts[i] + 1);
-    }
+
+    max_count = size_t(*std::max_element(counts.begin(), counts.end()));
+    ranks.assign(width * (max_length + 1) * (max_count + 1), 0);
+    for (size_t i = 0; i < width; ++i)
+      for (size_t r = 0; r <= max_length; ++r) {
+        size_t sum = 0;
+        for (size_t d = 0; d <= std::min(size_t(counts[i]), r); ++d) {
+          ranks[rank_slot(i, r, d)] = sum;
+          sum += size_t(below[(i + 1) * (max_length + 1) + r - d]);
+        }
+      }
+    total = size_t(sub_bags);
   }
 
   bool fits() const { return sub_bags <= MAX_SUB_BAGS; }
@@ -157,7 +171,6 @@ class BadBags {
   void add_words(DfsDictionary const& dictionary) {
     size_t const width = symbols.size();
     std::vector<uint32_t> children(width, 0);
-    std::vector<size_t> offsets(1, 0);
     std::vector<bool> terminals(1, false);
     std::vector<int> need(width);
     for (std::string const& word : dictionary) {
@@ -178,8 +191,7 @@ class BadBags {
         for (int i = 0; i < need[slot]; ++i) {
           size_t const edge = node * width + slot;
           if (children[edge] == 0) {
-            children[edge] = uint32_t(offsets.size());
-            offsets.push_back(offsets[node] + strides[slot]);
+            children[edge] = uint32_t(terminals.size());
             terminals.push_back(false);
             children.resize(children.size() + width, 0);
           }
@@ -190,9 +202,8 @@ class BadBags {
 
     nodes.clear();
     edges.clear();
-    for (size_t node = 0; node < offsets.size(); ++node) {
-      TrieNode trie_node = { offsets[node], uint32_t(edges.size()), 0,
-          terminals[node] };
+    for (size_t node = 0; node < terminals.size(); ++node) {
+      TrieNode trie_node = { uint32_t(edges.size()), 0, terminals[node] };
       for (size_t slot = 0; slot < width; ++slot) {
         uint32_t const child = children[node * width + slot];
         if (child == 0) continue;
@@ -221,6 +232,22 @@ class BadBags {
  private:
   static int const SLOT_MISSING = -1;
 
+  size_t rank_slot(size_t slot, size_t budget, size_t digit) const {
+    return (slot * (max_length + 1) + budget) * (max_count + 1) + digit;
+  }
+
+  // The index of the sub-bag `digits` holds, whose letters before `first`
+  // are all zero.
+  size_t index_of(size_t first) const {
+    size_t index = 0;
+    size_t budget = max_length;
+    for (size_t i = first; i < symbols.size(); ++i) {
+      index += ranks[rank_slot(i, budget, size_t(digits[i]))];
+      budget -= size_t(digits[i]);
+    }
+    return index;
+  }
+
   bool is_good(size_t index) const {
     return (good[index / 64] >> (index % 64)) & 1;
   }
@@ -234,23 +261,24 @@ class BadBags {
         size_t(counts[slot]), max_length - length));
     for (int digit = 0; digit <= limit; ++digit) {
       digits[slot] = digit;
-      visit(slot + 1, index + size_t(digit) * strides[slot],
+      visit(slot + 1,
+          index + ranks[rank_slot(slot, max_length - length, size_t(digit))],
           length + size_t(digit),
           digit != 0 && first == symbols.size() ? slot : first);
     }
     digits[slot] = 0;
   }
 
-  bool completes(uint32_t node, size_t index) {
+  bool completes(uint32_t node, size_t first) {
     TrieNode const& trie_node = nodes[node];
-    if (trie_node.terminal && is_good(index - trie_node.offset)) return true;
+    if (trie_node.terminal && is_good(index_of(first))) return true;
     TrieEdge const* const end =
         edges.data() + trie_node.first_edge + trie_node.edge_count;
     for (TrieEdge const* edge = edges.data() + trie_node.first_edge;
          edge != end; ++edge) {
       if (digits[edge->slot] == 0) continue;
       --digits[edge->slot];
-      bool const found = completes(edge->node, index);
+      bool const found = completes(edge->node, first);
       ++digits[edge->slot];
       if (found) return true;
     }
@@ -262,7 +290,7 @@ class BadBags {
     ++decided;
     if (roots[first] != 0) {
       --digits[first];
-      bool const found = completes(roots[first], index);
+      bool const found = completes(roots[first], first);
       ++digits[first];
       if (found) {
         good[index / 64] |= uint64_t(1) << (index % 64);
@@ -280,8 +308,13 @@ class BadBags {
   std::string symbols;
   std::vector<int> counts;
   int slot_of[UCHAR_MAX + 1];
-  std::vector<size_t> strides;
-  long double sub_bags = 1;
+  long double sub_bags = 0;
+  size_t max_count = 0;
+  // Sub-bags of at most max_length letters are indexed in increasing order
+  // of their digits, the first letter's most significant. ranks[rank_slot(
+  // i, budget, d)] is how many of them put a digit below d at letter i when
+  // the letters before it leave `budget` letters to spend.
+  std::vector<size_t> ranks;
   size_t total = 0;
   size_t decided = 0;
   std::vector<TrieNode> nodes;
@@ -325,8 +358,9 @@ int main(int argc, char* argv[]) {
       size_t(args.max_letters));
   if (!bags.fits()) {
     fprintf(stderr,
-        "bad-bags: \"%s\" has %.0Lf sub-bags, over the limit of %zu\n",
-        args.letters.c_str(), bags.sub_bag_count(), MAX_SUB_BAGS);
+        "bad-bags: \"%s\" has %.0Lf sub-bags of at most %d letters, over "
+        "the limit of %zu\n", args.letters.c_str(), bags.sub_bag_count(),
+        args.max_letters, MAX_SUB_BAGS);
     return 1;
   }
   bags.add_words(dictionary);
