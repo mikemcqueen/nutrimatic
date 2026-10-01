@@ -14,8 +14,9 @@
 // drawing only those scrolled into view. A filter hides the items it doesn't match without changing
 // the items or the selection. While the list has keyboard focus, Left and
 // Right don't move ImGui navigation; sideways_pressed() reports them
-// instead, and judge_pressed() reports J. Its background is the frame
-// background lightened, more so while it has keyboard focus.
+// instead, and judge_pressed() reports J. Its items are drawn in
+// light gray on a muted blue background, both lighter while it has keyboard
+// focus.
 class ListBox {
  public:
   ListBox(SharedLines items, SharedLines values);

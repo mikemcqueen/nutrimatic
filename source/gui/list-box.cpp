@@ -11,12 +11,8 @@ ListBox::ListBox(SharedLines items, SharedLines values)
 
 void ListBox::render() {
   judge_pressed_ = false;
-  float const brightness = focused_ ? 1.45f : 1.25f;
-  ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
-  bg.x *= brightness;
-  bg.y *= brightness;
-  bg.z *= brightness;
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, bg);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, focused_ ? IM_COL32(0x31, 0x3b, 0x4a, 0xff)
+                                                   : IM_COL32(0x2a, 0x33, 0x40, 0xff));
   bool const open = ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN));
   ImGui::PopStyleColor();
   focused_ = open && ImGui::IsWindowFocused();
@@ -37,8 +33,12 @@ void ListBox::render() {
   float const top = ImGui::GetCurrentWindow()->InnerRect.Min.y - 1;
   auto const row = [&](int i) {
     ImGui::PushID(i);
-    if (ImGui::Selectable(items[i].c_str(), selected_ == i,
-                          ImGuiSelectableFlags_SelectOnNav)) {
+    ImGui::PushStyleColor(ImGuiCol_Text, focused_ ? IM_COL32(0xe4, 0xe4, 0xe4, 0xff)
+                                                  : IM_COL32(0xd4, 0xd4, 0xd4, 0xff));
+    bool const clicked = ImGui::Selectable(items[i].c_str(), selected_ == i,
+                                           ImGuiSelectableFlags_SelectOnNav);
+    ImGui::PopStyleColor();
+    if (clicked) {
       bool const navigated = GImGui->NavJustMovedToId == ImGui::GetItemID();
       selected_ = selected_ == i && !navigated ? -1 : i;
     }
