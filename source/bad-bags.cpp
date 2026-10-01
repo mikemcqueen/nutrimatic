@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <iostream>
 #include <string>
 #include <vector>
 
@@ -48,7 +47,7 @@ void usage(FILE* out) {
 
   fputs("  for each sub-bag of LETTERS holding N..X letters, decide whether\n"
         "  dictionary words of at least N letters spell it exactly; print\n"
-        "  the sorted letters of every sub-bag they do not, shortest first\n"
+        "  the sorted letters of every sub-bag they do not, as each is found\n"
         "\noptions:\n", stdout);
   dfs_help_option("-m, --min-word-length N",
       "use only words of at least N letters, and only sub-bags of at least "
@@ -215,18 +214,11 @@ class BadBags {
     roots.assign(children.begin(), children.begin() + width);
   }
 
-  std::vector<std::string> run() {
+  void run() {
     good.assign(total / 64 + 1, 0);
     good[0] = 1;
     digits.assign(symbols.size(), 0);
-    bad.clear();
     visit(0, 0, 0, symbols.size());
-    std::sort(bad.begin(), bad.end(),
-        [](std::string const& a, std::string const& b) {
-          if (a.size() != b.size()) return a.size() < b.size();
-          return a < b;
-        });
-    return std::move(bad);
   }
 
  private:
@@ -297,10 +289,11 @@ class BadBags {
         return;
       }
     }
-    std::string text;
+    text.clear();
     for (size_t i = 0; i < symbols.size(); ++i)
       text.append(size_t(digits[i]), symbols[i]);
-    bad.push_back(std::move(text));
+    text.push_back('\n');
+    fwrite(text.data(), 1, text.size(), stdout);
   }
 
   size_t const min_length;
@@ -325,7 +318,7 @@ class BadBags {
   std::vector<uint32_t> roots;
   std::vector<uint64_t> good;
   std::vector<int> digits;
-  std::vector<std::string> bad;
+  std::string text;
 };
 
 }  // namespace
@@ -364,9 +357,9 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   bags.add_words(dictionary);
-  for (std::string const& bag : bags.run()) std::cout << bag << '\n';
+  bags.run();
   fprintf(stderr, "Checked %zu combinations\n", bags.checked());
-  if (!(std::cout << std::flush)) {
+  if (fflush(stdout) != 0 || ferror(stdout)) {
     fputs("bad-bags: can't write output\n", stderr);
     return 1;
   }
