@@ -5,8 +5,10 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "bad-bag-bitmap.h"
@@ -21,6 +23,7 @@ namespace {
 
 int const DEFAULT_MIN_WORD_LENGTH = 3;
 int const OPT_BITMAP = 256;
+int const OPT_THREADS = 257;
 
 struct Args {
   std::string letters;
@@ -28,6 +31,7 @@ struct Args {
   int max_letters = 0;
   char const* dictionary = NULL;
   bool bitmap = false;
+  int threads = 1;
 };
 
 // One node of the word trie, whose paths spell words' letters in slot order.
@@ -43,8 +47,8 @@ struct TrieEdge {
 };
 
 void usage(FILE* out) {
-  fputs("usage: bad-bags [-m N] [-x N] [--dict PATH] [--bitmap] LETTERS\n",
-        out);
+  fputs("usage: bad-bags [-m N] [-x N] [--dict PATH] [--bitmap] "
+        "[--threads N] LETTERS\n", out);
   if (out != stdout) return;
 
   fputs("  for each sub-bag of LETTERS holding N..X letters, decide whether\n"
@@ -62,6 +66,11 @@ void usage(FILE* out) {
   dfs_help_option("--bitmap",
       "print, instead of the letters, a bitmap of which sub-bags words "
       "spell (see bad-bag-bitmap.h)");
+  dfs_help_option("--threads N",
+      "decide the sub-bags of each length on N threads, at most the "
+      "hardware threads, 0 for all of them; "
+      "with more than 1, bad sub-bags print shortest first, in no fixed "
+      "order within a length (default: 1)");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -71,6 +80,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "max-letters", 'x', OPTPARSE_REQUIRED },
     { "dict", 'd', OPTPARSE_REQUIRED },
     { "bitmap", OPT_BITMAP, OPTPARSE_NONE },
+    { "threads", OPT_THREADS, OPTPARSE_REQUIRED },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -103,6 +113,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         break;
       case OPT_BITMAP:
         out->bitmap = true;
+        break;
+      case OPT_THREADS:
+        if (!parse_count(options.optarg, "--threads", &out->threads))
+          return false;
         break;
       case 'h':
         *help = true;
@@ -191,67 +205,144 @@ class BadBags {
     roots.assign(children.begin(), children.begin() + width);
   }
 
-  void run() {
+  void run(size_t threads) {
+    size_t const width = symbols.size();
     good.assign(index.total() / 64 + 1, 0);
     good[0] = 1;
-    digits.assign(symbols.size(), 0);
-    visit(0, 0, 0, symbols.size());
+    rest.assign(width + 1, 0);
+    for (size_t slot = width; slot-- > 0;)
+      rest[slot] = rest[slot + 1] + size_t(counts[slot]);
+
+    if (threads <= 1) {
+      Walker walker(*this);
+      walker.visit(0, 0, 0, width, 0);
+      decided = walker.decided;
+      return;
+    }
+
+    size_t prefix = 0;
+    size_t tasks = 1;
+    while (prefix < width && tasks < 64 * threads)
+      tasks *= size_t(counts[prefix++]) + 1;
+
+    for (size_t target = min_length; target <= max_length; ++target) {
+      std::atomic<size_t> next(0);
+      std::vector<Walker> walkers(std::min(threads, tasks), Walker(*this));
+      std::vector<std::thread> pool;
+      for (Walker& walker : walkers)
+        pool.push_back(std::thread([&, target] {
+          for (size_t task; (task = next++) < tasks;)
+            walker.run_task(task, prefix, target);
+        }));
+      for (std::thread& thread : pool) thread.join();
+      for (Walker const& walker : walkers) decided += walker.decided;
+    }
   }
 
  private:
-  void visit(size_t slot, size_t sum, size_t length, size_t first) {
-    if (slot == symbols.size()) {
-      if (length != 0) decide(sum, length, first);
-      return;
-    }
-    int const limit = int(std::min(
-        size_t(counts[slot]), max_length - length));
-    for (int digit = 0; digit <= limit; ++digit) {
-      digits[slot] = digit;
-      visit(slot + 1,
-          sum + index.rank(slot, max_length - length, size_t(digit)),
-          length + size_t(digit),
-          digit != 0 && first == symbols.size() ? slot : first);
-    }
-    digits[slot] = 0;
-  }
+  // One thread's walk over sub-bags; the trie and `good` are shared.
+  class Walker {
+   public:
+    explicit Walker(BadBags& bags)
+        : bags(&bags), digits(bags.symbols.size(), 0) {}
 
-  bool completes(uint32_t node, size_t first) {
-    TrieNode const& trie_node = nodes[node];
-    if (trie_node.terminal && is_good_bit(good, index.number(digits, first)))
-      return true;
-    TrieEdge const* const end =
-        edges.data() + trie_node.first_edge + trie_node.edge_count;
-    for (TrieEdge const* edge = edges.data() + trie_node.first_edge;
-         edge != end; ++edge) {
-      if (digits[edge->slot] == 0) continue;
-      --digits[edge->slot];
-      bool const found = completes(edge->node, first);
-      ++digits[edge->slot];
-      if (found) return true;
+    // Decides the sub-bags of `target` letters whose first `prefix` digits
+    // spell `task`, read as a mixed-radix number.
+    void run_task(size_t task, size_t prefix, size_t target) {
+      size_t sum = 0;
+      size_t length = 0;
+      size_t first = digits.size();
+      for (size_t slot = 0; slot < prefix; ++slot) {
+        size_t const base = size_t(bags->counts[slot]) + 1;
+        size_t const digit = task % base;
+        task /= base;
+        if (length + digit > target) return;
+        digits[slot] = int(digit);
+        sum += bags->index.rank(slot, bags->max_length - length, digit);
+        length += digit;
+        if (digit != 0 && first == digits.size()) first = slot;
+      }
+      visit(prefix, sum, length, first, target);
     }
-    return false;
-  }
 
-  void decide(size_t number, size_t length, size_t first) {
-    if (length < min_length) return;
-    ++decided;
-    if (roots[first] != 0) {
-      --digits[first];
-      bool const found = completes(roots[first], first);
-      ++digits[first];
-      if (found) {
-        good[number / 64] |= uint64_t(1) << (number % 64);
+    // Visits the sub-bags extending digits[0, slot), only those of `target`
+    // letters unless it is 0.
+    void visit(size_t slot, size_t sum, size_t length, size_t first,
+               size_t target) {
+      if (slot == digits.size()) {
+        if (length != 0 && (target == 0 || length == target))
+          decide(sum, length, first);
         return;
       }
+      if (target != 0 && length + bags->rest[slot] < target) return;
+      size_t const cap = target == 0 ? bags->max_length : target;
+      int const limit = int(std::min(
+          size_t(bags->counts[slot]), cap - length));
+      for (int digit = 0; digit <= limit; ++digit) {
+        digits[slot] = digit;
+        visit(slot + 1,
+            sum + bags->index.rank(
+                slot, bags->max_length - length, size_t(digit)),
+            length + size_t(digit),
+            digit != 0 && first == digits.size() ? slot : first,
+            target);
+      }
+      digits[slot] = 0;
     }
-    if (!print) return;
-    text.clear();
-    for (size_t i = 0; i < symbols.size(); ++i)
-      text.append(size_t(digits[i]), symbols[i]);
-    text.push_back('\n');
-    fwrite(text.data(), 1, text.size(), stdout);
-  }
+
+    size_t decided = 0;
+
+   private:
+    bool is_good(size_t number) {
+      uint64_t const word =
+          std::atomic_ref<uint64_t>(bags->good[number / 64]).load(
+              std::memory_order_relaxed);
+      return (word >> (number % 64)) & 1;
+    }
+
+    bool completes(uint32_t node, size_t first) {
+      TrieNode const& trie_node = bags->nodes[node];
+      if (trie_node.terminal &&
+          is_good(bags->index.number(digits, first)))
+        return true;
+      TrieEdge const* const begin =
+          bags->edges.data() + trie_node.first_edge;
+      TrieEdge const* const end = begin + trie_node.edge_count;
+      for (TrieEdge const* edge = begin; edge != end; ++edge) {
+        if (digits[edge->slot] == 0) continue;
+        --digits[edge->slot];
+        bool const found = completes(edge->node, first);
+        ++digits[edge->slot];
+        if (found) return true;
+      }
+      return false;
+    }
+
+    void decide(size_t number, size_t length, size_t first) {
+      if (length < bags->min_length) return;
+      ++decided;
+      if (bags->roots[first] != 0) {
+        --digits[first];
+        bool const found = completes(bags->roots[first], first);
+        ++digits[first];
+        if (found) {
+          std::atomic_ref<uint64_t>(bags->good[number / 64]).fetch_or(
+              uint64_t(1) << (number % 64), std::memory_order_relaxed);
+          return;
+        }
+      }
+      if (!bags->print) return;
+      text.clear();
+      for (size_t i = 0; i < digits.size(); ++i)
+        text.append(size_t(digits[i]), bags->symbols[i]);
+      text.push_back('\n');
+      fwrite(text.data(), 1, text.size(), stdout);
+    }
+
+    BadBags* bags;
+    std::vector<int> digits;
+    std::string text;
+  };
 
   SubBagIndex const& index;
   size_t const min_length;
@@ -267,8 +358,8 @@ class BadBags {
   // tried.
   std::vector<uint32_t> roots;
   std::vector<uint64_t> good;
-  std::vector<int> digits;
-  std::string text;
+  // How many letters the slots from each one on hold.
+  std::vector<size_t> rest;
 };
 
 }  // namespace
@@ -307,7 +398,10 @@ int main(int argc, char* argv[]) {
   }
   BadBags bags(index, size_t(args.min_word_length), !args.bitmap);
   bags.add_words(dictionary);
-  bags.run();
+  size_t threads = resolve_search_threads(args.threads);
+  unsigned int const cores = std::thread::hardware_concurrency();
+  if (cores != 0) threads = std::min(threads, size_t(cores));
+  bags.run(threads);
   if (args.bitmap)
     write_bad_bag_bitmap(stdout, args.letters, size_t(args.min_word_length),
                          index, bags.good_bits());
