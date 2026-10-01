@@ -25,8 +25,10 @@ class ListBox {
 
   SharedLines const& items() const { return items_; }
 
-  // Replaces the items and their values and clears the selection. `values` is
-  // either empty or holds one entry, possibly empty, per item.
+  // Replaces the items and their values. The selected item stays selected
+  // when it is among the new items, at its first occurrence; otherwise the
+  // selection is cleared. `values` is either empty or holds one entry,
+  // possibly empty, per item.
   void set_items(SharedLines items, SharedLines values);
 
   // Shows only the items `pattern` (ECMAScript) matches part of; empty shows

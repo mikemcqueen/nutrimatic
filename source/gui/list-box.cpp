@@ -70,9 +70,16 @@ void ListBox::render() {
 }
 
 void ListBox::set_items(SharedLines items, SharedLines values) {
+  std::optional<std::string> const selected =
+      selected_ < 0 ? std::nullopt : std::optional((*items_)[selected_]);
   items_ = std::move(items);
   values_ = std::move(values);
   selected_ = -1;
+  if (selected) {
+    auto const found = std::ranges::find(*items_, *selected);
+    if (found != items_->end())
+      selected_ = static_cast<int>(found - items_->begin());
+  }
   apply_filter();
 }
 
