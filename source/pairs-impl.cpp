@@ -3,6 +3,7 @@
 #include <smmintrin.h>
 
 #include "dfs-cli-args.h"
+#include "letter-bag.h"
 
 namespace {
 

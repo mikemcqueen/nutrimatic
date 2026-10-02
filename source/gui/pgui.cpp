@@ -150,6 +150,7 @@ int main(int, char**) {
 
   ImGui::StyleColorsDark();
   ImGui::GetIO().Fonts->AddFontDefaultVector();
+  load_letter_count_font();
   ImGui::GetStyle().FontSizeBase = 20.0f;
   ImGui::GetIO().ConfigInputTextCursorBlink = false;
   ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;

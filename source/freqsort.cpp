@@ -9,6 +9,7 @@
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "freqsort-impl.h"
+#include "letter-bag.h"
 #include "optparse.h"
 #include "row-input.h"
 
@@ -141,7 +142,7 @@ bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
 
   out->letters = letters;
   for (char* arg; (arg = optparse_arg(&options)) != NULL;)
-    out->used_letters += freqsort_letters(arg);
+    out->used_letters += lowercase_letters(arg);
   return true;
 }
 

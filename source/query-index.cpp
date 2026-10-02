@@ -14,6 +14,7 @@
 #include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
+#include "letter-bag.h"
 #include "log.h"
 #include "optparse.h"
 #include "workflow-paths.h"

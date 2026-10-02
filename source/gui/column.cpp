@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app-state.h"
+#include "lc-impl.h"
 #include "letter-bag.h"
 #include "widgets.h"
 #include "window.h"
@@ -105,6 +106,21 @@ std::string remaining_letters(std::string const& letters,
   std::string text = "(" + std::to_string(left.size()) + "): " + left;
   if (!over.empty()) text += "  over: " + over;
   return text;
+}
+
+char const* const LETTER_COUNT_FONT = "/mnt/c/Windows/Fonts/CascadiaMono.ttf";
+
+// The font lc's output is shown in, or null for the current font.
+ImFont* letter_count_font = nullptr;
+
+// lc's output on app_state()'s letters less `used`.
+std::vector<std::string> letter_count(std::string const& used) {
+  LetterCountOptions options;
+  options.text = app_state().actual_letters;
+  options.used_letters = used;
+  std::vector<std::string> lines;
+  if (!letter_count_lines(options, &lines)) return {"lc failed; see stderr"};
+  return lines;
 }
 
 // The source dropdown's label for `source`: a seed or dictionary key, or a
@@ -201,6 +217,11 @@ void Column::render() {
     update_hidden();
   ImVec2 const status_min = ImGui::GetCursorScreenPos();
   float const status_width = ImGui::GetContentRegionAvail().x;
+  ImGui::InvisibleButton("##remaining",
+      ImVec2(std::max(1.0f, status_width), ImGui::GetTextLineHeight()));
+  if (ImGui::IsItemActivated()) letter_count_ = letter_count(used_letters());
+  bool const show_letter_count = ImGui::IsItemActive();
+  ImGui::SetCursorScreenPos(status_min);
   Window const& window = main_window();
   bool const judge = window.judge() == id_;
   if (!judge) {
@@ -215,6 +236,8 @@ void Column::render() {
         ImVec2(status_min.x + status_width + 2, ImGui::GetItemRectMax().y + pad),
         color, 0.0f, 0, 1.0f);
   }
+  if (show_letter_count)
+    render_letter_count(status_min.x, ImGui::GetItemRectMax().y);
 
   if (job_) {
     ImGui::TextDisabled("running");
@@ -244,6 +267,32 @@ void Column::render() {
     if (list_.selected() != selected) ++version_;
   }
   ImGui::PopID();
+}
+
+void load_letter_count_font() {
+  ImFontConfig config;
+  config.Flags |= ImFontFlags_NoLoadError;
+  letter_count_font =
+      ImGui::GetIO().Fonts->AddFontFromFileTTF(LETTER_COUNT_FONT, 0.0f, &config);
+  if (!letter_count_font)
+    std::fprintf(stderr, "pgui: can't load \"%s\"\n", LETTER_COUNT_FONT);
+}
+
+void Column::render_letter_count(float x, float y) const {
+  ImGui::PushFont(letter_count_font, 0.0f);
+  float width = 0;
+  for (std::string const& line : letter_count_)
+    width = std::max(width, ImGui::CalcTextSize(line.c_str()).x);
+  width += 2 * ImGui::GetStyle().WindowPadding.x;
+  ImGuiViewport const* const viewport = ImGui::GetMainViewport();
+  x = std::max(viewport->WorkPos.x,
+               std::min(x, viewport->WorkPos.x + viewport->WorkSize.x - width));
+  ImGui::SetNextWindowPos(ImVec2(x, y));
+  ImGui::BeginTooltip();
+  for (std::string const& line : letter_count_)
+    ImGui::TextUnformatted(line.c_str());
+  ImGui::EndTooltip();
+  ImGui::PopFont();
 }
 
 void Column::render_sources() {

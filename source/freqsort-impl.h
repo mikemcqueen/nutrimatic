@@ -39,9 +39,6 @@ struct FreqsortOptions {
 // +NUMBER. Returns false, with the error diagnosed, when it can't be parsed.
 bool freqsort_parse_value(char const* in, FreqsortOptions* out);
 
-// The a-z letters of `in`, lowercased.
-std::string freqsort_letters(char const* in);
-
 // Entries ranked under FreqsortOptions.
 class Freqsort {
  public:

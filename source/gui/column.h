@@ -12,6 +12,11 @@
 #include "input-source.h"
 #include "list-box.h"
 
+// Loads the font Column's lc tooltips use, Cascadia Mono, after the default
+// font. The tooltips use the current font when it can't be loaded, which is
+// diagnosed.
+void load_letter_count_font();
+
 // One top-level pane: a line of a source dropdown, offering app_state()'s
 // seed keys, its dictionary keys when the command reads dictionaries (see
 // Command::reads_dictionaries()), and the number, counting from 1, of each
@@ -30,10 +35,12 @@
 // column (see output_used_letters()), or app_state()'s (the window's u:
 // field) for "all", plus its own (see Command::used_letters()). A status line
 // shows the letters left once those used letters are removed from
-// app_state()'s letters (the window's l: field). Items that would leave
-// letters judged bad (see AppState::is_judged_bad()), were they taken from
-// the letters left, are hidden from the ListBox (see ListBox::set_hidden()),
-// once output() is up to date. A selected item hidden this way is deselected
+// app_state()'s letters (the window's l: field); while the mouse is held on
+// it, a tooltip below it shows lc's report on them (see
+// letter_count_lines()). Items that would leave letters judged bad (see
+// AppState::is_judged_bad()), were they taken from the letters left, are
+// hidden from the ListBox (see ListBox::set_hidden()), once output() is up to
+// date. A selected item hidden this way is deselected
 // when it was kept across a rerun, or stepped off (see
 // ListBox::step_off_hidden()) when judged_bad_version went up. Pressing Enter
 // in the filter field applies it as a regex to the ListBox (see
@@ -96,6 +103,8 @@ class Column {
   // "src:" and the source dropdown, which sets source_, then "ltrs:" and
   // the letter source dropdown, which sets letter_source_.
   void render_sources();
+  // letter_count_ in a tooltip whose top left is at `x`, `y`.
+  void render_letter_count(float x, float y) const;
   // Whether render() shows the ListBox: the source isn't std::monostate.
   bool shows_list() const {
     return !std::holds_alternative<std::monostate>(source_);
@@ -136,6 +145,8 @@ class Column {
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
   // empty when some used letters weren't in app_state()'s letters.
   std::string remaining_sorted_;
+  // lc's output, as of the last press on the remaining letters status line.
+  std::vector<std::string> letter_count_;
   // The made_key_ and app_state()'s judged_bad_version as of the last
   // update_hidden().
   Key hidden_key_ = {-1, 0, 0, 0, {}, 0, {}};

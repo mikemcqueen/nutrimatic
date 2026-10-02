@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "dfs-cli-args.h"
+#include "letter-bag.h"
 #include "option-value.h"
 #include "pair-exclusions.h"
 #include "row-input.h"

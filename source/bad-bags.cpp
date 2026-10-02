@@ -15,6 +15,7 @@
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "dfs-class-list.h"
+#include "letter-bag.h"
 #include "optparse.h"
 #include "sub-bag-index.h"
 #include "workflow-paths.h"

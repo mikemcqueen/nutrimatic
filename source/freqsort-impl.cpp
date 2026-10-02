@@ -14,12 +14,6 @@
 
 namespace {
 
-double const ENGLISH_PERCENT[26] = {
-  8.167, 1.492, 2.782, 4.253, 12.702, 2.228, 2.015, 6.094, 6.966,
-  0.153, 0.772, 4.025, 2.406, 6.749, 7.507, 1.929, 0.095, 5.987,
-  6.327, 9.056, 2.758, 0.978, 2.360, 0.150, 1.974, 0.074,
-};
-
 double g_statistic(LetterCounts const& counts, int total) {
   double g = 0;
   for (int i = 0; i < 26; ++i) {
@@ -64,15 +58,6 @@ bool freqsort_parse_value(char const* in, FreqsortOptions* out) {
   return true;
 }
 
-std::string freqsort_letters(char const* in) {
-  std::string out;
-  for (; *in != '\0'; ++in) {
-    int const ch = tolower((unsigned char) *in);
-    if (ch >= 'a' && ch <= 'z') out.push_back(char(ch));
-  }
-  return out;
-}
-
 bool Freqsort::load(FreqsortOptions const& options) {
   options_ = options;
   counts_.fill(0);
@@ -80,8 +65,8 @@ bool Freqsort::load(FreqsortOptions const& options) {
   entries_.clear();
 
   std::string remaining;
-  if (!subtract_letters(freqsort_letters(options.letters.c_str()),
-          freqsort_letters(options.used_letters.c_str()), &remaining))
+  if (!subtract_letters(lowercase_letters(options.letters),
+          lowercase_letters(options.used_letters), &remaining))
     return false;
   for (char ch : remaining) ++counts_[ch - 'a'];
   total_ = int(remaining.size());

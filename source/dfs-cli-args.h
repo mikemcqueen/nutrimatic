@@ -157,17 +157,6 @@ inline constexpr size_t DFS_DEFAULT_SCORE_CACHE_MIB = 64;
 inline constexpr unsigned int DFS_DEFAULT_MAX_PREPROCESS_THREADS = 20;
 inline constexpr size_t DFS_MIB = size_t(1024) * size_t(1024);
 
-// Copies in-only lowercase a-z/0-9 characters from `in` into `out`, skipping
-// spaces. Prints an error naming `what` and returns false on any other
-// character.
-bool clean_letters(char const* in, char const* what, std::string* out);
-
-// Removes the multiset `used` from the multiset `bag`, writing the remainder
-// (sorted by character) to `out`. Prints an error and returns false if `used`
-// contains a letter not available in `bag`, or if nothing is left.
-bool subtract_letters(std::string const& bag, std::string const& used,
-                      std::string* out);
-
 // Reports the cleaned, post-subtraction letter bag to the diagnostic stream.
 void dfs_diagnostic_letter_bag(std::string const& letters);
 

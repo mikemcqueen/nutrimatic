@@ -7,6 +7,7 @@
 #include "dfs-search-stats.h"
 #include "dfs-search.h"
 #include "index.h"
+#include "letter-bag.h"
 #include "optparse.h"
 #include "segment-report.h"
 #include "workflow-paths.h"

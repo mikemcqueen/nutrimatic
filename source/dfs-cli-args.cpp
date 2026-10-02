@@ -1,6 +1,7 @@
 #include "dfs-cli-args.h"
 
 #include "dfs-diagnostic.h"
+#include "letter-bag.h"
 #include "workflow-paths.h"
 
 #include <assert.h>
@@ -223,45 +224,6 @@ void merge_pair_tier(
 }
 
 }  // namespace
-
-bool clean_letters(char const* in, char const* what, std::string* out) {
-  for (; *in != '\0'; ++in) {
-    if (*in == ' ') continue;
-    if ((*in < 'a' || *in > 'z') && (*in < '0' || *in > '9')) {
-      fprintf(stderr, "error: bad character '%c' in %s\n", *in, what);
-      return false;
-    }
-    out->push_back(*in);
-  }
-  return true;
-}
-
-bool subtract_letters(std::string const& bag, std::string const& used,
-                      std::string* out) {
-  int have[UCHAR_MAX + 1] = { 0 };
-  for (size_t i = 0; i < bag.size(); ++i)
-    ++have[(unsigned char) bag[i]];
-
-  for (size_t i = 0; i < used.size(); ++i) {
-    unsigned char const ch = (unsigned char) used[i];
-    if (have[ch] == 0) {
-      fprintf(stderr, "error: no '%c' left in \"%s\" to use\n",
-              ch, bag.c_str());
-      return false;
-    }
-    --have[ch];
-  }
-
-  out->clear();
-  for (int ch = 0; ch <= UCHAR_MAX; ++ch)
-    out->append(size_t(have[ch]), char(ch));
-
-  if (out->empty()) {
-    fputs("error: no letters left after removing used letters\n", stderr);
-    return false;
-  }
-  return true;
-}
 
 void dfs_diagnostic_letter_bag(std::string const& letters) {
   dfs_diagnostic("%zu letters \"%s\"\n", letters.size(), letters.c_str());
