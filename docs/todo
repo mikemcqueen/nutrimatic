@@ -90,3 +90,9 @@
   the dict file are read again for each column. consider holding them in
   shared app state so every freqsort/pfilter run in the same process reuses
   the same loaded data
+
+* pairs --exact: take an optional [M[,N]], where M is the minimum number of
+  words to combine (default 2) and N is the maximum (default 2). remove
+  --allow-solo (it becomes --exact 1,2). this should simplify the pgui
+  find-pairs ui, which currently has a separate "solo" checkbox enabled only
+  with exact.

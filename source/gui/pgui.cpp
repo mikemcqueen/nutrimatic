@@ -122,7 +122,7 @@ int main(int, char**) {
   if (!load_app_state(seed)) return 1;
   Window& top = main_window();
   ColumnIdentifier previous = top.add_column(Column(Seed{app_state().seed_key}, std::nullopt));
-  for (int i = 1; i < 5; ++i)
+  for (int i = 1; i < 6; ++i)
     previous = top.add_column(Column(previous, previous));
 
   IMGUI_CHECKVERSION();
