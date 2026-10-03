@@ -231,8 +231,9 @@ int main(int argc, char* argv[]) {
     args.options.dictionary = std::cref(dictionary);
   }
 
+  ClassifiedPairCache cache;
   Pfilter filter;
-  if (!filter.load("pfilter", args.options)) return 1;
+  if (!filter.load("pfilter", args.options, cache)) return 1;
   if (args.cv)
     return print_kept_rows_with_cv(args.source, filter, *args.options.bag,
                args.csv) ? 0 : 1;

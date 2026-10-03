@@ -1,8 +1,12 @@
 #ifndef NUTRIMATIC_CLASSIFIED_H
 #define NUTRIMATIC_CLASSIFIED_H
 
+#include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "dfs-class-list.h"
@@ -49,6 +53,27 @@ bool load_global_no_pairs(
 // load_classified_pairs() of sentence N's NO pairs.
 bool load_sentence_no_pairs(
     char const* program, char const* root, int sentence, DfsPairSet* pairs);
+
+// Classified pair files by path, each kept after it is loaded and loaded
+// again only when its modification time or size differs from when it was
+// last loaded. Safe to share between threads.
+class ClassifiedPairCache {
+ public:
+  // The pairs load_classified_pairs() would load for `sentence` and `kind`,
+  // or null on an error, which is diagnosed, prefixed by `program`.
+  std::shared_ptr<DfsPairSet const> get(
+      char const* program, char const* root, int sentence, char const* kind);
+
+ private:
+  struct Entry {
+    std::filesystem::file_time_type mtime;
+    std::uintmax_t size = 0;
+    std::shared_ptr<DfsPairSet const> pairs;
+  };
+
+  std::mutex mutex_;
+  std::unordered_map<std::string, Entry> entries_;
+};
 
 // Adds sentence N's classified YES pairs to `args`' YES pair files and its NO
 // pairs to `reject_files`, as the workflow root's global files are. The root

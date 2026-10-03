@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "classified.h"
 #include "dfs-class-list.h"
@@ -33,16 +34,18 @@ struct PfilterOptions {
 // PfilterOptions with its classified pairs and index loaded.
 class Pfilter {
  public:
-  // Loads what `options` names from the workflow root in $WFROOT. Errors are
-  // diagnosed, prefixed by `program`.
-  bool load(char const* program, PfilterOptions const& options);
+  // Loads what `options` names from the workflow root in $WFROOT, taking its
+  // classified pairs from `cache`. Errors are diagnosed, prefixed by
+  // `program`.
+  bool load(char const* program, PfilterOptions const& options,
+            ClassifiedPairCache& cache);
 
   // Whether `row` is kept. Only valid after load() succeeds.
   bool keep(DfsPairRow const& row) const;
 
  private:
   PfilterOptions options_;
-  DfsPairSet rejected_;
+  std::vector<std::shared_ptr<DfsPairSet const>> rejected_;
   std::unique_ptr<IndexReader> index_;
 };
 

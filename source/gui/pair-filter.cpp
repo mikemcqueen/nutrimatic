@@ -35,7 +35,8 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   options.dictionary = std::cref(app_state().dictionaries.at("big_dict").words);
 
   Pfilter filter;
-  if (!filter.load("pgui", options)) return false;
+  if (!filter.load("pgui", options, app_state().classified_pairs))
+    return false;
 
   Lines const& lines = *inputs[0];
   Lines kept;

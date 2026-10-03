@@ -2,6 +2,8 @@
 
 #include <stdio.h>
 
+#include <algorithm>
+
 #include "workflow-paths.h"
 
 namespace {
@@ -14,7 +16,8 @@ bool in_index(IndexReader const& reader, DfsPairRow const& row) {
 
 }  // namespace
 
-bool Pfilter::load(char const* program, PfilterOptions const& options) {
+bool Pfilter::load(char const* program, PfilterOptions const& options,
+                   ClassifiedPairCache& cache) {
   options_ = options;
   rejected_.clear();
   index_.reset();
@@ -22,17 +25,20 @@ bool Pfilter::load(char const* program, PfilterOptions const& options) {
   char const* const root = require_workflow_root(program);
   if (root == NULL) return false;
 
-  if (!load_global_no_pairs(program, root, &rejected_)) return false;
+  auto const add = [&](int sentence, char const* kind) {
+    std::shared_ptr<DfsPairSet const> pairs =
+        cache.get(program, root, sentence, kind);
+    if (pairs == nullptr) return false;
+    rejected_.push_back(std::move(pairs));
+    return true;
+  };
+  if (!add(CLASSIFIED_NO_SENTENCE, "no")) return false;
   if (options_.sentence != CLASSIFIED_NO_SENTENCE &&
-      !load_sentence_no_pairs(program, root, options_.sentence, &rejected_))
+      !add(options_.sentence, "no"))
     return false;
-  if (options_.drop_yes &&
-      !load_classified_pairs(program, root, CLASSIFIED_NO_SENTENCE, "yes",
-          &rejected_))
-    return false;
+  if (options_.drop_yes && !add(CLASSIFIED_NO_SENTENCE, "yes")) return false;
   if (options_.drop_yes && options_.sentence != CLASSIFIED_NO_SENTENCE &&
-      !load_classified_pairs(program, root, options_.sentence, "yes",
-          &rejected_))
+      !add(options_.sentence, "yes"))
     return false;
 
   if (!options_.index_file.empty()) {
@@ -54,7 +60,10 @@ bool Pfilter::keep(DfsPairRow const& row) const {
       (!options_.dictionary ||
           (options_.dictionary->get().contains(row.left) &&
               options_.dictionary->get().contains(row.right))) &&
-      !rejected_.contains(row.entry()) &&
+      std::ranges::none_of(rejected_,
+          [entry = row.entry()](auto const& pairs) {
+            return pairs->contains(entry);
+          }) &&
       (!options_.bag || fits_letter_bag(*options_.bag, row.left + row.right)) &&
       (index_ == nullptr || in_index(*index_, row));
 }

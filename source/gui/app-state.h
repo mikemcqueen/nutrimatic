@@ -118,6 +118,9 @@ struct AppState {
   // Goes up whenever judged_bad, bad_bags_bitmap, or judged_bad_filter
   // changes.
   unsigned judged_bad_version = 0;
+  // The classified pairs pfilter runs share, loaded from $WFROOT as they're
+  // first asked for and again when their files change.
+  ClassifiedPairCache classified_pairs;
 };
 
 // A copy of app_state()'s actual letters, used letters, and sentence, taken

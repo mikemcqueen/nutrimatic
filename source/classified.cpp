@@ -76,6 +76,38 @@ bool load_sentence_no_pairs(
   return load_classified_pairs(program, root, sentence, "no", pairs);
 }
 
+std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
+    char const* program, char const* root, int sentence, char const* kind) {
+  std::string path;
+  if (!classified_pair_file(program, root, sentence, kind, &path))
+    return nullptr;
+  if (path.empty()) return std::make_shared<DfsPairSet const>();
+
+  std::error_code error;
+  std::filesystem::file_time_type const mtime =
+      std::filesystem::last_write_time(path, error);
+  std::uintmax_t const size =
+      error ? 0 : std::filesystem::file_size(path, error);
+  if (error) {
+    fprintf(stderr, "%s: can't stat \"%s\": %s\n", program, path.c_str(),
+            error.message().c_str());
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> const lock(mutex_);
+  Entry& entry = entries_[path];
+  if (entry.pairs == nullptr || entry.mtime != mtime || entry.size != size) {
+    auto pairs = std::make_shared<DfsPairSet>();
+    if (!load_pair_file(path.c_str(), "classified pair list", pairs.get(),
+            true, true)) {
+      entries_.erase(path);
+      return nullptr;
+    }
+    entry = {mtime, size, std::move(pairs)};
+  }
+  return entry.pairs;
+}
+
 bool add_classified_sentence_pairs(
     char const* program, int sentence, DfsCommonArgs* args,
     std::vector<std::string>* reject_files) {
