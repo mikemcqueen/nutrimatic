@@ -10,17 +10,19 @@
 #include <vector>
 
 inline constexpr int PAIRS_DEFAULT_MIN_WORD_LENGTH = 4;
+inline constexpr int PAIRS_MAX_WORDS = 2;
 
-// Which pairs pairs prints: those of distinct words of at least
-// min_word_length letters (0 for no minimum) that fit together within letters
-// less used_letters, or that use all of them when exact. With exact and
-// allow_solo, single words that use all of them are printed too.
+// Which lines pairs prints: combinations of min_words to max_words (1 to
+// PAIRS_MAX_WORDS) distinct words of at least min_word_length letters (0 for
+// no minimum) that fit together within letters less used_letters, or that use
+// all of them when exact.
 struct PairsOptions {
   std::string letters;
   std::string used_letters;
   int min_word_length = PAIRS_DEFAULT_MIN_WORD_LENGTH;
   bool exact = false;
-  bool allow_solo = false;
+  int min_words = 2;
+  int max_words = 2;
 };
 
 // A word's a-z letter counts, padded to two SSE lanes.
@@ -47,7 +49,7 @@ class Pairs {
   // load() succeeds.
   void add(std::string const& word);
 
-  // Writes the solo words, then the pairs, one per line.
+  // Writes the single words, then the pairs, one per line.
   void write(FILE* out) const;
 
   // The lines write() would write.

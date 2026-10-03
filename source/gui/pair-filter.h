@@ -15,6 +15,7 @@
 // With cv, which requires letters, each kept line is followed by a space and
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
+// Without cv, the kept lines are sorted.
 struct PairFilter {
   static constexpr bool reads_pairs = true;
 

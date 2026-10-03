@@ -84,7 +84,13 @@ check_pairs exact "$exact" abcd 1 'ab,cd' -x
 check_pairs exact-same-group "$exact" aabbcc 1 'abc,bca' -x
 check_pairs exact-solo "$exact" abc 3 'abc
 bca
-ab,c' -x --allow-solo
-if "$pairs" --allow-solo -d "$exact" abc 2>/dev/null; then
-  fail "--allow-solo without -x was accepted"
+ab,c' -x --mx 1
+check_pairs exact-solo-only "$exact" abc 2 'abc
+bca' -x --min-max-words 1,1
+check_pairs solo-fits "$exact" abc 4 'ab
+c
+abc
+bca' --mx 1,1
+if "$pairs" --mx 2,3 -d "$exact" abc 2>/dev/null; then
+  fail "--mx 2,3 was accepted"
 fi

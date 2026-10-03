@@ -89,11 +89,18 @@ void Pairs::add(std::string const& word) {
 
 template <typename Emit>
 void Pairs::each_line(Emit emit) const {
-  if (options_.exact && options_.allow_solo) {
-    auto const solo = group_indices_.find(bag_);
-    if (solo != group_indices_.end())
-      for (std::string const& word : groups_[solo->second]) emit(word, nullptr);
+  if (options_.min_words <= 1) {
+    if (options_.exact) {
+      auto const solo = group_indices_.find(bag_);
+      if (solo != group_indices_.end())
+        for (std::string const& word : groups_[solo->second])
+          emit(word, nullptr);
+    } else {
+      for (std::vector<std::string> const& group : groups_)
+        for (std::string const& word : group) emit(word, nullptr);
+    }
   }
+  if (options_.max_words < 2) return;
 
   auto const emit_pair = [&emit](std::string const& x, std::string const& y) {
     if (x < y)

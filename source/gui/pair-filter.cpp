@@ -61,6 +61,8 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
       snprintf(text, sizeof text, " %.2f", ratio);
       kept.push_back(lines[i] + text);
     }
+  } else {
+    std::ranges::sort(kept);
   }
   *output = std::move(kept);
   return true;

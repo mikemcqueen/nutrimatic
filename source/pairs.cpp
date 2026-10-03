@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr int OPT_ALLOW_SOLO = 256;
+constexpr int OPT_MIN_MAX_WORDS = 256;
 
 struct Args {
     char const* dictionary_file = NULL;
@@ -22,7 +22,7 @@ struct Args {
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
-            "usage: %s [-d FILE] [-u LETTERS] [-m N] [-x [--allow-solo]] "
+            "usage: %s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] "
             "LETTERS\n", program);
     if (out != stdout) return;
 
@@ -38,9 +38,33 @@ void usage(char const* program, FILE* out) {
         PAIRS_DEFAULT_MIN_WORD_LENGTH);
     dfs_help_option("-x, --exact",
         "only print pairs that use all of LETTERS");
-    dfs_help_option("--allow-solo",
-        "with -x, also print single words that use all of LETTERS");
+    dfs_help_option("--mx, --min-max-words M[,X]",
+        "print combinations of M to X words, at most %d (default: 2,2; "
+        "1 also prints single words)", PAIRS_MAX_WORDS);
     dfs_help_option("-h, --help", "show this help");
+}
+
+bool parse_min_max_words(char const* in, PairsOptions* out) {
+    std::string const arg = in;
+    size_t const comma = arg.find(',');
+    int min_words;
+    int max_words = out->max_words;
+    if (!parse_count(arg.substr(0, comma).c_str(), "--min-max-words M",
+                     &min_words) ||
+        (comma != std::string::npos &&
+         !parse_count(arg.substr(comma + 1).c_str(), "--min-max-words X",
+                      &max_words)))
+        return false;
+    if (min_words < 1 || min_words > max_words ||
+        max_words > PAIRS_MAX_WORDS) {
+        fprintf(stderr,
+                "pairs: --min-max-words needs 1 <= M <= X <= %d, not \"%s\"\n",
+                PAIRS_MAX_WORDS, in);
+        return false;
+    }
+    out->min_words = min_words;
+    out->max_words = max_words;
+    return true;
 }
 
 bool parse_args(char* argv[], Args* out, bool* help) {
@@ -49,7 +73,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "used-letters", 'u', OPTPARSE_REQUIRED },
         { "min_word_length", 'm', OPTPARSE_REQUIRED },
         { "exact", 'x', OPTPARSE_NONE },
-        { "allow-solo", OPT_ALLOW_SOLO, OPTPARSE_NONE },
+        { "mx", OPT_MIN_MAX_WORDS, OPTPARSE_REQUIRED },
+        { "min-max-words", OPT_MIN_MAX_WORDS, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -74,8 +99,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case 'x':
             out->options.exact = true;
             break;
-          case OPT_ALLOW_SOLO:
-            out->options.allow_solo = true;
+          case OPT_MIN_MAX_WORDS:
+            if (!parse_min_max_words(options.optarg, &out->options))
+                return false;
             break;
           case 'h':
             *help = true;
@@ -88,10 +114,6 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
     char const* letters = optparse_arg(&options);
     if (letters == NULL || optparse_arg(&options) != NULL) return false;
-    if (out->options.allow_solo && !out->options.exact) {
-        fputs("pairs: --allow-solo requires --exact\n", stderr);
-        return false;
-    }
     out->options.letters = letters;
     return true;
 }
