@@ -404,7 +404,8 @@ void Column::update_hidden() {
   AppState const& state = app_state();
   hidden_judged_version_ = state.judged_bad_version;
   std::vector<char> hidden;
-  if ((!state.judged_bad.empty() || state.bad_bags_bitmap) &&
+  if (state.judged_bad_filter &&
+      (!state.judged_bad.empty() || state.bad_bags_bitmap) &&
       !remaining_sorted_.empty()) {
     LetterCounts left = {};
     for (char const c : remaining_sorted_) ++left[c - 'a'];

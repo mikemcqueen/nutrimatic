@@ -38,9 +38,10 @@ void load_letter_count_font();
 // app_state()'s letters (the window's l: field); while the mouse is held on
 // it, a tooltip below it shows lc's report on them (see
 // letter_count_lines()). Items that would leave letters judged bad (see
-// AppState::is_judged_bad()), were they taken from the letters left, are
-// hidden from the ListBox (see ListBox::set_hidden()), once output() is up to
-// date. A selected item hidden this way is deselected
+// AppState::is_judged_bad()), were they taken from the letters left, are,
+// while app_state()'s judged_bad_filter is on, hidden from the ListBox (see
+// ListBox::set_hidden()), once output() is up to date. A selected item
+// hidden this way is deselected
 // when it was kept across a rerun, or stepped off (see
 // ListBox::step_off_hidden()) when judged_bad_version went up. Pressing Enter
 // in the filter field applies it as a regex to the ListBox (see

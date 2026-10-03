@@ -37,8 +37,8 @@ void Window::render() {
   ImGui::Begin("pgui", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
 
-  if (ImGui::BeginTable("fields", 5)) {
-    for (int i = 0; i < 5; ++i) {
+  if (ImGui::BeginTable("fields", 6)) {
+    for (int i = 0; i < 6; ++i) {
       ImGui::TableSetupColumn("", i == 0 || i == 2 || i == 3
                                       ? ImGuiTableColumnFlags_WidthStretch
                                       : ImGuiTableColumnFlags_WidthFixed);
@@ -67,6 +67,10 @@ void Window::render() {
     ImGui::SameLine(0, 0);
     entered |= clearable_input("used", used_letters_, sizeof used_letters_);
     ImGui::TableNextColumn();
+    bool judged_bad_filter = app_state().judged_bad_filter;
+    bool const judged_bad_filter_toggled =
+        ImGui::Checkbox("BAD", &judged_bad_filter);
+    ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("s:");
     for (int i = 1; i <= 9; ++i) {
@@ -85,6 +89,10 @@ void Window::render() {
       state.set_letters(letters_);
       state.used_letters = used_letters_;
       ++state.generation;
+    }
+    if (judged_bad_filter_toggled) {
+      state.judged_bad_filter = judged_bad_filter;
+      ++state.judged_bad_version;
     }
     if (state.sentence != sentence_) {
       state.sentence = sentence_;

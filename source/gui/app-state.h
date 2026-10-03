@@ -112,7 +112,11 @@ struct AppState {
   // The sN component of the seed whose bad.sN judged_bad or bad_bags_bitmap
   // holds, set by load_seed_and_bad_bags(); none before the first.
   std::optional<std::string> bad_bags_sentence;
-  // Goes up whenever judged_bad or bad_bags_bitmap changes.
+  // Whether columns hide items leaving letters judged bad (see
+  // is_judged_bad()).
+  bool judged_bad_filter = true;
+  // Goes up whenever judged_bad, bad_bags_bitmap, or judged_bad_filter
+  // changes.
   unsigned judged_bad_version = 0;
 };
 

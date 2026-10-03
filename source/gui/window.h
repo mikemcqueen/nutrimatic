@@ -8,8 +8,9 @@
 #include "input-source.h"
 
 // The top-level pane filling the viewport: a line of seed, letters (l), and
-// used-letters (u) fields splitting its width evenly, followed by sentence
-// buttons S1-S9 (s), then the columns side by side. The seed field starts
+// used-letters (u) fields splitting its width evenly, followed by a BAD
+// checkbox that toggles app_state()'s judged_bad_filter and sentence buttons
+// S1-S9 (s), then the columns side by side. The seed field starts
 // from app_state()'s seed_name, and Enter in it reloads the seed from the
 // name typed, with its bad bags (see AppState::load_seed_and_bad_bags()).
 // The letters fields start from app_state(), and Enter in either stores both
