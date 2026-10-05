@@ -15,7 +15,7 @@
 
 using DictionaryRef = std::reference_wrapper<DfsDictionary const>;
 
-inline constexpr int PFILTER_DEFAULT_MAX_LETTERS = 15;
+inline constexpr int PFILTER_DEFAULT_MAX_LETTERS = 20;
 
 // Which pairs pfilter keeps: those of at most max_letters letters (0 for no
 // limit), whose words are both in dictionary when given, that fit within bag

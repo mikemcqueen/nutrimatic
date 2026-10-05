@@ -58,7 +58,7 @@ The details:
 
     * build list of 4-letter wiki index pairs:
 
-      `query-index $S2 --wf -w2 -n0 --csv | sort -u > idx/idx.2.s2.m4`
+      `query-index $S2 --wf -w2 -n0 --csv > idx/idx.2.s2.m4`
       
       NOTE: can remove sort (replace with uniq) after pcomm is broadly incorporated into workflow.
 
@@ -72,13 +72,21 @@ The details:
 
     * making 3-letter word pairs:
     
-      index:   `query-index $S9 --wf -w2 -n0 --csv -m3 --dict idx/words.big.l3-10 > idx/idx.2.s9.m3`
-
       NOTE: for cluer, i should build a dictionary that combines words.filtered & a filtered 3-letter
             wordlist (idx/words.3.bowie.filtered is a start).  and use that as pair's --dict.
-
+      old:
+      
+      index:   `query-index $S9 --wf -w2 -n0 --csv -m3 --dict idx/words.big.l3-10 > idx/idx.2.s9.m3`
       cluer:   `pairs $S9 -m3 | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s9.m3`
       combine: `pcomm idx/cluer.s9.m3 idx/idx.2.s9.m3 > idx/all.s9.m3`
+
+      updated;
+
+      index:   `query-index $S2 --wf -w2 -n0 --csv -m3 --dict idx/words.big.3.13 > idx/idx.2.s2.m3.3.13`
+      # filter out non-cluer-index dict words before sending to pairs
+      updated: `time cat idx/words.big.3.13 | ../nutrimatic/dict-filter -d cluer/data/index/tokens.txt - | pairs $S2 -d - -m3 |
+                python cluer/query_index.py -f - -j --threads 2 > cluer.s2.m3.3.13`
+      combine: `pcomm idx/cluer.s2.m3.3.13 idx/idx.2.s2.m3.3.13 | sort -u > idx/all.s2.m3.3.13`
 
     * calculate and auto-classify emaining:
 
@@ -125,14 +133,11 @@ The details:
       smarter than the dumb version it's using, which i think is to use the `pcomm` tool.
 
    From here, we need to run
-     `wf extract p1 yes idx/idx.2.s2.m4 --pm .85 --pr .15 > seed.s2.m4.85.15.pairs`
-       input: the original (pre-filtered) pairs file
-       output: top 15% of YES results.
-       
-     NOTE: wf filter is not a command.  maybe i renamed it to wf extract yes?
+     `./wf extract p1 yes --pairs idx/all.s2.m3.3.13 --pm .85 --pr .15 -o idx/seed.s2.m3.all.85.15.pairs`
+     `./wf extract p1 yes --pairs idx/all.s2.m3.3.13 --pm .5 --pr .5 -o idx/seed.s2.m3.all.50.pairs`
 
-     NOTE: I'm losing the ".2" of the "using the 2-occurance wiki-merged index in the
-           filename here. Not ideal, but not sure it matters? I could prepend idx.2 i guess?
+       input: the original (pre-filtered) pairs file
+       output: 15%/50% classified YES results.
        
    That will give us the --pairs file input to step 1.
 

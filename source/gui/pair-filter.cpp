@@ -30,6 +30,7 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
     fputs("pgui: pfilter cv requires letters\n", stderr);
     return false;
   }
+  options.max_letters = max_letters;
   options.sentence = settings.sentence;
   options.drop_yes = yes;
   options.dictionary = std::cref(app_state().dictionaries.at("big_dict").words);
@@ -70,14 +71,27 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
 }
 
 bool PairFilter::render_options() {
-  bool const cv_changed = toggle_button("cv", cv);
-  if (cv_changed) cv = !cv;
+  bool changed = toggle_button("cv", cv);
+  if (changed) cv = !cv;
+  ImGui::SameLine();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("x:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
+                          2 * ImGui::GetStyle().FramePadding.x);
+  int letters = max_letters;
+  if (ImGui::InputInt("##x", &letters, 0, 0,
+                      ImGuiInputTextFlags_EnterReturnsTrue)) {
+    letters = std::max(letters, 0);
+    changed |= letters != max_letters;
+    max_letters = letters;
+  }
   ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
   ImGui::SameLine(0, 0);
   if (!clearable_input("u", used_text, sizeof used_text) || used == used_text)
-    return cv_changed;
+    return changed;
   used = used_text;
   return true;
 }
