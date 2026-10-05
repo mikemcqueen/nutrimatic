@@ -18,17 +18,20 @@
 void load_letter_count_font();
 
 // One top-level pane: a line of a source dropdown, offering app_state()'s
-// seed keys, its dictionary keys when the command reads dictionaries (see
+// seed keys, "dict" when the command reads dictionaries (see
 // Command::reads_dictionaries()), and the number, counting from 1, of each
 // column before this one, and a letter
-// source dropdown, offering "all" and those same numbers; a line of a filter field; then a
+// source dropdown, offering "all" and those same numbers; a line of an "f:"
+// filter field and a "D:" dropdown of DICT ("sml_dict") and BIG ("big_dict"),
+// starting at DICT, naming the dictionary in app_state()'s dictionaries the
+// command runs with, and that "dict" names; then a
 // dropdown of
 // command_names naming the command (see make_command()), sized to the longest
 // name, beside that command's option widgets, a status line, and a ListBox of
 // that command's output on its input source, omitted when the source is
 // std::monostate. Each choice keeps its own options. render() reruns the
-// command, on a worker thread, when the source, the choice, its options,
-// app_state(), or the source or letters column's output or selection has
+// command, on a worker thread, when the source, the choice, its options, the
+// dictionary, app_state(), or the source or letters column's output or selection has
 // changed since it last ran; it waits for a pending source or letters column
 // to finish first. The letters column is the one letter_source names, none
 // for "all". The command runs with the used letters passed on by the letters
@@ -89,6 +92,7 @@ class Column {
     InputSource source;
     unsigned letters_version;
     LetterSource letter_source;
+    int dictionary;
     bool operator==(Key const&) const = default;
   };
 
@@ -133,14 +137,16 @@ class Column {
   InputSource source_;
   LetterSource letter_source_;
   char filter_[256] = {};
+  // Index of the D: dropdown's choice in dictionary_choices.
+  int dictionary_ = 0;
   bool bad_filter_ = false;
   std::vector<std::optional<Command>> commands_;
   int choice_ = 0;
   unsigned options_version_ = 0;
-  Key made_key_ = {-1, 0, 0, 0, {}, 0, {}};
+  Key made_key_ = {-1, 0, 0, 0, {}, 0, {}, 0};
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
-  Key remaining_key_ = {-1, 0, 0, 0, {}, 0, {}};
+  Key remaining_key_ = {-1, 0, 0, 0, {}, 0, {}, 0};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
@@ -150,7 +156,7 @@ class Column {
   std::vector<std::string> letter_count_;
   // The made_key_ and app_state()'s judged_bad_version as of the last
   // update_hidden().
-  Key hidden_key_ = {-1, 0, 0, 0, {}, 0, {}};
+  Key hidden_key_ = {-1, 0, 0, 0, {}, 0, {}, 0};
   unsigned hidden_judged_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;

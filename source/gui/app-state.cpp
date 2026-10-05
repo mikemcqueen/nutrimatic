@@ -129,6 +129,18 @@ void load_bags(std::string const& path, std::unordered_set<std::string>& bags,
     std::fprintf(stderr, "pgui: can't read %s\n", path.c_str());
 }
 
+// The words of the word list at `path`, empty when it can't be read, which is
+// diagnosed. Sets `ok` to whether it could.
+SharedDictionary read_dictionary(std::string const& path, bool* ok) {
+  auto dictionary = std::make_shared<LoadedDictionary>();
+  *ok = load_dictionary(path.c_str(), &dictionary->words);
+  if (!*ok) dictionary->words.clear();
+  Lines lines(dictionary->words.begin(), dictionary->words.end());
+  std::ranges::sort(lines);
+  dictionary->lines = std::make_shared<Lines const>(std::move(lines));
+  return dictionary;
+}
+
 // The keys of `map`, sorted.
 template <typename Map>
 std::vector<std::string> sorted_keys(Map const& map) {
@@ -149,13 +161,12 @@ bool load_app_state(std::string const& seed_path) {
   state.set_letters("$S2");
   state.used_letters.clear();
   state.dictionaries.clear();
-  state.dictionary_words.clear();
   state.dictionaries["sml_dict"].path = "/usr/share/dict/words";
   AppState::Dictionary& big = state.dictionaries["big_dict"];
   big.path = path;
-  if (!load_dictionary(path.c_str(), &big.words)) return false;
-  big.loaded = true;
-  state.dictionary_keys = sorted_keys(state.dictionaries);
+  bool ok;
+  big.words = read_dictionary(path, &ok);
+  if (!ok) return false;
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
   state.bad_bags_sentence.reset();
@@ -217,21 +228,19 @@ SharedLines AppState::seed_lines(std::string const& key) {
   return seeds.emplace(key, std::move(lines)).first->second;
 }
 
-SharedLines AppState::dictionary_lines(std::string const& key) {
-  if (auto const found = dictionary_words.find(key);
-      found != dictionary_words.end())
-    return found->second;
-  auto lines = std::make_shared<Lines>();
-  if (auto const found = dictionaries.find(key); found != dictionaries.end()) {
-    Dictionary& dictionary = found->second;
-    if (!dictionary.loaded &&
-        !load_dictionary(dictionary.path.c_str(), &dictionary.words))
-      dictionary.words.clear();
-    dictionary.loaded = true;
-    lines->assign(dictionary.words.begin(), dictionary.words.end());
-    std::ranges::sort(*lines);
+SharedDictionary AppState::dictionary(std::string const& key) {
+  auto const found = dictionaries.find(key);
+  if (found == dictionaries.end()) {
+    static SharedDictionary const empty = std::make_shared<LoadedDictionary>(
+        LoadedDictionary{{}, std::make_shared<Lines const>()});
+    return empty;
   }
-  return dictionary_words.emplace(key, std::move(lines)).first->second;
+  Dictionary& dictionary = found->second;
+  if (!dictionary.words) {
+    bool ok;
+    dictionary.words = read_dictionary(dictionary.path, &ok);
+  }
+  return dictionary.words;
 }
 
 bool AppState::is_judged_bad(std::string const& letters,

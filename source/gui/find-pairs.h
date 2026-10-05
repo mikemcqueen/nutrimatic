@@ -8,7 +8,7 @@
 #include "pairs-impl.h"
 
 // A pairs call on one input, taking its letters and used letters from the
-// GlobalSettings in place of those in options. Its option widgets are an "m:"
+// LetterToolsParams in place of those in options. Its option widgets are an "m:"
 // field setting min_word_length, an "ex" checkbox setting exact, and "mx:"
 // fields setting min_words and max_words. It starts with a minimum length of
 // 3, exact, and 1 to 2 words. It reads dictionaries as well as seeds and
@@ -19,7 +19,7 @@ struct FindPairs {
   FindPairs();
 
   bool run(std::vector<SharedLines> const& inputs,
-           GlobalSettings const& settings, Lines* output) const;
+           LetterToolsParams const& params, Lines* output) const;
   bool render_options();
 
   PairsOptions options;

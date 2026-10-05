@@ -17,15 +17,14 @@ struct Seed {
   bool operator==(Seed const&) const = default;
 };
 
-// The words of the dictionary under `key` in app_state()'s dictionaries as a
-// Column's input source.
+// The words of the dictionary a Column's D: dropdown names as its input
+// source.
 struct Dict {
-  std::string key;
   bool operator==(Dict const&) const = default;
 };
 
-// Where a Column's items come from: nothing, one of app_state()'s seed files
-// or dictionaries, or another Column's items.
+// Where a Column's items come from: nothing, one of app_state()'s seed files,
+// the Column's dictionary, or another Column's items.
 using InputSource =
     std::variant<std::monostate, Seed, Dict, ColumnIdentifier>;
 

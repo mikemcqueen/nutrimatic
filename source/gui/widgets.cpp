@@ -6,11 +6,12 @@
 #include <cfloat>
 #include <cmath>
 
-bool clearable_input(char const* id, char* text, size_t size) {
+bool clearable_input(char const* id, char* text, size_t size,
+                     float reserve) {
   ImGui::PushID(id);
   float const side = ImGui::GetFrameHeight();
   float const spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-  ImGui::SetNextItemWidth(-(side + spacing));
+  ImGui::SetNextItemWidth(-(side + spacing + reserve));
   bool changed = ImGui::InputText("##text", text, size,
                                   ImGuiInputTextFlags_EnterReturnsTrue);
   ImGui::SameLine(0, spacing);

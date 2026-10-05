@@ -14,10 +14,10 @@
 
 // A tool call: any value with
 //   bool run(std::vector<SharedLines> const& inputs,
-//            GlobalSettings const& settings, Lines* output) const
+//            LetterToolsParams const& params, Lines* output) const
 // run() sets `output`; it returns false, with the error diagnosed, when the
 // call fails. It may run on any thread, reading app_state() only for its
-// dictionary.
+// classified pairs.
 // It may also have
 //   bool render_options()
 // drawing its option widgets in the current content region and returning
@@ -28,8 +28,8 @@
 // of the Columns downstream of it; commands without it add none. And it may
 // have
 //   static constexpr bool reads_dictionaries
-// true when its Column's source dropdown offers app_state()'s dictionaries;
-// commands without it read none. And it may have
+// true when its Column's source dropdown offers "dict", its D: dictionary;
+// commands without it don't. And it may have
 //   static constexpr bool reads_pairs
 // true when it reads pairs, so choosing it moves its Column's source off a
 // dictionary; commands without it don't.
@@ -48,8 +48,8 @@ class Command {
   }
 
   bool run(std::vector<SharedLines> const& inputs,
-           GlobalSettings const& settings, Lines* output) const {
-    return self_->run(inputs, settings, output);
+           LetterToolsParams const& params, Lines* output) const {
+    return self_->run(inputs, params, output);
   }
 
   bool render_options() { return self_->render_options(); }
@@ -65,7 +65,7 @@ class Command {
     virtual ~Concept() = default;
     virtual std::unique_ptr<Concept> copy() const = 0;
     virtual bool run(std::vector<SharedLines> const& inputs,
-                     GlobalSettings const& settings, Lines* output) const = 0;
+                     LetterToolsParams const& params, Lines* output) const = 0;
     virtual bool render_options() = 0;
     virtual std::string used_letters() const = 0;
     virtual bool reads_dictionaries() const = 0;
@@ -79,8 +79,8 @@ class Command {
       return std::make_unique<Model>(*this);
     }
     bool run(std::vector<SharedLines> const& inputs,
-             GlobalSettings const& settings, Lines* output) const override {
-      return data.run(inputs, settings, output);
+             LetterToolsParams const& params, Lines* output) const override {
+      return data.run(inputs, params, output);
     }
     bool render_options() override {
       if constexpr (requires { data.render_options(); })

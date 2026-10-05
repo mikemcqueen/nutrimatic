@@ -11,19 +11,19 @@
 #include "widgets.h"
 
 bool PairFilter::run(std::vector<SharedLines> const& inputs,
-                     GlobalSettings const& settings, Lines* output) const {
+                     LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {
     fprintf(stderr, "pgui: pfilter takes 1 input, not %zu\n", inputs.size());
     return false;
   }
 
   PfilterOptions options;
-  if (!settings.letters.empty()) {
+  if (!params.letters.empty()) {
     LetterBag bag;
-    if (!make_letter_bag(settings.letters.c_str(), settings.used_letters, &bag))
+    if (!make_letter_bag(params.letters.c_str(), params.used_letters, &bag))
       return false;
     options.bag = bag;
-  } else if (!settings.used_letters.empty()) {
+  } else if (!params.used_letters.empty()) {
     fputs("pgui: pfilter used letters require letters\n", stderr);
     return false;
   } else if (cv) {
@@ -31,9 +31,9 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
     return false;
   }
   options.max_letters = max_letters;
-  options.sentence = settings.sentence;
+  options.sentence = params.sentence;
   options.drop_yes = yes;
-  options.dictionary = std::cref(app_state().dictionaries.at("big_dict").words);
+  options.dictionary = std::cref(params.dictionary->words);
 
   Pfilter filter;
   if (!filter.load("pgui", options, app_state().classified_pairs))

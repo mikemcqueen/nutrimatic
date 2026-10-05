@@ -15,15 +15,15 @@ FindPairs::FindPairs() {
 }
 
 bool FindPairs::run(std::vector<SharedLines> const& inputs,
-                    GlobalSettings const& settings, Lines* output) const {
+                    LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {
     fprintf(stderr, "pgui: pairs takes 1 input, not %zu\n", inputs.size());
     return false;
   }
 
   PairsOptions call = options;
-  call.letters = settings.letters;
-  call.used_letters = settings.used_letters;
+  call.letters = params.letters;
+  call.used_letters = params.used_letters;
   Pairs pairs;
   if (!pairs.load(call)) return false;
 

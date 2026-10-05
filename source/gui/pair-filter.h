@@ -8,8 +8,8 @@
 #include "input-source.h"
 #include "pfilter-impl.h"
 
-// A pfilter call on one input, taking its dictionary from app_state() and its
-// sentence from the GlobalSettings. Its option widgets are a "cv" toggle
+// A pfilter call on one input, taking its dictionary and sentence from the
+// LetterToolsParams. Its option widgets are a "cv" toggle
 // button, setting cv, an "x:" field setting max_letters, and a "u:" field
 // with a clear button; entering letters there, or clearing it, sets used, which the Column adds to its used letters.
 // With cv, which requires letters, each kept line is followed by a space and
@@ -20,7 +20,7 @@ struct PairFilter {
   static constexpr bool reads_pairs = true;
 
   bool run(std::vector<SharedLines> const& inputs,
-           GlobalSettings const& settings, Lines* output) const;
+           LetterToolsParams const& params, Lines* output) const;
   bool render_options();
   std::string used_letters() const { return used; }
 

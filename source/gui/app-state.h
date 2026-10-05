@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_GUI_APP_STATE_H
 #define NUTRIMATIC_GUI_APP_STATE_H
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -12,6 +13,13 @@
 #include "dfs-class-list.h"
 #include "input-source.h"
 #include "letter-bag.h"
+
+// A word list's words, as a set and as sorted lines.
+struct LoadedDictionary {
+  DfsDictionary words;
+  SharedLines lines;
+};
+using SharedDictionary = std::shared_ptr<LoadedDictionary const>;
 
 // Seed file names in AppState::seed_directory, by key: "seed50", "seed85",
 // "all", or the loaded seed's AppState::seed_key.
@@ -56,11 +64,10 @@ struct AppState {
   // or the file can't be read, which is diagnosed.
   SharedLines seed_lines(std::string const& key);
 
-  // The words of the dictionary under `key` in dictionaries, loaded from its
-  // path if it isn't yet, sorted, made the first time they're asked for; none
-  // when `key` isn't in dictionaries or its file can't be read, which is
-  // diagnosed.
-  SharedLines dictionary_lines(std::string const& key);
+  // The dictionary under `key` in dictionaries, loaded from its path if it
+  // isn't yet; empty when `key` isn't in dictionaries or its file can't be
+  // read, which is diagnosed. Only called on the main thread.
+  SharedDictionary dictionary(std::string const& key);
 
   // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't
   // there already, bumps judged_bad_version, and appends it as a line to the
@@ -75,18 +82,13 @@ struct AppState {
   // A word list file, and its words once loaded.
   struct Dictionary {
     std::string path;
-    bool loaded = false;
-    DfsDictionary words;
+    SharedDictionary words;
   };
 
   // Dictionaries by key, set only by load_app_state(): "big_dict", $WFROOT's
   // filtered dictionary, loaded there, and "sml_dict", /usr/share/dict/words,
-  // loaded by dictionary_lines(). pfilter uses "big_dict".
+  // loaded by dictionary().
   std::unordered_map<std::string, Dictionary> dictionaries;
-  // dictionaries' keys, sorted.
-  std::vector<std::string> dictionary_keys;
-  // The lines made by dictionary_lines(), by key.
-  std::unordered_map<std::string, SharedLines> dictionary_words;
   std::string visual_letters;
   std::string actual_letters;
   std::string used_letters;
@@ -123,12 +125,14 @@ struct AppState {
   ClassifiedPairCache classified_pairs;
 };
 
-// A copy of app_state()'s actual letters, used letters, and sentence, taken
-// when a command starts so it runs unaffected by later changes.
-struct GlobalSettings {
+// What a command runs with, taken when it starts so it runs unaffected by
+// later changes: app_state()'s actual letters and sentence, its Column's used
+// letters, and the dictionary its Column's D: dropdown names.
+struct LetterToolsParams {
   std::string letters;
   std::string used_letters;
   int sentence = CLASSIFIED_NO_SENTENCE;
+  SharedDictionary dictionary;
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside

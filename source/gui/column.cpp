@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cctype>
 #include <climits>
+#include <cstddef>
 #include <cstdio>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -61,6 +63,11 @@ float combo_width(std::span<char const* const> labels) {
   return longest + 2 * ImGui::GetStyle().FramePadding.x +
          ImGui::GetFrameHeight();
 }
+
+// The D: dropdown's choices: each label and its key in app_state()'s
+// dictionaries.
+constexpr std::pair<char const*, char const*> dictionary_choices[] = {
+    {"DICT", "sml_dict"}, {"BIG", "big_dict"}};
 
 // "(N): letters" for the N letters of `letters` left once `used` is removed,
 // in the order typed, then "  over: letters" for those of `used` that
@@ -129,7 +136,7 @@ std::string source_label(InputSource const& source) {
   if (auto const* id = std::get_if<ColumnIdentifier>(&source))
     return std::to_string(*id + 1);
   if (auto const* seed = std::get_if<Seed>(&source)) return seed->key;
-  if (auto const* dict = std::get_if<Dict>(&source)) return dict->key;
+  if (std::holds_alternative<Dict>(source)) return "dict";
   return "none";
 }
 
@@ -159,10 +166,27 @@ void Column::render() {
   ImGui::PushID(this);
   render_sources();
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("filter:");
+  ImGui::TextUnformatted("f:");
   ImGui::SameLine(0, 0);
-  if (clearable_input("filter", filter_, sizeof filter_))
+  char const* dictionary_labels[std::size(dictionary_choices)];
+  for (size_t i = 0; i < std::size(dictionary_choices); ++i)
+    dictionary_labels[i] = dictionary_choices[i].first;
+  float const dictionary_width = combo_width(dictionary_labels);
+  if (clearable_input("filter", filter_, sizeof filter_,
+                      ImGui::GetStyle().ItemSpacing.x +
+                          ImGui::CalcTextSize("D:").x + dictionary_width))
     bad_filter_ = !list_.set_filter(filter_);
+  ImGui::SameLine();
+  ImGui::TextUnformatted("D:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(dictionary_width);
+  if (ImGui::BeginCombo("##dictionary", dictionary_labels[dictionary_])) {
+    for (int i = 0; i < static_cast<int>(std::size(dictionary_labels)); ++i) {
+      if (ImGui::Selectable(dictionary_labels[i], dictionary_ == i))
+        dictionary_ = i;
+    }
+    ImGui::EndCombo();
+  }
 
   if (ImGui::BeginTable("##command", 2)) {
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
@@ -177,7 +201,7 @@ void Column::render() {
         choice_ = i;
         if (commands_[choice_] && commands_[choice_]->reads_dictionaries() &&
             !std::holds_alternative<Dict>(source_))
-          source_ = Dict{"sml_dict"};
+          source_ = Dict{};
         if (commands_[choice_] && commands_[choice_]->reads_pairs() &&
             std::holds_alternative<Dict>(source_)) {
           if (id_ > 0)
@@ -296,16 +320,13 @@ void Column::render_letter_count(float x, float y) const {
 }
 
 void Column::render_sources() {
-  static std::vector<std::string> const no_keys;
   std::vector<std::string> const& keys = app_state().seed_keys;
-  std::vector<std::string> const& dict_keys =
-      commands_[choice_] && commands_[choice_]->reads_dictionaries()
-          ? app_state().dictionary_keys
-          : no_keys;
+  bool const reads_dictionaries =
+      commands_[choice_] && commands_[choice_]->reads_dictionaries();
   std::string const label = source_label(source_);
   std::vector<char const*> widest = {label.c_str()};
   for (std::string const& key : keys) widest.push_back(key.c_str());
-  for (std::string const& key : dict_keys) widest.push_back(key.c_str());
+  if (reads_dictionaries) widest.push_back("dict");
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("src:");
   ImGui::SameLine(0, 0);
@@ -315,9 +336,9 @@ void Column::render_sources() {
       InputSource const choice = Seed{key};
       if (ImGui::Selectable(key.c_str(), source_ == choice)) source_ = choice;
     }
-    for (std::string const& key : dict_keys) {
-      InputSource const choice = Dict{key};
-      if (ImGui::Selectable(key.c_str(), source_ == choice)) source_ = choice;
+    if (reads_dictionaries) {
+      InputSource const choice = Dict{};
+      if (ImGui::Selectable("dict", source_ == choice)) source_ = choice;
     }
     for (ColumnIdentifier id = 0; id < id_; ++id) {
       InputSource const choice = id;
@@ -379,7 +400,8 @@ Column::Key Column::wanted_key() const {
           source ? source->version() : 0,
           source_,
           letters ? letters->version() : 0,
-          letter_source_};
+          letter_source_,
+          dictionary_};
 }
 
 std::string Column::used_letters() const {
@@ -445,6 +467,9 @@ void Column::start(Key key) {
     return;
   }
 
+  AppState& state = app_state();
+  SharedDictionary dictionary =
+      state.dictionary(dictionary_choices[key.dictionary].second);
   SharedLines input;
   if (auto const* id = std::get_if<ColumnIdentifier>(&source_)) {
     Column const* source = source_column();
@@ -455,24 +480,23 @@ void Column::start(Key key) {
     }
     input = source->output();
   } else if (auto const* seed = std::get_if<Seed>(&source_)) {
-    input = app_state().seed_lines(seed->key);
-  } else if (auto const* dict = std::get_if<Dict>(&source_)) {
-    input = app_state().dictionary_lines(dict->key);
+    input = state.seed_lines(seed->key);
+  } else if (std::holds_alternative<Dict>(source_)) {
+    input = dictionary->lines;
   } else {
     input = empty_lines();
   }
 
-  AppState const& state = app_state();
-  GlobalSettings settings = {state.actual_letters, used_letters(),
-                             state.sentence};
+  LetterToolsParams params = {state.actual_letters, used_letters(),
+                              state.sentence, std::move(dictionary)};
   auto job = std::make_shared<Job>();
   job->key = key;
   job_ = job;
   worker_ = std::jthread([job, command = std::move(*command),
-                          settings = std::move(settings),
+                          params = std::move(params),
                           input = std::move(input)] {
     Lines output;
-    job->ok = command.run({input}, settings, &output);
+    job->ok = command.run({input}, params, &output);
     job->values = split_values(&output);
     job->output = std::make_shared<Lines const>(std::move(output));
     job->done.store(true, std::memory_order_release);

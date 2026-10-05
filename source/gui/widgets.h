@@ -3,10 +3,11 @@
 
 #include <cstddef>
 
-// A text field filling the rest of the line but for a square X button to its
-// right, which clears it. Returns true when Enter is pressed in the field or
-// the button is clicked.
-bool clearable_input(char const* id, char* text, size_t size);
+// A text field filling the rest of the line, less `reserve`, but for a square
+// X button to its right, which clears it. Returns true when Enter is pressed
+// in the field or the button is clicked.
+bool clearable_input(char const* id, char* text, size_t size,
+                     float reserve = 0);
 
 // A square button, a frame high, with `label` centered inside by the extent
 // of its glyphs, drawn pressed and outlined while `on`. Returns true when
