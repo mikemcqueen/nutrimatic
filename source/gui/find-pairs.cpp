@@ -29,6 +29,7 @@ bool FindPairs::run(std::vector<SharedLines> const& inputs,
 
   for (std::string const& line : *inputs[0]) pairs.add(line);
   *output = pairs.lines();
+  std::sort(output->begin(), output->end());
   return true;
 }
 

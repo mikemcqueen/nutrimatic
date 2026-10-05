@@ -3,6 +3,7 @@
 import argparse
 import re
 import signal
+import sys
 
 from nutrimatic.counts import strip_count_prefix
 
@@ -33,6 +34,15 @@ def load_dictionary(path: str) -> set[str]:
     return dictionary
 
 
+def filter_lines(input_file, dictionary: set[str], invert: bool) -> None:
+    for line in input_file:
+        text = strip_line_prefix(line)
+        words = text.split(" ")
+        matches = all(word in dictionary for word in words)
+        if matches != invert:
+            print(line, end="")
+
+
 def main() -> None:
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
@@ -52,20 +62,20 @@ def main() -> None:
             f"(default: {DEFAULT_DICTIONARY})"
         ),
     )
-    parser.add_argument("text_file", metavar="TEXT_FILE")
+    parser.add_argument(
+        "text_file", metavar="TEXT_FILE", help="text file, or - for stdin"
+    )
     args = parser.parse_args()
 
     dictionary = set()
     for path in args.dict or [DEFAULT_DICTIONARY]:
         dictionary.update(load_dictionary(path))
 
-    with open(args.text_file, encoding="utf-8") as input_file:
-        for line in input_file:
-            text = strip_line_prefix(line)
-            words = text.split(" ")
-            matches = all(word in dictionary for word in words)
-            if matches != args.v:
-                print(line, end="")
+    if args.text_file == "-":
+        filter_lines(sys.stdin, dictionary, args.v)
+    else:
+        with open(args.text_file, encoding="utf-8") as input_file:
+            filter_lines(input_file, dictionary, args.v)
 
 
 if __name__ == "__main__":

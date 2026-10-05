@@ -30,7 +30,7 @@ void usage(char const* program, FILE* out) {
           "  together within LETTERS\n"
           "\noptions:\n", stdout);
     dfs_help_option("-d, --dict FILE",
-        "read words from FILE (default: $WFROOT/%s)",
+        "read words from FILE, or - for stdin (default: $WFROOT/%s)",
         WORKFLOW_DICT_PATH);
     dfs_help_used_letters();
     dfs_help_option("-m, --min_word_length N",
@@ -145,7 +145,8 @@ int main(int argc, char* argv[]) {
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
 
-    FILE* wf = fopen(args.dictionary_file, "r");
+    bool const dict_stdin = strcmp(args.dictionary_file, "-") == 0;
+    FILE* wf = dict_stdin ? stdin : fopen(args.dictionary_file, "r");
     if (!wf) { perror(args.dictionary_file); return 1; }
 
     char line[4096];
@@ -157,7 +158,7 @@ int main(int argc, char* argv[]) {
         word.assign(line, len);
         pairs.add(word);
     }
-    fclose(wf);
+    if (!dict_stdin) fclose(wf);
 
     pairs.write(stdout);
     return 0;
