@@ -36,6 +36,7 @@ struct Args {
   int length = DEFAULT_LENGTH;
   int sentence = CLASSIFIED_NO_SENTENCE;
   bool reverse = false;
+  char const* dictionary_file = NULL;
   char const* source = NULL;
 };
 
@@ -46,15 +47,15 @@ struct SubsetCount {
 
 void usage(FILE* out) {
   fputs("usage: bag-subset [-u LETTERS]... [-s N] [-x N] [-l LENGTH] [-r] "
-        "LETTERS FILE|-\n", out);
+        "[-d FILE] LETTERS FILE|-\n", out);
   if (out != stdout) return;
 
   fputs("  for each subset of LETTERS up to LENGTH letters, count the words\n"
         "  and word,word pairs in FILE that fit within LETTERS and contain\n"
         "  every letter of the subset; print SUBSET COUNT lines by ascending\n"
         "  COUNT, omitting subsets with a COUNT of 0\n"
-        "  entries must be in $WFROOT/.wf/dict/words.filtered, and pairs not\n"
-        "  in $WFROOT/.wf/classified/no/no.pairs; '-' reads standard input\n"
+        "  entries must be in the dictionary, and pairs not in\n"
+        "  $WFROOT/.wf/classified/no/no.pairs; '-' reads standard input\n"
         "\noptions:\n", stdout);
   dfs_help_used_letters();
   classified_help_sentence_no();
@@ -67,6 +68,8 @@ void usage(FILE* out) {
   dfs_help_option("-r, --reverse",
       "instead count the entries that fit within LETTERS once the subset is "
       "removed");
+  dfs_help_option("-d, --dict FILE",
+      "dictionary FILE (default: $WFROOT/%s)", WORKFLOW_DICT_PATH);
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -77,6 +80,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "max-letters", 'x', OPTPARSE_REQUIRED },
     { "length", 'l', OPTPARSE_REQUIRED },
     { "reverse", 'r', OPTPARSE_NONE },
+    { "dict", 'd', OPTPARSE_REQUIRED },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -109,6 +113,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         break;
       case 'r':
         out->reverse = true;
+        break;
+      case 'd':
+        out->dictionary_file = options.optarg;
         break;
       case 'h':
         *help = true;
@@ -206,8 +213,9 @@ int main(int argc, char* argv[]) {
 
   char const* const root = require_workflow_root("bag-subset");
   if (root == NULL) return 1;
-  std::filesystem::path const dict_path =
-      std::filesystem::path(root) / WORKFLOW_DICT_PATH;
+  std::string const dict_path = args.dictionary_file != NULL
+      ? std::string(args.dictionary_file)
+      : (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
   DfsDictionary dictionary;
   if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
 

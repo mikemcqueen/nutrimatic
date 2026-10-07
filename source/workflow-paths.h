@@ -26,6 +26,7 @@ inline constexpr char WORKFLOW_NO_PAIRS_PATH[] =
 inline constexpr char WORKFLOW_YES_PAIRS_PATH[] =
     ".wf/classified/yes/yes.pairs";
 inline constexpr char WORKFLOW_DICT_PATH[] = ".wf/dict/words.filtered";
+inline constexpr char WORKFLOW_SMALL_DICT_PATH[] = ".wf/dict/dict.filtered";
 
 inline constexpr char WORKFLOW_TARGET_NO_PAIRS_NAME[] = "no.pairs";
 inline constexpr char WORKFLOW_TARGET_BEST_PAIRS_NAME[] = "best.pairs";

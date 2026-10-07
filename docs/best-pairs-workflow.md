@@ -80,15 +80,15 @@ The details:
       cluer:   `pairs $S9 -m3 | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s9.m3`
       combine: `pcomm idx/cluer.s9.m3 idx/idx.2.s9.m3 > idx/all.s9.m3`
 
-      updated;
+      updated:
 
       index:   `query-index $S2 --wf -w2 -n0 --csv -m3 --dict idx/words.big.3.13 > idx/idx.2.s2.m3.3.13`
       # filter out non-cluer-index dict words before sending to pairs
-      updated: `time cat idx/words.big.3.13 | ../nutrimatic/dict-filter -d cluer/data/index/tokens.txt - | pairs $S2 -d - -m3 |
+      cluer:   `time cat idx/words.big.3.13 | ../nutrimatic/dict-filter -d cluer/data/index/tokens.txt - | pairs $S2 -d - -m3 |
                 python cluer/query_index.py -f - -j --threads 2 > cluer.s2.m3.3.13`
       combine: `pcomm idx/cluer.s2.m3.3.13 idx/idx.2.s2.m3.3.13 | sort -u > idx/all.s2.m3.3.13`
 
-    * calculate and auto-classify emaining:
+    * calculate and auto-classify remaining:
 
        `cat $WFROOT/.wf/p1/done/p1_done.pairs | pcomm -23 idx/all.s9.m3 - > tmp/s9/all.s9.m3.remain`
        

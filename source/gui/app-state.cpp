@@ -157,11 +157,13 @@ bool load_app_state(std::string const& seed_path) {
   if (root == NULL) return false;
   std::string const path =
       (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
+  std::string const small_path =
+      (std::filesystem::path(root) / WORKFLOW_SMALL_DICT_PATH).string();
   AppState& state = app_state();
-  state.set_letters("$S2");
+  state.set_letters("$S1");
   state.used_letters.clear();
   state.dictionaries.clear();
-  state.dictionaries["sml_dict"].path = "/usr/share/dict/words";
+  state.dictionaries["sml_dict"].path = small_path;
   AppState::Dictionary& big = state.dictionaries["big_dict"];
   big.path = path;
   bool ok;

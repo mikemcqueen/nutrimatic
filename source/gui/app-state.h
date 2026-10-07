@@ -86,13 +86,13 @@ struct AppState {
   };
 
   // Dictionaries by key, set only by load_app_state(): "big_dict", $WFROOT's
-  // filtered dictionary, loaded there, and "sml_dict", /usr/share/dict/words,
-  // loaded by dictionary().
+  // filtered dictionary, loaded there, and "sml_dict", $WFROOT's filtered
+  // small dictionary, loaded by dictionary().
   std::unordered_map<std::string, Dictionary> dictionaries;
   std::string visual_letters;
   std::string actual_letters;
   std::string used_letters;
-  int sentence = 2;
+  int sentence = 1;
   std::string seed_directory;
   std::string seed_name;
   bool seed_readable = false;
@@ -136,7 +136,7 @@ struct LetterToolsParams {
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
-// "sml_dict", not loaded yet, with letters "$S2", empty used letters, the
+// "sml_dict", not loaded yet, with letters "$S1", empty used letters, the
 // seed at `seed_path`, and judged_bad and bad_bags_bitmap from the
 // judged-bad and bad.sN files beside it (see
 // AppState::load_seed_and_bad_bags()). Returns false, with the error

@@ -35,3 +35,11 @@ bc 1
 b  2
 c  3'
 [[ $actual == "$expected" ]] || fail "reverse output is wrong: $actual"
+
+printf '%s\n' a b c > "$test_dir/small.dict"
+actual=$(WFROOT=$test_dir "$bag_subset" -d "$test_dir/small.dict" -l 1 abc \
+    "$test_dir/input" 2>/dev/null)
+expected='b 1
+c 1
+a 2'
+[[ $actual == "$expected" ]] || fail "--dict output is wrong: $actual"
