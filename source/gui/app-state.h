@@ -22,7 +22,7 @@ struct LoadedDictionary {
 using SharedDictionary = std::shared_ptr<LoadedDictionary const>;
 
 // Seed file names in AppState::seed_directory, by key: "seed50", "seed85",
-// "all", or the loaded seed's AppState::seed_key.
+// or "all", then "m3" or "m4", or the loaded seed's AppState::seed_key.
 using SeedMap = std::unordered_map<std::string, std::string>;
 
 // pgui's global state, loaded once at startup by load_app_state(), and the
@@ -41,12 +41,14 @@ struct AppState {
 
   // Sets seed_name to `name`, loads that file's lines, or none when it can't
   // be read, and sets seed_readable to whether it could; sets seed_key to
-  // name's key, "seed" and its cutoff for seed.S.M.all.CUTOFF[...].pairs,
-  // "all" for all.S.M, or "seed" otherwise; sets seed_map to seed_name under
-  // seed_key plus whichever of seed.S.M.all.50.pairs (seed50),
-  // seed.S.M.all.85.15.pairs (seed85), and all.S.M (all) exist in
-  // seed_directory under keys not already taken; and bumps generation. An
-  // unreadable seed is diagnosed.
+  // name's key, "seed", its cutoff, and its M for
+  // seed.S.M.all.CUTOFF[...].pairs, "all" and its M for all.S.M, or "seed"
+  // otherwise; sets seed_m to name's M; sets seed_map to seed_name under
+  // seed_key plus, for each M of m3 and m4, whichever of
+  // seed.S.M.all.50.pairs (seed50M), seed.S.M.all.85.15.pairs (seed85M),
+  // and all.S.M (allM) exist in seed_directory under keys not already
+  // taken, S being name's; and bumps generation. An unreadable seed is
+  // diagnosed.
   void load_seed(std::string name);
 
   // load_seed()s `name`, diagnosing a name whose sN component,
@@ -97,6 +99,9 @@ struct AppState {
   std::string seed_name;
   bool seed_readable = false;
   std::string seed_key;
+  // The mN component of seed_name, <prefix>.sN.mN.<suffix>; empty when it
+  // has none.
+  std::string seed_m;
   SeedMap seed_map;
   // seed_map's keys, sorted.
   std::vector<std::string> seed_keys;

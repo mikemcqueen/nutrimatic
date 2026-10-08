@@ -206,8 +206,9 @@ void Column::render() {
             std::holds_alternative<Dict>(source_)) {
           if (id_ > 0)
             source_ = id_ - 1;
-          else if (app_state().seed_map.contains("seed85"))
-            source_ = Seed{"seed85"};
+          else if (std::string const key = "seed85" + app_state().seed_m;
+                   app_state().seed_map.contains(key))
+            source_ = Seed{key};
         }
       }
       ImGui::EndCombo();

@@ -32,26 +32,37 @@ std::vector<std::string_view> split(std::string_view text, char separator) {
   }
 }
 
-// The seed map key for the seed file `name`: "seed" and its cutoff for
-// seed.S.M.all.CUTOFF[...].pairs ("seed85" for seed.s9.m3.all.85.15.pairs),
-// "all" for all.S.M, or "seed" otherwise.
+// The mN component of the seed file `name`, <prefix>.sN.mN.<suffix>; empty
+// when `name` has no mN.
+std::string_view get_seed_m(std::string_view name) {
+  std::vector<std::string_view> const pieces = split(name, '.');
+  return pieces.size() > 2 ? pieces[2] : std::string_view();
+}
+
+// The seed map key for the seed file `name`: "seed", its cutoff, and its mN
+// for seed.S.M.all.CUTOFF[...].pairs ("seed85m3" for
+// seed.s9.m3.all.85.15.pairs), "all" and its mN for all.S.M, or "seed"
+// otherwise.
 std::string get_seed_key(std::string const& name) {
   std::vector<std::string_view> const pieces = split(name, '.');
   if (pieces[0] == "seed" && pieces.size() > 4)
-    return "seed" + std::string(pieces[4]);
-  if (pieces[0] == "all") return "all";
+    return "seed" + std::string(pieces[4]) + std::string(pieces[2]);
+  if (pieces[0] == "all" && pieces.size() > 2)
+    return "all" + std::string(pieces[2]);
   return "seed";
 }
 
-// The name of the `type` seed file sharing the S.M of the seed file `name`:
-// seed.S.M.all.CUTOFF.pairs for "seed", all.S.M for "all", or none when
-// `name` has no S.M, or `type` is "seed" with no `cutoff`, or is neither.
+// The name of the `type` seed file with the sN of the seed file `name` and
+// the mN `m`: seed.S.M.all.CUTOFF.pairs for "seed", all.S.M for "all", or
+// none when `name` has no sN, or `type` is "seed" with no `cutoff`, or is
+// neither.
 std::optional<std::string> build_seed_name(std::string const& name,
                                            std::string_view type,
+                                           std::string_view m,
                                            std::string_view cutoff = {}) {
   std::vector<std::string_view> const pieces = split(name, '.');
-  if (pieces.size() < 3) return std::nullopt;
-  std::string const sm = std::string(pieces[1]) + "." + std::string(pieces[2]);
+  if (pieces.size() < 2) return std::nullopt;
+  std::string const sm = std::string(pieces[1]) + "." + std::string(m);
   if (type == "seed") {
     if (cutoff.empty()) return std::nullopt;
     return "seed." + sm + ".all." + std::string(cutoff) + ".pairs";
@@ -71,15 +82,19 @@ void add_seed_if_exists(SeedMap& map, std::string const& directory,
   map.emplace(key, *name);
 }
 
-// Adds to `map` the seed50, seed85, and all seed files in `directory` sharing
-// the S.M of the seed file `name`.
+// Adds to `map` the seed50, seed85, and all seed files in `directory` with
+// the sN of the seed file `name`, for each of m3 and m4, under keys suffixed
+// with m3 or m4.
 void add_other_seed_files(SeedMap& map, std::string const& directory,
                           std::string const& name) {
-  add_seed_if_exists(map, directory, "seed50",
-                     build_seed_name(name, "seed", "50"));
-  add_seed_if_exists(map, directory, "seed85",
-                     build_seed_name(name, "seed", "85.15"));
-  add_seed_if_exists(map, directory, "all", build_seed_name(name, "all"));
+  for (std::string const m : {"m3", "m4"}) {
+    add_seed_if_exists(map, directory, "seed50" + m,
+                       build_seed_name(name, "seed", m, "50"));
+    add_seed_if_exists(map, directory, "seed85" + m,
+                       build_seed_name(name, "seed", m, "85.15"));
+    add_seed_if_exists(map, directory, "all" + m,
+                       build_seed_name(name, "all", m));
+  }
 }
 
 // The judged-bad file in `directory`.
@@ -180,6 +195,7 @@ void AppState::load_seed(std::string name) {
   seed_name = std::move(name);
   seed_map.clear();
   seed_key = get_seed_key(seed_name);
+  seed_m = get_seed_m(seed_name);
   seed_map.emplace(seed_key, seed_name);
   add_other_seed_files(seed_map, seed_directory, seed_name);
   seed_keys = sorted_keys(seed_map);
