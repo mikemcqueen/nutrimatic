@@ -17,7 +17,11 @@ void ListBox::render() {
   bool const open = ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN));
   ImGui::PopStyleColor();
   focused_ = open && ImGui::IsWindowFocused();
-  if (!open) return;
+  if (!open) {
+    rect_min_ = ImGui::GetItemRectMin();
+    rect_max_ = ImGui::GetItemRectMax();
+    return;
+  }
   sideways_pressed_ = 0;
   if (ImGui::Shortcut(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat))
     sideways_pressed_ = -1;
@@ -68,6 +72,8 @@ void ListBox::render() {
   }
   if (focus_top) ImGui::SetWindowFocus();
   ImGui::EndListBox();
+  rect_min_ = ImGui::GetItemRectMin();
+  rect_max_ = ImGui::GetItemRectMax();
 }
 
 void ListBox::set_items(SharedLines items, SharedLines values) {

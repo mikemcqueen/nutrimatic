@@ -1,6 +1,8 @@
 #ifndef NUTRIMATIC_GUI_LIST_BOX_H
 #define NUTRIMATIC_GUI_LIST_BOX_H
 
+#include <imgui.h>
+
 #include <optional>
 #include <regex>
 #include <string>
@@ -72,6 +74,10 @@ class ListBox {
   // last render().
   bool review_pressed() const { return review_pressed_; }
 
+  // The screen rect of the list's frame during the last render().
+  ImVec2 rect_min() const { return rect_min_; }
+  ImVec2 rect_max() const { return rect_max_; }
+
   // Moves keyboard focus, at the next render(), to the selected item when it
   // is shown, else to the top item in view, else to the list itself, without
   // changing the selection.
@@ -93,6 +99,8 @@ class ListBox {
   int selected_ = -1;
   int sideways_pressed_ = 0;
   bool review_pressed_ = false;
+  ImVec2 rect_min_;
+  ImVec2 rect_max_;
   // Whether the list had keyboard focus during the last render().
   bool focused_ = false;
   bool focus_requested_ = false;

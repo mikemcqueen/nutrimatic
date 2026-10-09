@@ -152,7 +152,7 @@ std::unique_ptr<Review> Review::open(SharedLines items, SharedLines values,
   return review;
 }
 
-Review::Result Review::render() {
+Review::Result Review::render(ImVec2 min, ImVec2 max) {
   Result result = Result::open;
   if (job_ && job_->done.load(std::memory_order_acquire)) {
     worker_.join();
@@ -167,18 +167,25 @@ Review::Result Review::render() {
     ImGui::OpenPopup("Review");
     opened_ = true;
   }
-  ImGuiViewport const* const viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing,
-                          ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSize(
-      ImVec2(viewport->WorkSize.x * 0.6f, viewport->WorkSize.y * 0.9f),
-      ImGuiCond_Appearing);
-  if (!ImGui::BeginPopupModal("Review", nullptr,
-                              ImGuiWindowFlags_NoSavedSettings))
-    return result;
+  ImGuiStyle const& style = ImGui::GetStyle();
+  float const header = ImGui::GetTextLineHeight() + style.ItemSpacing.y;
+  ImGui::SetNextWindowPos(ImVec2(min.x, min.y - header));
+  ImGui::SetNextWindowSize(ImVec2(max.x - min.x, max.y - min.y + header));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, style.Colors[ImGuiCol_WindowBg]);
+  ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, IM_COL32(0, 0, 0, 0x60));
+  bool const open = ImGui::BeginPopupModal(
+      "Review", nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(2);
+  if (!open) return result;
 
   int const count = static_cast<int>(rows_.size());
-  ImGui::Text("S%d: %d YES / %d NO", sentence_, checked_count_,
+  ImGui::Text("S%d: %d YES / %d NO", sentence_,
+              locked_count_ + checked_count_,
               count - locked_count_ - checked_count_);
   if (locked_count_ > 0) {
     ImGui::SameLine();
@@ -220,7 +227,10 @@ Review::Result Review::render() {
 }
 
 void Review::render_rows() {
-  if (!ImGui::BeginListBox("##rows", ImVec2(-FLT_MIN, -FLT_MIN))) return;
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0x31, 0x3b, 0x4a, 0xff));
+  bool const open = ImGui::BeginListBox("##rows", ImVec2(-FLT_MIN, -FLT_MIN));
+  ImGui::PopStyleColor();
+  if (!open) return;
   Lines const& items = *items_;
   Lines const& values = *values_;
   int const count = static_cast<int>(rows_.size());
@@ -228,7 +238,7 @@ void Review::render_rows() {
   float const pad = height * 0.15f;
   float const spacing = ImGui::GetStyle().ItemSpacing.x;
   ImDrawList* const draw = ImGui::GetWindowDrawList();
-  ImU32 const text = ImGui::GetColorU32(ImGuiCol_Text);
+  ImU32 const text = IM_COL32(0xe4, 0xe4, 0xe4, 0xff);
   ImU32 const disabled = ImGui::GetColorU32(ImGuiCol_TextDisabled);
   ImGuiListClipper clipper;
   clipper.Begin(count + 1);

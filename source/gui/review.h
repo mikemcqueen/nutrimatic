@@ -1,6 +1,8 @@
 #ifndef NUTRIMATIC_GUI_REVIEW_H
 #define NUTRIMATIC_GUI_REVIEW_H
 
+#include <imgui.h>
+
 #include <atomic>
 #include <memory>
 #include <string>
@@ -29,7 +31,9 @@ class Review {
   static std::unique_ptr<Review> open(SharedLines items, SharedLines values,
                                       std::vector<int> rows, int sentence);
 
-  Result render();
+  // Draws the review with its list over the screen rect from `min` to `max`
+  // and its status line just above, in the colors of a focused ListBox.
+  Result render(ImVec2 min, ImVec2 max);
 
  private:
   // A `wf classify pairs` run; done is set once ok and output are.

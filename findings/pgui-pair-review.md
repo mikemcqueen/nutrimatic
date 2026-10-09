@@ -60,8 +60,20 @@ Shift+R does nothing, but says why on stderr, unless all of these hold:
   would need guards on every one of those paths.
 - The modal blocks input to other windows, so the column-level `Shortcut`s
   (Left/Right and Shift+R in `ListBox::render()`) stop firing with no extra code.
-- Size it to the viewport, or to the column's rect so it looks like an
-  in-place review.
+- Entering review should change as little as possible on screen: the rest
+  of the window dims, but the pairs stay where they were. So the modal's
+  list sits on the column's list box, and its status line on the column's
+  item-count line just above. `ListBox::render()` records its frame's screen
+  rect each frame and the modal is placed on it every frame, so it follows
+  the list when the window resizes.
+- The modal has no title bar, padding, or border, takes the main window's
+  background, and its list takes a focused ListBox's colors. It dims the
+  rest of the window with black at 38% rather than StyleColorsDark()'s light
+  gray, which brightened the window around the modal instead of dimming it.
+  Its rows have the ListBox's row height, so each pair lands where it was,
+  shifted right by the checkbox, when the ListBox was scrolled to the top.
+- The modal's list always opens at its first pair, with keyboard focus
+  there, however the ListBox was scrolled or whatever it had selected.
 
 ## Freezing the pairs
 

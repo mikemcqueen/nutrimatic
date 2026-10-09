@@ -126,7 +126,9 @@ void Window::render() {
     }
   }
   if (review_) {
-    Review::Result const result = review_->render();
+    Review::Result const result =
+        review_->render(columns_[reviewed_].list_.rect_min(),
+                        columns_[reviewed_].list_.rect_max());
     if (result != Review::Result::open) {
       if (result == Review::Result::submitted)
         ++app_state().classified_version;
