@@ -88,6 +88,9 @@ class Column {
     int choice;
     unsigned options_version;
     unsigned generation;
+    // app_state()'s classified_version when the command reads classified
+    // pairs, else 0.
+    unsigned classified_version;
     unsigned source_version;
     InputSource source;
     unsigned letters_version;
@@ -143,10 +146,10 @@ class Column {
   std::vector<std::optional<Command>> commands_;
   int choice_ = 0;
   unsigned options_version_ = 0;
-  Key made_key_ = {-1, 0, 0, 0, {}, 0, {}, 0};
+  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0};
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
-  Key remaining_key_ = {-1, 0, 0, 0, {}, 0, {}, 0};
+  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
@@ -156,7 +159,7 @@ class Column {
   std::vector<std::string> letter_count_;
   // The made_key_ and app_state()'s judged_bad_version as of the last
   // update_hidden().
-  Key hidden_key_ = {-1, 0, 0, 0, {}, 0, {}, 0};
+  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0};
   unsigned hidden_judged_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;

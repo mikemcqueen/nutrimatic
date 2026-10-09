@@ -15,9 +15,12 @@
 // With cv, which requires letters, each kept line is followed by a space and
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
-// Without cv, the kept lines are sorted.
+// Without cv, the kept lines are sorted. Its Column's shown pairs can be
+// reviewed.
 struct PairFilter {
   static constexpr bool reads_pairs = true;
+  static constexpr bool reads_classified = true;
+  static constexpr bool reviewable = true;
 
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;

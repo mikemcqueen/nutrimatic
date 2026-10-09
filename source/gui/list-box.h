@@ -14,7 +14,7 @@
 // drawing only those scrolled into view. A filter hides the items it doesn't match without changing
 // the items or the selection. While the list has keyboard focus, Left and
 // Right don't move ImGui navigation; sideways_pressed() reports them
-// instead, judge_pressed() reports J, and bad_pressed() reports D. Items can
+// instead, and review_pressed() reports Shift+R. Items can
 // also be hidden by set_hidden(), apart from the filter. Its items are drawn in
 // light gray on a muted blue background, both lighter while it has keyboard
 // focus.
@@ -25,6 +25,8 @@ class ListBox {
   void render();
 
   SharedLines const& items() const { return items_; }
+
+  SharedLines const& values() const { return values_; }
 
   // Replaces the items and their values. The selected item stays selected
   // when it is among the new items, at its first occurrence; otherwise the
@@ -56,6 +58,9 @@ class ListBox {
   // How many items the filter and set_hidden() show.
   size_t shown_count() const;
 
+  // The indexes of the items the filter and set_hidden() show, in order.
+  std::vector<int> shown_items() const;
+
   // Index into the items, or -1 when nothing is selected.
   int selected() const { return selected_; }
 
@@ -63,13 +68,9 @@ class ListBox {
   // focus during the last render(), else 0.
   int sideways_pressed() const { return sideways_pressed_; }
 
-  // Whether J was pressed while the list had keyboard focus during the last
-  // render().
-  bool judge_pressed() const { return judge_pressed_; }
-
-  // Whether D was pressed while the list had keyboard focus during the last
-  // render().
-  bool bad_pressed() const { return bad_pressed_; }
+  // Whether Shift+R was pressed while the list had keyboard focus during the
+  // last render().
+  bool review_pressed() const { return review_pressed_; }
 
   // Moves keyboard focus, at the next render(), to the selected item when it
   // is shown, else to the top item in view, else to the list itself, without
@@ -91,8 +92,7 @@ class ListBox {
   std::vector<int> shown_;
   int selected_ = -1;
   int sideways_pressed_ = 0;
-  bool judge_pressed_ = false;
-  bool bad_pressed_ = false;
+  bool review_pressed_ = false;
   // Whether the list had keyboard focus during the last render().
   bool focused_ = false;
   bool focus_requested_ = false;

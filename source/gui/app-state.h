@@ -128,6 +128,8 @@ struct AppState {
   // The classified pairs pfilter runs share, loaded from $WFROOT as they're
   // first asked for and again when their files change.
   ClassifiedPairCache classified_pairs;
+  // Goes up whenever a Review records verdicts.
+  unsigned classified_version = 0;
 };
 
 // What a command runs with, taken when it starts so it runs unaffected by

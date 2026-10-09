@@ -112,11 +112,9 @@ void Window::render() {
     ImGui::EndTable();
   }
   for (int i = 0; i < column_count(); ++i) {
-    if (columns_[i].shows_list() && columns_[i].list_.judge_pressed())
-      toggle_judge(i);
-    if (columns_[i].shows_list() && columns_[i].list_.bad_pressed() &&
-        judge_ && !columns_[*judge_].remaining_sorted_.empty())
-      app_state().add_judged_bad(columns_[*judge_].remaining_sorted_);
+    if (!review_ && columns_[i].shows_list() &&
+        columns_[i].list_.review_pressed())
+      open_review(i);
     int const step =
         columns_[i].shows_list() ? columns_[i].list_.sideways_pressed() : 0;
     if (step == 0) continue;
@@ -127,7 +125,37 @@ void Window::render() {
       }
     }
   }
+  if (review_) {
+    Review::Result const result = review_->render();
+    if (result != Review::Result::open) {
+      if (result == Review::Result::submitted)
+        ++app_state().classified_version;
+      review_.reset();
+      columns_[reviewed_].list_.focus();
+    }
+  }
   ImGui::End();
+}
+
+void Window::open_review(ColumnIdentifier id) {
+  Column const& column = columns_[id];
+  std::optional<Command> const& command = column.commands_[column.choice_];
+  int const sentence = app_state().sentence;
+  if (!command || !command->reviewable()) {
+    std::fputs("pgui: only pfilter columns can be reviewed\n", stderr);
+    return;
+  }
+  if (column.pending()) {
+    std::fputs("pgui: can't review a column that is running\n", stderr);
+    return;
+  }
+  if (sentence == CLASSIFIED_NO_SENTENCE) {
+    std::fputs("pgui: select a sentence to review pairs\n", stderr);
+    return;
+  }
+  review_ = Review::open(column.output(), column.list_.values(),
+                         column.list_.shown_items(), sentence);
+  reviewed_ = id;
 }
 
 void Window::toggle_judge(ColumnIdentifier id) {

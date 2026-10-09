@@ -398,6 +398,9 @@ Column::Key Column::wanted_key() const {
   return {choice_,
           options_version_,
           app_state().generation,
+          commands_[choice_] && commands_[choice_]->reads_classified()
+              ? app_state().classified_version
+              : 0,
           source ? source->version() : 0,
           source_,
           letters ? letters->version() : 0,

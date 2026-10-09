@@ -23,6 +23,6 @@ if sdl2_dep.found()
   pgui_src = files('pgui.cpp', 'column.cpp', 'list-box.cpp',
     'input-source.cpp', 'pair-filter.cpp', 'window.cpp',
     'app-state.cpp', 'command.cpp', 'freq-sort.cpp', 'find-pairs.cpp',
-    'widgets.cpp')
+    'widgets.cpp', 'review.cpp')
   pgui_inc = include_directories('..')
 endif

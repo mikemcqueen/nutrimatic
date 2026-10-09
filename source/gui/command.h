@@ -32,7 +32,14 @@
 // commands without it don't. And it may have
 //   static constexpr bool reads_pairs
 // true when it reads pairs, so choosing it moves its Column's source off a
-// dictionary; commands without it don't.
+// dictionary; commands without it don't. And it may have
+//   static constexpr bool reads_classified
+// true when its output depends on the classified pairs, so it reruns when
+// they're recorded (see AppState::classified_version); commands without it
+// don't. And it may have
+//   static constexpr bool reviewable
+// true when its Column's shown pairs can be reviewed (see Review); commands
+// without it can't.
 // Holds its value by copy.
 class Command {
  public:
@@ -60,6 +67,10 @@ class Command {
 
   bool reads_pairs() const { return self_->reads_pairs(); }
 
+  bool reads_classified() const { return self_->reads_classified(); }
+
+  bool reviewable() const { return self_->reviewable(); }
+
  private:
   struct Concept {
     virtual ~Concept() = default;
@@ -70,6 +81,8 @@ class Command {
     virtual std::string used_letters() const = 0;
     virtual bool reads_dictionaries() const = 0;
     virtual bool reads_pairs() const = 0;
+    virtual bool reads_classified() const = 0;
+    virtual bool reviewable() const = 0;
   };
 
   template <typename T>
@@ -103,6 +116,18 @@ class Command {
     bool reads_pairs() const override {
       if constexpr (requires { T::reads_pairs; })
         return T::reads_pairs;
+      else
+        return false;
+    }
+    bool reads_classified() const override {
+      if constexpr (requires { T::reads_classified; })
+        return T::reads_classified;
+      else
+        return false;
+    }
+    bool reviewable() const override {
+      if constexpr (requires { T::reviewable; })
+        return T::reviewable;
       else
         return false;
     }

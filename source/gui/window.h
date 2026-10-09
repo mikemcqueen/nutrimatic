@@ -1,11 +1,13 @@
 #ifndef NUTRIMATIC_GUI_WINDOW_H
 #define NUTRIMATIC_GUI_WINDOW_H
 
+#include <memory>
 #include <optional>
 #include <vector>
 
 #include "column.h"
 #include "input-source.h"
+#include "review.h"
 
 // The top-level pane filling the viewport: a line of seed, letters (l), and
 // used-letters (u) fields splitting its width evenly, followed by a BAD
@@ -18,11 +20,13 @@
 // one selects it alone, or deselects it when already selected, and stores the
 // result there. Left and Right, while a column's ListBox has keyboard focus,
 // move it to the ListBox of the nearest column that shows one on that side
-// (see ListBox::focus()). J, while a column's ListBox has keyboard focus,
-// calls toggle_judge() on that column. D, while a column's ListBox has
-// keyboard focus and there is a judge, adds the judge's remaining letters to
-// app_state()'s judged_bad (see AppState::add_judged_bad()), unless they're
-// empty or some of its used letters weren't in app_state()'s letters.
+// (see ListBox::focus()).
+// Shift+R, while a column's ListBox has keyboard focus, opens a Review of the
+// items it shows, when its command is reviewable (see Command::reviewable()),
+// its output is up to date, and a sentence is selected, and otherwise says
+// why on stderr; once the Review records verdicts, app_state()'s
+// classified_version goes up. Keyboard focus returns to the column's ListBox
+// when the Review closes.
 class Window {
  public:
   Window();
@@ -52,6 +56,9 @@ class Window {
   bool judge_flashing() const;
 
  private:
+  // Opens a Review of column `id`; see the class comment.
+  void open_review(ColumnIdentifier id);
+
   std::vector<Column> columns_;
   char seed_[256] = {};
   char letters_[256] = {};
@@ -60,6 +67,9 @@ class Window {
   std::optional<ColumnIdentifier> judge_;
   // When the judge stops flashing, in ImGui::GetTime() seconds.
   double judge_flash_until_ = 0;
+  // The open Review, if any, and the column it reviews.
+  std::unique_ptr<Review> review_;
+  ColumnIdentifier reviewed_ = 0;
 };
 
 // pgui's one Window, constructed on first use, which must follow

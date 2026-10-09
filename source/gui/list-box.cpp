@@ -4,14 +4,14 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <numeric>
 #include <utility>
 
 ListBox::ListBox(SharedLines items, SharedLines values)
     : items_(std::move(items)), values_(std::move(values)) {}
 
 void ListBox::render() {
-  judge_pressed_ = false;
-  bad_pressed_ = false;
+  review_pressed_ = false;
   ImGui::PushStyleColor(ImGuiCol_FrameBg, focused_ ? IM_COL32(0x31, 0x3b, 0x4a, 0xff)
                                                    : IM_COL32(0x2a, 0x33, 0x40, 0xff));
   bool const open = ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN));
@@ -23,8 +23,7 @@ void ListBox::render() {
     sideways_pressed_ = -1;
   if (ImGui::Shortcut(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat))
     sideways_pressed_ = 1;
-  judge_pressed_ = ImGui::Shortcut(ImGuiKey_J);
-  bad_pressed_ = ImGui::Shortcut(ImGuiKey_D);
+  review_pressed_ = ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_R);
   Lines const& items = *items_;
   Lines const& values = *values_;
   float const right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -133,6 +132,13 @@ int ListBox::shown_row(int item) const {
 
 size_t ListBox::shown_count() const {
   return filtering() ? shown_.size() : items_->size();
+}
+
+std::vector<int> ListBox::shown_items() const {
+  if (filtering()) return shown_;
+  std::vector<int> all(items_->size());
+  std::iota(all.begin(), all.end(), 0);
+  return all;
 }
 
 void ListBox::apply_filter() {
