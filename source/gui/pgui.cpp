@@ -117,7 +117,7 @@ void keypad_to_navigation(SDL_Event& event) {
 int main(int, char**) {
   char const* home = std::getenv("HOME");
   std::string const seed = std::string(home ? home : "") +
-      "/code/nutrimatic/idx/seed.s1.m3.all.85.15.pairs";
+      "/code/nutrimatic/idx/seed.s1.m4.all.85.15.pairs";
 
   if (!load_app_state(seed)) return 1;
   Window& top = main_window();

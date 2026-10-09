@@ -2,6 +2,7 @@
 
 #include <SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <cstdio>
 #include <utility>
@@ -36,6 +37,7 @@ void Window::render() {
   ImGui::SetNextWindowSize(vp->WorkSize);
   ImGui::Begin("pgui", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+  ImGui::SetKeyOwner(ImGuiMod_Alt, ImGui::GetID("alt"));
 
   if (ImGui::BeginTable("fields", 6)) {
     for (int i = 0; i < 6; ++i) {

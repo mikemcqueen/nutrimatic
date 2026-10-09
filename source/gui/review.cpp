@@ -187,10 +187,6 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
   ImGui::Text("S%d: %d YES / %d NO", sentence_,
               locked_count_ + checked_count_,
               count - locked_count_ - checked_count_);
-  if (locked_count_ > 0) {
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%d already YES)", locked_count_);
-  }
   if (job_) {
     ImGui::SameLine();
     ImGui::TextDisabled("submitting...");

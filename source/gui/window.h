@@ -26,7 +26,8 @@
 // its output is up to date, and a sentence is selected, and otherwise says
 // why on stderr; once the Review records verdicts, app_state()'s
 // classified_version goes up. Keyboard focus returns to the column's ListBox
-// when the Review closes.
+// when the Review closes. Tapping Alt doesn't move keyboard focus, so the
+// Alt release that follows Alt-Tab back into the window leaves it in place.
 class Window {
  public:
   Window();
