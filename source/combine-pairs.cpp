@@ -25,19 +25,22 @@ namespace {
 
 int const DEFAULT_MIN_PAIRS = 2;
 int const OPT_CV = 256;
+int const OPT_TOP_FORMAT = 257;
 
 struct Args {
   LetterBag bag;
   int min_pairs = DEFAULT_MIN_PAIRS;
   int sentence = CLASSIFIED_NO_SENTENCE;
   bool cv = false;
+  bool top_format = false;
   std::string source;
 };
 
 void usage(FILE* out) {
-  fputs("usage: combine-pairs [-u LETTERS]... [-m N] [--cv] LETTERS FILE|-\n"
-        "       combine-pairs [-u LETTERS]... [-m N] [--cv] -s N LETTERS "
-        "[FILE|-]\n",
+  fputs("usage: combine-pairs [-u LETTERS]... [-m N] [--cv | --top-format] "
+        "LETTERS FILE|-\n"
+        "       combine-pairs [-u LETTERS]... [-m N] [--cv | --top-format] "
+        "-s N LETTERS [FILE|-]\n",
         out);
   if (out != stdout) return;
 
@@ -57,6 +60,9 @@ void usage(FILE* out) {
       "add a column with the consonant/vowel ratio of REMAINING, y being a "
       "consonant, and sort by it ascending; 0 when no consonants are left "
       "and inf when only consonants are");
+  dfs_help_option("--top-format",
+      "print each combination as \"0 WORD WORD,WORD WORD,...\", without "
+      "REMAINING, for top-segments input; incompatible with --cv");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -66,6 +72,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "min-pairs", 'm', OPTPARSE_REQUIRED },
     CLASSIFIED_SENTENCE_LONG_OPTION,
     { "cv", OPT_CV, OPTPARSE_NONE },
+    { "top-format", OPT_TOP_FORMAT, OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -91,6 +98,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case OPT_CV:
         out->cv = true;
         break;
+      case OPT_TOP_FORMAT:
+        out->top_format = true;
+        break;
       case 'h':
         *help = true;
         return true;
@@ -98,6 +108,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         fprintf(stderr, "error: %s\n", options.errmsg);
         return false;
     }
+  }
+
+  if (out->cv && out->top_format) {
+    fputs("error: --cv and --top-format are incompatible\n", stderr);
+    return false;
   }
 
   char const* const letters = optparse_arg(&options);
@@ -281,7 +296,9 @@ int main(int argc, char* argv[]) {
   }
   for (size_t i = 0; i < combinations.size(); ++i) {
     Combination const& combination = combinations[i];
-    if (args.cv)
+    if (args.top_format)
+      std::cout << "0 " << combination.entries << '\n';
+    else if (args.cv)
       std::cout << std::left << std::setw(int(entries_width))
                 << combination.entries << ' ' << std::setw(int(remaining_width))
                 << combination.remaining << ' ' << std::right

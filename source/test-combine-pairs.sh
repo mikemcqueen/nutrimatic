@@ -37,3 +37,14 @@ expected='red fox,red hat        0.00
 fox hat         ddeerr 2.00
 red hat,ox      defr   3.00'
 [[ $actual == "$expected" ]] || fail "cv output is wrong: $actual"
+
+actual=$("$combine_pairs" -m 1 --top-format redfoxredhat "$test_dir/input")
+expected='0 red fox,red hat
+0 red hat,ox
+0 fox hat'
+[[ $actual == "$expected" ]] || fail "top-format output is wrong: $actual"
+
+if "$combine_pairs" --cv --top-format redfoxredhat "$test_dir/input" \
+    2>/dev/null; then
+  fail "--cv with --top-format was accepted"
+fi
