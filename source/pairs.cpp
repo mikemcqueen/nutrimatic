@@ -22,7 +22,7 @@ struct Args {
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
-            "usage: %s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] "
+            "usage: %s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] [-c] "
             "LETTERS\n", program);
     if (out != stdout) return;
 
@@ -41,6 +41,8 @@ void usage(char const* program, FILE* out) {
     dfs_help_option("--mx, --min-max-words M[,X]",
         "print combinations of M to X words, at most %d (default: 2,2; "
         "1 also prints single words)", PAIRS_MAX_WORDS);
+    dfs_help_option("-c, --count",
+        "print only how many lines would be printed");
     dfs_help_option("-h, --help", "show this help");
 }
 
@@ -75,6 +77,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "exact", 'x', OPTPARSE_NONE },
         { "mx", OPT_MIN_MAX_WORDS, OPTPARSE_REQUIRED },
         { "min-max-words", OPT_MIN_MAX_WORDS, OPTPARSE_REQUIRED },
+        { "count", 'c', OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -98,6 +101,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             break;
           case 'x':
             out->options.exact = true;
+            break;
+          case 'c':
+            out->options.count = true;
             break;
           case OPT_MIN_MAX_WORDS:
             if (!parse_min_max_words(options.optarg, &out->options))

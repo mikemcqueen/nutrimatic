@@ -15,7 +15,8 @@ inline constexpr int PAIRS_MAX_WORDS = 2;
 // Which lines pairs prints: combinations of min_words to max_words (1 to
 // PAIRS_MAX_WORDS) distinct words of at least min_word_length letters (0 for
 // no minimum) that fit together within letters less used_letters, or that use
-// all of them when exact.
+// all of them when exact. With count, pairs prints how many lines there are
+// instead of the lines.
 struct PairsOptions {
   std::string letters;
   std::string used_letters;
@@ -23,6 +24,7 @@ struct PairsOptions {
   bool exact = false;
   int min_words = 2;
   int max_words = 2;
+  bool count = false;
 };
 
 // A word's a-z letter counts, padded to two SSE lanes.
@@ -49,7 +51,8 @@ class Pairs {
   // load() succeeds.
   void add(std::string const& word);
 
-  // Writes the single words, then the pairs, one per line.
+  // Writes the single words, then the pairs, one per line, or, with
+  // options.count, how many lines that is.
   void write(FILE* out) const;
 
   // The lines write() would write.

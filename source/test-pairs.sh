@@ -94,3 +94,5 @@ bca' --mx 1,1
 if "$pairs" --mx 2,3 -d "$exact" abc 2>/dev/null; then
   fail "--mx 2,3 was accepted"
 fi
+[[ $("$pairs" -c --mx 1,1 -m 0 -d "$exact" abc) == 4 ]] ||
+  fail "--count is wrong"

@@ -1,5 +1,6 @@
 #include "pairs-impl.h"
 
+#include <inttypes.h>
 #include <smmintrin.h>
 
 #include "dfs-cli-args.h"
@@ -145,6 +146,12 @@ void Pairs::each_line(Emit emit) const {
 }
 
 void Pairs::write(FILE* out) const {
+  if (options_.count) {
+    uint64_t lines = 0;
+    each_line([&lines](std::string const&, std::string const*) { ++lines; });
+    fprintf(out, "%" PRIu64 "\n", lines);
+    return;
+  }
   each_line([out](std::string const& left, std::string const* right) {
     if (right == nullptr)
       fprintf(out, "%s\n", left.c_str());
