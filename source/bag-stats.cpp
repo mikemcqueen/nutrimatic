@@ -498,31 +498,24 @@ class RestTable {
         capacity_ = std::min(index_.total(), size_t(1) << 25);
         slots_.reset(static_cast<uint32_t*>(
             std::calloc(index_.total(), sizeof(uint32_t))));
-        rows_.reset(static_cast<Counts*>(
-            std::calloc(capacity_, sizeof(Counts))));
+        rows_.reset(static_cast<BagStatsCounts*>(
+            std::calloc(capacity_, sizeof(BagStatsCounts))));
         if (!slots_ || !rows_) {
             slots_.reset();
             rows_.reset();
         }
     }
 
-    bool get(PairsCounts const& rest, BagStatsRow* out) const {
+    bool get(PairsCounts const& rest, BagStatsCounts* out) const {
         if (!slots_) return false;
         uint32_t const slot = std::atomic_ref<uint32_t>(
             slots_[index_.number(rest)]).load(std::memory_order_acquire);
         if (slot == 0 || slot == UINT32_MAX) return false;
-        Counts const& row = rows_[slot - 1];
-        out->word_bags = row.word_bags;
-        out->with_pairs = row.with_pairs;
-        out->total_pairs = row.total_pairs;
-        out->max_pairs = row.max_pairs;
-        out->solo = row.solo;
-        out->min_word_bags = row.min_word_bags;
-        out->min_with_pairs = row.min_with_pairs;
+        *out = rows_[slot - 1];
         return true;
     }
 
-    void put(PairsCounts const& rest, BagStatsRow const& row) const {
+    void put(PairsCounts const& rest, BagStatsCounts const& counts) const {
         if (!slots_) return;
         std::atomic_ref<uint32_t> slot(slots_[index_.number(rest)]);
         uint32_t expected = 0;
@@ -531,24 +524,18 @@ class RestTable {
             return;
         size_t const i = next_.fetch_add(1, std::memory_order_relaxed);
         if (i >= capacity_) return;
-        rows_[i] = {row.word_bags, row.with_pairs, row.total_pairs,
-                    row.max_pairs, row.solo, row.min_word_bags,
-                    row.min_with_pairs};
+        rows_[i] = counts;
         slot.store(uint32_t(i + 1), std::memory_order_release);
     }
 
   private:
-    struct Counts {
-        uint64_t word_bags, with_pairs, total_pairs, max_pairs, solo;
-        uint64_t min_word_bags, min_with_pairs;
-    };
     struct Free {
         template <typename T> void operator()(T* p) const { std::free(p); }
     };
     RemainderIndex index_;
     size_t capacity_ = 0;
     std::unique_ptr<uint32_t[], Free> slots_;
-    std::unique_ptr<Counts[], Free> rows_;
+    std::unique_ptr<BagStatsCounts[], Free> rows_;
     mutable std::atomic<size_t> next_{0};
 };
 
@@ -567,7 +554,8 @@ class RestCounter {
     // dictionary groups, holding every one that fits `rest`.
     void count(PairsCounts const& rest,
                std::vector<PairsCounts> const& fitting,
-               PairsExactCounter::Groups const& groups, BagStatsRow* out) {
+               PairsExactCounter::Groups const& groups,
+               BagStatsCounts* out) {
         fitting_ = &fitting;
         groups_ = &groups;
         visit(1, 0, rest, true, out);
@@ -575,7 +563,7 @@ class RestCounter {
 
   private:
     void visit(int word, size_t start, PairsCounts const& rest, bool is_min,
-               BagStatsRow* out) {
+               BagStatsCounts* out) {
         PairsCounts word_rest;
         std::vector<PairsCounts> const& fitting = *fitting_;
         for (size_t i = start; i < fitting.size(); ++i) {

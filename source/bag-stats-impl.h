@@ -37,12 +37,8 @@ struct BagStatsHeader {
 // in BagStatsRow::min_with_pairs.
 constexpr uint64_t BAG_STATS_MIN_WB_PAIRS = 2;
 
-// One combination of pair bags' counts, written as BAG_STATS_COLUMNS lists
-// them. See plans/bag-stats.md and plans/bag-stats-search-sequence.md for what
-// each counts.
-struct BagStatsRow {
-  std::string pair;
-  uint64_t pairs;
+// The counts that depend only on what a row's pair picks leave.
+struct BagStatsCounts {
   uint64_t word_bags;
   uint64_t with_pairs;
   uint64_t total_pairs;
@@ -50,6 +46,14 @@ struct BagStatsRow {
   uint64_t solo;
   uint64_t min_word_bags;
   uint64_t min_with_pairs;
+};
+
+// One combination of pair bags' counts, written as BAG_STATS_COLUMNS lists
+// them. See plans/bag-stats.md and plans/bag-stats-search-sequence.md for what
+// each counts.
+struct BagStatsRow : BagStatsCounts {
+  std::string pair;
+  uint64_t pairs;
 };
 
 // The row columns, comma-separated:
