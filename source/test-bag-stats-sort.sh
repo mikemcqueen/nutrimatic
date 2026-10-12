@@ -58,8 +58,13 @@ actual=$("$bag_stats_sort" --min-wb-frac --by-length "$test_dir/min-wb" | sed '1
 actual=$("$bag_stats_sort" --min-wb-frac --pb-len 4 "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
 [[ $actual == $'cc dd\naa bb' ]] || fail "--pb-len rows are wrong: $actual"
 
-if "$bag_stats_sort" --wb --mp "$test_dir/stats" 2>/dev/null; then
-  fail "two sort options were accepted"
-fi
+cat > "$test_dir/merge" <<END
+$header
+z z,zz,1,0,0,0,5,0,2,1
+x x,xx,1,0,0,0,1,0,2,2
+y y,yy,1,0,0,0,9,0,2,0
+END
+actual=$("$bag_stats_sort" --min-wb-frac --mp "$test_dir/merge" | sed '1,/^$/d' | cut -d, -f1)
+[[ $actual == $'x x\ny y\nz z' ]] || fail "merged order is wrong: $actual"
 
 echo PASS

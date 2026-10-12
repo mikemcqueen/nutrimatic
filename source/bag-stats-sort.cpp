@@ -1,4 +1,4 @@
-// bag-stats-sort.cpp - Sort bag-stats rows by one count column or the MIN_WB
+// bag-stats-sort.cpp - Sort bag-stats rows by count columns or the MIN_WB
 // fraction, largest first.
 
 #include "bad-bag-bitmap.h"
@@ -19,6 +19,7 @@ namespace {
 
 constexpr char PROGRAM[] = "bag-stats-sort";
 
+// A NULL column is the MIN_WB fraction.
 struct SortFlag {
     char const* option;
     char const* column;
@@ -30,18 +31,18 @@ SortFlag const SORT_FLAGS[] = {
     {"tp", "TOTAL_PAIRS"},
     {"mp", "MAX_PAIRS"},
     {"min-wb", "MIN_WB"},
+    {"min-wb-frac", NULL},
 };
 
 constexpr int SORT_FLAG_COUNT = sizeof(SORT_FLAGS) / sizeof(SORT_FLAGS[0]);
 constexpr int OPT_SORT = 256;
 
-constexpr int OPT_MIN_WB_FRAC = OPT_SORT + SORT_FLAG_COUNT;
-constexpr int OPT_BY_LENGTH = OPT_MIN_WB_FRAC + 1;
-constexpr int OPT_PAIR_BAG_LENGTH = OPT_MIN_WB_FRAC + 2;
+constexpr int OPT_BY_LENGTH = OPT_SORT + SORT_FLAG_COUNT;
+constexpr int OPT_PAIR_BAG_LENGTH = OPT_BY_LENGTH + 1;
 
 struct Args {
-    BagStatsCount const* key = NULL;
-    bool min_wb_frac = false;
+    // One per sort option, NULL for the MIN_WB fraction.
+    std::vector<BagStatsCount const*> keys;
     bool by_length = false;
     int pair_bag_length = -1;
     char const* input_file = "-";
@@ -49,7 +50,7 @@ struct Args {
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
-            "usage: %s (--wb | --wbwp | --tp | --mp | --min-wb | --min-wb-frac)\n"
+            "usage: %s (--wb | --wbwp | --tp | --mp | --min-wb | --min-wb-frac)...\n"
             "       [--by-length] [--pb-len N] [FILE|-]\n",
             program);
     if (out != stdout) return;
@@ -57,8 +58,14 @@ void usage(char const* program, FILE* out) {
     fputs("  print bag-stats output from FILE, standard input when it is '-'\n"
           "  or not given, with its rows sorted by one count column or the\n"
           "  MIN_WB fraction, largest first; equal rows keep their order\n"
+          "\n"
+          "  with more than one sort option, each row's value under each\n"
+          "  option becomes its percentile among all rows, and rows sort by\n"
+          "  their best percentile, then by the sum of them: the sorted lists\n"
+          "  merged, each row at its better place\n"
           "\noptions:\n", stdout);
     for (SortFlag const& flag : SORT_FLAGS) {
+        if (flag.column == NULL) continue;
         std::string const option = std::string("--") + flag.option;
         dfs_help_option(option.c_str(), "sort by %s", flag.column);
     }
@@ -83,32 +90,23 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
         { SORT_FLAGS[3].option, OPT_SORT + 3, OPTPARSE_NONE },
         { SORT_FLAGS[4].option, OPT_SORT + 4, OPTPARSE_NONE },
-        { "min-wb-frac", OPT_MIN_WB_FRAC, OPTPARSE_NONE },
+        { SORT_FLAGS[5].option, OPT_SORT + 5, OPTPARSE_NONE },
         { "by-length", OPT_BY_LENGTH, OPTPARSE_NONE },
         { "pb-len", OPT_PAIR_BAG_LENGTH, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
-    static_assert(SORT_FLAG_COUNT == 5);
+    static_assert(SORT_FLAG_COUNT == 6);
 
     struct optparse options;
     optparse_init(&options, argv);
 
     int option;
     while ((option = optparse_long(&options, long_options, NULL)) != -1) {
-        bool const is_sort = option == OPT_MIN_WB_FRAC ||
-            (option >= OPT_SORT && option < OPT_SORT + SORT_FLAG_COUNT);
-        if (is_sort && (out->key != NULL || out->min_wb_frac)) {
-            fprintf(stderr, "%s: give one sort option\n", PROGRAM);
-            return false;
-        }
-        if (option == OPT_MIN_WB_FRAC) {
-            out->min_wb_frac = true;
-            continue;
-        }
         if (option >= OPT_SORT && option < OPT_SORT + SORT_FLAG_COUNT) {
-            out->key =
-                find_bag_stats_count(SORT_FLAGS[option - OPT_SORT].column);
+            char const* const column = SORT_FLAGS[option - OPT_SORT].column;
+            out->keys.push_back(
+                column == NULL ? NULL : find_bag_stats_count(column));
             continue;
         }
         switch (option) {
@@ -129,7 +127,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         }
     }
 
-    if (out->key == NULL && !out->min_wb_frac) {
+    if (out->keys.empty()) {
         fprintf(stderr, "%s: give a sort option\n", PROGRAM);
         return false;
     }
@@ -159,6 +157,19 @@ double min_wb_fraction(BagStatsRow const& row) {
         ? 0 : double(row.min_with_pairs) / double(row.min_word_bags);
 }
 
+double sort_value(BagStatsCount const* key, BagStatsRow const& row) {
+    return key == NULL ? min_wb_fraction(row) : double(row.*key->value);
+}
+
+// The mid-rank percentile of `value` among the sorted `group`.
+double percentile(std::vector<double> const& group, double value) {
+    auto const below =
+        std::lower_bound(group.begin(), group.end(), value) - group.begin();
+    auto const through =
+        std::upper_bound(group.begin(), group.end(), value) - group.begin();
+    return double(below + through) / 2 / double(group.size());
+}
+
 // Each of `values`, the sort value of the row at the same index of `rows`, as
 // a mid-rank percentile among the values of the rows whose PAIRBAG has the
 // same length.
@@ -172,14 +183,39 @@ std::vector<double> length_ranks(std::vector<BagStatsRow> const& rows,
 
     std::vector<double> out;
     out.reserve(rows.size());
-    for (size_t i = 0; i < rows.size(); ++i) {
-        std::vector<double> const& group = by_length[rows[i].pair_bag.size()];
-        double const value = values[i];
-        auto const below =
-            std::lower_bound(group.begin(), group.end(), value) - group.begin();
-        auto const through =
-            std::upper_bound(group.begin(), group.end(), value) - group.begin();
-        out.push_back(double(below + through) / 2 / double(group.size()));
+    for (size_t i = 0; i < rows.size(); ++i)
+        out.push_back(
+            percentile(by_length[rows[i].pair_bag.size()], values[i]));
+    return out;
+}
+
+// Each of `values` as a mid-rank percentile among all of them.
+std::vector<double> ranks(std::vector<double> const& values) {
+    std::vector<double> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+    std::vector<double> out;
+    out.reserve(values.size());
+    for (double value : values) out.push_back(percentile(sorted, value));
+    return out;
+}
+
+// One key per row: the sort value, its percentile within its length with
+// `by_length`, and with more than one sort key, the row's best percentile
+// among all rows, the sum of them breaking ties.
+std::vector<std::pair<double, double>> sort_keys(
+        Args const& args, std::vector<BagStatsRow> const& rows) {
+    std::vector<std::pair<double, double>> out(rows.size(), {-1, 0});
+    for (BagStatsCount const* key : args.keys) {
+        std::vector<double> values;
+        values.reserve(rows.size());
+        for (BagStatsRow const& row : rows)
+            values.push_back(sort_value(key, row));
+        if (args.by_length) values = length_ranks(rows, values);
+        if (args.keys.size() > 1) values = ranks(values);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            out[i].first = std::max(out[i].first, values[i]);
+            out[i].second += values[i];
+        }
     }
     return out;
 }
@@ -215,12 +251,7 @@ int main(int argc, char* argv[]) {
                 return row.pair_bag.size() != size_t(args.pair_bag_length);
             }), rows.end());
 
-    std::vector<double> keys;
-    keys.reserve(rows.size());
-    for (BagStatsRow const& row : rows)
-        keys.push_back(args.min_wb_frac ? min_wb_fraction(row)
-                                        : double(row.*args.key->value));
-    if (args.by_length) keys = length_ranks(rows, keys);
+    auto const keys = sort_keys(args, rows);
 
     std::vector<size_t> order(rows.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;

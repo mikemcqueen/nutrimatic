@@ -90,11 +90,16 @@ The average PC is `TOTAL_PAIRS / WORDBAGS` or
 
 ## Sorting
 
-`bag-stats-sort (--wb | --wbwp | --tp | --mp | --min-wb | --min-wb-frac)
+`bag-stats-sort (--wb | --wbwp | --tp | --mp | --min-wb | --min-wb-frac)...
 [--by-length] [--pb-len N] [FILE|-]` reads bag-stats output and prints it
 back, header unchanged, with the rows sorted by `WORDBAGS`, `WB_WITH_PAIRS`,
 `TOTAL_PAIRS`, `MAX_PAIRS`, `MIN_WB` or the MIN_WB fraction, largest first.
-The sort options are mutually exclusive.
+
+- More than one sort option merges their sorted lists: each row's value
+  under each option (its length percentile with `--by-length`) becomes its
+  mid-rank percentile among all rows, and rows sort by the best of those,
+  then by their sum. `--min-wb-frac --mp --by-length` is the one that works
+  on all three labelled lists; see `findings/bag-stats-min-wb-rank.md`.
 
 - `--min-wb-frac` sorts by `MIN_WB_WITH_PAIRS / MIN_WB` (0 when `MIN_WB` is
   0): the fraction of MIN_WB word bags whose remainder has at least 2 exact
