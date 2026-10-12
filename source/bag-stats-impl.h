@@ -12,9 +12,10 @@ extern char const BAG_STATS_MAGIC[];
 
 // What a bag-stats run was given. Written as a text header, each line ending
 // in '\n',
-//   bag-stats 1
+//   bag-stats 2
 //   letters LETTERS      (what is left once used letters are removed, sorted)
 //   min MIN_LENGTH       (of the words in each counted pair)
+//   min-wb MIN_WB_LENGTH (of the word bags MIN_WB counts)
 //   pairs PATH
 //   dict PATH
 //   columns BAG_STATS_COLUMNS
@@ -23,9 +24,14 @@ extern char const BAG_STATS_MAGIC[];
 struct BagStatsHeader {
   std::string letters;
   int min_word_length;
+  int min_word_bag_length;
   std::string pairs;
   std::string dict;
 };
+
+// A MIN_WB word bag whose remainder has at least this many exact pairs counts
+// in BagStatsRow::min_with_pairs.
+constexpr uint64_t BAG_STATS_MIN_WB_PAIRS = 2;
 
 // One pair bag's counts, written as BAG_STATS_COLUMNS lists them. See
 // plans/bag-stats.md for what each counts.
@@ -38,10 +44,13 @@ struct BagStatsRow {
   uint64_t total_pairs;
   uint64_t max_pairs;
   uint64_t solo;
+  uint64_t min_word_bags;
+  uint64_t min_with_pairs;
 };
 
 // The row columns, comma-separated:
-//   PAIR,PAIRBAG,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO
+//   PAIR,PAIRBAG,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,
+//   MIN_WB,MIN_WB_WITH_PAIRS
 extern char const BAG_STATS_COLUMNS[];
 
 // A count column of BAG_STATS_COLUMNS and the row member holding it.
@@ -51,7 +60,7 @@ struct BagStatsCount {
 };
 
 // The count columns, in BAG_STATS_COLUMNS order.
-extern BagStatsCount const BAG_STATS_COUNTS[6];
+extern BagStatsCount const BAG_STATS_COUNTS[8];
 
 // The count column named `column`; null when there isn't one.
 BagStatsCount const* find_bag_stats_count(std::string const& column);

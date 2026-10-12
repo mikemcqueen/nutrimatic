@@ -2,6 +2,7 @@
 // they leave.
 
 #include "bag-stats-impl.h"
+#include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
 #include "optparse.h"
@@ -22,10 +23,13 @@ namespace {
 
 constexpr char PROGRAM[] = "bag-stats";
 constexpr int INNER_MIN_WORD_LENGTH = 3;
+constexpr int DEFAULT_MIN_WB_LENGTH = 5;
+constexpr int OPT_MIN_WB_LENGTH = 256;
 
 struct Args {
     std::string letters;
     std::string used_letters;
+    int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
     char const* pairs_file = NULL;
     char const* dictionary_file = NULL;
 };
@@ -37,7 +41,8 @@ struct PairBag {
 };
 
 void usage(char const* program, FILE* out) {
-    fprintf(out, "usage: %s [-u LETTERS] LETTERS PAIRS DICT\n", program);
+    fprintf(out, "usage: %s [-u LETTERS] [--min-wb-len N] LETTERS PAIRS DICT\n",
+            program);
     if (out != stdout) return;
 
     fprintf(stdout,
@@ -49,12 +54,19 @@ void usage(char const* program, FILE* out) {
           "  output: %s\n"
           "\noptions:\n", INNER_MIN_WORD_LENGTH, BAG_STATS_COLUMNS);
     dfs_help_used_letters();
+    dfs_help_option("--min-wb-len N",
+                    "MIN_WB counts the fitting DICT word bags of at least N "
+                    "letters (default %d), MIN_WB_WITH_PAIRS those of them "
+                    "whose remainder has at least %d exact pairs; "
+                    "bag-stats-sort --min-wb-frac sorts by their ratio",
+                    DEFAULT_MIN_WB_LENGTH, int(BAG_STATS_MIN_WB_PAIRS));
     dfs_help_option("-h, --help", "show this help");
 }
 
 bool parse_args(char* argv[], Args* out, bool* help) {
     static struct optparse_long const long_options[] = {
         { "used-letters", 'u', OPTPARSE_REQUIRED },
+        { "min-wb-len", OPT_MIN_WB_LENGTH, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -67,6 +79,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         switch (option) {
           case 'u':
             out->used_letters += options.optarg;
+            break;
+          case OPT_MIN_WB_LENGTH:
+            if (!parse_count(options.optarg, "--min-wb-len",
+                             &out->min_word_bag_length))
+                return false;
             break;
           case 'h':
             *help = true;
@@ -192,6 +209,7 @@ int main(int argc, char* argv[]) {
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
     write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
+                                    args.min_word_bag_length,
                                     args.pairs_file, args.dictionary_file});
 
     std::unordered_map<PairsCounts, uint64_t, PairsCountsHash> cache;
@@ -200,10 +218,13 @@ int main(int argc, char* argv[]) {
     for (PairBag const& pair_bag : pair_bags) {
         pairs_subtract(bag, pair_bag.counts, &pair_rest);
         BagStatsRow row{pair_bag.pair, bag_letters(pair_bag.counts),
-                        pair_bag.pairs, 0, 0, 0, 0, 0};
+                        pair_bag.pairs, 0, 0, 0, 0, 0, 0, 0};
         for (PairsCounts const& word_bag : word_bags) {
             if (!pairs_subtract(pair_rest, word_bag, &word_rest)) continue;
             ++row.word_bags;
+            bool const is_min =
+                letter_total(word_bag) >= args.min_word_bag_length;
+            row.min_word_bags += is_min;
             if (word_rest == PairsCounts{}) {
                 ++row.solo;
                 continue;
@@ -217,6 +238,7 @@ int main(int argc, char* argv[]) {
             ++row.with_pairs;
             row.total_pairs += count;
             row.max_pairs = std::max(row.max_pairs, count);
+            row.min_with_pairs += is_min && count >= BAG_STATS_MIN_WB_PAIRS;
         }
         write_bag_stats_row(stdout, row);
     }

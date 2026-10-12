@@ -14,29 +14,49 @@ fail() {
   exit 1
 }
 
-header="bag-stats 1
+header="bag-stats 2
 letters aaacdglnnootttw
 min 3
+min-wb 5
 pairs p
 dict d
-columns PAIR,PAIRBAG,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO
+columns PAIR,PAIRBAG,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,MIN_WB,MIN_WB_WITH_PAIRS
 "
 cat > "$test_dir/stats" <<END
 $header
-cat dog,acdgot,2,3,2,9,6,1
-low ant,alnotw,1,1,1,4,4,0
-tan owl,alnotw,1,5,1,9,9,0
+cat dog,acdgot,2,3,2,9,6,1,0,0
+low ant,alnotw,1,1,1,4,4,0,0,0
+tan owl,alnotw,1,5,1,9,9,0,0,0
 END
 
 actual=$("$bag_stats_sort" --tp "$test_dir/stats")
 expected="$header
-cat dog,acdgot,2,3,2,9,6,1
-tan owl,alnotw,1,5,1,9,9,0
-low ant,alnotw,1,1,1,4,4,0"
+cat dog,acdgot,2,3,2,9,6,1,0,0
+tan owl,alnotw,1,5,1,9,9,0,0,0
+low ant,alnotw,1,1,1,4,4,0,0,0"
 [[ $actual == "$expected" ]] || fail "--tp rows are wrong: $actual"
 
 actual=$("$bag_stats_sort" --wb < "$test_dir/stats" | sed '1,/^$/d' | cut -d, -f1)
 [[ $actual == $'tan owl\ncat dog\nlow ant' ]] || fail "--wb order is wrong: $actual"
+
+cat > "$test_dir/min-wb" <<END
+$header
+aa bb,aabb,1,0,0,0,0,0,8,2
+eee fff,eeefff,1,0,0,0,0,0,4,2
+cc dd,ccdd,1,0,0,0,0,0,4,3
+END
+actual=$("$bag_stats_sort" --min-wb "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
+[[ $actual == $'aa bb\neee fff\ncc dd' ]] || fail "--min-wb order is wrong: $actual"
+
+actual=$("$bag_stats_sort" --min-wb-frac "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
+[[ $actual == $'cc dd\neee fff\naa bb' ]] || fail "--min-wb-frac order is wrong: $actual"
+
+sed -i 's/^eee fff,eeefff,1,0,0,0,0,0,4,2$/eee fff,eeefff,1,0,0,0,0,0,4,0/' "$test_dir/min-wb"
+actual=$("$bag_stats_sort" --min-wb-frac --by-length "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
+[[ $actual == $'cc dd\neee fff\naa bb' ]] || fail "--by-length order is wrong: $actual"
+
+actual=$("$bag_stats_sort" --min-wb-frac --pb-len 4 "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
+[[ $actual == $'cc dd\naa bb' ]] || fail "--pb-len rows are wrong: $actual"
 
 if "$bag_stats_sort" --wb --mp "$test_dir/stats" 2>/dev/null; then
   fail "two sort options were accepted"

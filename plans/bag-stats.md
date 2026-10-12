@@ -12,7 +12,7 @@ three-part solutions they leave open: pair + dictionary word + pair = all of
 the letters.
 
 ```
-bag-stats [-u LETTERS] LETTERS PAIRS DICT
+bag-stats [-u LETTERS] [--min-wb-len N] LETTERS PAIRS DICT
 ```
 
 For remaining letters R = LETTERS - used letters:
@@ -52,14 +52,15 @@ row per PAIRBAG in order of its first appearance in PAIRS. The format,
 `source/bag-stats-impl.{h,cpp}`:
 
 ```
-bag-stats 1
+bag-stats 2
 letters R            (sorted)
 min 3
+min-wb 5
 pairs PATH
 dict PATH
-columns PAIR,PAIRBAG,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO
+columns PAIR,PAIRBAG,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,MIN_WB,MIN_WB_WITH_PAIRS
 
-cat dog,acdgot,2,3,2,9,6,1
+cat dog,acdgot,2,3,2,9,6,1,1,0
 ...
 ```
 
@@ -76,6 +77,8 @@ pipelines skip the header with `sed '1,/^$/d'`.
 | `TOTAL_PAIRS` | sum of PC over those WORDBAGS |
 | `MAX_PAIRS` | largest PC among them |
 | `WB_SOLO` | WORDBAGS equal to PR, so WR is empty: pair + word uses all of R. Counted in `WORDBAGS`, contributes no PC |
+| `MIN_WB` | WORDBAGS of at least `--min-wb-len` letters (default 5, written as the `min-wb` header line) |
+| `MIN_WB_WITH_PAIRS` | of those, how many have PC >= 2 (`BAG_STATS_MIN_WB_PAIRS`) |
 
 PC counts words, not bags, exactly as `pairs -m3 -x -c` does: a bag pair whose
 sides have 3 and 2 spellings counts 6, and a bag paired with itself counts
@@ -87,9 +90,20 @@ The average PC is `TOTAL_PAIRS / WORDBAGS` or
 
 ## Sorting
 
-`bag-stats-sort (--wb | --wbwp | --tp | --mp) [FILE|-]` reads bag-stats
-output and prints it back, header unchanged, with the rows sorted by
-`WORDBAGS`, `WB_WITH_PAIRS`, `TOTAL_PAIRS` or `MAX_PAIRS`, largest first.
+`bag-stats-sort (--wb | --wbwp | --tp | --mp | --min-wb | --min-wb-frac)
+[--by-length] [--pb-len N] [FILE|-]` reads bag-stats output and prints it
+back, header unchanged, with the rows sorted by `WORDBAGS`, `WB_WITH_PAIRS`,
+`TOTAL_PAIRS`, `MAX_PAIRS`, `MIN_WB` or the MIN_WB fraction, largest first.
+The sort options are mutually exclusive.
+
+- `--min-wb-frac` sorts by `MIN_WB_WITH_PAIRS / MIN_WB` (0 when `MIN_WB` is
+  0): the fraction of MIN_WB word bags whose remainder has at least 2 exact
+  pairs.
+- `--by-length` sorts by the sort value's mid-rank percentile among the rows
+  whose `PAIRBAG` has the same number of letters, so the best of each length
+  comes first. It has no effect with `--pb-len`, which leaves one length.
+  See `findings/bag-stats-min-wb-rank.md`.
+- `--pb-len N` prints only the rows whose `PAIRBAG` has N letters.
 Equal rows keep their order. Each option maps to a column name in the
 `columns` line, and the column table `BAG_STATS_COUNTS` in
 `bag-stats-impl` maps that name to the row's count.
