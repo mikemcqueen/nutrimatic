@@ -1015,7 +1015,7 @@ int main(int argc, char* argv[]) {
     PairCountTable const table(
         pair_count_index(letters, longest_leftover(bag, steps, word_bags,
                                                    args.search.words)),
-        bag, counter, steps.size() > 1 && pair_bags.size() > 1024, threads);
+        bag, counter, steps.size() > 1, threads);
     if (!table.allocated()) {
         fprintf(stderr, "%s: can't allocate the pair count table\n", PROGRAM);
         return 1;
