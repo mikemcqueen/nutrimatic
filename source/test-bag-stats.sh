@@ -93,4 +93,9 @@ actual=$("$bag_stats" -n 1 --tp --by-length catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d')
 [[ $actual == 'cat dog,2,3,2,9,6,1,1,0' ]] || fail "-n rows are wrong: $actual"
 
+actual=$("$bag_stats" --score ant,low --tp catdoglowanttan "$test_dir/pairs" \
+  "$test_dir/dict")
+[[ $actual == $'low ant,1,1,1,4,4,0,0,0\nrank 2 of 2, tied 2-2' ]] ||
+  fail "--score is wrong: $actual"
+
 echo PASS

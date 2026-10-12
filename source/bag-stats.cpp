@@ -40,7 +40,9 @@ constexpr int OPT_SEARCH = 257;
 constexpr int OPT_PROSPECTS = 258;
 constexpr int OPT_THREADS = 259;
 constexpr int OPT_BY_LENGTH = 260;
-constexpr int OPT_SORT = 261;
+constexpr int OPT_TOP_SEGMENTS = 261;
+constexpr int OPT_SCORE = 262;
+constexpr int OPT_SORT = 263;
 constexpr int SORT_FLAG_COUNT =
     sizeof(BAG_STATS_SORT_FLAGS) / sizeof(BAG_STATS_SORT_FLAGS[0]);
 // The most sub-bags PairCountTable numbers, 4 bytes each.
@@ -68,6 +70,9 @@ struct Args {
     // One per sort option, NULL for the MIN_WB fraction.
     std::vector<BagStatsCount const*> keys;
     bool by_length = false;
+    bool top_segments = false;
+    // --score, the row's picks as PAIR names them, each as its two words.
+    std::vector<std::string> score;
     char const* pairs_file = NULL;
     char const* dictionary_file = NULL;
 };
@@ -82,7 +87,8 @@ void usage(char const* program, FILE* out) {
     fprintf(out,
             "usage: %s [-u LETTERS] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
             "       [--threads N] [-n N SORT... [--by-length]]\n"
-            "       LETTERS PAIRS DICT\n",
+            "       [--score W1,W2... SORT... [--by-length]]\n"
+            "       [--top-segments] LETTERS PAIRS DICT\n",
             program);
     if (out != stdout) return;
 
@@ -118,8 +124,19 @@ void usage(char const* program, FILE* out) {
                     "print only the N rows that bag-stats-sort, given the "
                     "same SORT options and --by-length, would print first, in "
                     "that order; needs at least one SORT option");
+    dfs_help_option("--top-segments",
+                    "print no header, and each row as \"0 PAIR,PAIR...\", "
+                    "its pair picks, for top-segments; bag-stats-sort can't "
+                    "read it");
+    dfs_help_option("--score W1,W2",
+                    "print only the row whose pair picks are these, one "
+                    "--score per ppb and pb step in PAIR order, ppb picks "
+                    "first, and below it \"rank R of N, tied A-B\": where -n, "
+                    "given the same SORT options and --by-length, would print "
+                    "it, and the rows sharing its sort key; each pick is the "
+                    "bag of its two words");
     dfs_help_option("-h, --help", "show this help");
-    fputs("\nSORT options, only with -n:\n", stdout);
+    fputs("\nSORT options, only with -n or --score:\n", stdout);
     bag_stats_help_sort_flags();
     dfs_help_option("--by-length",
                     "rank each row's sort value only among the rows whose "
@@ -177,6 +194,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "threads", OPT_THREADS, OPTPARSE_REQUIRED },
         { NULL, 'n', OPTPARSE_REQUIRED },
         { "by-length", OPT_BY_LENGTH, OPTPARSE_NONE },
+        { "top-segments", OPT_TOP_SEGMENTS, OPTPARSE_NONE },
+        { "score", OPT_SCORE, OPTPARSE_REQUIRED },
         { BAG_STATS_SORT_FLAGS[0].option, OPT_SORT + 0, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[1].option, OPT_SORT + 1, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
@@ -228,6 +247,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case OPT_BY_LENGTH:
             out->by_length = true;
             break;
+          case OPT_TOP_SEGMENTS:
+            out->top_segments = true;
+            break;
+          case OPT_SCORE:
+            out->score.push_back(options.optarg);
+            break;
           case 'h':
             *help = true;
             return true;
@@ -244,10 +269,21 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         return false;
     out->letters = letters;
     if (!parse_search(search, &out->search)) return false;
-    if ((out->top > 0) != !out->keys.empty() ||
-        (out->by_length && out->top == 0)) {
-        fprintf(stderr, "%s: -n goes with sort options, and they with it\n",
-                PROGRAM);
+    bool const ranked = out->top > 0 || !out->score.empty();
+    if (out->top > 0 && !out->score.empty()) {
+        fprintf(stderr, "%s: -n and --score don't go together\n", PROGRAM);
+        return false;
+    }
+    if (ranked != !out->keys.empty() || (out->by_length && !ranked)) {
+        fprintf(stderr, "%s: -n or --score goes with sort options, and they "
+                "with it\n", PROGRAM);
+        return false;
+    }
+    if (!out->score.empty() &&
+        (out->top_segments ||
+         int(out->score.size()) != out->search.prospects + out->search.pairs)) {
+        fprintf(stderr, "%s: --score names one pick per ppb and pb step, "
+                "without --top-segments\n", PROGRAM);
         return false;
     }
     if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
@@ -635,6 +671,12 @@ class RowWalker {
         return out;
     }
 
+    // Whether the current row's picks, one list index per pair step, are
+    // `picks`.
+    bool at(std::vector<size_t> const& picks) const {
+        return chosen_ == picks;
+    }
+
     // The current row's PAIRS.
     uint64_t pairs() const {
         uint64_t out = 1;
@@ -860,6 +902,25 @@ struct Walk {
     size_t units() const { return steps[0]->size(); }
 };
 
+// Appends `row` as a bag-stats row, or with --top-segments as a top-segments
+// row.
+void append_row(std::string* out, BagStatsRow const& row, bool top_segments) {
+    if (!top_segments) {
+        append_bag_stats_row(out, row);
+        return;
+    }
+    *out += "0 ";
+    for (size_t i = 0; i < row.pair.size();) {
+        if (row.pair.compare(i, 3, " + ") == 0) {
+            *out += ',';
+            i += 3;
+        } else {
+            *out += row.pair[i++];
+        }
+    }
+    *out += '\n';
+}
+
 // Prints every row, in walk order, while later units are counted.
 void print_rows(Walk const& walk) {
     size_t const units = walk.units();
@@ -888,7 +949,7 @@ void print_rows(Walk const& walk) {
             walker.walk(unit, walk.bag, [&](BagStatsRow& row, size_t) {
                 row.pair = walker.pair();
                 row.pairs = walker.pairs();
-                append_bag_stats_row(&buffer, row);
+                append_row(&buffer, row, walk.args.top_segments);
             });
             {
                 std::lock_guard<std::mutex> lock(mutex);
@@ -966,6 +1027,126 @@ std::vector<RankedRow> top_rows(Walk const& walk, Ranker const& ranker,
     return out;
 }
 
+// Where the --score row comes among all rows.
+struct ScoreRank {
+    // Rows -n would print before it.
+    uint64_t before = 0;
+    // Rows whose sort key is larger.
+    uint64_t larger = 0;
+    // Rows with its sort key, itself included.
+    uint64_t tied = 0;
+    uint64_t rows = 0;
+};
+
+// The list index of each --score pick, in walk step order: pb picks, then
+// ppb picks, each kind in increasing order. False, with a message, when a
+// pick isn't a bag of its list.
+bool score_picks(Args const& args,
+                 std::vector<std::vector<PairBag> const*> const& steps,
+                 std::vector<size_t>* out) {
+    size_t const prospects = size_t(args.search.prospects);
+    std::vector<size_t> picks(steps.size());
+    for (size_t i = 0; i < args.score.size(); ++i) {
+        std::string const& name = args.score[i];
+        size_t const comma = name.find(',');
+        // ppb picks come first in --score and last in the steps.
+        size_t const step = i < prospects ? steps.size() - prospects + i
+            : i - prospects;
+        std::vector<PairBag> const& bags = *steps[step];
+        PairsCounts const counts = pairs_letter_counts(name.c_str());
+        auto const found = std::find_if(bags.begin(), bags.end(),
+            [&](PairBag const& bag) { return bag.counts == counts; });
+        if (comma == std::string::npos || comma == 0 ||
+            comma + 1 == name.size() ||
+            name.find(',', comma + 1) != std::string::npos ||
+            found == bags.end()) {
+            fprintf(stderr, "%s: --score %s isn't two words whose bag is "
+                    "in %s and fits the letters\n", PROGRAM, name.c_str(),
+                    i < prospects ? "--pp" : "PAIRS");
+            return false;
+        }
+        picks[step] = size_t(found - bags.begin());
+    }
+    std::sort(picks.begin(), picks.begin() + args.search.pairs);
+    std::sort(picks.begin() + args.search.pairs, picks.end());
+    *out = std::move(picks);
+    return true;
+}
+
+// The row whose picks are `picks`, with its unit and walk sequence, and its
+// pair picks' letter count; false when they don't make a row.
+bool find_row(Walk const& walk, std::vector<size_t> const& picks,
+              RankedRow* out, size_t* out_length) {
+    RowWalker walker = walk.walker();
+    uint64_t seq = 0;
+    bool found = false;
+    walker.walk(picks[0], walk.bag, [&](BagStatsRow& row, size_t length) {
+        if (!found && walker.at(picks)) {
+            row.pair = walker.pair();
+            row.pairs = walker.pairs();
+            *out = {{}, picks[0], seq, std::move(row)};
+            *out_length = length;
+            found = true;
+        }
+        ++seq;
+    });
+    return found;
+}
+
+// Where `target`, its key set, comes among all rows.
+ScoreRank score_rank(Walk const& walk, Ranker const& ranker,
+                     RankedRow const& target) {
+    std::atomic<size_t> next{0};
+    std::vector<ScoreRank> parts(walk.threads);
+    run_threads(walk.threads, [&](size_t t) {
+        RowWalker walker = walk.walker();
+        ScoreRank& part = parts[t];
+        for (size_t unit; (unit = next.fetch_add(1)) < walk.units();) {
+            uint64_t seq = 0;
+            walker.walk(unit, walk.bag,
+                        [&](BagStatsRow const& row, size_t length) {
+                RankedRow const ranked{ranker.key(row, length), unit, seq++,
+                                       {}};
+                ++part.rows;
+                part.before += ranks_before(ranked, target);
+                part.larger += ranked.key > target.key;
+                part.tied += ranked.key == target.key;
+            });
+        }
+    });
+    ScoreRank out;
+    for (ScoreRank const& part : parts) {
+        out.before += part.before;
+        out.larger += part.larger;
+        out.tied += part.tied;
+        out.rows += part.rows;
+    }
+    return out;
+}
+
+// Prints the --score row and its rank.
+int print_score(Walk const& walk, Ranker* ranker, bool passes) {
+    std::vector<size_t> picks;
+    if (!score_picks(walk.args, walk.steps, &picks)) return 1;
+    RankedRow target;
+    size_t length;
+    if (!find_row(walk, picks, &target, &length)) {
+        fprintf(stderr, "%s: the --score picks don't fit the letters "
+                "together\n", PROGRAM);
+        return 1;
+    }
+    if (passes) count_sort_values(walk, ranker);
+    target.key = ranker->key(target.row, length);
+    ScoreRank const rank = score_rank(walk, *ranker, target);
+    write_bag_stats_row(stdout, target.row);
+    printf("rank %llu of %llu, tied %llu-%llu\n",
+           (unsigned long long)(rank.before + 1),
+           (unsigned long long)rank.rows,
+           (unsigned long long)(rank.larger + 1),
+           (unsigned long long)(rank.larger + rank.tied));
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -1010,24 +1191,31 @@ int main(int argc, char* argv[]) {
     }
 
     Ranker ranker(args.keys, args.by_length);
-    bool const passes = args.top != 0 && ranker.needs_counts();
+    bool const passes =
+        (args.top != 0 || !args.score.empty()) && ranker.needs_counts();
     RestTable const rest_table(bag, steps.size() > 1 || passes);
     Walk const walk{steps, bag, word_bags, args, counter, table, rest_table,
                     threads};
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
-    write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
-                                    args.min_word_bag_length,
-                                    search_text(args.search),
-                                    args.prospects_file == NULL
-                                        ? "" : args.prospects_file,
-                                    args.pairs_file, args.dictionary_file});
+    if (!args.score.empty()) return print_score(walk, &ranker, passes);
+    if (!args.top_segments)
+        write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
+                                        args.min_word_bag_length,
+                                        search_text(args.search),
+                                        args.prospects_file == NULL
+                                            ? "" : args.prospects_file,
+                                        args.pairs_file, args.dictionary_file});
     if (args.top == 0) {
         print_rows(walk);
         return 0;
     }
     if (passes) count_sort_values(walk, &ranker);
-    for (RankedRow const& ranked : top_rows(walk, ranker, size_t(args.top)))
-        write_bag_stats_row(stdout, ranked.row);
+    std::string line;
+    for (RankedRow const& ranked : top_rows(walk, ranker, size_t(args.top))) {
+        line.clear();
+        append_row(&line, ranked.row, args.top_segments);
+        fwrite(line.data(), 1, line.size(), stdout);
+    }
     return 0;
 }
