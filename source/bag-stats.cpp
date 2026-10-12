@@ -333,22 +333,95 @@ int letter_total(PairsCounts const& counts) {
     return total;
 }
 
-// The exact pair counts of the sub-bags of R, shared by every thread and
-// filled as each is first asked for. A slot holds its count plus one, 0
-// while unknown. Sub-bags the index doesn't number are counted every time.
+// A full mixed-radix index makes a remainder's number cheap to compute.
+// Unlike SubBagIndex it does not restrict the length of the sub-bag.
+class RemainderIndex {
+  public:
+    explicit RemainderIndex(PairsCounts const& bag) {
+        for (size_t i = 0; i < 26; ++i) {
+            if (bag.values[i] == 0) continue;
+            if (total_ > PAIR_COUNT_TABLE_MAX / (bag.values[i] + 1)) {
+                total_ = 0;
+                break;
+            }
+            digits_.push_back({i, total_});
+            total_ *= bag.values[i] + 1;
+        }
+    }
+
+    size_t total() const { return total_; }
+    size_t number(PairsCounts const& bag) const {
+        size_t out = 0;
+        for (auto const& [letter, stride] : digits_)
+            out += bag.values[letter] * stride;
+        return out;
+    }
+
+  private:
+    size_t total_ = 1;
+    std::vector<std::pair<size_t, size_t>> digits_;
+};
+
+// Exact pair counts shared by every thread. Large searches fill a full
+// table once by enumerating dictionary group pairs. Otherwise slots hold
+// count + 1, or 0 while unknown, and are filled on demand; sub-bags outside
+// that bounded-length index are counted every time.
 class PairCountTable {
   public:
-    PairCountTable(SubBagIndex index, PairsExactCounter const& counter)
-        : index_(std::move(index)), counter_(counter),
+    PairCountTable(SubBagIndex index, PairsCounts const& bag,
+                   PairsExactCounter const& counter, bool prepare,
+                   size_t threads)
+        : index_(std::move(index)), full_(bag), counter_(counter),
+          prepared_(prepare && full_.total() != 0),
           counts_(static_cast<uint32_t*>(
-              std::calloc(index_.total(), sizeof(uint32_t)))) {}
+              std::calloc(prepared_ ? full_.total() : index_.total(),
+                          sizeof(uint32_t)))) {
+        if (!prepared_ || !allocated()) return;
+        // Enumerate dictionary group pairs once, accumulating all exact
+        // counts. Their mixed-radix numbers add when their letters fit.
+        auto const& keys = counter.groups().keys;
+        std::vector<size_t> numbers;
+        for (PairsCounts const& key : keys)
+            numbers.push_back(full_.number(key));
+        std::atomic<size_t> next{0};
+        auto const work = [&] {
+            PairsCounts remaining;
+            for (size_t a; (a = next.fetch_add(1)) < keys.size();) {
+                pairs_subtract(bag, keys[a], &remaining);
+                uint64_t const size = counter.group_size(a);
+                for (size_t b = a; b < keys.size(); ++b) {
+                    if (!pairs_fits(remaining, keys[b])) continue;
+                    uint64_t const count = a == b ? size * (size - 1) / 2
+                        : size * counter.group_size(b);
+                    if (count == 0) continue;
+                    std::atomic_ref<uint32_t> slot(
+                        counts_[numbers[a] + numbers[b]]);
+                    uint32_t old = slot.load(std::memory_order_relaxed);
+                    while (old != UINT32_MAX &&
+                           !slot.compare_exchange_weak(old,
+                               uint32_t(std::min<uint64_t>(UINT32_MAX,
+                                                          old + count)),
+                               std::memory_order_relaxed)) {}
+                }
+            }
+        };
+        std::vector<std::thread> workers;
+        for (size_t t = 1; t < threads; ++t) workers.emplace_back(work);
+        work();
+        for (auto& worker : workers) worker.join();
+    }
 
     bool allocated() const { return counts_ != nullptr; }
+    bool needs_groups() const { return !prepared_; }
 
     // `groups`: the inner dictionary groups, holding every one that fits
     // `bag`.
     uint64_t count(PairsCounts const& bag,
                    PairsExactCounter::Groups const& groups) const {
+        if (prepared_) {
+            uint32_t const count = counts_[full_.number(bag)];
+            return count == UINT32_MAX ? counter_.count(bag) : count;
+        }
         LetterCounts letters;
         for (int i = 0; i < 26; ++i) letters[i] = bag.values[i];
         size_t number;
@@ -369,7 +442,9 @@ class PairCountTable {
     };
 
     SubBagIndex index_;
+    RemainderIndex full_;
     PairsExactCounter const& counter_;
+    bool prepared_;
     std::unique_ptr<uint32_t[], Free> counts_;
 };
 
@@ -413,6 +488,70 @@ void filter_word_bags(std::vector<PairsCounts> const& from,
         if (pairs_fits(rest, word_bag)) out->push_back(word_bag);
 }
 
+// Statistics depend only on the remainder, not on which pair picks made
+// it. Keep immutable records shared across workers and ranking passes.
+// Together with the pair table, these allocations stay below 4 GiB.
+class RestTable {
+  public:
+    RestTable(PairsCounts const& bag, bool enabled) : index_(bag) {
+        if (!enabled || index_.total() == 0) return;
+        capacity_ = std::min(index_.total(), size_t(1) << 25);
+        slots_.reset(static_cast<uint32_t*>(
+            std::calloc(index_.total(), sizeof(uint32_t))));
+        rows_.reset(static_cast<Counts*>(
+            std::calloc(capacity_, sizeof(Counts))));
+        if (!slots_ || !rows_) {
+            slots_.reset();
+            rows_.reset();
+        }
+    }
+
+    bool get(PairsCounts const& rest, BagStatsRow* out) const {
+        if (!slots_) return false;
+        uint32_t const slot = std::atomic_ref<uint32_t>(
+            slots_[index_.number(rest)]).load(std::memory_order_acquire);
+        if (slot == 0 || slot == UINT32_MAX) return false;
+        Counts const& row = rows_[slot - 1];
+        out->word_bags = row.word_bags;
+        out->with_pairs = row.with_pairs;
+        out->total_pairs = row.total_pairs;
+        out->max_pairs = row.max_pairs;
+        out->solo = row.solo;
+        out->min_word_bags = row.min_word_bags;
+        out->min_with_pairs = row.min_with_pairs;
+        return true;
+    }
+
+    void put(PairsCounts const& rest, BagStatsRow const& row) const {
+        if (!slots_) return;
+        std::atomic_ref<uint32_t> slot(slots_[index_.number(rest)]);
+        uint32_t expected = 0;
+        if (!slot.compare_exchange_strong(expected, UINT32_MAX,
+                                           std::memory_order_relaxed))
+            return;
+        size_t const i = next_.fetch_add(1, std::memory_order_relaxed);
+        if (i >= capacity_) return;
+        rows_[i] = {row.word_bags, row.with_pairs, row.total_pairs,
+                    row.max_pairs, row.solo, row.min_word_bags,
+                    row.min_with_pairs};
+        slot.store(uint32_t(i + 1), std::memory_order_release);
+    }
+
+  private:
+    struct Counts {
+        uint64_t word_bags, with_pairs, total_pairs, max_pairs, solo;
+        uint64_t min_word_bags, min_with_pairs;
+    };
+    struct Free {
+        template <typename T> void operator()(T* p) const { std::free(p); }
+    };
+    RemainderIndex index_;
+    size_t capacity_ = 0;
+    std::unique_ptr<uint32_t[], Free> slots_;
+    std::unique_ptr<Counts[], Free> rows_;
+    mutable std::atomic<size_t> next_{0};
+};
+
 // Fills a remainder's counts over every combination of one word bag per
 // word step, word bags in non-decreasing order.
 class RestCounter {
@@ -421,6 +560,8 @@ class RestCounter {
                 PairCountTable const& table)
         : words_(words), min_word_bag_length_(min_word_bag_length),
           table_(table) {}
+
+    bool needs_groups() const { return table_.needs_groups(); }
 
     // `fitting`: the word bags that fit `rest`; `groups`: the inner
     // dictionary groups, holding every one that fits `rest`.
@@ -478,11 +619,12 @@ class RowWalker {
   public:
     RowWalker(std::vector<std::vector<PairBag> const*> const& steps,
               int pair_steps, std::vector<PairsCounts> const& word_bags,
-              PairsExactCounter const& counter, RestCounter rest_counter)
+              PairsExactCounter const& counter, RestCounter rest_counter,
+              RestTable const& rest_table)
         : steps_(steps), pair_steps_(size_t(pair_steps)),
           word_bags_(word_bags), counter_(counter), chosen_(steps.size()),
           fitting_(steps.size()), groups_(steps.size()),
-          rest_counter_(std::move(rest_counter)) {}
+          rest_counter_(std::move(rest_counter)), rest_table_(rest_table) {}
 
     // Calls visit(row, pair_length) for each row whose first pick is
     // `unit`, in order, with the row's counts but not its PAIR or PAIRS.
@@ -491,8 +633,6 @@ class RowWalker {
         PairsCounts rest;
         if (!pairs_subtract(bag, (*steps_[0])[unit].counts, &rest)) return;
         chosen_[0] = unit;
-        filter_word_bags(word_bags_, rest, &fitting_[0]);
-        counter_.filter(counter_.groups(), rest, &groups_[0]);
         descend(1, rest, letter_total(bag), visit);
     }
 
@@ -521,11 +661,16 @@ class RowWalker {
                  Visit const& visit) {
         if (step == steps_.size()) {
             BagStatsRow row{};
-            rest_counter_.count(rest, fitting_[step - 1], groups_[step - 1],
-                                &row);
+            if (!rest_table_.get(rest, &row)) {
+                filter(step - 1, rest);
+                rest_counter_.count(rest, fitting_[step - 1],
+                                    groups_[step - 1], &row);
+                rest_table_.put(rest, row);
+            }
             visit(row, size_t(letters - letter_total(rest)));
             return;
         }
+        filter(step - 1, rest);
         std::vector<PairBag> const& bags = *steps_[step];
         size_t const start = steps_[step - 1] == steps_[step]
             ? chosen_[step - 1] + 1 : 0;
@@ -535,10 +680,16 @@ class RowWalker {
                 repeats_bag(step, bags[i].counts))
                 continue;
             chosen_[step] = i;
-            filter_word_bags(fitting_[step - 1], next, &fitting_[step]);
-            counter_.filter(groups_[step - 1], next, &groups_[step]);
             descend(step + 1, next, letters, visit);
         }
+    }
+
+    void filter(size_t step, PairsCounts const& rest) {
+        filter_word_bags(step == 0 ? word_bags_ : fitting_[step - 1],
+                          rest, &fitting_[step]);
+        if (rest_counter_.needs_groups())
+            counter_.filter(step == 0 ? counter_.groups() : groups_[step - 1],
+                             rest, &groups_[step]);
     }
 
     bool repeats_bag(size_t step, PairsCounts const& counts) const {
@@ -559,6 +710,7 @@ class RowWalker {
     std::vector<std::vector<PairsCounts>> fitting_;
     std::vector<PairsExactCounter::Groups> groups_;
     RestCounter rest_counter_;
+    RestTable const& rest_table_;
 };
 
 struct LengthValueHash {
@@ -707,12 +859,14 @@ struct Walk {
     Args const& args;
     PairsExactCounter const& counter;
     PairCountTable const& table;
+    RestTable const& rest_table;
     size_t threads;
 
     RowWalker walker() const {
         return RowWalker(steps, args.search.pairs, word_bags, counter,
                          RestCounter(args.search.words,
-                                     args.min_word_bag_length, table));
+                                     args.min_word_bag_length, table),
+                         rest_table);
     }
 
     size_t units() const { return steps[0]->size(); }
@@ -855,19 +1009,23 @@ int main(int argc, char* argv[]) {
     std::vector<std::vector<PairBag> const*> steps;
     steps.insert(steps.end(), args.search.pairs, &pair_bags);
     steps.insert(steps.end(), args.search.prospects, &prospect_bags);
+    size_t threads = resolve_search_threads(args.threads);
+    unsigned int const cores = std::thread::hardware_concurrency();
+    if (cores != 0) threads = std::min(threads, size_t(cores));
     PairCountTable const table(
         pair_count_index(letters, longest_leftover(bag, steps, word_bags,
                                                    args.search.words)),
-        counter);
+        bag, counter, steps.size() > 1 && pair_bags.size() > 1024, threads);
     if (!table.allocated()) {
         fprintf(stderr, "%s: can't allocate the pair count table\n", PROGRAM);
         return 1;
     }
 
-    size_t threads = resolve_search_threads(args.threads);
-    unsigned int const cores = std::thread::hardware_concurrency();
-    if (cores != 0) threads = std::min(threads, size_t(cores));
-    Walk const walk{steps, bag, word_bags, args, counter, table, threads};
+    Ranker ranker(args.keys, args.by_length);
+    bool const passes = args.top != 0 && ranker.needs_counts();
+    RestTable const rest_table(bag, steps.size() > 1 || passes);
+    Walk const walk{steps, bag, word_bags, args, counter, table, rest_table,
+                    threads};
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
     write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
@@ -880,8 +1038,7 @@ int main(int argc, char* argv[]) {
         print_rows(walk);
         return 0;
     }
-    Ranker ranker(args.keys, args.by_length);
-    if (ranker.needs_counts()) count_sort_values(walk, &ranker);
+    if (passes) count_sort_values(walk, &ranker);
     for (RankedRow const& ranked : top_rows(walk, ranker, size_t(args.top)))
         write_bag_stats_row(stdout, ranked.row);
     return 0;

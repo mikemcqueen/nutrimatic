@@ -116,8 +116,9 @@ Otherwise unchanged; it reads and writes version 3 only.
    earlier pick's bag in the row is skipped. Each level subtracts its bag
    from the rest and skips bags that don't fit.
 3. Each combination that reaches the last pair step is a row; RK = R - its
-   picks. Nothing is stored per row: rows that leave the same RK are counted
-   again.
+   picks. A shared cache reuses the statistics of rows that leave the same
+   RK, including across the two ranking passes. Pair names and PAIRS are
+   still computed from each row's own picks.
 
 ### Row counts
 
@@ -125,6 +126,21 @@ For one RK, `RestCounter` enumerates `wb` tuples depth-first with
 non-decreasing indices, first restricting the word-bag list to the bags that
 fit RK. At each leaf, WR = what is left: solo, the 6-letter floor, PC, and
 MIN_WB when every bag in the tuple has at least `--min-wb-len` letters.
+
+When R has at most 2^28 sub-bags, and either the search has more than one
+step (pairs plus prospects) or ranking walks the rows twice, `RestTable`
+indexes all of them with a mixed-radix number. Otherwise no two rows leave
+the same RK, and the table stays unallocated. Its 32-bit slots refer to up
+to 2^25 immutable records, each containing the seven 64-bit remainder
+statistics. A release store publishes each record; readers use acquire
+loads. Concurrent misses may compute the same statistics, but only one
+publishes a record. Once the record capacity is reached, new remainders are
+computed without caching. Larger bags and failed cache allocations also use
+the uncached path.
+
+The slot array takes at most 1 GiB and the records at most 1.75 GiB. With
+the pair count table below, total cache allocations are at most 3.75 GiB,
+leaving room within a 5 GB budget for dictionaries, ranking and workers.
 
 ### Pair count table
 
@@ -140,11 +156,22 @@ less the shortest bag of each pair step's list and the shortest word bag per
 word step. When that numbers more than 2^28 sub-bags (1 GiB), the cutoff
 drops until it doesn't; longer leftovers are counted every time.
 
+For searches with multiple pair steps and more than 1,024 PAIRS bags, when
+all of R's sub-bags fit within the same 2^28 limit, the table is instead
+filled before walking rows. Workers enumerate unordered pairs of inner
+dictionary groups, add their mixed-radix numbers, and accumulate the number
+of distinct word pairs in that slot. Groups paired with themselves
+contribute n*(n-1)/2. This table stores PC directly, including zero; counts
+that reach UINT32_MAX fall back to the exact counter when queried.
+
 ### Pair counting
 
-- Each pick also narrows the inner dictionary's groups
-  (`PairsExactCounter::Groups`) to those that fit what is left, and
+- With the lazily filled table, each pick also narrows the inner
+  dictionary's groups (`PairsExactCounter::Groups`) to those that fit what
+  is left, and
   `PairsExactCounter::count(bag, groups)` scans only those.
+- With the table filled in advance, rows look up exact pair counts directly
+  and do not filter or scan the inner dictionary groups.
 - `count` looks a pair up from its shorter word only, or from the
   lower-numbered one when both are as long, so it skips groups longer than
   half the bag.

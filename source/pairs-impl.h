@@ -108,6 +108,9 @@ class PairsExactCounter {
   // Every group.
   Groups const& groups() const { return all_; }
 
+  // The number of distinct words in one of groups().
+  uint32_t group_size(size_t group) const { return sizes_[group]; }
+
   // Writes the groups of `from` whose letters fit `bag` to `out`.
   void filter(Groups const& from, PairsCounts const& bag, Groups* out) const;
 
