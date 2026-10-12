@@ -99,16 +99,42 @@ class PairsExactCounter {
   // Adds `word` under the same rules as Pairs::add().
   void add(std::string const& word);
 
+  // Groups of words with the same letters: each one's letters and number.
+  struct Groups {
+    std::vector<PairsCounts> keys;
+    std::vector<uint32_t> numbers;
+  };
+
+  // Every group.
+  Groups const& groups() const { return all_; }
+
+  // Writes the groups of `from` whose letters fit `bag` to `out`.
+  void filter(Groups const& from, PairsCounts const& bag, Groups* out) const;
+
   // How many pairs of distinct words use exactly the letters of `bag`, which
   // must fit the constructor's bag.
-  uint64_t count(PairsCounts const& bag) const;
+  uint64_t count(PairsCounts const& bag) const { return count(bag, all_); }
+
+  // As count(bag), looking only at `groups`, which must hold every group
+  // that fits `bag`.
+  uint64_t count(PairsCounts const& bag, Groups const& groups) const;
 
  private:
+  static uint32_t const NO_GROUP = UINT32_MAX;
+
+  // The number of the group whose letters are `key`, or NO_GROUP.
+  uint32_t find(PairsCounts const& key) const;
+  void insert(PairsCounts const& key, uint32_t group);
+
   PairsCounts bag_;
   int min_word_length_;
-  std::vector<PairsCounts> keys_;
+  Groups all_;
+  std::vector<uint32_t> sizes_;
+  std::vector<uint8_t> lengths_;
   std::vector<std::vector<std::string>> groups_;
-  std::unordered_map<PairsCounts, size_t, PairsCountsHash> group_indices_;
+  // Open addressing over the groups' letters: each slot a hash tag in the
+  // high half and the group number + 1 in the low half, 0 when empty.
+  std::vector<uint64_t> slots_;
 };
 
 #endif

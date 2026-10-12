@@ -19,22 +19,8 @@ namespace {
 
 constexpr char PROGRAM[] = "bag-stats-sort";
 
-// A NULL column is the MIN_WB fraction.
-struct SortFlag {
-    char const* option;
-    char const* column;
-};
-
-SortFlag const SORT_FLAGS[] = {
-    {"wb", "WORDBAGS"},
-    {"wbwp", "WB_WITH_PAIRS"},
-    {"tp", "TOTAL_PAIRS"},
-    {"mp", "MAX_PAIRS"},
-    {"min-wb", "MIN_WB"},
-    {"min-wb-frac", NULL},
-};
-
-constexpr int SORT_FLAG_COUNT = sizeof(SORT_FLAGS) / sizeof(SORT_FLAGS[0]);
+constexpr int SORT_FLAG_COUNT =
+    sizeof(BAG_STATS_SORT_FLAGS) / sizeof(BAG_STATS_SORT_FLAGS[0]);
 constexpr int OPT_SORT = 256;
 
 constexpr int OPT_BY_LENGTH = OPT_SORT + SORT_FLAG_COUNT;
@@ -64,33 +50,25 @@ void usage(char const* program, FILE* out) {
           "  their best percentile, then by the sum of them: the sorted lists\n"
           "  merged, each row at its better place\n"
           "\noptions:\n", stdout);
-    for (SortFlag const& flag : SORT_FLAGS) {
-        if (flag.column == NULL) continue;
-        std::string const option = std::string("--") + flag.option;
-        dfs_help_option(option.c_str(), "sort by %s", flag.column);
-    }
-    dfs_help_option("--min-wb-frac",
-                    "sort by MIN_WB_WITH_PAIRS / MIN_WB, the fraction of "
-                    "MIN_WB word bags whose remainder has enough exact pairs "
-                    "(0 when MIN_WB is 0)");
+    bag_stats_help_sort_flags();
     dfs_help_option("--by-length",
                     "compare each row's sort value only with the rows whose "
-                    "PAIRBAG has the same number of letters, and sort by its "
+                    "PAIR has the same number of letters, and sort by its "
                     "percentile there, so the best of each length comes "
                     "first; no effect with --pb-len");
     dfs_help_option("--pb-len N",
-                    "print only the rows whose PAIRBAG has N letters");
+                    "print only the rows whose PAIR has N letters");
     dfs_help_option("-h, --help", "show this help");
 }
 
 bool parse_args(char* argv[], Args* out, bool* help) {
     static struct optparse_long const long_options[] = {
-        { SORT_FLAGS[0].option, OPT_SORT + 0, OPTPARSE_NONE },
-        { SORT_FLAGS[1].option, OPT_SORT + 1, OPTPARSE_NONE },
-        { SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
-        { SORT_FLAGS[3].option, OPT_SORT + 3, OPTPARSE_NONE },
-        { SORT_FLAGS[4].option, OPT_SORT + 4, OPTPARSE_NONE },
-        { SORT_FLAGS[5].option, OPT_SORT + 5, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[0].option, OPT_SORT + 0, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[1].option, OPT_SORT + 1, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[3].option, OPT_SORT + 3, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[4].option, OPT_SORT + 4, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[5].option, OPT_SORT + 5, OPTPARSE_NONE },
         { "by-length", OPT_BY_LENGTH, OPTPARSE_NONE },
         { "pb-len", OPT_PAIR_BAG_LENGTH, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
@@ -104,9 +82,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     int option;
     while ((option = optparse_long(&options, long_options, NULL)) != -1) {
         if (option >= OPT_SORT && option < OPT_SORT + SORT_FLAG_COUNT) {
-            char const* const column = SORT_FLAGS[option - OPT_SORT].column;
             out->keys.push_back(
-                column == NULL ? NULL : find_bag_stats_count(column));
+                bag_stats_sort_key(BAG_STATS_SORT_FLAGS[option - OPT_SORT]));
             continue;
         }
         switch (option) {
@@ -152,40 +129,32 @@ bool read_rows(FILE* in, std::string const& path,
     return true;
 }
 
-double min_wb_fraction(BagStatsRow const& row) {
-    return row.min_word_bags == 0
-        ? 0 : double(row.min_with_pairs) / double(row.min_word_bags);
-}
-
-double sort_value(BagStatsCount const* key, BagStatsRow const& row) {
-    return key == NULL ? min_wb_fraction(row) : double(row.*key->value);
-}
-
 // The mid-rank percentile of `value` among the sorted `group`.
 double percentile(std::vector<double> const& group, double value) {
     auto const below =
         std::lower_bound(group.begin(), group.end(), value) - group.begin();
     auto const through =
         std::upper_bound(group.begin(), group.end(), value) - group.begin();
-    return double(below + through) / 2 / double(group.size());
+    return bag_stats_percentile(uint64_t(below), uint64_t(through),
+                                group.size());
 }
 
 // Each of `values`, the sort value of the row at the same index of `rows`, as
-// a mid-rank percentile among the values of the rows whose PAIRBAG has the
+// a mid-rank percentile among the values of the rows whose PAIR has the
 // same length.
 std::vector<double> length_ranks(std::vector<BagStatsRow> const& rows,
                                  std::vector<double> const& values) {
     std::unordered_map<size_t, std::vector<double>> by_length;
     for (size_t i = 0; i < rows.size(); ++i)
-        by_length[rows[i].pair_bag.size()].push_back(values[i]);
+        by_length[bag_stats_pair_length(rows[i].pair)].push_back(values[i]);
     for (auto& entry : by_length)
         std::sort(entry.second.begin(), entry.second.end());
 
     std::vector<double> out;
     out.reserve(rows.size());
     for (size_t i = 0; i < rows.size(); ++i)
-        out.push_back(
-            percentile(by_length[rows[i].pair_bag.size()], values[i]));
+        out.push_back(percentile(
+            by_length[bag_stats_pair_length(rows[i].pair)], values[i]));
     return out;
 }
 
@@ -209,7 +178,7 @@ std::vector<std::pair<double, double>> sort_keys(
         std::vector<double> values;
         values.reserve(rows.size());
         for (BagStatsRow const& row : rows)
-            values.push_back(sort_value(key, row));
+            values.push_back(bag_stats_sort_value(key, row));
         if (args.by_length) values = length_ranks(rows, values);
         if (args.keys.size() > 1) values = ranks(values);
         for (size_t i = 0; i < rows.size(); ++i) {
@@ -248,7 +217,8 @@ int main(int argc, char* argv[]) {
     if (args.pair_bag_length >= 0)
         rows.erase(std::remove_if(rows.begin(), rows.end(),
             [&args](BagStatsRow const& row) {
-                return row.pair_bag.size() != size_t(args.pair_bag_length);
+                return bag_stats_pair_length(row.pair) !=
+                    size_t(args.pair_bag_length);
             }), rows.end());
 
     auto const keys = sort_keys(args, rows);

@@ -5,6 +5,10 @@
 Implemented in `source/bag-stats.cpp`, with the exact-count index in
 `source/pairs-impl.{h,cpp}` and a smoke test in `source/test-bag-stats.sh`.
 
+Superseded in part by `plans/bag-stats-search-sequence.md`: `--ss`, `--pp`,
+`--threads` and the version 3 output, which drops `PAIRBAG` and adds the `ss`
+and `pp` header lines. The default `--ss pb,wb,p` counts as below.
+
 ## Outcome
 
 A new tool that ranks the letter bags of candidate pairs by how many complete
