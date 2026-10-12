@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_PAIRS_IMPL_H
 #define NUTRIMATIC_PAIRS_IMPL_H
 
+#include <smmintrin.h>
 #include <stdio.h>
 
 #include <array>
@@ -38,6 +39,25 @@ struct PairsCountsHash {
   size_t operator()(PairsCounts const& counts) const;
 };
 
+// The a-z letter counts of `s`, case-insensitive; other characters are
+// ignored.
+PairsCounts pairs_letter_counts(char const* s);
+
+// Writes `pool` less `word` to `out` and returns true, or returns false when
+// `word` doesn't fit `pool`.
+bool pairs_subtract(PairsCounts const& pool, PairsCounts const& word,
+                    PairsCounts* out);
+
+// Whether `word` fits within `pool`.
+inline bool pairs_fits(PairsCounts const& pool, PairsCounts const& word) {
+  __m128i const* p = reinterpret_cast<__m128i const*>(pool.values.data());
+  __m128i const* w = reinterpret_cast<__m128i const*>(word.values.data());
+  __m128i const excess = _mm_or_si128(
+      _mm_subs_epu8(_mm_load_si128(w), _mm_load_si128(p)),
+      _mm_subs_epu8(_mm_load_si128(w + 1), _mm_load_si128(p + 1)));
+  return _mm_testz_si128(excess, excess);
+}
+
 // Word pairs found under PairsOptions among the words added, each written
 // left,right with left < right.
 class Pairs {
@@ -64,6 +84,28 @@ class Pairs {
 
   PairsOptions options_;
   PairsCounts bag_;
+  std::vector<PairsCounts> keys_;
+  std::vector<std::vector<std::string>> groups_;
+  std::unordered_map<PairsCounts, size_t, PairsCountsHash> group_indices_;
+};
+
+// Counts the lines `pairs -x -c` prints for many bags within one: built once
+// from the dictionary words that fit `bag` and are at least
+// `min_word_length` letters long, then queried per sub-bag.
+class PairsExactCounter {
+ public:
+  PairsExactCounter(PairsCounts const& bag, int min_word_length);
+
+  // Adds `word` under the same rules as Pairs::add().
+  void add(std::string const& word);
+
+  // How many pairs of distinct words use exactly the letters of `bag`, which
+  // must fit the constructor's bag.
+  uint64_t count(PairsCounts const& bag) const;
+
+ private:
+  PairsCounts bag_;
+  int min_word_length_;
   std::vector<PairsCounts> keys_;
   std::vector<std::vector<std::string>> groups_;
   std::unordered_map<PairsCounts, size_t, PairsCountsHash> group_indices_;

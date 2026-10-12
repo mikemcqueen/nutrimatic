@@ -8,18 +8,6 @@ char const BAD_BAG_BITMAP_MAGIC[] = "bad-bags-bitmap 1";
 
 namespace {
 
-// Reads a line of `in` that is `name`, a space, and the rest, into `value`.
-bool read_field(FILE* in, char const* name, std::string* value) {
-  std::string line;
-  if (!read_line(in, &line)) return false;
-  size_t const length = strlen(name);
-  if (line.compare(0, length, name) != 0 || line.size() <= length ||
-      line[length] != ' ')
-    return false;
-  *value = line.substr(length + 1);
-  return true;
-}
-
 bool parse_size(std::string const& text, size_t* out) {
   if (text.empty() ||
       !std::all_of(text.begin(), text.end(),
@@ -38,6 +26,17 @@ bool read_line(FILE* in, std::string* line) {
     line->push_back(char(ch));
   }
   return !line->empty();
+}
+
+bool read_field(FILE* in, char const* name, std::string* value) {
+  std::string line;
+  if (!read_line(in, &line)) return false;
+  size_t const length = strlen(name);
+  if (line.compare(0, length, name) != 0 || line.size() <= length ||
+      line[length] != ' ')
+    return false;
+  *value = line.substr(length + 1);
+  return true;
 }
 
 bool BadBagBitmap::is_bad(LetterCounts const& letter_counts) const {

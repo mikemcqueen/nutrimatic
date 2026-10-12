@@ -250,6 +250,18 @@ pairs = executable('pairs', 'pairs.cpp',
   dependencies: thread_dep,
   install: true)
 
+bag_stats_lib = static_library('bag-stats', 'bag-stats-impl.cpp',
+  link_with: dfs_class_list_lib)
+
+bag_stats = executable('bag-stats', 'bag-stats.cpp',
+  link_with: [bag_stats_lib, pairs_lib, dfs_class_list_lib, optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
+bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
+  link_with: [bag_stats_lib, dfs_class_list_lib, optparse_lib],
+  install: true)
+
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   link_with: [dfs_class_list_lib, optparse_lib, index_lib],
   dependencies: [segment_output_dep, segment_rows_dep, thread_dep],
@@ -424,6 +436,16 @@ test(
   'pairs',
   bash,
   args: [files('test-pairs.sh'), pairs],
+)
+test(
+  'bag-stats',
+  bash,
+  args: [files('test-bag-stats.sh'), bag_stats, pairs],
+)
+test(
+  'bag-stats-sort',
+  bash,
+  args: [files('test-bag-stats-sort.sh'), bag_stats_sort],
 )
 test(
   'lc',

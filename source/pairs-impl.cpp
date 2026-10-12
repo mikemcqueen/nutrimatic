@@ -1,7 +1,6 @@
 #include "pairs-impl.h"
 
 #include <inttypes.h>
-#include <smmintrin.h>
 
 #include "dfs-cli-args.h"
 #include "letter-bag.h"
@@ -12,7 +11,9 @@ constexpr size_t ALPHA = 26;
 
 static_assert(sizeof(PairsCounts) == 32);
 
-PairsCounts letter_counts(char const* s) {
+}  // namespace
+
+PairsCounts pairs_letter_counts(char const* s) {
   PairsCounts out{};
   for (; *s; ++s) {
     char c = *s;
@@ -22,8 +23,8 @@ PairsCounts letter_counts(char const* s) {
   return out;
 }
 
-bool subtract(PairsCounts const& pool, PairsCounts const& word,
-              PairsCounts* out) {
+bool pairs_subtract(PairsCounts const& pool, PairsCounts const& word,
+                    PairsCounts* out) {
   PairsCounts result{};
   for (size_t i = 0; i < ALPHA; ++i) {
     if (word.values[i] > pool.values[i]) return false;
@@ -32,17 +33,6 @@ bool subtract(PairsCounts const& pool, PairsCounts const& word,
   *out = result;
   return true;
 }
-
-bool fits(PairsCounts const& pool, PairsCounts const& word) {
-  __m128i const* p = reinterpret_cast<__m128i const*>(pool.values.data());
-  __m128i const* w = reinterpret_cast<__m128i const*>(word.values.data());
-  __m128i const excess = _mm_or_si128(
-      _mm_subs_epu8(_mm_load_si128(w), _mm_load_si128(p)),
-      _mm_subs_epu8(_mm_load_si128(w + 1), _mm_load_si128(p + 1)));
-  return _mm_testz_si128(excess, excess);
-}
-
-}  // namespace
 
 size_t PairsCountsHash::operator()(PairsCounts const& counts) const {
   uint64_t hash = UINT64_C(14695981039346656037);
@@ -66,16 +56,16 @@ bool Pairs::load(PairsOptions const& options) {
       !clean_letters(options_.used_letters.c_str(), "used letters", &remove) ||
       !subtract_letters(bag, remove, &letters))
     return false;
-  bag_ = letter_counts(letters.c_str());
+  bag_ = pairs_letter_counts(letters.c_str());
   return true;
 }
 
 void Pairs::add(std::string const& word) {
   if ((int) word.size() < options_.min_word_length) return;
-  PairsCounts const counts = letter_counts(word.c_str());
+  PairsCounts const counts = pairs_letter_counts(word.c_str());
   if (counts == PairsCounts{}) return;
   PairsCounts remaining;
-  if (!subtract(bag_, counts, &remaining)) return;
+  if (!pairs_subtract(bag_, counts, &remaining)) return;
 
   auto const inserted = group_indices_.emplace(counts, groups_.size());
   if (inserted.second) {
@@ -115,10 +105,10 @@ void Pairs::each_line(Emit emit) const {
 
   for (size_t a = 0; a < groups_.size(); ++a) {
     std::vector<std::string> const& first_group = groups_[a];
-    subtract(bag_, keys_[a], &remaining);
+    pairs_subtract(bag_, keys_[a], &remaining);
 
     bool const same_group_fits = options_.exact
-        ? remaining == keys_[a] : fits(remaining, keys_[a]);
+        ? remaining == keys_[a] : pairs_fits(remaining, keys_[a]);
     if (first_group.size() >= 2 && same_group_fits) {
       for (size_t i = 0; i < first_group.size(); ++i)
         for (size_t j = i + 1; j < first_group.size(); ++j)
@@ -133,7 +123,7 @@ void Pairs::each_line(Emit emit) const {
     } else {
       for (size_t b = a + 1; b < groups_.size(); ++b) {
         matching_groups[matching_count] = b;
-        matching_count += fits(remaining, keys_[b]);
+        matching_count += pairs_fits(remaining, keys_[b]);
       }
     }
 
@@ -166,4 +156,42 @@ std::vector<std::string> Pairs::lines() const {
     out.push_back(right == nullptr ? left : left + "," + *right);
   });
   return out;
+}
+
+PairsExactCounter::PairsExactCounter(PairsCounts const& bag,
+                                     int min_word_length)
+    : bag_(bag), min_word_length_(min_word_length) {}
+
+void PairsExactCounter::add(std::string const& word) {
+  if ((int) word.size() < min_word_length_) return;
+  PairsCounts const counts = pairs_letter_counts(word.c_str());
+  if (counts == PairsCounts{} || !pairs_fits(bag_, counts)) return;
+
+  auto const inserted = group_indices_.emplace(counts, groups_.size());
+  if (inserted.second) {
+    keys_.push_back(counts);
+    groups_.push_back({});
+  }
+  std::vector<std::string>& words = groups_[inserted.first->second];
+  for (std::string const& existing : words)
+    if (existing == word) return;
+  words.push_back(word);
+}
+
+uint64_t PairsExactCounter::count(PairsCounts const& bag) const {
+  uint64_t total = 0;
+  PairsCounts remaining;
+  for (size_t a = 0; a < keys_.size(); ++a) {
+    if (!pairs_fits(bag, keys_[a])) continue;
+    pairs_subtract(bag, keys_[a], &remaining);
+    uint64_t const size = groups_[a].size();
+    if (remaining == keys_[a]) {
+      total += size * (size - 1) / 2;
+      continue;
+    }
+    auto const partner = group_indices_.find(remaining);
+    if (partner != group_indices_.end() && partner->second > a)
+      total += size * groups_[partner->second].size();
+  }
+  return total;
 }

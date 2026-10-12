@@ -52,6 +52,10 @@ void write_bad_bag_bitmap(FILE* out, std::string const& letters,
 // file with nothing read.
 bool read_line(FILE* in, std::string* line);
 
+// Reads a line of `in` that is `name`, a space, and the rest, into `value`;
+// false when the line is missing or isn't one.
+bool read_field(FILE* in, char const* name, std::string* value);
+
 // The bitmap in `in`, the file at `path` read through its
 // BAD_BAG_BITMAP_MAGIC line; none, diagnosed, when the rest isn't a
 // well-formed bitmap.
