@@ -36,7 +36,7 @@ class PairEvidenceSource {
 // plus one for each kind of clue evidence.
 inline constexpr char PRIOR_WEIGHTS_DEFAULT[] =
     "mean=1,exact=1,adjacent=1,adjacent-short=1,link=1,link-short=1,"
-    "not-answer=1";
+    "rare-answer=1";
 
 // A pair's prior: the sum of each term's weight times its value.
 struct PriorWeights {

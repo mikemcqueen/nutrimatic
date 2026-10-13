@@ -72,6 +72,11 @@ PriorTerm const PRIOR_TERMS[] = {
      [](PairEvidence const& e) {
          return double(e.clues.phrase_answer == 0);
      }},
+    {"rare-answer", false,
+     "1 when they are an answer in no more clues than have them adjacent",
+     [](PairEvidence const& e) {
+         return double(e.clues.phrase_answer <= e.clues.adjacent);
+     }},
 };
 
 constexpr size_t PRIOR_TERM_COUNT =

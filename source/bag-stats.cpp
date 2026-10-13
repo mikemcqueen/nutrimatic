@@ -166,9 +166,10 @@ void usage(char const* program, FILE* out) {
                     "each of its pair picks, Q the best mid-rank percentile "
                     "from the top over picks and SORT options; with --prior, "
                     "a pick's Q is weighted by P, its prior's percentile from "
-                    "the top among its list's bags, as P * Q * sqrt(P of each "
-                    "other pick), and rows sort by the smallest; needs two or "
-                    "more ppb and pb steps; bag-stats-sort has no equivalent");
+                    "the top among its list's bags, as P * Q * sqrt(P) * "
+                    "Q^(1/4) of each other pick, and rows sort by the "
+                    "smallest; needs two or more ppb and pb steps; "
+                    "bag-stats-sort has no equivalent");
     dfs_help_option("--prior FILE",
                     "\"SCORE word,word\" lines, as pair-prior prints them, "
                     "larger better; a pick bag scores its best row, below "
@@ -1065,24 +1066,29 @@ class PickRanker {
         for (Part& part : parts) std::vector<Entry>().swap(part.entries);
     }
 
-    // Larger first: the smallest P * Q * sqrt(P of each other pick) over the
-    // row's picks, negated, then the sum of those, negated.
+    // Larger first: the smallest P * Q * sqrt(P) * Q^(1/4) of each other pick
+    // over the row's picks, negated, then the sum of those, negated; each is
+    // sqrt(P) * Q^(3/4) of its pick times sqrt(P) * Q^(1/4) of every pick.
     std::pair<double, double> key(BagStatsRow const& row, size_t,
                                   std::vector<uint32_t> const& picks) const {
+        double all = 1;
         double best = INFINITY;
         double sum = 0;
-        for (size_t i = 0; i < picks.size(); ++i) {
+        for (uint32_t pick : picks) {
             double q = 1;
             for (size_t k = 0; k < keys_.size(); ++k)
-                q = std::min(q, 1 - groups_[k * ranks_.size() + picks[i]]
+                q = std::min(q, 1 - groups_[k * ranks_.size() + pick]
                                         .percentile(bag_stats_sort_value(
                                             keys_[k], row)));
-            double score = ranks_[picks[i]] * q;
-            for (size_t j = 0; j < picks.size(); ++j)
-                if (j != i) score *= std::sqrt(ranks_[picks[j]]);
-            best = std::min(best, score);
-            sum += score;
+            double const p = std::sqrt(ranks_[pick]);
+            double const quarter = std::sqrt(std::sqrt(q));
+            all *= p * quarter;
+            double const own = p * q / quarter;
+            best = std::min(best, own);
+            sum += own;
         }
+        best *= all;
+        sum *= all;
         return {-best, -sum};
     }
 
