@@ -262,6 +262,10 @@ bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
   link_with: [bag_stats_lib, dfs_class_list_lib, optparse_lib],
   install: true)
 
+pair_prior = executable('pair-prior', 'pair-prior.cpp',
+  link_with: [dfs_class_list_lib, optparse_lib],
+  install: true)
+
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   link_with: [dfs_class_list_lib, optparse_lib, index_lib],
   dependencies: [segment_output_dep, segment_rows_dep, thread_dep],
@@ -441,6 +445,11 @@ test(
   'bag-stats',
   bash,
   args: [files('test-bag-stats.sh'), bag_stats, pairs],
+)
+test(
+  'pair-prior',
+  bash,
+  args: [files('test-pair-prior.sh'), pair_prior],
 )
 test(
   'bag-stats-sort',

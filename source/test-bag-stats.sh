@@ -98,4 +98,11 @@ actual=$("$bag_stats" --score ant,low --tp catdoglowanttan "$test_dir/pairs" \
 [[ $actual == $'low ant,1,1,1,4,4,0,0,0\nrank 2 of 2, tied 2-2' ]] ||
   fail "--score is wrong: $actual"
 
+echo '2.5 dog,cat' > "$test_dir/prior"
+actual=$("$bag_stats" --score cat,dog --score low,ant --min-wb-frac --min-wbwp \
+  --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
+  "$test_dir/pairs" "$test_dir/dict")
+[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0,0\nrank 1 of 1, tied 1-1' ]] ||
+  fail "--by-pick --score is wrong: $actual"
+
 echo PASS

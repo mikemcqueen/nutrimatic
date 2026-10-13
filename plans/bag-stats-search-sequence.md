@@ -211,3 +211,31 @@ Output is the same for every thread count.
   `wb,wb` and `-n` rows checked by hand.
 - `source/test-bag-stats-sort.sh`: version 3.
 - `plans/bag-stats.md`: points here for the version 3 format.
+
+## --by-pick, --prior and pair-prior
+
+Added for two-pair rows; see `findings/bag-stats-phase-2.md`.
+
+```
+pair-prior [--p1 DIR] [--clues FILE] PAIRS...
+bag-stats ... (-n N | --score W1,W2...) SORT... --by-pick [--prior FILE] ...
+```
+
+- `pair-prior` prints `SCORE word,word` per distinct pair of PAIRS, in order:
+  the smaller of its phase 1 YES probabilities (forward, reverse; best jsonl
+  line in DIR; 0 without one), +1 when one word is a cluedata answer whose
+  clue has the other, +1 when the words are adjacent in a clue (one space or
+  hyphen apart). Clue words are split as cluer's index splits them.
+- `--prior FILE` reads those lines; a pick bag's prior is the best score of
+  its rows, -1 when none is in FILE. P is 1 less the bag's mid-rank
+  percentile among its list's bags (PAIRS, `--pp`), 1 for every bag without
+  `--prior`.
+- `--by-pick` ranks a row by its picks: Q_i is the smallest, over SORT
+  options, of 1 less the mid-rank percentile of the row's value among the
+  rows sharing pick i. The key is the smallest `P_i * Q_i * prod(sqrt(P_j))`
+  over picks, then their sum; smaller first, ties in walk order. It needs two
+  or more ppb and pb steps, `-n` or `--score`, and no `--by-length`.
+- `PickRanker` takes the first walk's (sort key, pick, value) counts in
+  per-thread buffers that are sorted and merged whenever they fill, then one
+  `Distribution` per sort key and pick.
+- `--min-wbwp` sorts by MIN_WB_WITH_PAIRS, in bag-stats and bag-stats-sort.

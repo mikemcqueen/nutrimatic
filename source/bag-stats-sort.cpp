@@ -36,7 +36,8 @@ struct Args {
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
-            "usage: %s (--wb | --wbwp | --tp | --mp | --min-wb | --min-wb-frac)...\n"
+            "usage: %s (--wb | --wbwp | --tp | --mp | --min-wb | --min-wbwp |\n"
+            "       --min-wb-frac)...\n"
             "       [--by-length] [--pb-len N] [FILE|-]\n",
             program);
     if (out != stdout) return;
@@ -69,12 +70,13 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { BAG_STATS_SORT_FLAGS[3].option, OPT_SORT + 3, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[4].option, OPT_SORT + 4, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[5].option, OPT_SORT + 5, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[6].option, OPT_SORT + 6, OPTPARSE_NONE },
         { "by-length", OPT_BY_LENGTH, OPTPARSE_NONE },
         { "pb-len", OPT_PAIR_BAG_LENGTH, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
-    static_assert(SORT_FLAG_COUNT == 6);
+    static_assert(SORT_FLAG_COUNT == 7);
 
     struct optparse options;
     optparse_init(&options, argv);

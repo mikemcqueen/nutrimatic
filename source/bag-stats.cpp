@@ -14,12 +14,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -42,7 +44,9 @@ constexpr int OPT_THREADS = 259;
 constexpr int OPT_BY_LENGTH = 260;
 constexpr int OPT_TOP_SEGMENTS = 261;
 constexpr int OPT_SCORE = 262;
-constexpr int OPT_SORT = 263;
+constexpr int OPT_PRIOR = 263;
+constexpr int OPT_BY_PICK = 264;
+constexpr int OPT_SORT = 265;
 constexpr int SORT_FLAG_COUNT =
     sizeof(BAG_STATS_SORT_FLAGS) / sizeof(BAG_STATS_SORT_FLAGS[0]);
 // The most sub-bags PairCountTable numbers, 4 bytes each.
@@ -70,6 +74,8 @@ struct Args {
     // One per sort option, NULL for the MIN_WB fraction.
     std::vector<BagStatsCount const*> keys;
     bool by_length = false;
+    bool by_pick = false;
+    char const* prior_file = NULL;
     bool top_segments = false;
     // --score, the row's picks as PAIR names them, each as its two words.
     std::vector<std::string> score;
@@ -81,14 +87,16 @@ struct PairBag {
     PairsCounts counts;
     std::string pair;
     uint64_t pairs = 0;
+    // The best --prior score of its rows, -INFINITY when none has one.
+    double prior = -INFINITY;
 };
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
             "usage: %s [-u LETTERS] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
-            "       [--threads N] [-n N SORT... [--by-length]]\n"
-            "       [--score W1,W2... SORT... [--by-length]]\n"
-            "       [--top-segments] LETTERS PAIRS DICT\n",
+            "       [--threads N] [-n N SORT... [--by-length | --by-pick]]\n"
+            "       [--score W1,W2... SORT... [--by-length | --by-pick]]\n"
+            "       [--prior FILE] [--top-segments] LETTERS PAIRS DICT\n",
             program);
     if (out != stdout) return;
 
@@ -142,6 +150,18 @@ void usage(char const* program, FILE* out) {
                     "rank each row's sort value only among the rows whose "
                     "pair picks have as many letters, as bag-stats-sort "
                     "--by-length does");
+    dfs_help_option("--by-pick",
+                    "rank each row's sort value among the rows that share "
+                    "each of its pair picks, Q the best mid-rank percentile "
+                    "from the top over picks and SORT options; with --prior, "
+                    "a pick's Q is weighted by P, its prior's percentile from "
+                    "the top among its list's bags, as P * Q * sqrt(P of each "
+                    "other pick), and rows sort by the smallest; needs two or "
+                    "more ppb and pb steps; bag-stats-sort has no equivalent");
+    dfs_help_option("--prior FILE",
+                    "\"SCORE word,word\" lines, as pair-prior prints them, "
+                    "larger better; a pick bag scores its best row, below "
+                    "every score when none is in FILE; only with --by-pick");
 }
 
 bool parse_search(char const* text, Search* out) {
@@ -196,16 +216,19 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "by-length", OPT_BY_LENGTH, OPTPARSE_NONE },
         { "top-segments", OPT_TOP_SEGMENTS, OPTPARSE_NONE },
         { "score", OPT_SCORE, OPTPARSE_REQUIRED },
+        { "prior", OPT_PRIOR, OPTPARSE_REQUIRED },
+        { "by-pick", OPT_BY_PICK, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[0].option, OPT_SORT + 0, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[1].option, OPT_SORT + 1, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[3].option, OPT_SORT + 3, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[4].option, OPT_SORT + 4, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[5].option, OPT_SORT + 5, OPTPARSE_NONE },
+        { BAG_STATS_SORT_FLAGS[6].option, OPT_SORT + 6, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
-    static_assert(SORT_FLAG_COUNT == 6);
+    static_assert(SORT_FLAG_COUNT == 7);
 
     struct optparse options;
     optparse_init(&options, argv);
@@ -253,6 +276,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case OPT_SCORE:
             out->score.push_back(options.optarg);
             break;
+          case OPT_PRIOR:
+            out->prior_file = options.optarg;
+            break;
+          case OPT_BY_PICK:
+            out->by_pick = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -279,6 +308,18 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                 "with it\n", PROGRAM);
         return false;
     }
+    if (out->by_pick &&
+        (!ranked || out->by_length ||
+         out->search.prospects + out->search.pairs < 2)) {
+        fprintf(stderr, "%s: --by-pick goes with -n or --score, without "
+                "--by-length, and with two or more ppb and pb steps\n",
+                PROGRAM);
+        return false;
+    }
+    if (out->prior_file != NULL && !out->by_pick) {
+        fprintf(stderr, "%s: --prior goes with --by-pick\n", PROGRAM);
+        return false;
+    }
     if (!out->score.empty() &&
         (out->top_segments ||
          int(out->score.size()) != out->search.prospects + out->search.pairs)) {
@@ -292,10 +333,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
     int const stdin_inputs = (strcmp(out->pairs_file, "-") == 0) +
         (strcmp(out->dictionary_file, "-") == 0) +
-        (out->prospects_file != NULL && strcmp(out->prospects_file, "-") == 0);
+        (out->prospects_file != NULL && strcmp(out->prospects_file, "-") == 0) +
+        (out->prior_file != NULL && strcmp(out->prior_file, "-") == 0);
     if (stdin_inputs > 1) {
-        fprintf(stderr, "%s: only one of PAIRS, DICT and --pp can be -\n",
-                PROGRAM);
+        fprintf(stderr, "%s: only one of PAIRS, DICT, --pp and --prior can "
+                "be -\n", PROGRAM);
         return false;
     }
     return true;
@@ -309,7 +351,37 @@ bool remaining_letters(Args const& args, std::string* out) {
         subtract_letters(bag, remove, out);
 }
 
+std::string pair_key(std::string const& left, std::string const& right) {
+    return left < right ? left + "," + right : right + "," + left;
+}
+
+// The --prior FILE's scores by pair_key().
+bool load_priors(char const* path,
+                 std::unordered_map<std::string, double>* out) {
+    return read_lines(PROGRAM, path,
+        [&](std::string const& line, size_t number) {
+            char* end;
+            double const score = strtod(line.c_str(), &end);
+            size_t const space = size_t(end - line.c_str());
+            if (end == line.c_str() || !std::isfinite(score) ||
+                space >= line.size() || line[space] != ' ') {
+                fprintf(stderr, "%s: %s:%zu isn't \"SCORE word,word\" with "
+                        "a finite SCORE\n", PROGRAM, path, number);
+                return false;
+            }
+            DfsPairRow row;
+            if (!parse_pair_row(line.substr(space + 1), "prior", path, number,
+                                false, &row))
+                return false;
+            auto const [entry, inserted] =
+                out->emplace(pair_key(row.left, row.right), score);
+            if (!inserted) entry->second = std::max(entry->second, score);
+            return true;
+        });
+}
+
 bool load_pair_bags(char const* path, PairsCounts const& bag,
+                    std::unordered_map<std::string, double> const& priors,
                     std::vector<PairBag>* out) {
     std::unordered_set<std::string> rows;
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices;
@@ -318,12 +390,15 @@ bool load_pair_bags(char const* path, PairsCounts const& bag,
             PairsCounts const counts =
                 pairs_letter_counts((row.left + row.right).c_str());
             if (!pairs_fits(bag, counts)) return true;
-            std::string const key = row.left < row.right
-                ? row.left + "," + row.right : row.right + "," + row.left;
+            std::string const key = pair_key(row.left, row.right);
             if (!rows.insert(key).second) return true;
             auto const inserted = indices.emplace(counts, out->size());
             if (inserted.second) out->push_back({counts, row.left + " " + row.right});
-            ++(*out)[inserted.first->second].pairs;
+            PairBag& pair_bag = (*out)[inserted.first->second];
+            ++pair_bag.pairs;
+            auto const prior = priors.find(key);
+            if (prior != priors.end())
+                pair_bag.prior = std::max(pair_bag.prior, prior->second);
             return true;
         });
 }
@@ -677,6 +752,15 @@ class RowWalker {
         return chosen_ == picks;
     }
 
+    // The current row's picks, one per pair step: a PAIRS bag's list index,
+    // or a --pp bag's past every PAIRS bag.
+    void picks(std::vector<uint32_t>* out) const {
+        out->resize(steps_.size());
+        for (size_t j = 0; j < steps_.size(); ++j)
+            (*out)[j] = uint32_t(chosen_[j] +
+                                 (j < pair_steps_ ? 0 : steps_[0]->size()));
+    }
+
     // The current row's PAIRS.
     uint64_t pairs() const {
         uint64_t out = 1;
@@ -758,6 +842,8 @@ using SortValueCounts = std::vector<
 // at it.
 class Distribution {
   public:
+    Distribution() = default;
+
     // From `counts`, each value once, with how many rows have it.
     explicit Distribution(std::vector<std::pair<double, uint64_t>> counts) {
         std::sort(counts.begin(), counts.end());
@@ -795,16 +881,20 @@ class Ranker {
     // other rows.
     bool needs_counts() const { return by_length_ || keys_.size() > 1; }
 
-    SortValueCounts counts() const { return SortValueCounts(keys_.size()); }
+    // Whether add() and key() read the row's picks.
+    static constexpr bool NEEDS_PICKS = false;
 
-    void add(SortValueCounts* counts, BagStatsRow const& row,
-             size_t length) const {
+    using Part = SortValueCounts;
+
+    Part part() const { return Part(keys_.size()); }
+
+    void add(Part* part, BagStatsRow const& row, size_t length,
+             std::vector<uint32_t> const&) const {
         for (size_t k = 0; k < keys_.size(); ++k)
-            ++(*counts)[k][{group(length),
-                            bag_stats_sort_value(keys_[k], row)}];
+            ++(*part)[k][{group(length), bag_stats_sort_value(keys_[k], row)}];
     }
 
-    void finish(std::vector<SortValueCounts> const& parts) {
+    void finish(std::vector<Part>& parts) {
         for (size_t k = 0; k < keys_.size(); ++k) {
             std::unordered_map<size_t,
                 std::vector<std::pair<double, uint64_t>>> by_group;
@@ -829,8 +919,8 @@ class Ranker {
     }
 
     // The row's sort key, larger first, as bag-stats-sort's sort_keys().
-    std::pair<double, double> key(BagStatsRow const& row,
-                                  size_t length) const {
+    std::pair<double, double> key(BagStatsRow const& row, size_t length,
+                                  std::vector<uint32_t> const&) const {
         std::pair<double, double> out{-1, 0};
         for (size_t k = 0; k < keys_.size(); ++k) {
             double value = first_rank(k, group(length),
@@ -856,6 +946,133 @@ class Ranker {
     std::vector<std::unordered_map<size_t, Distribution>> groups_;
     std::vector<Distribution> overall_;
 };
+
+// Ranks rows for --by-pick: each sort value as its percentile among the rows
+// sharing a pick, weighted by the picks' prior ranks.
+class PickRanker {
+  public:
+    // `ranks`: each pick's P, its --prior percentile from the top, 1 for
+    // every pick without --prior.
+    PickRanker(std::vector<BagStatsCount const*> keys,
+               std::vector<double> ranks)
+        : keys_(std::move(keys)), ranks_(std::move(ranks)) {}
+
+    bool needs_counts() const { return true; }
+
+    static constexpr bool NEEDS_PICKS = true;
+
+    // How many rows sharing a pick have a sort value: `group` is the sort
+    // key's index times the number of picks, plus the pick.
+    struct Entry {
+        size_t group;
+        double value;
+        uint64_t count;
+    };
+
+    struct Part {
+        std::vector<Entry> entries;
+        size_t limit = size_t(1) << 20;
+    };
+
+    Part part() const { return {}; }
+
+    void add(Part* part, BagStatsRow const& row, size_t,
+             std::vector<uint32_t> const& picks) const {
+        for (size_t k = 0; k < keys_.size(); ++k) {
+            double const value = bag_stats_sort_value(keys_[k], row);
+            for (uint32_t pick : picks)
+                part->entries.push_back({k * ranks_.size() + pick, value, 1});
+        }
+        if (part->entries.size() < part->limit) return;
+        compact(&part->entries);
+        if (part->entries.size() > part->limit / 2) part->limit *= 2;
+    }
+
+    void finish(std::vector<Part>& parts) {
+        std::vector<Entry> all;
+        for (Part& part : parts) {
+            all.insert(all.end(), part.entries.begin(), part.entries.end());
+            std::vector<Entry>().swap(part.entries);
+        }
+        compact(&all);
+        groups_.assign(keys_.size() * ranks_.size(), Distribution());
+        for (size_t i = 0; i < all.size();) {
+            size_t j = i;
+            std::vector<std::pair<double, uint64_t>> counts;
+            for (; j < all.size() && all[j].group == all[i].group; ++j)
+                counts.emplace_back(all[j].value, all[j].count);
+            groups_[all[i].group] = Distribution(std::move(counts));
+            i = j;
+        }
+    }
+
+    // Larger first: the smallest P * Q * sqrt(P of each other pick) over the
+    // row's picks, negated, then the sum of those, negated.
+    std::pair<double, double> key(BagStatsRow const& row, size_t,
+                                  std::vector<uint32_t> const& picks) const {
+        double best = INFINITY;
+        double sum = 0;
+        for (size_t i = 0; i < picks.size(); ++i) {
+            double q = 1;
+            for (size_t k = 0; k < keys_.size(); ++k)
+                q = std::min(q, 1 - groups_[k * ranks_.size() + picks[i]]
+                                        .percentile(bag_stats_sort_value(
+                                            keys_[k], row)));
+            double score = ranks_[picks[i]] * q;
+            for (size_t j = 0; j < picks.size(); ++j)
+                if (j != i) score *= std::sqrt(ranks_[picks[j]]);
+            best = std::min(best, score);
+            sum += score;
+        }
+        return {-best, -sum};
+    }
+
+  private:
+    // Sorts `entries` and merges those of one group and value.
+    static void compact(std::vector<Entry>* entries) {
+        std::sort(entries->begin(), entries->end(),
+                  [](Entry const& a, Entry const& b) {
+                      return a.group != b.group ? a.group < b.group
+                                                : a.value < b.value;
+                  });
+        size_t out = 0;
+        for (Entry const& entry : *entries) {
+            if (out > 0 && (*entries)[out - 1].group == entry.group &&
+                (*entries)[out - 1].value == entry.value)
+                (*entries)[out - 1].count += entry.count;
+            else
+                (*entries)[out++] = entry;
+        }
+        entries->resize(out);
+    }
+
+    std::vector<BagStatsCount const*> keys_;
+    std::vector<double> ranks_;
+    std::vector<Distribution> groups_;
+};
+
+// Each pick's P for PickRanker: 1 less the mid-rank percentile of its bag's
+// prior among its list's bags, PAIRS bags then --pp bags; all 1 without
+// --prior.
+std::vector<double> pick_ranks(std::vector<PairBag> const& pair_bags,
+                               std::vector<PairBag> const& prospect_bags,
+                               bool prior) {
+    std::vector<double> out;
+    for (std::vector<PairBag> const* bags : {&pair_bags, &prospect_bags}) {
+        if (!prior) {
+            out.insert(out.end(), bags->size(), 1.0);
+            continue;
+        }
+        std::map<double, uint64_t> priors;
+        for (PairBag const& bag : *bags) ++priors[bag.prior];
+        Distribution const distribution(
+            std::vector<std::pair<double, uint64_t>>(priors.begin(),
+                                                     priors.end()));
+        for (PairBag const& bag : *bags)
+            out.push_back(1 - distribution.percentile(bag.prior));
+    }
+    return out;
+}
 
 // A row kept for -n, with where it came in the walk to break ties as
 // bag-stats-sort's stable sort does.
@@ -979,32 +1196,39 @@ void print_rows(Walk const& walk) {
 }
 
 // Fills `ranker` with how many rows have each sort value.
-void count_sort_values(Walk const& walk, Ranker* ranker) {
+template <typename R>
+void count_sort_values(Walk const& walk, R* ranker) {
     std::atomic<size_t> next{0};
-    std::vector<SortValueCounts> parts(walk.threads, ranker->counts());
+    std::vector<typename R::Part> parts(walk.threads, ranker->part());
     run_threads(walk.threads, [&](size_t t) {
         RowWalker walker = walk.walker();
+        std::vector<uint32_t> picks;
         for (size_t unit; (unit = next.fetch_add(1)) < walk.units();)
             walker.walk(unit, walk.bag,
                         [&](BagStatsRow const& row, size_t length) {
-                ranker->add(&parts[t], row, length);
+                if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
+                ranker->add(&parts[t], row, length, picks);
             });
     });
     ranker->finish(parts);
 }
 
 // The `top` rows that rank first, in order.
-std::vector<RankedRow> top_rows(Walk const& walk, Ranker const& ranker,
+template <typename R>
+std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
                                 size_t top) {
     std::atomic<size_t> next{0};
     std::vector<std::vector<RankedRow>> heaps(walk.threads);
     run_threads(walk.threads, [&](size_t t) {
         RowWalker walker = walk.walker();
         std::vector<RankedRow>& heap = heaps[t];
+        std::vector<uint32_t> picks;
         for (size_t unit; (unit = next.fetch_add(1)) < walk.units();) {
             uint64_t seq = 0;
             walker.walk(unit, walk.bag, [&](BagStatsRow& row, size_t length) {
-                RankedRow ranked{ranker.key(row, length), unit, seq++, {}};
+                if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
+                RankedRow ranked{ranker.key(row, length, picks), unit, seq++,
+                                 {}};
                 if (heap.size() == top && !ranks_before(ranked, heap.front()))
                     return;
                 row.pair = walker.pair();
@@ -1073,10 +1297,12 @@ bool score_picks(Args const& args,
     return true;
 }
 
-// The row whose picks are `picks`, with its unit and walk sequence, and its
-// pair picks' letter count; false when they don't make a row.
+// The row whose picks are `picks`, with its unit and walk sequence, its
+// pair picks' letter count and its picks as RowWalker::picks() numbers them;
+// false when they don't make a row.
 bool find_row(Walk const& walk, std::vector<size_t> const& picks,
-              RankedRow* out, size_t* out_length) {
+              RankedRow* out, size_t* out_length,
+              std::vector<uint32_t>* out_picks) {
     RowWalker walker = walk.walker();
     uint64_t seq = 0;
     bool found = false;
@@ -1086,6 +1312,7 @@ bool find_row(Walk const& walk, std::vector<size_t> const& picks,
             row.pairs = walker.pairs();
             *out = {{}, picks[0], seq, std::move(row)};
             *out_length = length;
+            walker.picks(out_picks);
             found = true;
         }
         ++seq;
@@ -1094,19 +1321,22 @@ bool find_row(Walk const& walk, std::vector<size_t> const& picks,
 }
 
 // Where `target`, its key set, comes among all rows.
-ScoreRank score_rank(Walk const& walk, Ranker const& ranker,
+template <typename R>
+ScoreRank score_rank(Walk const& walk, R const& ranker,
                      RankedRow const& target) {
     std::atomic<size_t> next{0};
     std::vector<ScoreRank> parts(walk.threads);
     run_threads(walk.threads, [&](size_t t) {
         RowWalker walker = walk.walker();
         ScoreRank& part = parts[t];
+        std::vector<uint32_t> picks;
         for (size_t unit; (unit = next.fetch_add(1)) < walk.units();) {
             uint64_t seq = 0;
             walker.walk(unit, walk.bag,
                         [&](BagStatsRow const& row, size_t length) {
-                RankedRow const ranked{ranker.key(row, length), unit, seq++,
-                                       {}};
+                if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
+                RankedRow const ranked{ranker.key(row, length, picks), unit,
+                                       seq++, {}};
                 ++part.rows;
                 part.before += ranks_before(ranked, target);
                 part.larger += ranked.key > target.key;
@@ -1125,18 +1355,20 @@ ScoreRank score_rank(Walk const& walk, Ranker const& ranker,
 }
 
 // Prints the --score row and its rank.
-int print_score(Walk const& walk, Ranker* ranker, bool passes) {
+template <typename R>
+int print_score(Walk const& walk, R* ranker, bool passes) {
     std::vector<size_t> picks;
     if (!score_picks(walk.args, walk.steps, &picks)) return 1;
     RankedRow target;
     size_t length;
-    if (!find_row(walk, picks, &target, &length)) {
+    std::vector<uint32_t> target_picks;
+    if (!find_row(walk, picks, &target, &length, &target_picks)) {
         fprintf(stderr, "%s: the --score picks don't fit the letters "
                 "together\n", PROGRAM);
         return 1;
     }
     if (passes) count_sort_values(walk, ranker);
-    target.key = ranker->key(target.row, length);
+    target.key = ranker->key(target.row, length, target_picks);
     ScoreRank const rank = score_rank(walk, *ranker, target);
     write_bag_stats_row(stdout, target.row);
     printf("rank %llu of %llu, tied %llu-%llu\n",
@@ -1145,6 +1377,19 @@ int print_score(Walk const& walk, Ranker* ranker, bool passes) {
            (unsigned long long)(rank.larger + 1),
            (unsigned long long)(rank.larger + rank.tied));
     return 0;
+}
+
+// Prints the -n rows.
+template <typename R>
+void print_top(Walk const& walk, R* ranker, bool passes) {
+    if (passes) count_sort_values(walk, ranker);
+    std::string line;
+    for (RankedRow const& ranked :
+         top_rows(walk, *ranker, size_t(walk.args.top))) {
+        line.clear();
+        append_row(&line, ranked.row, walk.args.top_segments);
+        fwrite(line.data(), 1, line.size(), stdout);
+    }
 }
 
 }  // namespace
@@ -1168,9 +1413,11 @@ int main(int argc, char* argv[]) {
     std::vector<PairBag> pair_bags;
     std::vector<PairsCounts> word_bags;
     PairsExactCounter counter(bag, INNER_MIN_WORD_LENGTH);
-    if ((args.prospects_file != NULL &&
-         !load_pair_bags(args.prospects_file, bag, &prospect_bags)) ||
-        !load_pair_bags(args.pairs_file, bag, &pair_bags) ||
+    std::unordered_map<std::string, double> priors;
+    if ((args.prior_file != NULL && !load_priors(args.prior_file, &priors)) ||
+        (args.prospects_file != NULL &&
+         !load_pair_bags(args.prospects_file, bag, priors, &prospect_bags)) ||
+        !load_pair_bags(args.pairs_file, bag, priors, &pair_bags) ||
         !load_word_bags(args.dictionary_file, bag, &word_bags) ||
         !load_inner_dictionary(&counter))
         return 1;
@@ -1191,14 +1438,19 @@ int main(int argc, char* argv[]) {
     }
 
     Ranker ranker(args.keys, args.by_length);
-    bool const passes =
-        (args.top != 0 || !args.score.empty()) && ranker.needs_counts();
+    PickRanker pick_ranker(args.keys,
+                           pick_ranks(pair_bags, prospect_bags,
+                                      args.prior_file != NULL));
+    bool const passes = (args.top != 0 || !args.score.empty()) &&
+        (args.by_pick || ranker.needs_counts());
     RestTable const rest_table(bag, steps.size() > 1 || passes);
     Walk const walk{steps, bag, word_bags, args, counter, table, rest_table,
                     threads};
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
-    if (!args.score.empty()) return print_score(walk, &ranker, passes);
+    if (!args.score.empty())
+        return args.by_pick ? print_score(walk, &pick_ranker, passes)
+                            : print_score(walk, &ranker, passes);
     if (!args.top_segments)
         write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
                                         args.min_word_bag_length,
@@ -1210,12 +1462,7 @@ int main(int argc, char* argv[]) {
         print_rows(walk);
         return 0;
     }
-    if (passes) count_sort_values(walk, &ranker);
-    std::string line;
-    for (RankedRow const& ranked : top_rows(walk, ranker, size_t(args.top))) {
-        line.clear();
-        append_row(&line, ranked.row, args.top_segments);
-        fwrite(line.data(), 1, line.size(), stdout);
-    }
+    if (args.by_pick) print_top(walk, &pick_ranker, passes);
+    else print_top(walk, &ranker, passes);
     return 0;
 }

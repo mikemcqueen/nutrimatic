@@ -81,7 +81,7 @@ struct BagStatsSortFlag {
   char const* column;
 };
 
-extern BagStatsSortFlag const BAG_STATS_SORT_FLAGS[6];
+extern BagStatsSortFlag const BAG_STATS_SORT_FLAGS[7];
 
 // Prints the --help lines of BAG_STATS_SORT_FLAGS.
 void bag_stats_help_sort_flags();

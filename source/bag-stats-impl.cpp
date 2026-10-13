@@ -27,12 +27,13 @@ BagStatsCount const BAG_STATS_COUNTS[8] = {
   {"MIN_WB_WITH_PAIRS", &BagStatsRow::min_with_pairs},
 };
 
-BagStatsSortFlag const BAG_STATS_SORT_FLAGS[6] = {
+BagStatsSortFlag const BAG_STATS_SORT_FLAGS[7] = {
   {"wb", "WORDBAGS"},
   {"wbwp", "WB_WITH_PAIRS"},
   {"tp", "TOTAL_PAIRS"},
   {"mp", "MAX_PAIRS"},
   {"min-wb", "MIN_WB"},
+  {"min-wbwp", "MIN_WB_WITH_PAIRS"},
   {"min-wb-frac", NULL},
 };
 
