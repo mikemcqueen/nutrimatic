@@ -885,21 +885,28 @@ struct LengthValueHash {
 using SortValueCounts = std::vector<
     std::unordered_map<std::pair<size_t, double>, uint64_t, LengthValueHash>>;
 
-// A sorted distribution of values, each with how many rows are below it and
-// at it.
+// A sorted distribution of values, each with how many rows are below it.
 class Distribution {
   public:
     Distribution() = default;
 
-    // From `counts`, each value once, with how many rows have it.
+    // From `counts`, values with how many rows have them; a value may repeat.
     explicit Distribution(std::vector<std::pair<double, uint64_t>> counts) {
         std::sort(counts.begin(), counts.end());
+        size_t distinct = 0;
+        for (size_t i = 0; i < counts.size(); ++i)
+            if (i == 0 || counts[i].first != counts[i - 1].first) ++distinct;
+        values_.reserve(distinct);
+        below_.reserve(distinct + 1);
+        uint64_t size = 0;
         for (auto const& [value, count] : counts) {
-            values_.push_back(value);
-            below_.push_back(size_);
-            at_.push_back(count);
-            size_ += count;
+            if (values_.empty() || values_.back() != value) {
+                values_.push_back(value);
+                below_.push_back(size);
+            }
+            size += count;
         }
+        below_.push_back(size);
     }
 
     // The mid-rank percentile of `value`, one of the values.
@@ -907,14 +914,13 @@ class Distribution {
         size_t const i = size_t(
             std::lower_bound(values_.begin(), values_.end(), value) -
             values_.begin());
-        return bag_stats_percentile(below_[i], below_[i] + at_[i], size_);
+        return bag_stats_percentile(below_[i], below_[i + 1], below_.back());
     }
 
   private:
     std::vector<double> values_;
+    // below_[i] rows are below values_[i]; the last is every row.
     std::vector<uint64_t> below_;
-    std::vector<uint64_t> at_;
-    uint64_t size_ = 0;
 };
 
 // Ranks rows as bag-stats-sort ranks them, from how many rows have each sort
@@ -1011,9 +1017,9 @@ class PickRanker {
     // How many rows sharing a pick have a sort value: `group` is the sort
     // key's index times the number of picks, plus the pick.
     struct Entry {
-        size_t group;
         double value;
-        uint64_t count;
+        uint32_t group;
+        uint32_t count;
     };
 
     struct Part {
@@ -1028,7 +1034,8 @@ class PickRanker {
         for (size_t k = 0; k < keys_.size(); ++k) {
             double const value = bag_stats_sort_value(keys_[k], row);
             for (uint32_t pick : picks)
-                part->entries.push_back({k * ranks_.size() + pick, value, 1});
+                part->entries.push_back(
+                    {value, uint32_t(k * ranks_.size() + pick), 1});
         }
         if (part->entries.size() < part->limit) return;
         compact(&part->entries);
@@ -1036,21 +1043,26 @@ class PickRanker {
     }
 
     void finish(std::vector<Part>& parts) {
-        std::vector<Entry> all;
         for (Part& part : parts) {
-            all.insert(all.end(), part.entries.begin(), part.entries.end());
-            std::vector<Entry>().swap(part.entries);
+            compact(&part.entries);
+            part.entries.shrink_to_fit();
         }
-        compact(&all);
-        groups_.assign(keys_.size() * ranks_.size(), Distribution());
-        for (size_t i = 0; i < all.size();) {
-            size_t j = i;
+        size_t const groups = keys_.size() * ranks_.size();
+        groups_.assign(groups, Distribution());
+        std::vector<size_t> next(parts.size(), 0);
+        for (size_t group = 0; group < groups; ++group) {
             std::vector<std::pair<double, uint64_t>> counts;
-            for (; j < all.size() && all[j].group == all[i].group; ++j)
-                counts.emplace_back(all[j].value, all[j].count);
-            groups_[all[i].group] = Distribution(std::move(counts));
-            i = j;
+            for (size_t p = 0; p < parts.size(); ++p) {
+                std::vector<Entry> const& entries = parts[p].entries;
+                for (; next[p] < entries.size() &&
+                       entries[next[p]].group == group; ++next[p])
+                    counts.emplace_back(entries[next[p]].value,
+                                        entries[next[p]].count);
+            }
+            if (!counts.empty())
+                groups_[group] = Distribution(std::move(counts));
         }
+        for (Part& part : parts) std::vector<Entry>().swap(part.entries);
     }
 
     // Larger first: the smallest P * Q * sqrt(P of each other pick) over the
@@ -1075,7 +1087,8 @@ class PickRanker {
     }
 
   private:
-    // Sorts `entries` and merges those of one group and value.
+    // Sorts `entries` and merges those of one group and value while their
+    // count fits.
     static void compact(std::vector<Entry>* entries) {
         std::sort(entries->begin(), entries->end(),
                   [](Entry const& a, Entry const& b) {
@@ -1085,7 +1098,8 @@ class PickRanker {
         size_t out = 0;
         for (Entry const& entry : *entries) {
             if (out > 0 && (*entries)[out - 1].group == entry.group &&
-                (*entries)[out - 1].value == entry.value)
+                (*entries)[out - 1].value == entry.value &&
+                (*entries)[out - 1].count <= UINT32_MAX - entry.count)
                 (*entries)[out - 1].count += entry.count;
             else
                 (*entries)[out++] = entry;
@@ -1490,6 +1504,10 @@ int main(int argc, char* argv[]) {
         !load_word_bags(args.dictionary_file, bag, &word_bags) ||
         !load_inner_dictionary(&counter))
         return 1;
+    bool const has_prior = bool(prior);
+    prior = nullptr;
+    evidence = PairEvidenceSource();
+    std::unordered_map<std::string, double>().swap(priors);
 
     std::vector<std::vector<PairBag> const*> steps;
     steps.insert(steps.end(), args.search.pairs, &pair_bags);
@@ -1508,8 +1526,7 @@ int main(int argc, char* argv[]) {
 
     Ranker ranker(args.keys, args.by_length);
     PickRanker pick_ranker(args.keys,
-                           pick_ranks(pair_bags, prospect_bags,
-                                      bool(prior)));
+                           pick_ranks(pair_bags, prospect_bags, has_prior));
     bool const passes = (args.top != 0 || !args.score.empty()) &&
         (args.by_pick || ranker.needs_counts());
     RestTable const rest_table(bag, steps.size() > 1 || passes);
