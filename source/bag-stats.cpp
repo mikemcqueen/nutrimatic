@@ -78,10 +78,8 @@ struct Args {
     int threads = 1;
     // -n; 0 prints every row.
     int top = 0;
-    // One per sort option, NULL for the MIN_WB fraction.
-    std::vector<BagStatsCount const*> keys;
-    // The sort option of each key.
-    std::vector<char const*> key_options;
+    // The sort options, in command line order.
+    std::vector<BagStatsSortFlag const*> sorts;
     bool by_length = false;
     bool by_pick = false;
     char const* prior_file = NULL;
@@ -281,10 +279,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     int option;
     while ((option = optparse_long(&options, long_options, NULL)) != -1) {
         if (option >= OPT_SORT && option < OPT_SORT + SORT_FLAG_COUNT) {
-            out->keys.push_back(
-                bag_stats_sort_key(BAG_STATS_SORT_FLAGS[option - OPT_SORT]));
-            out->key_options.push_back(
-                BAG_STATS_SORT_FLAGS[option - OPT_SORT].option);
+            out->sorts.push_back(&BAG_STATS_SORT_FLAGS[option - OPT_SORT]);
             continue;
         }
         switch (option) {
@@ -361,7 +356,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         fprintf(stderr, "%s: -n and --score don't go together\n", PROGRAM);
         return false;
     }
-    if (ranked != !out->keys.empty() || (out->by_length && !ranked)) {
+    if (ranked != !out->sorts.empty() || (out->by_length && !ranked)) {
         fprintf(stderr, "%s: -n or --score goes with sort options, and they "
                 "with it\n", PROGRAM);
         return false;
@@ -1115,10 +1110,8 @@ class PickRanker {
             double q = 1;
             for (size_t k = 0; k < keys_.size(); ++k)
                 q = std::min(q, pick_q(row, pick, k));
-            double const p = std::sqrt(ranks_[pick]);
-            double const quarter = std::sqrt(std::sqrt(q));
-            all *= p * quarter;
-            double const own = p * q / quarter;
+            auto const [own, shared] = factors(ranks_[pick], q);
+            all *= shared;
             best = std::min(best, own);
             sum += own;
         }
@@ -1159,20 +1152,28 @@ class PickRanker {
             }
             out.push_back(std::move(part));
         }
-        for (size_t i = 0; i < out.size(); ++i) {
-            double others = 1;
+        auto const term = [&](size_t i, double q) {
+            double all = 1;
             for (size_t j = 0; j < out.size(); ++j)
-                if (j != i)
-                    others *= std::sqrt(out[j].p) *
-                        std::sqrt(std::sqrt(out[j].q));
-            out[i].term = out[i].p * out[i].q * others;
-            for (double q : out[i].qs)
-                out[i].terms.push_back(out[i].p * q * others);
+                all *= factors(out[j].p, j == i ? q : out[j].q).second;
+            return factors(out[i].p, q).first * all;
+        };
+        for (size_t i = 0; i < out.size(); ++i) {
+            out[i].term = term(i, out[i].q);
+            for (double q : out[i].qs) out[i].terms.push_back(term(i, q));
         }
         return out;
     }
 
   private:
+    // A pick's two factors in key(), from its P and Q: sqrt(P) * Q^(3/4),
+    // its own, and sqrt(P) * Q^(1/4), which every pick's term has.
+    static std::pair<double, double> factors(double p, double q) {
+        double const root = std::sqrt(p);
+        double const quarter = std::sqrt(std::sqrt(q));
+        return {root * q / quarter, root * quarter};
+    }
+
     // Q of sort key `k` for `row` among the rows sharing `pick`.
     double pick_q(BagStatsRow const& row, uint32_t pick, size_t k) const {
         return 1 - groups_[k * ranks_.size() + pick].percentile(
@@ -1527,9 +1528,10 @@ void print_score_detail(Walk const& walk, PickRanker const& ranker,
             auto const [above, tied] = part.above_and_tied[k];
             std::array<std::string, COLUMNS>& line =
                 lines.back().emplace_back();
-            line[0] = std::string("--") + walk.args.key_options[k];
+            BagStatsSortFlag const& sort = *walk.args.sorts[k];
+            line[0] = std::string("--") + sort.option;
             snprintf(text, sizeof text,
-                     walk.args.keys[k] == NULL ? "%.3f" : "%.6g",
+                     sort.column == NULL ? "%.3f" : "%.6g",
                      part.values[k]);
             line[1] = text;
             if (tied > 1)
@@ -1677,8 +1679,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    Ranker ranker(args.keys, args.by_length);
-    PickRanker pick_ranker(args.keys,
+    std::vector<BagStatsCount const*> keys;
+    for (BagStatsSortFlag const* sort : args.sorts)
+        keys.push_back(bag_stats_sort_key(*sort));
+    Ranker ranker(keys, args.by_length);
+    PickRanker pick_ranker(keys,
                            pick_ranks(pair_bags, prospect_bags, has_prior));
     bool const passes = (args.top != 0 || !args.score.empty()) &&
         (args.by_pick || ranker.needs_counts());
