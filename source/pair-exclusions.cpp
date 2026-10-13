@@ -501,10 +501,7 @@ bool load_pair_filters(
       return false;
   }
   if (wfroot != NULL) {
-    if (!load_global_no_pairs(program, wfroot, &out->sources.classified_no))
-      return false;
-    if (options.sentence != CLASSIFIED_NO_SENTENCE &&
-        !load_sentence_no_pairs(program, wfroot, options.sentence,
+    if (!load_no_pairs(program, wfroot, options.sentence,
             &out->sources.classified_no))
       return false;
     out->rejected.insert(

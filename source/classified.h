@@ -46,12 +46,9 @@ bool load_classified_pairs(
     char const* program, char const* root, int sentence, char const* kind,
     DfsPairSet* pairs);
 
-// load_classified_pairs() of the global NO pairs.
-bool load_global_no_pairs(
-    char const* program, char const* root, DfsPairSet* pairs);
-
-// load_classified_pairs() of sentence N's NO pairs.
-bool load_sentence_no_pairs(
+// load_classified_pairs() of the global NO pairs, and of `sentence`'s NO
+// pairs unless it is CLASSIFIED_NO_SENTENCE.
+bool load_no_pairs(
     char const* program, char const* root, int sentence, DfsPairSet* pairs);
 
 // Classified pair files by path, each kept after it is loaded and loaded

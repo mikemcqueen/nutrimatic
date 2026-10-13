@@ -2,9 +2,11 @@
 // pair completions they leave.
 
 #include "bag-stats-impl.h"
+#include "classified.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "pair-evidence.h"
 #include "pairs-impl.h"
@@ -53,7 +55,8 @@ constexpr int OPT_P1 = 265;
 constexpr int OPT_CLUES = 266;
 constexpr int OPT_PRIOR_WEIGHTS = 267;
 constexpr int OPT_SCORE_DETAIL = 268;
-constexpr int OPT_SORT = 269;
+constexpr int OPT_BEST_PAIRS = 269;
+constexpr int OPT_SORT = 270;
 constexpr int SORT_FLAG_COUNT =
     sizeof(BAG_STATS_SORT_FLAGS) / sizeof(BAG_STATS_SORT_FLAGS[0]);
 // The most sub-bags PairCountTable numbers, 4 bytes each.
@@ -69,9 +72,13 @@ struct Search {
     int words = 0;
 };
 
+// --best-pairs: which of a row's picks it recognizes as best pairs.
+enum class BestPairs { NONE, APPEAR, LEAD };
+
 struct Args {
     std::string letters;
     std::string used_letters;
+    int sentence = CLASSIFIED_NO_SENTENCE;
     int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
     Search search;
     char const* prospects_file = NULL;
@@ -90,6 +97,7 @@ struct Args {
     // --score, the row's picks as PAIR names them, each as its two words.
     std::vector<std::string> score;
     bool score_detail = false;
+    BestPairs best_pairs = BestPairs::NONE;
     char const* pairs_file = NULL;
     char const* dictionary_file = NULL;
 };
@@ -105,10 +113,11 @@ struct PairBag {
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
-            "usage: %s [-u LETTERS] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
+            "usage: %s [-u LETTERS] [-s N] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
             "       [--threads N] [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... [--score-detail] SORT...\n"
             "        [--by-length | --by-pick]]\n"
+            "       [--best-pairs appear|lead]\n"
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]] [--top-segments]\n"
             "       LETTERS PAIRS DICT\n",
@@ -119,11 +128,14 @@ void usage(char const* program, FILE* out) {
           "  for each combination of pair letter bags that fits LETTERS, count\n"
           "  the combinations of DICT word bags that fit what is left, and the\n"
           "  exact pairs (pairs -m%d -x -c) of what is left after each; PAIRS,\n"
-          "  DICT or the --pp FILE may be - for stdin\n"
+          "  DICT or the --pp FILE may be - for stdin; pairs in\n"
+          "  $WFROOT/%s/no/no.pairs are dropped from PAIRS and --pp\n"
           "\n"
           "  output: %s\n"
-          "\noptions:\n", INNER_MIN_WORD_LENGTH, BAG_STATS_COLUMNS);
+          "\noptions:\n", INNER_MIN_WORD_LENGTH, WORKFLOW_CLASSIFIED_PATH,
+          BAG_STATS_COLUMNS);
     dfs_help_used_letters();
+    classified_help_sentence_no();
     dfs_help_option("--min-wb-len N",
                     "MIN_WB counts the fitting DICT word bag combinations "
                     "whose every bag has at least N letters (default %d), "
@@ -167,6 +179,12 @@ void usage(char const* program, FILE* out) {
                     "other pick, and Q, then each SORT option's value, and "
                     "among the pick's rows its RANK, A-B when tied, its Q, "
                     "and TERM with that Q, the other picks' Q their best");
+    dfs_help_option("--best-pairs appear|lead",
+                    "with -n, print the -n rows' pair picks instead, each "
+                    "once as PAIRS writes it, at the first row it is in "
+                    "(appear) or leads, its own term sqrt(P) * Q^(3/4) the "
+                    "smallest of the row's, the one in its key (lead, only "
+                    "with --by-pick)");
     dfs_help_option("-h, --help", "show this help");
     fputs("\nSORT options, only with -n or --score:\n", stdout);
     bag_stats_help_sort_flags();
@@ -246,6 +264,7 @@ std::string search_text(Search const& search) {
 bool parse_args(char* argv[], Args* out, bool* help) {
     static struct optparse_long const long_options[] = {
         { "used-letters", 'u', OPTPARSE_REQUIRED },
+        CLASSIFIED_SENTENCE_LONG_OPTION,
         { "min-wb-len", OPT_MIN_WB_LENGTH, OPTPARSE_REQUIRED },
         { "ss", OPT_SEARCH, OPTPARSE_REQUIRED },
         { "pp", OPT_PROSPECTS, OPTPARSE_REQUIRED },
@@ -260,6 +279,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "clues", OPT_CLUES, OPTPARSE_REQUIRED },
         { "prior-weights", OPT_PRIOR_WEIGHTS, OPTPARSE_REQUIRED },
         { "score-detail", OPT_SCORE_DETAIL, OPTPARSE_NONE },
+        { "best-pairs", OPT_BEST_PAIRS, OPTPARSE_REQUIRED },
         { BAG_STATS_SORT_FLAGS[0].option, OPT_SORT + 0, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[1].option, OPT_SORT + 1, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
@@ -285,6 +305,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         switch (option) {
           case 'u':
             out->used_letters += options.optarg;
+            break;
+          case 's':
+            if (!parse_classified_sentence(options.optarg, &out->sentence))
+                return false;
             break;
           case OPT_MIN_WB_LENGTH:
             if (!parse_count(options.optarg, "--min-wb-len",
@@ -325,6 +349,17 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             break;
           case OPT_SCORE_DETAIL:
             out->score_detail = true;
+            break;
+          case OPT_BEST_PAIRS:
+            if (strcmp(options.optarg, "appear") == 0) {
+                out->best_pairs = BestPairs::APPEAR;
+            } else if (strcmp(options.optarg, "lead") == 0) {
+                out->best_pairs = BestPairs::LEAD;
+            } else {
+                fprintf(stderr, "%s: --best-pairs is appear or lead\n",
+                        PROGRAM);
+                return false;
+            }
             break;
           case OPT_P1:
             out->p1 = options.optarg;
@@ -397,6 +432,13 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                 PROGRAM);
         return false;
     }
+    if (out->best_pairs != BestPairs::NONE &&
+        (out->top == 0 || out->top_segments ||
+         (out->best_pairs == BestPairs::LEAD && !out->by_pick))) {
+        fprintf(stderr, "%s: --best-pairs goes with -n, without "
+                "--top-segments, and lead with --by-pick\n", PROGRAM);
+        return false;
+    }
     if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
         fprintf(stderr, "%s: --pp goes with a ppb step in --ss\n", PROGRAM);
         return false;
@@ -451,14 +493,16 @@ bool load_priors(char const* path,
 using PairPrior = std::function<bool(DfsPairRow const&, double*)>;
 
 bool load_pair_bags(char const* path, PairsCounts const& bag,
-                    PairPrior const& prior, std::vector<PairBag>* out) {
+                    DfsPairSet const& rejected, PairPrior const& prior,
+                    std::vector<PairBag>* out) {
     std::unordered_set<std::string> rows;
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices;
     return read_rows(PROGRAM, path, "pairs", false,
         [&](DfsPairRow const& row, std::string const&) {
             PairsCounts const counts =
                 pairs_letter_counts((row.left + row.right).c_str());
-            if (!pairs_fits(bag, counts)) return true;
+            if (!pairs_fits(bag, counts) || rejected.contains(row.entry()))
+                return true;
             std::string const key = pair_key(row.left, row.right);
             if (!rows.insert(key).second) return true;
             auto const inserted = indices.emplace(counts, out->size());
@@ -1107,10 +1151,7 @@ class PickRanker {
         double best = INFINITY;
         double sum = 0;
         for (uint32_t pick : picks) {
-            double q = 1;
-            for (size_t k = 0; k < keys_.size(); ++k)
-                q = std::min(q, pick_q(row, pick, k));
-            auto const [own, shared] = factors(ranks_[pick], q);
+            auto const [own, shared] = pick_factors(row, pick);
             all *= shared;
             best = std::min(best, own);
             sum += own;
@@ -1118,6 +1159,19 @@ class PickRanker {
         best *= all;
         sum *= all;
         return {-best, -sum};
+    }
+
+    // The row's picks whose own factor is the smallest, the one its key has.
+    std::vector<uint32_t> leaders(BagStatsRow const& row,
+                                  std::vector<uint32_t> const& picks) const {
+        std::vector<double> own;
+        for (uint32_t pick : picks)
+            own.push_back(pick_factors(row, pick).first);
+        double const least = *std::min_element(own.begin(), own.end());
+        std::vector<uint32_t> out;
+        for (size_t i = 0; i < picks.size(); ++i)
+            if (own[i] == least) out.push_back(picks[i]);
+        return out;
     }
 
     // What key() makes of one of a row's picks.
@@ -1172,6 +1226,15 @@ class PickRanker {
         double const root = std::sqrt(p);
         double const quarter = std::sqrt(std::sqrt(q));
         return {root * q / quarter, root * quarter};
+    }
+
+    // factors() of `pick` in `row`, Q its smallest over the sort keys.
+    std::pair<double, double> pick_factors(BagStatsRow const& row,
+                                           uint32_t pick) const {
+        double q = 1;
+        for (size_t k = 0; k < keys_.size(); ++k)
+            q = std::min(q, pick_q(row, pick, k));
+        return factors(ranks_[pick], q);
     }
 
     // Q of sort key `k` for `row` among the rows sharing `pick`.
@@ -1235,6 +1298,9 @@ struct RankedRow {
     size_t unit;
     uint64_t seq;
     BagStatsRow row;
+    // With --best-pairs, the picks the row recognizes, as RowWalker::picks()
+    // numbers them.
+    std::vector<uint32_t> best;
 };
 
 bool ranks_before(RankedRow const& a, RankedRow const& b) {
@@ -1382,9 +1448,15 @@ std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
             walker.walk(unit, walk.bag, [&](BagStatsRow& row, size_t length) {
                 if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
                 RankedRow ranked{ranker.key(row, length, picks), unit, seq++,
-                                 {}};
+                                 {}, {}};
                 if (heap.size() == top && !ranks_before(ranked, heap.front()))
                     return;
+                if (walk.args.best_pairs == BestPairs::APPEAR) {
+                    walker.picks(&ranked.best);
+                } else if constexpr (R::NEEDS_PICKS) {
+                    if (walk.args.best_pairs == BestPairs::LEAD)
+                        ranked.best = ranker.leaders(row, picks);
+                }
                 row.pair = walker.pair();
                 row.pairs = walker.pairs();
                 ranked.row = std::move(row);
@@ -1464,7 +1536,7 @@ bool find_row(Walk const& walk, std::vector<size_t> const& picks,
         if (!found && walker.at(picks)) {
             row.pair = walker.pair();
             row.pairs = walker.pairs();
-            *out = {{}, picks[0], seq, std::move(row)};
+            *out = {{}, picks[0], seq, std::move(row), {}};
             *out_length = length;
             walker.picks(out_picks);
             found = true;
@@ -1490,7 +1562,7 @@ ScoreRank score_rank(Walk const& walk, R const& ranker,
                         [&](BagStatsRow const& row, size_t length) {
                 if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
                 RankedRow const ranked{ranker.key(row, length, picks), unit,
-                                       seq++, {}};
+                                       seq++, {}, {}};
                 ++part.rows;
                 part.before += ranks_before(ranked, target);
                 part.larger += ranked.key > target.key;
@@ -1595,15 +1667,27 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
     return 0;
 }
 
-// Prints the -n rows.
+// Prints the -n rows, or with --best-pairs each recognized pick the first
+// time a row recognizes it.
 template <typename R>
 void print_top(Walk const& walk, R* ranker, bool passes) {
     if (passes) count_sort_values(walk, ranker);
     std::string line;
+    std::unordered_set<uint32_t> seen;
+    size_t const pair_bags = walk.steps[0]->size();
     for (RankedRow const& ranked :
          top_rows(walk, *ranker, size_t(walk.args.top))) {
         line.clear();
-        append_row(&line, ranked.row, walk.args.top_segments);
+        if (walk.args.best_pairs == BestPairs::NONE)
+            append_row(&line, ranked.row, walk.args.top_segments);
+        for (uint32_t pick : ranked.best) {
+            if (!seen.insert(pick).second) continue;
+            std::string const& pair = pick < pair_bags
+                ? (*walk.steps[0])[pick].pair
+                : (*walk.steps.back())[pick - pair_bags].pair;
+            line += pair.substr(0, pair.find(' ')) + ',' +
+                pair.substr(pair.find(' ') + 1) + '\n';
+        }
         fwrite(line.data(), 1, line.size(), stdout);
     }
 }
@@ -1623,6 +1707,13 @@ int main(int argc, char* argv[]) {
         usage(argv[0], stdout);
         return 0;
     }
+
+    if (args.sentence == CLASSIFIED_NO_SENTENCE)
+        alert(PROGRAM, "--sentence not supplied");
+    char const* const root = require_workflow_root(PROGRAM);
+    if (root == NULL) return 1;
+    DfsPairSet rejected;
+    if (!load_no_pairs(PROGRAM, root, args.sentence, &rejected)) return 1;
 
     PairsCounts const bag = pairs_letter_counts(letters.c_str());
     std::vector<PairBag> prospect_bags;
@@ -1654,8 +1745,9 @@ int main(int argc, char* argv[]) {
         };
     }
     if ((args.prospects_file != NULL &&
-         !load_pair_bags(args.prospects_file, bag, prior, &prospect_bags)) ||
-        !load_pair_bags(args.pairs_file, bag, prior, &pair_bags) ||
+         !load_pair_bags(args.prospects_file, bag, rejected, prior,
+                         &prospect_bags)) ||
+        !load_pair_bags(args.pairs_file, bag, rejected, prior, &pair_bags) ||
         !load_word_bags(args.dictionary_file, bag, &word_bags) ||
         !load_inner_dictionary(&counter))
         return 1;
@@ -1663,6 +1755,7 @@ int main(int argc, char* argv[]) {
     prior = nullptr;
     evidence = PairEvidenceSource();
     std::unordered_map<std::string, double>().swap(priors);
+    DfsPairSet().swap(rejected);
 
     std::vector<std::vector<PairBag> const*> steps;
     steps.insert(steps.end(), args.search.pairs, &pair_bags);
@@ -1695,7 +1788,7 @@ int main(int argc, char* argv[]) {
     if (!args.score.empty())
         return args.by_pick ? print_score(walk, &pick_ranker, passes)
                             : print_score(walk, &ranker, passes);
-    if (!args.top_segments)
+    if (!args.top_segments && args.best_pairs == BestPairs::NONE)
         write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
                                         args.min_word_bag_length,
                                         search_text(args.search),

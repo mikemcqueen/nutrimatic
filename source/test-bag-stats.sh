@@ -111,4 +111,22 @@ actual=$("$bag_stats" --score cat,dog --score low,ant --score-detail \
 [[ $actual == $'KEY 0.0910297 SUM 0.248698\nPAIR cat dog PRIOR 2.5 P 0.25000 ROWS 1 TERM 0.0910297 Q 0.50000' ]] ||
   fail "--score-detail is wrong: $actual"
 
+actual=$("$bag_stats" -n 1 --best-pairs appear --min-wb-frac --by-pick \
+  --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
+  "$test_dir/pairs" "$test_dir/dict")
+[[ $actual == $'cat,dog\nlow,ant' ]] ||
+  fail "--best-pairs appear is wrong: $actual"
+
+actual=$("$bag_stats" -n 1 --best-pairs lead --min-wb-frac --by-pick \
+  --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
+  "$test_dir/pairs" "$test_dir/dict")
+[[ $actual == 'cat,dog' ]] || fail "--best-pairs lead is wrong: $actual"
+
+mkdir -p "$WFROOT/.wf/classified/no" "$WFROOT/.wf/classified/s1/no"
+echo dog,cat > "$WFROOT/.wf/classified/no/no.pairs"
+echo ant,low > "$WFROOT/.wf/classified/s1/no/no.pairs"
+actual=$("$bag_stats" -s 1 catdoglowanttan "$test_dir/pairs" \
+  "$test_dir/dict" | sed '1,/^$/d' | cut -d, -f1,2)
+[[ $actual == 'act god,1' ]] || fail "-s NO pairs aren't dropped: $actual"
+
 echo PASS

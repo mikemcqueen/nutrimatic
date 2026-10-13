@@ -65,15 +65,12 @@ bool load_classified_pairs(
       load_pair_file(path.c_str(), "classified pair list", pairs, true, true);
 }
 
-bool load_global_no_pairs(
-    char const* program, char const* root, DfsPairSet* pairs) {
-  return load_classified_pairs(
-      program, root, CLASSIFIED_NO_SENTENCE, "no", pairs);
-}
-
-bool load_sentence_no_pairs(
+bool load_no_pairs(
     char const* program, char const* root, int sentence, DfsPairSet* pairs) {
-  return load_classified_pairs(program, root, sentence, "no", pairs);
+  return load_classified_pairs(
+             program, root, CLASSIFIED_NO_SENTENCE, "no", pairs) &&
+      (sentence == CLASSIFIED_NO_SENTENCE ||
+       load_classified_pairs(program, root, sentence, "no", pairs));
 }
 
 std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(

@@ -220,10 +220,7 @@ int main(int argc, char* argv[]) {
   if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
 
   DfsPairSet rejected;
-  if (!load_global_no_pairs("bag-subset", root, &rejected)) return 1;
-  if (args.sentence != CLASSIFIED_NO_SENTENCE &&
-      !load_sentence_no_pairs("bag-subset", root, args.sentence, &rejected))
-    return 1;
+  if (!load_no_pairs("bag-subset", root, args.sentence, &rejected)) return 1;
 
   std::vector<char> letters;
   Counts bag;
