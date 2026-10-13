@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_FREQSORT_IMPL_H
 #define NUTRIMATIC_FREQSORT_IMPL_H
 
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -33,6 +34,7 @@ struct FreqsortOptions {
   double value = 1.1;                                 // -v
   int min_letters = 4;                                // -m
   double min_cv = 0.0;                                // --min-cv
+  double max_cv = std::numeric_limits<double>::infinity();  // --max-cv
 };
 
 // Sets out's mode and value from a -v argument: log, glog, g, cv, NUMBER, or
