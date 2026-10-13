@@ -95,14 +95,20 @@ actual=$("$bag_stats" -n 1 --tp --by-length catdoglowanttan "$test_dir/pairs" \
 
 actual=$("$bag_stats" --score ant,low --tp catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict")
-[[ $actual == $'low ant,1,1,1,4,4,0,0,0\nrank 2 of 2, tied 2-2' ]] ||
+[[ $actual == $'low ant,1,1,1,4,4,0,0,0\nrank 2 of 2' ]] ||
   fail "--score is wrong: $actual"
 
 echo '2.5 dog,cat' > "$test_dir/prior"
 actual=$("$bag_stats" --score cat,dog --score low,ant --min-wb-frac --min-wbwp \
   --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
   "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0,0\nrank 1 of 1, tied 1-1' ]] ||
+[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0,0\nrank 1 of 1' ]] ||
   fail "--by-pick --score is wrong: $actual"
+
+actual=$("$bag_stats" --score cat,dog --score low,ant --score-detail \
+  --min-wb-frac --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict" | sed -n 3,4p)
+[[ $actual == $'KEY 0.0910297 SUM 0.248698\nPAIR cat dog PRIOR 2.5 P 0.25000 ROWS 1 TERM 0.0910297 Q 0.50000' ]] ||
+  fail "--score-detail is wrong: $actual"
 
 echo PASS
