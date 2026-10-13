@@ -250,11 +250,17 @@ pairs = executable('pairs', 'pairs.cpp',
   dependencies: thread_dep,
   install: true)
 
+pair_evidence_lib = static_library('pair-evidence',
+  ['mapped-file.cpp', 'clue-index.cpp', 'p1-index.cpp',
+   'pair-evidence.cpp'],
+  dependencies: thread_dep)
+
 bag_stats_lib = static_library('bag-stats', 'bag-stats-impl.cpp',
   link_with: dfs_class_list_lib)
 
 bag_stats = executable('bag-stats', 'bag-stats.cpp',
-  link_with: [bag_stats_lib, pairs_lib, dfs_class_list_lib, optparse_lib],
+  link_with: [bag_stats_lib, pairs_lib, pair_evidence_lib, dfs_class_list_lib,
+              optparse_lib],
   dependencies: thread_dep,
   install: true)
 
@@ -263,7 +269,12 @@ bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
   install: true)
 
 pair_prior = executable('pair-prior', 'pair-prior.cpp',
-  link_with: [dfs_class_list_lib, optparse_lib],
+  link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
+  install: true)
+
+make_p1_index = executable('make-p1-index', 'make-p1-index.cpp',
+  link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
+  dependencies: thread_dep,
   install: true)
 
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
@@ -449,7 +460,7 @@ test(
 test(
   'pair-prior',
   bash,
-  args: [files('test-pair-prior.sh'), pair_prior],
+  args: [files('test-pair-prior.sh'), pair_prior, make_p1_index],
 )
 test(
   'bag-stats-sort',

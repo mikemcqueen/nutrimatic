@@ -6,6 +6,7 @@
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
 #include "optparse.h"
+#include "pair-evidence.h"
 #include "pairs-impl.h"
 #include "row-input.h"
 #include "workflow-paths.h"
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -46,7 +48,10 @@ constexpr int OPT_TOP_SEGMENTS = 261;
 constexpr int OPT_SCORE = 262;
 constexpr int OPT_PRIOR = 263;
 constexpr int OPT_BY_PICK = 264;
-constexpr int OPT_SORT = 265;
+constexpr int OPT_P1 = 265;
+constexpr int OPT_CLUES = 266;
+constexpr int OPT_PRIOR_WEIGHTS = 267;
+constexpr int OPT_SORT = 268;
 constexpr int SORT_FLAG_COUNT =
     sizeof(BAG_STATS_SORT_FLAGS) / sizeof(BAG_STATS_SORT_FLAGS[0]);
 // The most sub-bags PairCountTable numbers, 4 bytes each.
@@ -76,6 +81,9 @@ struct Args {
     bool by_length = false;
     bool by_pick = false;
     char const* prior_file = NULL;
+    char const* p1 = NULL;
+    char const* clues = NULL;
+    char const* prior_weights = NULL;
     bool top_segments = false;
     // --score, the row's picks as PAIR names them, each as its two words.
     std::vector<std::string> score;
@@ -87,7 +95,8 @@ struct PairBag {
     PairsCounts counts;
     std::string pair;
     uint64_t pairs = 0;
-    // The best --prior score of its rows, -INFINITY when none has one.
+    // The best prior of its rows, from --prior or --p1 and --clues;
+    // -INFINITY when none has one.
     double prior = -INFINITY;
 };
 
@@ -96,7 +105,9 @@ void usage(char const* program, FILE* out) {
             "usage: %s [-u LETTERS] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
             "       [--threads N] [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... SORT... [--by-length | --by-pick]]\n"
-            "       [--prior FILE] [--top-segments] LETTERS PAIRS DICT\n",
+            "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
+            "        [--prior-weights SPEC]] [--top-segments]\n"
+            "       LETTERS PAIRS DICT\n",
             program);
     if (out != stdout) return;
 
@@ -162,6 +173,19 @@ void usage(char const* program, FILE* out) {
                     "\"SCORE word,word\" lines, as pair-prior prints them, "
                     "larger better; a pick bag scores its best row, below "
                     "every score when none is in FILE; only with --by-pick");
+    dfs_help_option("--p1 INDEX",
+                    "score each pair's prior from its phase 1 verdicts in "
+                    "INDEX, as make-p1-index writes it, as pair-prior does; "
+                    "only with --by-pick, not with --prior");
+    dfs_help_option("--clues CLUEDATA",
+                    "score each pair's prior from the cluer clue index "
+                    "beside CLUEDATA too, or alone");
+    dfs_help_option("--prior-weights SPEC",
+                    "how --p1 and --clues score a pair, as pair-prior "
+                    "--prior-weights (default %s, less the terms of an index "
+                    "not given)", PRIOR_WEIGHTS_DEFAULT);
+    fputs("\n--prior-weights terms:\n", stdout);
+    help_prior_terms();
 }
 
 bool parse_search(char const* text, Search* out) {
@@ -218,6 +242,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "score", OPT_SCORE, OPTPARSE_REQUIRED },
         { "prior", OPT_PRIOR, OPTPARSE_REQUIRED },
         { "by-pick", OPT_BY_PICK, OPTPARSE_NONE },
+        { "p1", OPT_P1, OPTPARSE_REQUIRED },
+        { "clues", OPT_CLUES, OPTPARSE_REQUIRED },
+        { "prior-weights", OPT_PRIOR_WEIGHTS, OPTPARSE_REQUIRED },
         { BAG_STATS_SORT_FLAGS[0].option, OPT_SORT + 0, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[1].option, OPT_SORT + 1, OPTPARSE_NONE },
         { BAG_STATS_SORT_FLAGS[2].option, OPT_SORT + 2, OPTPARSE_NONE },
@@ -282,6 +309,15 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case OPT_BY_PICK:
             out->by_pick = true;
             break;
+          case OPT_P1:
+            out->p1 = options.optarg;
+            break;
+          case OPT_CLUES:
+            out->clues = options.optarg;
+            break;
+          case OPT_PRIOR_WEIGHTS:
+            out->prior_weights = options.optarg;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -316,8 +352,20 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                 PROGRAM);
         return false;
     }
-    if (out->prior_file != NULL && !out->by_pick) {
-        fprintf(stderr, "%s: --prior goes with --by-pick\n", PROGRAM);
+    bool const evidence = out->p1 != NULL || out->clues != NULL;
+    if ((out->prior_file != NULL || evidence) && !out->by_pick) {
+        fprintf(stderr, "%s: --prior, --p1 and --clues go with --by-pick\n",
+                PROGRAM);
+        return false;
+    }
+    if (out->prior_file != NULL && evidence) {
+        fprintf(stderr, "%s: --prior doesn't go with --p1 or --clues\n",
+                PROGRAM);
+        return false;
+    }
+    if (out->prior_weights != NULL && !evidence) {
+        fprintf(stderr, "%s: --prior-weights goes with --p1 or --clues\n",
+                PROGRAM);
         return false;
     }
     if (!out->score.empty() &&
@@ -351,10 +399,6 @@ bool remaining_letters(Args const& args, std::string* out) {
         subtract_letters(bag, remove, out);
 }
 
-std::string pair_key(std::string const& left, std::string const& right) {
-    return left < right ? left + "," + right : right + "," + left;
-}
-
 // The --prior FILE's scores by pair_key().
 bool load_priors(char const* path,
                  std::unordered_map<std::string, double>* out) {
@@ -380,9 +424,12 @@ bool load_priors(char const* path,
         });
 }
 
+// `prior` sets a row's prior and returns true, or returns false when it has
+// none.
+using PairPrior = std::function<bool(DfsPairRow const&, double*)>;
+
 bool load_pair_bags(char const* path, PairsCounts const& bag,
-                    std::unordered_map<std::string, double> const& priors,
-                    std::vector<PairBag>* out) {
+                    PairPrior const& prior, std::vector<PairBag>* out) {
     std::unordered_set<std::string> rows;
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices;
     return read_rows(PROGRAM, path, "pairs", false,
@@ -396,9 +443,9 @@ bool load_pair_bags(char const* path, PairsCounts const& bag,
             if (inserted.second) out->push_back({counts, row.left + " " + row.right});
             PairBag& pair_bag = (*out)[inserted.first->second];
             ++pair_bag.pairs;
-            auto const prior = priors.find(key);
-            if (prior != priors.end())
-                pair_bag.prior = std::max(pair_bag.prior, prior->second);
+            double score;
+            if (prior && prior(row, &score))
+                pair_bag.prior = std::max(pair_bag.prior, score);
             return true;
         });
 }
@@ -951,8 +998,8 @@ class Ranker {
 // sharing a pick, weighted by the picks' prior ranks.
 class PickRanker {
   public:
-    // `ranks`: each pick's P, its --prior percentile from the top, 1 for
-    // every pick without --prior.
+    // `ranks`: each pick's P, its prior's percentile from the top, 1 for
+    // every pick without a prior.
     PickRanker(std::vector<BagStatsCount const*> keys,
                std::vector<double> ranks)
         : keys_(std::move(keys)), ranks_(std::move(ranks)) {}
@@ -1053,7 +1100,7 @@ class PickRanker {
 
 // Each pick's P for PickRanker: 1 less the mid-rank percentile of its bag's
 // prior among its list's bags, PAIRS bags then --pp bags; all 1 without
-// --prior.
+// --prior, --p1 or --clues.
 std::vector<double> pick_ranks(std::vector<PairBag> const& pair_bags,
                                std::vector<PairBag> const& prospect_bags,
                                bool prior) {
@@ -1414,10 +1461,32 @@ int main(int argc, char* argv[]) {
     std::vector<PairsCounts> word_bags;
     PairsExactCounter counter(bag, INNER_MIN_WORD_LENGTH);
     std::unordered_map<std::string, double> priors;
-    if ((args.prior_file != NULL && !load_priors(args.prior_file, &priors)) ||
-        (args.prospects_file != NULL &&
-         !load_pair_bags(args.prospects_file, bag, priors, &prospect_bags)) ||
-        !load_pair_bags(args.pairs_file, bag, priors, &pair_bags) ||
+    PairEvidenceSource evidence;
+    PriorWeights weights;
+    PairPrior prior;
+    if (args.prior_file != NULL) {
+        if (!load_priors(args.prior_file, &priors)) return 1;
+        prior = [&](DfsPairRow const& row, double* out) {
+            auto const found = priors.find(pair_key(row.left, row.right));
+            if (found == priors.end()) return false;
+            *out = found->second;
+            return true;
+        };
+    } else if (args.p1 != NULL || args.clues != NULL) {
+        std::string error;
+        if (!open_prior(args.p1, args.clues, args.prior_weights, false,
+                        &weights, &evidence, &error)) {
+            fprintf(stderr, "%s: %s\n", PROGRAM, error.c_str());
+            return 1;
+        }
+        prior = [&](DfsPairRow const& row, double* out) {
+            *out = prior_score(evidence.lookup(row.left, row.right), weights);
+            return true;
+        };
+    }
+    if ((args.prospects_file != NULL &&
+         !load_pair_bags(args.prospects_file, bag, prior, &prospect_bags)) ||
+        !load_pair_bags(args.pairs_file, bag, prior, &pair_bags) ||
         !load_word_bags(args.dictionary_file, bag, &word_bags) ||
         !load_inner_dictionary(&counter))
         return 1;
@@ -1440,7 +1509,7 @@ int main(int argc, char* argv[]) {
     Ranker ranker(args.keys, args.by_length);
     PickRanker pick_ranker(args.keys,
                            pick_ranks(pair_bags, prospect_bags,
-                                      args.prior_file != NULL));
+                                      bool(prior)));
     bool const passes = (args.top != 0 || !args.score.empty()) &&
         (args.by_pick || ranker.needs_counts());
     RestTable const rest_table(bag, steps.size() > 1 || passes);
