@@ -157,8 +157,14 @@ class PairsExactCounter {
   // Every group, shortest first.
   Groups const& groups_by_length() const { return by_length_; }
 
+  // The constructor's bag.
+  PairsCounts const& bag() const { return bag_; }
+
   // The number of distinct words in one of groups().
   uint32_t group_size(size_t group) const { return sizes_[group]; }
+
+  // The number of letters in one of groups().
+  int group_length(size_t group) const { return lengths_[group]; }
 
   // Writes the groups of `from` whose letters fit `bag` to `out`, in order.
   void filter(Groups const& from, PairsCounts const& bag, Groups* out) const;
@@ -209,6 +215,107 @@ class RemainderGroups {
   // Tags per bucket of slots_' positions in groups_.
   std::vector<ExactCounterTags> tags_;
   std::vector<uint32_t> slots_;
+};
+
+__extension__ typedef unsigned __int128 PairsKey128;
+
+// Packs the letter counts of sub-bags of one bag into an integer: each
+// letter of the bag gets a field wide enough for its count there, plus a
+// guard bit on top.
+class PairsPacking {
+ public:
+  explicit PairsPacking(PairsCounts const& bag);
+
+  // The bits the fields take.
+  int bits() const { return bits_; }
+
+  // `counts`, which must fit the bag, packed; `Key` must hold bits().
+  template <typename Key>
+  Key pack(PairsCounts const& counts) const {
+    Key out = 0;
+    for (int i = 0; i < 26; ++i) out |= Key(counts.values[i]) << shifts_[i];
+    return out;
+  }
+
+  // Every field's guard bit.
+  template <typename Key>
+  Key guards() const {
+    Key out = 0;
+    for (int i = 0; i < 26; ++i)
+      if (widths_[i] != 0) out |= Key(1) << (shifts_[i] + widths_[i] - 1);
+    return out;
+  }
+
+ private:
+  std::array<uint8_t, 26> shifts_{};
+  std::array<uint8_t, 26> widths_{};
+  int bits_ = 0;
+};
+
+// Groups of PairsExactCounter, packed: each one's letters and number.
+template <typename Key>
+struct PackedGroups {
+  std::vector<Key> keys;
+  std::vector<uint32_t> numbers;
+};
+
+// The packed groups that fit one remainder, hashed for find().
+template <typename Key>
+class PackedRemainderGroups {
+ public:
+  // Rebuilds from `groups`, reusing storage.
+  void build(PackedGroups<Key> const& groups);
+
+  // The number of the group whose letters are `key`, or NO_GROUP.
+  uint32_t find(Key key) const;
+
+ private:
+  // Tags per bucket of keys_' and numbers_' slots.
+  std::vector<ExactCounterTags> tags_;
+  std::vector<Key> keys_;
+  std::vector<uint32_t> numbers_;
+};
+
+// PairsExactCounter's count(bag, groups, hashed) over packed letters, for
+// a bag whose PairsPacking fits `Key`.
+template <typename Key>
+class PackedPairsCounter {
+ public:
+  // From `counter` after its finish(); shares nothing with it.
+  explicit PackedPairsCounter(PairsExactCounter const& counter);
+
+  // Fitting groups' remainders and positions, reused across count()s.
+  struct Scratch {
+    std::vector<Key> remainders;
+    std::vector<uint32_t> positions;
+  };
+
+  // `counts`, which must fit the counter's bag, packed.
+  Key pack(PairsCounts const& counts) const {
+    return packing_.pack<Key>(counts);
+  }
+
+  // Every group, shortest first.
+  PackedGroups<Key> const& groups_by_length() const { return by_length_; }
+
+  // Writes the groups of `from` whose letters fit `bag` to `out`, in order.
+  void filter(PackedGroups<Key> const& from, Key bag,
+              PackedGroups<Key>* out) const;
+
+  // How many pairs of distinct words use exactly the letters of `bag`,
+  // looking only at `groups`, which must hold every group that fits `bag`,
+  // shortest first; `hashed` is built from `groups` or from groups holding
+  // every one that fits `bag`.
+  uint64_t count(PairsCounts const& bag, PackedGroups<Key> const& groups,
+                 PackedRemainderGroups<Key> const& hashed,
+                 Scratch* scratch) const;
+
+ private:
+  PairsPacking packing_;
+  Key guards_;
+  PackedGroups<Key> by_length_;
+  std::vector<uint32_t> sizes_;
+  std::vector<uint8_t> lengths_;
 };
 
 #endif

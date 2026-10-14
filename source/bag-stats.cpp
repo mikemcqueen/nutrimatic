@@ -29,6 +29,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -487,12 +488,10 @@ class PairCountTable {
     bool needs_groups() const { return !prepared_; }
     PairCountCache const& cache() const { return cache_; }
 
-    // `groups`: the inner dictionary groups, holding every one that fits
-    // `bag`, shortest first; `hashed`: built from `groups`. Adds this call's
-    // PairCountCache lookup, if any, to `cache_counts`.
-    uint64_t count(PairsCounts const& bag,
-                   PairsExactCounter::Groups const& groups,
-                   RemainderGroups const& hashed,
+    // `exact()`: the count from the inner dictionary groups. Adds this
+    // call's PairCountCache lookup, if any, to `cache_counts`.
+    template <typename Exact>
+    uint64_t count(PairsCounts const& bag, Exact const& exact,
                    CacheCounts* cache_counts) const {
         if (prepared_) {
             uint32_t const count = counts_[full_.number(bag)];
@@ -502,7 +501,7 @@ class PairCountTable {
         for (int i = 0; i < 26; ++i) letters[i] = bag.values[i];
         size_t number;
         if (!index_.index_of(letters, &number)) {
-            if (!cache_.enabled()) return counter_.count(bag, groups, hashed);
+            if (!cache_.enabled()) return exact();
             uint64_t const key = cache_.key(bag);
             uint64_t count;
             ++cache_counts->lookups;
@@ -510,14 +509,14 @@ class PairCountTable {
                 ++cache_counts->hits;
                 return count;
             }
-            count = counter_.count(bag, groups, hashed);
+            count = exact();
             cache_.put(key, count);
             return count;
         }
         std::atomic_ref<uint32_t> slot(counts_.get()[number]);
         uint32_t const known = slot.load(std::memory_order_relaxed);
         if (known != 0) return known - 1;
-        uint64_t const count = counter_.count(bag, groups, hashed);
+        uint64_t const count = exact();
         if (count < UINT32_MAX)
             slot.store(uint32_t(count + 1), std::memory_order_relaxed);
         return count;
@@ -675,26 +674,137 @@ class RestTable {
     mutable std::atomic<size_t> next_{0};
 };
 
+// The inner dictionary groups that fit what is left after each pick step,
+// and exact pair counts over one step's.
+class InnerGroups {
+  public:
+    virtual ~InnerGroups() = default;
+
+    // Narrows step `step`'s groups to those of step `step` - 1, or every
+    // group for step 0, that fit `rest`.
+    virtual void filter(size_t step, PairsCounts const& rest) = 0;
+
+    // Hashes step `step`'s groups for count().
+    virtual void hash(size_t step) = 0;
+
+    // How many pairs of distinct words use exactly the letters of `bag`,
+    // which must fit the hashed step's rest.
+    virtual uint64_t count(PairsCounts const& bag) = 0;
+};
+
+class ExactInnerGroups : public InnerGroups {
+  public:
+    ExactInnerGroups(PairsExactCounter const& counter, size_t steps)
+        : counter_(counter), groups_(steps) {}
+
+    void filter(size_t step, PairsCounts const& rest) override {
+        counter_.filter(step == 0 ? counter_.groups_by_length()
+                                  : groups_[step - 1],
+                        rest, &groups_[step]);
+    }
+
+    void hash(size_t step) override {
+        hashed_groups_ = &groups_[step];
+        hashed_.build(groups_[step]);
+    }
+
+    uint64_t count(PairsCounts const& bag) override {
+        return counter_.count(bag, *hashed_groups_, hashed_);
+    }
+
+  private:
+    PairsExactCounter const& counter_;
+    std::vector<PairsExactCounter::Groups> groups_;
+    PairsExactCounter::Groups const* hashed_groups_ = nullptr;
+    RemainderGroups hashed_;
+};
+
+template <typename Key>
+class PackedInnerGroups : public InnerGroups {
+  public:
+    PackedInnerGroups(PackedPairsCounter<Key> const& counter, size_t steps)
+        : counter_(counter), groups_(steps) {}
+
+    void filter(size_t step, PairsCounts const& rest) override {
+        counter_.filter(step == 0 ? counter_.groups_by_length()
+                                  : groups_[step - 1],
+                        counter_.pack(rest), &groups_[step]);
+    }
+
+    void hash(size_t step) override {
+        hashed_groups_ = &groups_[step];
+        hashed_.build(groups_[step]);
+    }
+
+    uint64_t count(PairsCounts const& bag) override {
+        return counter_.count(bag, *hashed_groups_, hashed_, &scratch_);
+    }
+
+  private:
+    PackedPairsCounter<Key> const& counter_;
+    std::vector<PackedGroups<Key>> groups_;
+    PackedGroups<Key> const* hashed_groups_ = nullptr;
+    PackedRemainderGroups<Key> hashed_;
+    typename PackedPairsCounter<Key>::Scratch scratch_;
+};
+
+// The inner dictionary's counters: with `packed`, packed when the bag's
+// PairsPacking fits 64 or 128 bits.
+class InnerCounters {
+  public:
+    InnerCounters(PairsExactCounter const& counter, bool packed)
+        : counter_(counter), bits_(PairsPacking(counter.bag()).bits()) {
+        if (!packed) return;
+        if (bits_ <= 64) packed64_.emplace(counter);
+        else if (bits_ <= 128) packed128_.emplace(counter);
+    }
+
+    // The bits the bag's letter counts pack into.
+    int bits() const { return bits_; }
+
+    // The packed key size, 0 when the counts aren't packed.
+    int key_bits() const { return packed64_ ? 64 : packed128_ ? 128 : 0; }
+
+    // Groups for `steps` pick steps, over the narrowest counter.
+    std::unique_ptr<InnerGroups> groups(size_t steps) const {
+        if (packed64_)
+            return std::make_unique<PackedInnerGroups<uint64_t>>(*packed64_,
+                                                                 steps);
+        if (packed128_)
+            return std::make_unique<PackedInnerGroups<PairsKey128>>(
+                *packed128_, steps);
+        return std::make_unique<ExactInnerGroups>(counter_, steps);
+    }
+
+  private:
+    PairsExactCounter const& counter_;
+    int bits_;
+    std::optional<PackedPairsCounter<uint64_t>> packed64_;
+    std::optional<PackedPairsCounter<PairsKey128>> packed128_;
+};
+
 // Fills a remainder's counts over every combination of one word bag per
 // word step, word bags in non-decreasing order.
 class RestCounter {
   public:
     RestCounter(int words, int min_word_bag_length,
-                PairCountTable const& table)
+                PairCountTable const& table,
+                std::unique_ptr<InnerGroups> groups)
         : words_(words), min_word_bag_length_(min_word_bag_length),
-          table_(table) {}
+          table_(table), groups_(std::move(groups)) {}
 
     bool needs_groups() const { return table_.needs_groups(); }
 
-    // `fitting`: the word bags that fit `rest`; `groups`: the inner
-    // dictionary groups, holding every one that fits `rest`.
+    // The inner dictionary groups per pick step.
+    InnerGroups& groups() { return *groups_; }
+
+    // `fitting`: the word bags that fit `rest`; groups() step `step`: the
+    // inner dictionary groups, holding every one that fits `rest`.
     void count(PairsCounts const& rest,
-               std::vector<PairsCounts> const& fitting,
-               PairsExactCounter::Groups const& groups,
+               std::vector<PairsCounts> const& fitting, size_t step,
                BagStatsCounts* out) {
         fitting_ = &fitting;
-        groups_ = &groups;
-        if (needs_groups()) hashed_.build(groups);
+        if (needs_groups()) groups_->hash(step);
         visit(1, 0, rest, true, out);
     }
 
@@ -726,9 +836,9 @@ class RestCounter {
                 continue;
             }
             if (letter_total(word_rest) < 2 * INNER_MIN_WORD_LENGTH) continue;
-            uint64_t const count =
-                table_.count(word_rest, *groups_, hashed_,
-                             &pair_cache_counts_);
+            uint64_t const count = table_.count(
+                word_rest, [&] { return groups_->count(word_rest); },
+                &pair_cache_counts_);
             if (count == 0) continue;
             ++out->with_pairs;
             out->total_pairs += count;
@@ -741,8 +851,7 @@ class RestCounter {
     int min_word_bag_length_;
     PairCountTable const& table_;
     std::vector<PairsCounts> const* fitting_ = nullptr;
-    PairsExactCounter::Groups const* groups_ = nullptr;
-    RemainderGroups hashed_;
+    std::unique_ptr<InnerGroups> groups_;
     CacheCounts pair_cache_counts_;
 };
 
@@ -755,11 +864,10 @@ class RowWalker {
   public:
     RowWalker(std::vector<std::vector<PairBag> const*> const& steps,
               int pair_steps, std::vector<PairsCounts> const& word_bags,
-              PairsExactCounter const& counter, RestCounter rest_counter,
-              RestTable const& rest_table)
+              RestCounter rest_counter, RestTable const& rest_table)
         : steps_(steps), pair_steps_(size_t(pair_steps)),
-          word_bags_(word_bags), counter_(counter), chosen_(steps.size()),
-          fitting_(steps.size()), groups_(steps.size()),
+          word_bags_(word_bags), chosen_(steps.size()),
+          fitting_(steps.size()),
           rest_counter_(std::move(rest_counter)), rest_table_(rest_table) {}
 
     // Calls visit(row, pair_length) for each row whose first pick is
@@ -829,8 +937,8 @@ class RowWalker {
                 ++rest_counts_.hits;
             } else {
                 filter(step - 1, rest);
-                rest_counter_.count(rest, fitting_[step - 1],
-                                    groups_[step - 1], &row);
+                rest_counter_.count(rest, fitting_[step - 1], step - 1,
+                                    &row);
                 rest_table_.put(rest, row);
             }
             visit(row, size_t(letters - letter_total(rest)));
@@ -854,9 +962,7 @@ class RowWalker {
         filter_word_bags(step == 0 ? word_bags_ : fitting_[step - 1],
                           rest, &fitting_[step]);
         if (rest_counter_.needs_groups())
-            counter_.filter(step == 0 ? counter_.groups_by_length()
-                                      : groups_[step - 1],
-                             rest, &groups_[step]);
+            rest_counter_.groups().filter(step, rest);
     }
 
     bool repeats_bag(size_t step, PairsCounts const& counts) const {
@@ -870,12 +976,9 @@ class RowWalker {
     std::vector<std::vector<PairBag> const*> const& steps_;
     size_t pair_steps_;
     std::vector<PairsCounts> const& word_bags_;
-    PairsExactCounter const& counter_;
     std::vector<size_t> chosen_;
-    // The word bags and inner dictionary groups that fit what is left after
-    // each pick.
+    // The word bags that fit what is left after each pick.
     std::vector<std::vector<PairsCounts>> fitting_;
-    std::vector<PairsExactCounter::Groups> groups_;
     RestCounter rest_counter_;
     RestTable const& rest_table_;
     CacheCounts rest_counts_;
@@ -1006,7 +1109,7 @@ struct Walk {
     PairsCounts const& bag;
     std::vector<PairsCounts> const& word_bags;
     Args const& args;
-    PairsExactCounter const& counter;
+    InnerCounters const& inner;
     PairCountTable const& table;
     RestTable const& rest_table;
     size_t threads;
@@ -1015,9 +1118,10 @@ struct Walk {
     int passes;
 
     RowWalker walker() const {
-        return RowWalker(steps, args.search.pairs, word_bags, counter,
+        return RowWalker(steps, args.search.pairs, word_bags,
                          RestCounter(args.search.words,
-                                     args.min_word_bag_length, table),
+                                     args.min_word_bag_length, table,
+                                     inner.groups(steps.size())),
                          rest_table);
     }
 
@@ -1343,7 +1447,16 @@ int main(int argc, char* argv[]) {
                 pair_cache.too_many_sub_bags()
                     ? "the letters have too many sub-bags to key"
                     : "can't allocate it");
-    Walk const walk{steps, prospect_bags, bag, word_bags, args, counter, table,
+    InnerCounters const inner(counter, table.needs_groups());
+    if (args.progress != 0 && table.needs_groups()) {
+        if (inner.key_bits() != 0)
+            fprintf(stderr, "%s: pair counts use %d-bit keys, %d bits "
+                    "packed\n", PROGRAM, inner.key_bits(), inner.bits());
+        else
+            fprintf(stderr, "%s: pair counts use unpacked keys, %d bits, "
+                    "past 128\n", PROGRAM, inner.bits());
+    }
+    Walk const walk{steps, prospect_bags, bag, word_bags, args, inner, table,
                     rest_table, threads, passes ? 2 : 1};
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
