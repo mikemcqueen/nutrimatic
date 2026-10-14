@@ -123,6 +123,14 @@ actual=$("$bag_stats" -n 1 --best-pairs lead --min-wb-frac --by-pick \
   "$test_dir/pairs" "$test_dir/dict")
 [[ $actual == 'cat,dog' ]] || fail "--best-pairs lead is wrong: $actual"
 
+cached=$("$bag_stats" -n 2 --min-wb-frac --by-pick --prior "$test_dir/prior" \
+  --ss pb,pb,wb,p catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+uncached=$("$bag_stats" -n 2 --min-wb-frac --by-pick --prior "$test_dir/prior" \
+  --ss pb,pb,wb,p --cache-size 0 catdoglowanttan "$test_dir/pairs" \
+  "$test_dir/dict")
+[[ -n $cached && $cached == "$uncached" ]] ||
+  fail "--cache-size 0 rows differ: $uncached"
+
 mkdir -p "$WFROOT/.wf/classified/no" "$WFROOT/.wf/classified/s1/no"
 echo dog,cat > "$WFROOT/.wf/classified/no/no.pairs"
 echo ant,low > "$WFROOT/.wf/classified/s1/no/no.pairs"
