@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "dfs-cli-args.h"
+#include "dfs-diagnostic.h"
 #include "letter-bag.h"
 
 namespace {
@@ -238,22 +239,25 @@ void PairsExactCounter::filter(Groups const& from, PairsCounts const& bag,
   }
 }
 
-// Each pair is counted from its shorter word, or from the lower-numbered one
-// when both are as long.
 uint64_t PairsExactCounter::count(PairsCounts const& bag) const {
-  return count(bag, by_length_,
-               [this](PairsCounts const& key) { return find(key); });
+  DFS_CHECK(by_length_.keys.size() == all_.keys.size());
+  return count_with(bag, by_length_,
+                    [this](PairsCounts const& key) { return find(key); });
 }
 
 uint64_t PairsExactCounter::count(PairsCounts const& bag, Groups const& groups,
                                   RemainderGroups const& hashed) const {
-  return count(bag, groups,
-               [&hashed](PairsCounts const& key) { return hashed.find(key); });
+  return count_with(bag, groups, [&hashed](PairsCounts const& key) {
+    return hashed.find(key);
+  });
 }
 
+// Each pair is counted from its shorter word, or from the lower-numbered one
+// when both are as long.
 template <typename Find>
-uint64_t PairsExactCounter::count(PairsCounts const& bag, Groups const& groups,
-                                  Find const& find) const {
+uint64_t PairsExactCounter::count_with(PairsCounts const& bag,
+                                       Groups const& groups,
+                                       Find const& find) const {
   int length = 0;
   for (uint8_t value : bag.values) length += value;
   uint64_t total = 0;

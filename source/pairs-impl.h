@@ -164,7 +164,7 @@ class PairsExactCounter {
   void filter(Groups const& from, PairsCounts const& bag, Groups* out) const;
 
   // How many pairs of distinct words use exactly the letters of `bag`, which
-  // must fit the constructor's bag.
+  // must fit the constructor's bag. Only valid after finish().
   uint64_t count(PairsCounts const& bag) const;
 
   // As count(bag), looking only at `groups`, which must hold every group
@@ -179,8 +179,8 @@ class PairsExactCounter {
   void insert(PairsCounts const& key, uint32_t group);
 
   template <typename Find>
-  uint64_t count(PairsCounts const& bag, Groups const& groups,
-                 Find const& find) const;
+  uint64_t count_with(PairsCounts const& bag, Groups const& groups,
+                      Find const& find) const;
 
   PairsCounts bag_;
   int min_word_length_;
