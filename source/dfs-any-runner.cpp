@@ -2,6 +2,7 @@
 
 #include "dfs-diagnostic.h"
 #include "dfs-search-internal.h"
+#include "mix-bits.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -106,18 +107,10 @@ static size_t exact_memo_lookahead_choice() {
 
 }  // namespace
 
-static uint64_t exact_memo_hash(uint64_t value) {
-  value ^= value >> 30;
-  value *= UINT64_C(0xbf58476d1ce4e5b9);
-  value ^= value >> 27;
-  value *= UINT64_C(0x94d049bb133111eb);
-  return value ^ (value >> 31);
-}
-
 bool DfsAnySolutionRunner::memo_lookup(
     Worker* worker, uint64_t exact_key, bool* value) const {
   assert(memo.slots.get() != NULL);
-  size_t slot = size_t(exact_memo_hash(exact_key)) & (memo.capacity - 1);
+  size_t slot = size_t(mix_bits(exact_key)) & (memo.capacity - 1);
   for (;;) {
     uint64_t const stored = memo.slots.get()[slot].value.load(
         std::memory_order_relaxed);
@@ -136,7 +129,7 @@ void DfsAnySolutionRunner::memo_store(
   assert(memo.slots.get() != NULL);
   assert(exact_key <= (UINT64_MAX - 2) / 2);
   uint64_t const desired = exact_key * UINT64_C(2) + (value ? 2 : 1);
-  size_t slot = size_t(exact_memo_hash(exact_key)) & (memo.capacity - 1);
+  size_t slot = size_t(mix_bits(exact_key)) & (memo.capacity - 1);
   for (;;) {
     uint64_t stored = memo.slots.get()[slot].value.load(
         std::memory_order_relaxed);
