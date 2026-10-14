@@ -28,7 +28,7 @@ struct PairsOptions {
   bool count = false;
 };
 
-// A word's a-z letter counts, padded to two SSE lanes.
+// A word's a-z letter counts, zero-padded to two SSE lanes.
 struct alignas(32) PairsCounts {
   std::array<uint8_t, 32> values{};
 
@@ -43,19 +43,36 @@ struct PairsCountsHash {
 // ignored.
 PairsCounts pairs_letter_counts(char const* s);
 
-// Writes `pool` less `word` to `out` and returns true, or returns false when
-// `word` doesn't fit `pool`.
-bool pairs_subtract(PairsCounts const& pool, PairsCounts const& word,
-                    PairsCounts* out);
+// Lanes where `word` has more of a letter than `pool`, nonzero when `word`
+// doesn't fit.
+inline __m128i pairs_excess(__m128i p0, __m128i p1, __m128i w0, __m128i w1) {
+  return _mm_or_si128(_mm_subs_epu8(w0, p0), _mm_subs_epu8(w1, p1));
+}
 
 // Whether `word` fits within `pool`.
 inline bool pairs_fits(PairsCounts const& pool, PairsCounts const& word) {
   __m128i const* p = reinterpret_cast<__m128i const*>(pool.values.data());
   __m128i const* w = reinterpret_cast<__m128i const*>(word.values.data());
-  __m128i const excess = _mm_or_si128(
-      _mm_subs_epu8(_mm_load_si128(w), _mm_load_si128(p)),
-      _mm_subs_epu8(_mm_load_si128(w + 1), _mm_load_si128(p + 1)));
+  __m128i const excess =
+      pairs_excess(_mm_load_si128(p), _mm_load_si128(p + 1),
+                   _mm_load_si128(w), _mm_load_si128(w + 1));
   return _mm_testz_si128(excess, excess);
+}
+
+// Writes `pool` less `word` to `out` and returns true, or returns false when
+// `word` doesn't fit `pool`. `out` may alias `pool`.
+inline bool pairs_subtract(PairsCounts const& pool, PairsCounts const& word,
+                           PairsCounts* out) {
+  __m128i const* p = reinterpret_cast<__m128i const*>(pool.values.data());
+  __m128i const* w = reinterpret_cast<__m128i const*>(word.values.data());
+  __m128i const p0 = _mm_load_si128(p), p1 = _mm_load_si128(p + 1);
+  __m128i const w0 = _mm_load_si128(w), w1 = _mm_load_si128(w + 1);
+  __m128i const excess = pairs_excess(p0, p1, w0, w1);
+  if (!_mm_testz_si128(excess, excess)) return false;
+  __m128i* result = reinterpret_cast<__m128i*>(out->values.data());
+  _mm_store_si128(result, _mm_sub_epi8(p0, w0));
+  _mm_store_si128(result + 1, _mm_sub_epi8(p1, w1));
+  return true;
 }
 
 // Word pairs found under PairsOptions among the words added, each written
@@ -135,9 +152,14 @@ class PairsExactCounter {
   std::vector<uint32_t> sizes_;
   std::vector<uint8_t> lengths_;
   std::vector<std::vector<std::string>> groups_;
-  // Open addressing over the groups' letters: each slot a hash tag in the
-  // high half and the group number + 1 in the low half, 0 when empty.
-  std::vector<uint64_t> slots_;
+  // 16 hash tags per bucket, probed at once, over slots_' group numbers.
+  // Zero is empty; occupied tags have their high bit set. No entries are
+  // erased, so a bucket with an empty slot ends the probe chain.
+  struct alignas(16) Tags {
+    uint8_t values[16]{};
+  };
+  std::vector<Tags> tags_;
+  std::vector<uint32_t> slots_;
 };
 
 #endif
