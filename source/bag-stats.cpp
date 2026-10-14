@@ -8,6 +8,7 @@
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
 #include "log.h"
+#include "mix-bits.h"
 #include "optparse.h"
 #include "pairs-impl.h"
 #include "row-input.h"
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -46,8 +48,10 @@ constexpr int OPT_PROSPECTS = 258;
 constexpr int OPT_THREADS = 259;
 constexpr int OPT_PROGRESS = 260;
 constexpr int OPT_CACHE_SIZE = 261;
+constexpr int OPT_PAIR_CACHE_SIZE = 262;
 constexpr int DEFAULT_PROGRESS_SECONDS = 60;
 constexpr int DEFAULT_CACHE_SIZE_MB = 1000;
+constexpr int DEFAULT_PAIR_CACHE_SIZE_MB = 1000;
 // The most sub-bags PairCountTable numbers, 4 bytes each.
 constexpr size_t PAIR_COUNT_TABLE_MAX = size_t(1) << 28;
 // How many first picks past the last one printed a worker may start, per
@@ -63,6 +67,7 @@ struct Args {
     char const* prospects_file = NULL;
     int threads = 1;
     int cache_size_mb = DEFAULT_CACHE_SIZE_MB;
+    int pair_cache_size_mb = DEFAULT_PAIR_CACHE_SIZE_MB;
     int progress = DEFAULT_PROGRESS_SECONDS;
     RankArgs rank;
     char const* pairs_file = NULL;
@@ -72,7 +77,8 @@ struct Args {
 void usage(char const* program, FILE* out) {
     fprintf(out,
             "usage: %s [-u LETTERS] [-s N] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
-            "       [--threads N] [--cache-size N] [--progress N]\n"
+            "       [--threads N] [--cache-size N] [--pair-cache-size N]\n"
+            "       [--progress N]\n"
             "       [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... [--score-detail] SORT...\n"
             "        [--by-length | --by-pick]]\n"
@@ -118,6 +124,10 @@ void usage(char const* program, FILE* out) {
     dfs_help_option("--cache-size N",
                     "hold at most N MB of cached remainder counts, 0 for "
                     "none (default: %d)", DEFAULT_CACHE_SIZE_MB);
+    dfs_help_option("--pair-cache-size N",
+                    "hold at most N MB of cached pair counts for leftovers "
+                    "too long for the pair count table, 0 for none "
+                    "(default: %d)", DEFAULT_PAIR_CACHE_SIZE_MB);
     dfs_help_option("--progress N",
                     "report each pass's progress to stderr every N seconds, "
                     "and its time when it took that long or it is pass 2; "
@@ -142,6 +152,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "pp", OPT_PROSPECTS, OPTPARSE_REQUIRED },
         { "threads", OPT_THREADS, OPTPARSE_REQUIRED },
         { "cache-size", OPT_CACHE_SIZE, OPTPARSE_REQUIRED },
+        { "pair-cache-size", OPT_PAIR_CACHE_SIZE, OPTPARSE_REQUIRED },
         { "progress", OPT_PROGRESS, OPTPARSE_REQUIRED },
         BAG_STATS_RANK_LONG_OPTIONS,
         { "help", 'h', OPTPARSE_NONE },
@@ -184,6 +195,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case OPT_CACHE_SIZE:
             if (!parse_count(options.optarg, "--cache-size",
                              &out->cache_size_mb))
+                return false;
+            break;
+          case OPT_PAIR_CACHE_SIZE:
+            if (!parse_count(options.optarg, "--pair-cache-size",
+                             &out->pair_cache_size_mb))
                 return false;
             break;
           case OPT_PROGRESS:
@@ -314,18 +330,121 @@ class RemainderIndex {
     std::vector<std::pair<size_t, size_t>> digits_;
 };
 
+// Lookups of a cache and how many of them hit.
+struct CacheCounts {
+    uint64_t hits = 0;
+    uint64_t lookups = 0;
+};
+
+// Pair counts of sub-bags of `bag`, shared by every thread, in at most
+// `megabytes` MB, or two slots per sub-bag when that's less. Lossy: a
+// bucket holds 8 entries in a cache line, and a full one has its entries
+// overwritten in turn, a turn per thread. Each entry is one word, count <<
+// key_bits_ | (the sub-bag's number + 1), 0 while empty, so lookups never
+// see a torn entry. Counts too big for the bits left over aren't kept.
+class PairCountCache {
+  public:
+    PairCountCache(PairsCounts const& bag, size_t megabytes)
+        : index_(bag, UINT64_MAX - 1) {
+        if (index_.total() == 0) return;
+        size_t const buckets =
+            std::min(megabytes * 1024 * 1024 / sizeof(Bucket),
+                     2 * index_.total() / WAYS + 1);
+        if (megabytes == 0) return;
+        key_bits_ = std::bit_width(uint64_t(index_.total()));
+        if (key_bits_ > MAX_KEY_BITS) return;
+        memory_.reset(static_cast<char*>(
+            std::calloc(buckets * sizeof(Bucket) + alignof(Bucket), 1)));
+        if (!memory_) return;
+        buckets_ = reinterpret_cast<Bucket*>(
+            (reinterpret_cast<uintptr_t>(memory_.get()) + alignof(Bucket) - 1) &
+            ~uintptr_t(alignof(Bucket) - 1));
+        buckets_count_ = buckets;
+        max_count_ = (uint64_t(1) << (64 - key_bits_)) - 1;
+    }
+
+    bool enabled() const { return buckets_ != nullptr; }
+    // Whether sub-bag numbers are too wide to share a word with a count.
+    bool too_many_sub_bags() const {
+        return index_.total() == 0 ||
+            std::bit_width(uint64_t(index_.total())) > MAX_KEY_BITS;
+    }
+    size_t capacity() const { return buckets_count_ * WAYS; }
+    size_t bytes() const { return buckets_count_ * sizeof(Bucket); }
+
+    // The key of `bag`'s entry.
+    uint64_t key(PairsCounts const& bag) const {
+        return index_.number(bag) + 1;
+    }
+
+    bool get(uint64_t key, uint64_t* count) const {
+        uint64_t const key_mask = (uint64_t(1) << key_bits_) - 1;
+        for (uint64_t& slot : bucket(mix_bits(key)).entries) {
+            uint64_t const entry =
+                std::atomic_ref<uint64_t>(slot).load(std::memory_order_relaxed);
+            if ((entry & key_mask) != key) continue;
+            *count = entry >> key_bits_;
+            return true;
+        }
+        return false;
+    }
+
+    void put(uint64_t key, uint64_t count) const {
+        if (count > max_count_) return;
+        uint64_t const key_mask = (uint64_t(1) << key_bits_) - 1;
+        uint64_t const entry = count << key_bits_ | key;
+        Bucket& home = bucket(mix_bits(key));
+        for (uint64_t& slot : home.entries) {
+            std::atomic_ref<uint64_t> const ref(slot);
+            uint64_t found = ref.load(std::memory_order_relaxed);
+            if (found == 0 &&
+                ref.compare_exchange_strong(found, entry,
+                                            std::memory_order_relaxed))
+                return;
+            if ((found & key_mask) == key) return;
+        }
+        thread_local size_t turn = 0;
+        std::atomic_ref<uint64_t>(home.entries[turn++ % WAYS])
+            .store(entry, std::memory_order_relaxed);
+    }
+
+  private:
+    static constexpr size_t WAYS = 8;
+    static constexpr int MAX_KEY_BITS = 48;
+
+    struct alignas(64) Bucket {
+        uint64_t entries[WAYS];
+    };
+    struct Free {
+        void operator()(char* p) const { std::free(p); }
+    };
+
+    Bucket& bucket(uint64_t hash) const {
+        return buckets_[size_t(__uint128_t(hash) * buckets_count_ >> 64)];
+    }
+
+    RemainderIndex index_;
+    int key_bits_ = 0;
+    uint64_t max_count_ = 0;
+    size_t buckets_count_ = 0;
+    std::unique_ptr<char[], Free> memory_;
+    Bucket* buckets_ = nullptr;
+};
+
 // Exact pair counts shared by every thread. Large searches fill a full
 // table once by enumerating dictionary group pairs. Otherwise slots hold
 // count + 1, or 0 while unknown, and are filled on demand; sub-bags outside
-// that bounded-length index are counted every time.
+// that bounded-length index go through a PairCountCache of
+// `cache_megabytes` MB.
 class PairCountTable {
   public:
     PairCountTable(SubBagIndex index, PairsCounts const& bag,
                    PairsExactCounter const& counter, bool prepare,
-                   size_t threads)
+                   size_t threads, size_t cache_megabytes)
         : index_(std::move(index)), full_(bag, PAIR_COUNT_TABLE_MAX),
           counter_(counter),
           prepared_(prepare && full_.total() != 0),
+          cache_(bag, prepared_ ? 0 : cache_megabytes),
           counts_(static_cast<uint32_t*>(
               std::calloc(prepared_ ? full_.total() : index_.total(),
                           sizeof(uint32_t)))) {
@@ -366,11 +485,14 @@ class PairCountTable {
 
     bool allocated() const { return counts_ != nullptr; }
     bool needs_groups() const { return !prepared_; }
+    PairCountCache const& cache() const { return cache_; }
 
     // `groups`: the inner dictionary groups, holding every one that fits
-    // `bag`.
+    // `bag`. Adds this call's PairCountCache lookup, if any, to
+    // `cache_counts`.
     uint64_t count(PairsCounts const& bag,
-                   PairsExactCounter::Groups const& groups) const {
+                   PairsExactCounter::Groups const& groups,
+                   CacheCounts* cache_counts) const {
         if (prepared_) {
             uint32_t const count = counts_[full_.number(bag)];
             return count == UINT32_MAX ? counter_.count(bag) : count;
@@ -378,8 +500,19 @@ class PairCountTable {
         LetterCounts letters;
         for (int i = 0; i < 26; ++i) letters[i] = bag.values[i];
         size_t number;
-        if (!index_.index_of(letters, &number))
-            return counter_.count(bag, groups);
+        if (!index_.index_of(letters, &number)) {
+            if (!cache_.enabled()) return counter_.count(bag, groups);
+            uint64_t const key = cache_.key(bag);
+            uint64_t count;
+            ++cache_counts->lookups;
+            if (cache_.get(key, &count)) {
+                ++cache_counts->hits;
+                return count;
+            }
+            count = counter_.count(bag, groups);
+            cache_.put(key, count);
+            return count;
+        }
         std::atomic_ref<uint32_t> slot(counts_.get()[number]);
         uint32_t const known = slot.load(std::memory_order_relaxed);
         if (known != 0) return known - 1;
@@ -398,6 +531,7 @@ class PairCountTable {
     RemainderIndex full_;
     PairsExactCounter const& counter_;
     bool prepared_;
+    PairCountCache cache_;
     std::unique_ptr<uint32_t[], Free> counts_;
 };
 
@@ -527,12 +661,7 @@ class RestTable {
     };
 
     size_t home(uint64_t key) const {
-        key ^= key >> 30;
-        key *= UINT64_C(0xbf58476d1ce4e5b9);
-        key ^= key >> 27;
-        key *= UINT64_C(0x94d049bb133111eb);
-        key ^= key >> 31;
-        return size_t(__uint128_t(key) * slots_ >> 64);
+        return size_t(__uint128_t(mix_bits(key)) * slots_ >> 64);
     }
 
     RemainderIndex index_;
@@ -567,6 +696,13 @@ class RestCounter {
         visit(1, 0, rest, true, out);
     }
 
+    // The PairCountCache lookups since the last call.
+    CacheCounts take_pair_cache_counts() {
+        CacheCounts const out = pair_cache_counts_;
+        pair_cache_counts_ = {};
+        return out;
+    }
+
   private:
     void visit(int word, size_t start, PairsCounts const& rest, bool is_min,
                BagStatsCounts* out) {
@@ -588,7 +724,8 @@ class RestCounter {
                 continue;
             }
             if (letter_total(word_rest) < 2 * INNER_MIN_WORD_LENGTH) continue;
-            uint64_t const count = table_.count(word_rest, *groups_);
+            uint64_t const count =
+                table_.count(word_rest, *groups_, &pair_cache_counts_);
             if (count == 0) continue;
             ++out->with_pairs;
             out->total_pairs += count;
@@ -602,6 +739,7 @@ class RestCounter {
     PairCountTable const& table_;
     std::vector<PairsCounts> const* fitting_ = nullptr;
     PairsExactCounter::Groups const* groups_ = nullptr;
+    CacheCounts pair_cache_counts_;
 };
 
 // Walks the rows: every combination of one pick per pair step that fits,
@@ -656,12 +794,16 @@ class RowWalker {
                                  (j < pair_steps_ ? 0 : steps_[0]->size()));
     }
 
-    // The RestTable lookups and hits since the last call, as {hits,
-    // lookups}.
-    std::pair<uint64_t, uint64_t> take_rest_counts() {
-        std::pair<uint64_t, uint64_t> const out{rest_hits_, rest_lookups_};
-        rest_hits_ = rest_lookups_ = 0;
+    // The RestTable lookups since the last call.
+    CacheCounts take_rest_counts() {
+        CacheCounts const out = rest_counts_;
+        rest_counts_ = {};
         return out;
+    }
+
+    // The PairCountCache lookups since the last call.
+    CacheCounts take_pair_cache_counts() {
+        return rest_counter_.take_pair_cache_counts();
     }
 
     // The current row's PAIRS.
@@ -678,9 +820,9 @@ class RowWalker {
                  Visit const& visit) {
         if (step == steps_.size()) {
             BagStatsRow row{};
-            ++rest_lookups_;
+            ++rest_counts_.lookups;
             if (rest_table_.get(rest, &row)) {
-                ++rest_hits_;
+                ++rest_counts_.hits;
             } else {
                 filter(step - 1, rest);
                 rest_counter_.count(rest, fitting_[step - 1],
@@ -731,8 +873,7 @@ class RowWalker {
     std::vector<PairsExactCounter::Groups> groups_;
     RestCounter rest_counter_;
     RestTable const& rest_table_;
-    uint64_t rest_lookups_ = 0;
-    uint64_t rest_hits_ = 0;
+    CacheCounts rest_counts_;
 };
 
 // Runs work(thread) on `threads` threads, the calling thread 0.
@@ -764,10 +905,10 @@ class Progress {
     using Clock = std::chrono::steady_clock;
 
     Progress(int seconds, int pass, int passes, size_t units,
-             RestTable const& rest_table)
+             RestTable const& rest_table, PairCountCache const& pair_cache)
         : interval_(std::chrono::seconds(seconds)), pass_(pass),
           passes_(passes), units_(units), rest_table_(rest_table),
-          start_(Clock::now()),
+          pair_cache_(pair_cache), start_(Clock::now()),
           next_report_(seconds > 0 ? (start_ + interval_).time_since_epoch()
                                          .count()
                                    : INT64_MAX) {}
@@ -786,9 +927,8 @@ class Progress {
     // Counts one finished unit, and the cache lookups `walker` made since
     // its last one.
     void finished(RowWalker* walker) {
-        auto const [hits, lookups] = walker->take_rest_counts();
-        cache_hits_.fetch_add(hits, std::memory_order_relaxed);
-        cache_lookups_.fetch_add(lookups, std::memory_order_relaxed);
+        cache_.add(walker->take_rest_counts());
+        pair_cache_counts_.add(walker->take_pair_cache_counts());
         size_t const done = done_.fetch_add(1, std::memory_order_relaxed) + 1;
         Clock::time_point const now = Clock::now();
         int64_t due = next_report_.load(std::memory_order_relaxed);
@@ -808,17 +948,35 @@ class Progress {
     }
 
   private:
-    // ", cache off", or ", cache hits N/M (P%)".
+    // CacheCounts summed across workers.
+    struct SharedCacheCounts {
+        std::atomic<uint64_t> hits{0};
+        std::atomic<uint64_t> lookups{0};
+
+        void add(CacheCounts const& counts) {
+            hits.fetch_add(counts.hits, std::memory_order_relaxed);
+            lookups.fetch_add(counts.lookups, std::memory_order_relaxed);
+        }
+
+        // ", NAME hits N/M (P%)".
+        std::string text(char const* name) const {
+            uint64_t const h = hits.load(std::memory_order_relaxed);
+            uint64_t const l = lookups.load(std::memory_order_relaxed);
+            char out[96];
+            snprintf(out, sizeof out, ", %s hits %llu/%llu (%.1f%%)", name,
+                     static_cast<unsigned long long>(h),
+                     static_cast<unsigned long long>(l),
+                     l == 0 ? 0.0 : 100.0 * double(h) / double(l));
+            return out;
+        }
+    };
+
+    // ", cache off" or ", cache hits N/M (P%)", then the pair cache's hits
+    // when it is on.
     std::string cache_text() const {
-        char out[96];
-        if (!rest_table_.enabled()) return ", cache off";
-        uint64_t const hits = cache_hits_.load(std::memory_order_relaxed);
-        uint64_t const lookups =
-            cache_lookups_.load(std::memory_order_relaxed);
-        snprintf(out, sizeof out, ", cache hits %llu/%llu (%.1f%%)",
-                 static_cast<unsigned long long>(hits),
-                 static_cast<unsigned long long>(lookups),
-                 lookups == 0 ? 0.0 : 100.0 * double(hits) / double(lookups));
+        std::string out = rest_table_.enabled() ? cache_.text("cache")
+                                                : ", cache off";
+        if (pair_cache_.enabled()) out += pair_cache_counts_.text("pair cache");
         return out;
     }
 
@@ -831,10 +989,11 @@ class Progress {
     int const passes_;
     size_t const units_;
     RestTable const& rest_table_;
+    PairCountCache const& pair_cache_;
     Clock::time_point const start_;
     std::atomic<size_t> done_{0};
-    std::atomic<uint64_t> cache_hits_{0};
-    std::atomic<uint64_t> cache_lookups_{0};
+    SharedCacheCounts cache_;
+    SharedCacheCounts pair_cache_counts_;
     std::atomic<int64_t> next_report_;
 };
 
@@ -874,7 +1033,7 @@ void print_rows(Walk const& walk) {
     size_t next = 0;
     size_t printed = 0;
     Progress progress(walk.args.progress, 1, walk.passes, units,
-                      walk.rest_table);
+                      walk.rest_table, walk.table.cache());
 
     auto const work = [&](size_t) {
         RowWalker walker = walk.walker();
@@ -930,7 +1089,7 @@ void count_sort_values(Walk const& walk, R* ranker) {
     std::vector<typename R::Part> parts(walk.threads, ranker->part());
     {
         Progress progress(walk.args.progress, 1, walk.passes, walk.units(),
-                          walk.rest_table);
+                          walk.rest_table, walk.table.cache());
         run_threads(walk.threads, [&](size_t t) {
             RowWalker walker = walk.walker();
             std::vector<uint32_t> picks;
@@ -954,7 +1113,7 @@ std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
     std::atomic<size_t> next{0};
     std::vector<std::vector<RankedRow>> heaps(walk.threads);
     Progress progress(walk.args.progress, walk.passes, walk.passes,
-                      walk.units(), walk.rest_table);
+                      walk.units(), walk.rest_table, walk.table.cache());
     run_threads(walk.threads, [&](size_t t) {
         RowWalker walker = walk.walker();
         std::vector<RankedRow>& heap = heaps[t];
@@ -1024,7 +1183,7 @@ ScoreRank score_rank(Walk const& walk, R const& ranker,
     std::atomic<size_t> next{0};
     std::vector<ScoreRank> parts(walk.threads);
     Progress progress(walk.args.progress, walk.passes, walk.passes,
-                      walk.units(), walk.rest_table);
+                      walk.units(), walk.rest_table, walk.table.cache());
     run_threads(walk.threads, [&](size_t t) {
         RowWalker walker = walk.walker();
         ScoreRank& part = parts[t];
@@ -1142,10 +1301,15 @@ int main(int argc, char* argv[]) {
     size_t threads = resolve_search_threads(args.threads);
     unsigned int const cores = std::thread::hardware_concurrency();
     if (cores != 0) threads = std::min(threads, size_t(cores));
+    size_t const longest =
+        longest_leftover(bag, steps, word_bags, args.search.words);
+    SubBagIndex index = pair_count_index(letters, longest);
+    // Only leftovers longer than the index reach the pair cache.
+    bool const pair_cache_wanted =
+        args.pair_cache_size_mb != 0 && index.max_length() < longest;
     PairCountTable const table(
-        pair_count_index(letters, longest_leftover(bag, steps, word_bags,
-                                                   args.search.words)),
-        bag, counter, steps.size() > 1, threads);
+        std::move(index), bag, counter, steps.size() > 1, threads,
+        pair_cache_wanted ? size_t(args.pair_cache_size_mb) : 0);
     if (!table.allocated()) {
         fprintf(stderr, "%s: can't allocate the pair count table\n", PROGRAM);
         return 1;
@@ -1167,6 +1331,16 @@ int main(int argc, char* argv[]) {
                 double(rest_table.capacity() * REST_CACHE_ENTRY_BYTES) /
                     (1024 * 1024),
                 rest_table.remainders());
+    PairCountCache const& pair_cache = table.cache();
+    if (args.progress != 0 && pair_cache.enabled())
+        fprintf(stderr, "%s: pair cache holds %zu entries (%.1f MB)\n",
+                PROGRAM, pair_cache.capacity(),
+                double(pair_cache.bytes()) / (1024 * 1024));
+    else if (args.progress != 0 && pair_cache_wanted && table.needs_groups())
+        fprintf(stderr, "%s: pair cache off: %s\n", PROGRAM,
+                pair_cache.too_many_sub_bags()
+                    ? "the letters have too many sub-bags to key"
+                    : "can't allocate it");
     Walk const walk{steps, prospect_bags, bag, word_bags, args, counter, table,
                     rest_table, threads, passes ? 2 : 1};
 

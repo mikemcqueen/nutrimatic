@@ -4,6 +4,7 @@
 #include "dfs-score.h"
 #include "dfs-solo-words.h"
 #include "index.h"
+#include "mix-bits.h"
 
 #include <assert.h>
 #include <math.h>
@@ -110,7 +111,7 @@ class SignatureTable {
     uint64_t const key = signature + 1;
     uint64_t* const keys = key_array.get();
     uint32_t* const ids = id_array.get();
-    size_t slot = size_t(mix(key)) & slot_mask;
+    size_t slot = size_t(mix_bits(key)) & slot_mask;
     while (keys[slot] != 0) {
       if (keys[slot] == key) {
         *id = ids[slot];
@@ -139,14 +140,6 @@ class SignatureTable {
   }
 
  private:
-  static uint64_t mix(uint64_t value) {
-    value ^= value >> 30;
-    value *= UINT64_C(0xbf58476d1ce4e5b9);
-    value ^= value >> 27;
-    value *= UINT64_C(0x94d049bb133111eb);
-    return value ^ (value >> 31);
-  }
-
   bool grow(size_t slots) {
     void* const raw_keys =
         dfs_allocate_aligned(slots * sizeof(uint64_t));
@@ -163,7 +156,7 @@ class SignatureTable {
     for (size_t old = 0; old < slot_count; ++old) {
       uint64_t const key = key_array.get()[old];
       if (key == 0) continue;
-      size_t slot = size_t(mix(key)) & new_mask;
+      size_t slot = size_t(mix_bits(key)) & new_mask;
       while (new_keys.get()[slot] != 0) slot = (slot + 1) & new_mask;
       new_keys.get()[slot] = key;
       new_ids.get()[slot] = id_array.get()[old];
