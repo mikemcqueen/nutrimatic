@@ -3,6 +3,7 @@
 
 #include <smmintrin.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <array>
 #include <cstdint>
@@ -106,6 +107,29 @@ class Pairs {
   std::unordered_map<PairsCounts, size_t, PairsCountsHash> group_indices_;
 };
 
+// A hash of `key` for the exact counters' tables, cheaper than
+// PairsCountsHash: its four words multiply independently.
+inline uint64_t exact_counter_hash(PairsCounts const& key) {
+  uint64_t words[4];
+  memcpy(words, key.values.data(), sizeof words);
+  uint64_t hash = words[0] * UINT64_C(0x9e3779b97f4a7c15) ^
+                  words[1] * UINT64_C(0xc2b2ae3d27d4eb4f) ^
+                  words[2] * UINT64_C(0x165667b19e3779f9) ^
+                  words[3] * UINT64_C(0xd6e8feb86659fd93);
+  hash ^= hash >> 31;
+  hash *= UINT64_C(0x9e3779b97f4a7c15);
+  return hash ^ (hash >> 29);
+}
+
+// 16 hash tags of an exact counter's table, probed at once. Zero is empty;
+// occupied tags have their high bit set. No entries are erased, so a bucket
+// with an empty slot ends the probe chain.
+struct alignas(16) ExactCounterTags {
+  uint8_t values[16]{};
+};
+
+class RemainderGroups;
+
 // Counts the lines `pairs -x -c` prints for many bags within one: built once
 // from the dictionary words that fit `bag` and are at least
 // `min_word_length` letters long, then queried per sub-bag.
@@ -113,8 +137,13 @@ class PairsExactCounter {
  public:
   PairsExactCounter(PairsCounts const& bag, int min_word_length);
 
+  static uint32_t const NO_GROUP = UINT32_MAX;
+
   // Adds `word` under the same rules as Pairs::add().
   void add(std::string const& word);
+
+  // Builds groups_by_length(); call once after the last add().
+  void finish();
 
   // Groups of words with the same letters: each one's letters and number.
   struct Groups {
@@ -125,40 +154,60 @@ class PairsExactCounter {
   // Every group.
   Groups const& groups() const { return all_; }
 
+  // Every group, shortest first.
+  Groups const& groups_by_length() const { return by_length_; }
+
   // The number of distinct words in one of groups().
   uint32_t group_size(size_t group) const { return sizes_[group]; }
 
-  // Writes the groups of `from` whose letters fit `bag` to `out`.
+  // Writes the groups of `from` whose letters fit `bag` to `out`, in order.
   void filter(Groups const& from, PairsCounts const& bag, Groups* out) const;
 
   // How many pairs of distinct words use exactly the letters of `bag`, which
   // must fit the constructor's bag.
-  uint64_t count(PairsCounts const& bag) const { return count(bag, all_); }
+  uint64_t count(PairsCounts const& bag) const;
 
   // As count(bag), looking only at `groups`, which must hold every group
-  // that fits `bag`.
-  uint64_t count(PairsCounts const& bag, Groups const& groups) const;
+  // that fits `bag`, shortest first; `hashed` is built from `groups` or
+  // from groups holding every one that fits `bag`.
+  uint64_t count(PairsCounts const& bag, Groups const& groups,
+                 RemainderGroups const& hashed) const;
 
  private:
-  static uint32_t const NO_GROUP = UINT32_MAX;
-
   // The number of the group whose letters are `key`, or NO_GROUP.
   uint32_t find(PairsCounts const& key) const;
   void insert(PairsCounts const& key, uint32_t group);
 
+  template <typename Find>
+  uint64_t count(PairsCounts const& bag, Groups const& groups,
+                 Find const& find) const;
+
   PairsCounts bag_;
   int min_word_length_;
   Groups all_;
+  Groups by_length_;
   std::vector<uint32_t> sizes_;
   std::vector<uint8_t> lengths_;
   std::vector<std::vector<std::string>> groups_;
-  // 16 hash tags per bucket, probed at once, over slots_' group numbers.
-  // Zero is empty; occupied tags have their high bit set. No entries are
-  // erased, so a bucket with an empty slot ends the probe chain.
-  struct alignas(16) Tags {
-    uint8_t values[16]{};
-  };
-  std::vector<Tags> tags_;
+  // Tags per bucket of slots_' group numbers.
+  std::vector<ExactCounterTags> tags_;
+  std::vector<uint32_t> slots_;
+};
+
+// The groups that fit one remainder, hashed for find().
+class RemainderGroups {
+ public:
+  // Rebuilds from `groups`, reusing storage. `groups` must outlive the
+  // finds.
+  void build(PairsExactCounter::Groups const& groups);
+
+  // The number of the group whose letters are `key`, or NO_GROUP.
+  uint32_t find(PairsCounts const& key) const;
+
+ private:
+  PairsExactCounter::Groups const* groups_ = nullptr;
+  // Tags per bucket of slots_' positions in groups_.
+  std::vector<ExactCounterTags> tags_;
   std::vector<uint32_t> slots_;
 };
 

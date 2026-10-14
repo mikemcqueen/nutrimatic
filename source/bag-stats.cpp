@@ -130,8 +130,7 @@ void usage(char const* program, FILE* out) {
                     "(default: %d)", DEFAULT_PAIR_CACHE_SIZE_MB);
     dfs_help_option("--progress N",
                     "report each pass's progress to stderr every N seconds, "
-                    "and its time when it took that long or it is pass 2; "
-                    "0 for never "
+                    "and its time when it ends; 0 for never "
                     "(default: %d)", DEFAULT_PROGRESS_SECONDS);
     dfs_help_option("-n N",
                     "print only the N rows that rank first, in that order, "
@@ -291,6 +290,7 @@ bool load_inner_dictionary(PairsExactCounter* out) {
         out->add(word);
     }
     fclose(wf);
+    out->finish();
     return true;
 }
 
@@ -488,10 +488,11 @@ class PairCountTable {
     PairCountCache const& cache() const { return cache_; }
 
     // `groups`: the inner dictionary groups, holding every one that fits
-    // `bag`. Adds this call's PairCountCache lookup, if any, to
-    // `cache_counts`.
+    // `bag`, shortest first; `hashed`: built from `groups`. Adds this call's
+    // PairCountCache lookup, if any, to `cache_counts`.
     uint64_t count(PairsCounts const& bag,
                    PairsExactCounter::Groups const& groups,
+                   RemainderGroups const& hashed,
                    CacheCounts* cache_counts) const {
         if (prepared_) {
             uint32_t const count = counts_[full_.number(bag)];
@@ -501,7 +502,7 @@ class PairCountTable {
         for (int i = 0; i < 26; ++i) letters[i] = bag.values[i];
         size_t number;
         if (!index_.index_of(letters, &number)) {
-            if (!cache_.enabled()) return counter_.count(bag, groups);
+            if (!cache_.enabled()) return counter_.count(bag, groups, hashed);
             uint64_t const key = cache_.key(bag);
             uint64_t count;
             ++cache_counts->lookups;
@@ -509,14 +510,14 @@ class PairCountTable {
                 ++cache_counts->hits;
                 return count;
             }
-            count = counter_.count(bag, groups);
+            count = counter_.count(bag, groups, hashed);
             cache_.put(key, count);
             return count;
         }
         std::atomic_ref<uint32_t> slot(counts_.get()[number]);
         uint32_t const known = slot.load(std::memory_order_relaxed);
         if (known != 0) return known - 1;
-        uint64_t const count = counter_.count(bag, groups);
+        uint64_t const count = counter_.count(bag, groups, hashed);
         if (count < UINT32_MAX)
             slot.store(uint32_t(count + 1), std::memory_order_relaxed);
         return count;
@@ -693,6 +694,7 @@ class RestCounter {
                BagStatsCounts* out) {
         fitting_ = &fitting;
         groups_ = &groups;
+        if (needs_groups()) hashed_.build(groups);
         visit(1, 0, rest, true, out);
     }
 
@@ -725,7 +727,8 @@ class RestCounter {
             }
             if (letter_total(word_rest) < 2 * INNER_MIN_WORD_LENGTH) continue;
             uint64_t const count =
-                table_.count(word_rest, *groups_, &pair_cache_counts_);
+                table_.count(word_rest, *groups_, hashed_,
+                             &pair_cache_counts_);
             if (count == 0) continue;
             ++out->with_pairs;
             out->total_pairs += count;
@@ -739,6 +742,7 @@ class RestCounter {
     PairCountTable const& table_;
     std::vector<PairsCounts> const* fitting_ = nullptr;
     PairsExactCounter::Groups const* groups_ = nullptr;
+    RemainderGroups hashed_;
     CacheCounts pair_cache_counts_;
 };
 
@@ -850,7 +854,8 @@ class RowWalker {
         filter_word_bags(step == 0 ? word_bags_ : fitting_[step - 1],
                           rest, &fitting_[step]);
         if (rest_counter_.needs_groups())
-            counter_.filter(step == 0 ? counter_.groups() : groups_[step - 1],
+            counter_.filter(step == 0 ? counter_.groups_by_length()
+                                      : groups_[step - 1],
                              rest, &groups_[step]);
     }
 
@@ -899,7 +904,7 @@ std::string format_duration(double seconds) {
 }
 
 // Reports a pass's finished units to stderr every `seconds`, 0 for never,
-// and when it ends, its time if it took that long or it is pass 2.
+// and when it ends, its time.
 class Progress {
   public:
     using Clock = std::chrono::steady_clock;
@@ -914,11 +919,8 @@ class Progress {
                                    : INT64_MAX) {}
 
     ~Progress() {
+        if (interval_.count() == 0) return;
         double const elapsed = seconds_since_start(Clock::now());
-        if (interval_.count() == 0 ||
-            (pass_ != 2 &&
-             elapsed < std::chrono::duration<double>(interval_).count()))
-            return;
         fprintf(stderr, "%s: pass %d/%d: done in %s%s\n", PROGRAM, pass_,
                 passes_, format_duration(elapsed).c_str(),
                 cache_text().c_str());
