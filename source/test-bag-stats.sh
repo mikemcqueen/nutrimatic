@@ -46,12 +46,13 @@ x
 EOF
 
 actual=$("$bag_stats" catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
-expected="bag-stats 3
+expected="bag-stats 4
 letters aaacdglnnootttw
 min 3
 min-wb 5
 ss pb,wb,p
 pp
+sentence
 pairs $test_dir/pairs
 dict $test_dir/dict
 columns PAIR,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,MIN_WB,MIN_WB_WITH_PAIRS

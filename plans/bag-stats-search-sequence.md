@@ -44,6 +44,8 @@ records the canonical order: the `ppb` steps, then `pb`, then `wb`, then `p`.
 - Picks of one kind are unordered: a row is printed once, not once per
   ordering of its picks.
 - The pair picks in a row are distinct bags, across `ppb` and `pb` together.
+- A PAIRS bag that is also a `--pp` bag is dropped from PAIRS, so the `pb`
+  and `ppb` lists share no bag and a row's bags appear in one row only.
 - Word picks may repeat a bag (a word used twice).
 - Every combination of pair picks that fits R is a row, including rows whose
   counts are all 0, as today.
@@ -69,6 +71,9 @@ walk does.
 ## Output
 
 Header version 3. `PAIRBAG` goes; `ss` and `pp` lines are added.
+
+Version 4, in `plans/bag-stats-sort-dump.md`, adds a `sentence` line and
+writes absolute paths.
 
 ```
 bag-stats 3

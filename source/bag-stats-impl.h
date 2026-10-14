@@ -7,17 +7,20 @@
 #include <optional>
 #include <string>
 
+#include "classified.h"
+
 // The first line of bag-stats output.
 extern char const BAG_STATS_MAGIC[];
 
 // What a bag-stats run was given. Written as a text header, each line ending
 // in '\n',
-//   bag-stats 3
+//   bag-stats 4
 //   letters LETTERS      (what is left once used letters are removed, sorted)
 //   min MIN_LENGTH       (of the words in each counted pair)
 //   min-wb MIN_WB_LENGTH (of the word bags MIN_WB counts)
 //   ss STEPS             (the search sequence, in canonical order)
 //   pp PATH              (the prospective pairs; `pp` alone when none)
+//   sentence N           (-s's sentence; `sentence` alone when none)
 //   pairs PATH
 //   dict PATH
 //   columns BAG_STATS_COLUMNS
@@ -29,6 +32,8 @@ struct BagStatsHeader {
   int min_word_bag_length;
   std::string search;
   std::string prospects;
+  // CLASSIFIED_NO_SENTENCE when none.
+  int sentence;
   std::string pairs;
   std::string dict;
 };
@@ -104,6 +109,10 @@ inline double bag_stats_percentile(uint64_t below, uint64_t through,
                                    uint64_t size) {
   return double(below + through) / 2 / double(size);
 }
+
+// `path` as the header names it: absolute, `-` for standard input, empty for
+// none.
+std::string bag_stats_header_path(char const* path);
 
 void write_bag_stats_header(FILE* out, BagStatsHeader const& header);
 

@@ -258,14 +258,16 @@ pair_evidence_lib = static_library('pair-evidence',
 bag_stats_lib = static_library('bag-stats', 'bag-stats-impl.cpp',
   link_with: dfs_class_list_lib)
 
-bag_stats = executable('bag-stats', 'bag-stats.cpp',
+bag_stats = executable('bag-stats', ['bag-stats.cpp', 'bag-stats-rank.cpp'],
   link_with: [bag_stats_lib, pairs_lib, pair_evidence_lib, dfs_class_list_lib,
               optparse_lib],
   dependencies: thread_dep,
   install: true)
 
-bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
-  link_with: [bag_stats_lib, dfs_class_list_lib, optparse_lib],
+bag_stats_sort = executable('bag-stats-sort',
+  ['bag-stats-sort.cpp', 'bag-stats-rank.cpp'],
+  link_with: [bag_stats_lib, pairs_lib, pair_evidence_lib, dfs_class_list_lib,
+              optparse_lib],
   install: true)
 
 pair_prior = executable('pair-prior', 'pair-prior.cpp',
@@ -465,7 +467,7 @@ test(
 test(
   'bag-stats-sort',
   bash,
-  args: [files('test-bag-stats-sort.sh'), bag_stats_sort],
+  args: [files('test-bag-stats-sort.sh'), bag_stats_sort, bag_stats],
 )
 test(
   'lc',

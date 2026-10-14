@@ -2,6 +2,7 @@
 set -euo pipefail
 
 bag_stats_sort=$1
+bag_stats=$2
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/nutrimatic-bag-stats-sort.XXXXXX")
 
 cleanup() {
@@ -14,59 +15,52 @@ fail() {
   exit 1
 }
 
-header="bag-stats 3
-letters aaacdglnnootttw
-min 3
-min-wb 5
-ss pb,wb,p
-pp
-pairs p
-dict d
-columns PAIR,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,MIN_WB,MIN_WB_WITH_PAIRS
-"
-cat > "$test_dir/stats" <<END
-$header
-cat dog,2,3,2,9,6,1,0,0
-low ant,1,1,1,4,4,0,0,0
-tan owl,1,5,1,9,9,0,0,0
-END
+export WFROOT=$test_dir/root
+mkdir -p "$WFROOT/.wf/dict"
+printf '%s\n' ant tan nat owl low cat act dog god bee rat art tar \
+  > "$WFROOT/.wf/dict/words.filtered"
+printf '%s\n' cat,dog act,god low,ant owl,tan bee,rat tar,dog ant,bee \
+  > "$test_dir/pairs"
+printf '%s\n' low owl ant tan cat bee rat x dog > "$test_dir/dict"
+printf '%s\n' '2.5 dog,cat' '1.0 bee,rat' '0.5 low,ant' > "$test_dir/prior"
 
-actual=$("$bag_stats_sort" --tp "$test_dir/stats")
-expected="$header
-cat dog,2,3,2,9,6,1,0,0
-tan owl,1,5,1,9,9,0,0,0
-low ant,1,1,1,4,4,0,0,0"
-[[ $actual == "$expected" ]] || fail "--tp rows are wrong: $actual"
+letters=catdoglowanttanbeerat
+"$bag_stats" --ss pb,pb,wb,p $letters "$test_dir/pairs" "$test_dir/dict" \
+  > "$test_dir/dump" 2> /dev/null
 
-actual=$("$bag_stats_sort" --wb < "$test_dir/stats" | sed '1,/^$/d' | cut -d, -f1)
-[[ $actual == $'tan owl\ncat dog\nlow ant' ]] || fail "--wb order is wrong: $actual"
+for options in "-n 5 --min-wb-frac --tp --by-pick" \
+               "--score cat,dog --score ant,bee --score-detail --tp --mp --by-pick" \
+               "-n 5 --tp --by-pick --best-pairs lead"; do
+  expected=$("$bag_stats" --ss pb,pb,wb,p $options --prior "$test_dir/prior" \
+    $letters "$test_dir/pairs" "$test_dir/dict" 2> /dev/null)
+  actual=$("$bag_stats_sort" $options --prior "$test_dir/prior" \
+    "$test_dir/dump" 2> /dev/null)
+  [[ $actual == "$expected" ]] || fail "$options isn't bag-stats's: $actual"
+done
 
-cat > "$test_dir/min-wb" <<END
-$header
-aa bb,1,0,0,0,0,0,8,2
-eee fff,1,0,0,0,0,0,4,2
-cc dd,1,0,0,0,0,0,4,3
-END
-actual=$("$bag_stats_sort" --min-wb "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
-[[ $actual == $'aa bb\neee fff\ncc dd' ]] || fail "--min-wb order is wrong: $actual"
+printf '%s\n' dog,cat owl,tan ant,bee > "$test_dir/pp"
+for options in "-n 50 --tp --mp --by-pick" \
+               "--score dog,cat --score bee,rat --tp --by-pick"; do
+  expected=$("$bag_stats" --ss ppb,pb,wb,p --pp "$test_dir/pp" $options \
+    --prior "$test_dir/prior" $letters "$test_dir/pairs" "$test_dir/dict" \
+    2> /dev/null)
+  actual=$("$bag_stats_sort" --ss ppb,pb,wb,p --pp "$test_dir/pp" $options \
+    --prior "$test_dir/prior" "$test_dir/dump" 2> /dev/null)
+  [[ -n $actual && $actual == "$expected" ]] ||
+    fail "--ss ppb,pb $options isn't bag-stats's: $actual"
+done
 
-actual=$("$bag_stats_sort" --min-wb-frac "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
-[[ $actual == $'cc dd\neee fff\naa bb' ]] || fail "--min-wb-frac order is wrong: $actual"
-
-sed -i 's/^eee fff,1,0,0,0,0,0,4,2$/eee fff,1,0,0,0,0,0,4,0/' "$test_dir/min-wb"
-actual=$("$bag_stats_sort" --min-wb-frac --by-length "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
-[[ $actual == $'cc dd\neee fff\naa bb' ]] || fail "--by-length order is wrong: $actual"
-
-actual=$("$bag_stats_sort" --min-wb-frac --pb-len 4 "$test_dir/min-wb" | sed '1,/^$/d' | cut -d, -f1)
-[[ $actual == $'cc dd\naa bb' ]] || fail "--pb-len rows are wrong: $actual"
-
-cat > "$test_dir/merge" <<END
-$header
-z z,1,0,0,0,5,0,2,1
-x x,1,0,0,0,1,0,2,2
-y y,1,0,0,0,9,0,2,0
-END
-actual=$("$bag_stats_sort" --min-wb-frac --mp "$test_dir/merge" | sed '1,/^$/d' | cut -d, -f1)
-[[ $actual == $'x x\ny y\nz z' ]] || fail "merged order is wrong: $actual"
+mkdir -p "$WFROOT/.wf/classified/no"
+printf '%s\n' act,god bee,rat > "$WFROOT/.wf/classified/no/no.pairs"
+actual=$("$bag_stats_sort" --tp "$test_dir/dump" 2> "$test_dir/err" |
+  sed '1,/^$/d')
+expected='cat dog + ant bee,1,3,3,21,9,0,0,0
+low ant + ant bee,2,3,3,16,6,0,0,0
+tar dog + ant bee,1,3,3,16,6,0,0,0
+cat dog + low ant,2,3,3,15,9,0,0,0
+low ant + tar dog,2,3,3,11,6,0,0,0'
+[[ $actual == "$expected" ]] || fail "NO pairs aren't refreshed: $actual"
+grep -qx 'bag-stats-sort: dropped 2 of 7 rows whose picks have no pairs left' \
+  "$test_dir/err" || fail "the dropped rows aren't reported: $(cat "$test_dir/err")"
 
 echo PASS
