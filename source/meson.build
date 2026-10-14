@@ -454,6 +454,9 @@ test(
   bash,
   args: [files('test-pairs.sh'), pairs],
 )
+test_pairs_packed = executable('test-pairs-packed', 'test-pairs-packed.cpp',
+  link_with: [pairs_lib, dfs_class_list_lib], install: false)
+test('pairs-packed', test_pairs_packed)
 test(
   'bag-stats',
   bash,

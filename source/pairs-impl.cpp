@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <bit>
 
 #include "dfs-cli-args.h"
 #include "dfs-diagnostic.h"
@@ -318,3 +319,170 @@ uint32_t RemainderGroups::find(PairsCounts const& key) const {
     if (_mm_movemask_epi8(tags) != 0xffff) return PairsExactCounter::NO_GROUP;
   }
 }
+
+namespace {
+
+uint64_t packed_key_hash(uint64_t key) {
+  uint64_t hash = key * UINT64_C(0x9e3779b97f4a7c15);
+  hash ^= hash >> 31;
+  hash *= UINT64_C(0xc2b2ae3d27d4eb4f);
+  return hash ^ (hash >> 29);
+}
+
+uint64_t packed_key_hash(PairsKey128 key) {
+  return packed_key_hash(uint64_t(key) ^
+                         uint64_t(key >> 64) * UINT64_C(0x165667b19e3779f9));
+}
+
+// The first of `n` positions where `before` is false; `before` is true for
+// every position ahead of it.
+template <typename Before>
+size_t first_position(size_t n, Before const& before) {
+  size_t low = 0;
+  while (n > 0) {
+    size_t const half = n / 2;
+    if (before(low + half)) {
+      low += half + 1;
+      n -= half + 1;
+    } else {
+      n = half;
+    }
+  }
+  return low;
+}
+
+}  // namespace
+
+PairsPacking::PairsPacking(PairsCounts const& bag) {
+  for (int i = 0; i < 26; ++i) {
+    if (bag.values[i] == 0) continue;
+    shifts_[i] = uint8_t(bits_);
+    widths_[i] = uint8_t(std::bit_width(unsigned(bag.values[i])) + 1);
+    bits_ += widths_[i];
+  }
+}
+
+template <typename Key>
+void PackedRemainderGroups<Key>::build(PackedGroups<Key> const& groups) {
+  size_t const count = groups.keys.size();
+  size_t slots = 16;
+  while (slots < 2 * count) slots *= 2;
+  tags_.assign(slots / 16, ExactCounterTags{});
+  keys_.resize(slots);
+  numbers_.resize(slots);
+  size_t const mask = tags_.size() - 1;
+  for (size_t position = 0; position < count; ++position) {
+    uint64_t const hash = packed_key_hash(groups.keys[position]);
+    for (size_t i = hash & mask;; i = (i + 1) & mask) {
+      __m128i const tags = _mm_load_si128(
+          reinterpret_cast<__m128i const*>(tags_[i].values));
+      unsigned const empty = unsigned(~_mm_movemask_epi8(tags)) & 0xffff;
+      if (empty == 0) continue;
+      unsigned const slot = __builtin_ctz(empty);
+      tags_[i].values[slot] = uint8_t((hash >> 56) | 0x80);
+      keys_[16 * i + slot] = groups.keys[position];
+      numbers_[16 * i + slot] = groups.numbers[position];
+      break;
+    }
+  }
+}
+
+template <typename Key>
+uint32_t PackedRemainderGroups<Key>::find(Key key) const {
+  uint64_t const hash = packed_key_hash(key);
+  __m128i const tag = _mm_set1_epi8(char((hash >> 56) | 0x80));
+  size_t const mask = tags_.size() - 1;
+  for (size_t i = hash & mask;; i = (i + 1) & mask) {
+    __m128i const tags = _mm_load_si128(
+        reinterpret_cast<__m128i const*>(tags_[i].values));
+    unsigned matches = unsigned(_mm_movemask_epi8(_mm_cmpeq_epi8(tags, tag)));
+    while (matches != 0) {
+      size_t const slot = 16 * i + __builtin_ctz(matches);
+      if (keys_[slot] == key) return numbers_[slot];
+      matches &= matches - 1;
+    }
+    if (_mm_movemask_epi8(tags) != 0xffff) return PairsExactCounter::NO_GROUP;
+  }
+}
+
+template <typename Key>
+PackedPairsCounter<Key>::PackedPairsCounter(PairsExactCounter const& counter)
+    : packing_(counter.bag()), guards_(packing_.guards<Key>()) {
+  DFS_CHECK(packing_.bits() <= int(8 * sizeof(Key)));
+  PairsExactCounter::Groups const& by_length = counter.groups_by_length();
+  DFS_CHECK(by_length.keys.size() == counter.groups().keys.size());
+  for (PairsCounts const& key : by_length.keys)
+    by_length_.keys.push_back(pack(key));
+  by_length_.numbers = by_length.numbers;
+  for (size_t group = 0; group < counter.groups().keys.size(); ++group) {
+    sizes_.push_back(counter.group_size(group));
+    lengths_.push_back(uint8_t(counter.group_length(group)));
+  }
+}
+
+template <typename Key>
+void PackedPairsCounter<Key>::filter(PackedGroups<Key> const& from, Key bag,
+                                     PackedGroups<Key>* out) const {
+  size_t const count = from.keys.size();
+  out->keys.resize(count);
+  out->numbers.resize(count);
+  Key const pool = bag | guards_;
+  size_t n = 0;
+  for (size_t i = 0; i < count; ++i) {
+    out->keys[n] = from.keys[i];
+    out->numbers[n] = from.numbers[i];
+    n += ((pool - from.keys[i]) & guards_) == guards_;
+  }
+  out->keys.resize(n);
+  out->numbers.resize(n);
+}
+
+// Each pair is counted from its shorter word, or from the lower-numbered one
+// when both are as long.
+template <typename Key>
+uint64_t PackedPairsCounter<Key>::count(
+    PairsCounts const& bag, PackedGroups<Key> const& groups,
+    PackedRemainderGroups<Key> const& hashed, Scratch* scratch) const {
+  int length = 0;
+  for (uint8_t value : bag.values) length += value;
+  size_t const count = groups.keys.size();
+  size_t const half = first_position(count, [&](size_t i) {
+    return 2 * lengths_[groups.numbers[i]] < length;
+  });
+  size_t const end = first_position(count, [&](size_t i) {
+    return 2 * lengths_[groups.numbers[i]] <= length;
+  });
+  if (scratch->remainders.size() < end) {
+    scratch->remainders.resize(end);
+    scratch->positions.resize(end);
+  }
+  Key* const remainders = scratch->remainders.data();
+  uint32_t* const positions = scratch->positions.data();
+  Key const pool = pack(bag) | guards_;
+  size_t n = 0;
+  for (size_t i = 0; i < end; ++i) {
+    Key const remaining = pool - groups.keys[i];
+    remainders[n] = remaining & ~guards_;
+    positions[n] = uint32_t(i);
+    n += (remaining & guards_) == guards_;
+  }
+  uint64_t total = 0;
+  for (size_t j = 0; j < n; ++j) {
+    size_t const i = positions[j];
+    uint32_t const a = groups.numbers[i];
+    uint64_t const size = sizes_[a];
+    if (i >= half && remainders[j] == groups.keys[i]) {
+      total += size * (size - 1) / 2;
+      continue;
+    }
+    uint32_t const b = hashed.find(remainders[j]);
+    if (b != PairsExactCounter::NO_GROUP && (i < half || b > a))
+      total += size * sizes_[b];
+  }
+  return total;
+}
+
+template class PackedRemainderGroups<uint64_t>;
+template class PackedRemainderGroups<PairsKey128>;
+template class PackedPairsCounter<uint64_t>;
+template class PackedPairsCounter<PairsKey128>;
