@@ -152,24 +152,6 @@ PairsExactCounter::PairsExactCounter(PairsCounts const& bag,
                                      int min_word_length)
     : bag_(bag), min_word_length_(min_word_length) {}
 
-namespace {
-
-// A hash of `key` for PairsExactCounter's slots, cheaper than
-// PairsCountsHash: its four words multiply independently.
-uint64_t exact_counter_hash(PairsCounts const& key) {
-  uint64_t words[4];
-  memcpy(words, key.values.data(), sizeof words);
-  uint64_t hash = words[0] * UINT64_C(0x9e3779b97f4a7c15) ^
-                  words[1] * UINT64_C(0xc2b2ae3d27d4eb4f) ^
-                  words[2] * UINT64_C(0x165667b19e3779f9) ^
-                  words[3] * UINT64_C(0xd6e8feb86659fd93);
-  hash ^= hash >> 31;
-  hash *= UINT64_C(0x9e3779b97f4a7c15);
-  return hash ^ (hash >> 29);
-}
-
-}  // namespace
-
 uint32_t PairsExactCounter::find(PairsCounts const& key) const {
   if (slots_.empty()) return NO_GROUP;
   uint64_t const hash = exact_counter_hash(key);
@@ -191,7 +173,7 @@ uint32_t PairsExactCounter::find(PairsCounts const& key) const {
 void PairsExactCounter::insert(PairsCounts const& key, uint32_t group) {
   if (2 * (size_t(group) + 1) > slots_.size()) {
     slots_.assign(std::max<size_t>(1024, 2 * slots_.size()), 0);
-    tags_.assign(slots_.size() / 16, Tags{});
+    tags_.assign(slots_.size() / 16, ExactCounterTags{});
     for (uint32_t g = 0; g < group; ++g) insert(all_.keys[g], g);
   }
   uint64_t const hash = exact_counter_hash(key);
@@ -235,6 +217,16 @@ void PairsExactCounter::add(std::string const& word) {
   ++sizes_[group];
 }
 
+void PairsExactCounter::finish() {
+  std::vector<uint32_t> order(all_.numbers);
+  std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+    return lengths_[a] < lengths_[b];
+  });
+  by_length_.keys.clear();
+  by_length_.numbers = order;
+  for (uint32_t group : order) by_length_.keys.push_back(all_.keys[group]);
+}
+
 void PairsExactCounter::filter(Groups const& from, PairsCounts const& bag,
                                Groups* out) const {
   out->keys.clear();
@@ -248,8 +240,20 @@ void PairsExactCounter::filter(Groups const& from, PairsCounts const& bag,
 
 // Each pair is counted from its shorter word, or from the lower-numbered one
 // when both are as long.
-uint64_t PairsExactCounter::count(PairsCounts const& bag,
-                                  Groups const& groups) const {
+uint64_t PairsExactCounter::count(PairsCounts const& bag) const {
+  return count(bag, by_length_,
+               [this](PairsCounts const& key) { return find(key); });
+}
+
+uint64_t PairsExactCounter::count(PairsCounts const& bag, Groups const& groups,
+                                  RemainderGroups const& hashed) const {
+  return count(bag, groups,
+               [&hashed](PairsCounts const& key) { return hashed.find(key); });
+}
+
+template <typename Find>
+uint64_t PairsExactCounter::count(PairsCounts const& bag, Groups const& groups,
+                                  Find const& find) const {
   int length = 0;
   for (uint8_t value : bag.values) length += value;
   uint64_t total = 0;
@@ -257,7 +261,7 @@ uint64_t PairsExactCounter::count(PairsCounts const& bag,
   for (size_t i = 0; i < groups.keys.size(); ++i) {
     uint32_t const a = groups.numbers[i];
     int const twice = 2 * lengths_[a];
-    if (twice > length) continue;
+    if (twice > length) break;
     PairsCounts const& key = groups.keys[i];
     if (!pairs_subtract(bag, key, &remaining)) continue;
     uint64_t const size = sizes_[a];
@@ -269,4 +273,44 @@ uint64_t PairsExactCounter::count(PairsCounts const& bag,
     if (b != NO_GROUP && (twice < length || b > a)) total += size * sizes_[b];
   }
   return total;
+}
+
+void RemainderGroups::build(PairsExactCounter::Groups const& groups) {
+  groups_ = &groups;
+  size_t const count = groups.keys.size();
+  size_t slots = 16;
+  while (slots < 2 * count) slots *= 2;
+  tags_.assign(slots / 16, ExactCounterTags{});
+  slots_.resize(slots);
+  size_t const mask = tags_.size() - 1;
+  for (size_t position = 0; position < count; ++position) {
+    uint64_t const hash = exact_counter_hash(groups.keys[position]);
+    for (size_t i = hash & mask;; i = (i + 1) & mask) {
+      __m128i const tags = _mm_load_si128(
+          reinterpret_cast<__m128i const*>(tags_[i].values));
+      unsigned const empty = unsigned(~_mm_movemask_epi8(tags)) & 0xffff;
+      if (empty == 0) continue;
+      unsigned const slot = __builtin_ctz(empty);
+      tags_[i].values[slot] = uint8_t((hash >> 56) | 0x80);
+      slots_[16 * i + slot] = uint32_t(position);
+      break;
+    }
+  }
+}
+
+uint32_t RemainderGroups::find(PairsCounts const& key) const {
+  uint64_t const hash = exact_counter_hash(key);
+  __m128i const tag = _mm_set1_epi8(char((hash >> 56) | 0x80));
+  size_t const mask = tags_.size() - 1;
+  for (size_t i = hash & mask;; i = (i + 1) & mask) {
+    __m128i const tags = _mm_load_si128(
+        reinterpret_cast<__m128i const*>(tags_[i].values));
+    unsigned matches = unsigned(_mm_movemask_epi8(_mm_cmpeq_epi8(tags, tag)));
+    while (matches != 0) {
+      uint32_t const position = slots_[16 * i + __builtin_ctz(matches)];
+      if (groups_->keys[position] == key) return groups_->numbers[position];
+      matches &= matches - 1;
+    }
+    if (_mm_movemask_epi8(tags) != 0xffff) return PairsExactCounter::NO_GROUP;
+  }
 }
