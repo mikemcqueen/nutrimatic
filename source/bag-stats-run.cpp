@@ -1,0 +1,338 @@
+#include "bag-stats-run.h"
+
+#include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <unordered_map>
+
+#include "dfs-cli-args.h"
+#include "dfs-cli-help.h"
+#include "letter-bag.h"
+#include "log.h"
+#include "row-input.h"
+#include "workflow-paths.h"
+
+RankOption parse_common_option(char const* program, int option,
+                               char const* arg, BagStatsArgs* out) {
+    RankOption const rank = parse_rank_option(program, option, arg,
+                                              &out->rank);
+    if (rank != RankOption::NOT_ONE) return rank;
+    switch (option) {
+      case 'u':
+        out->used_letters += arg;
+        return RankOption::PARSED;
+      case 's':
+        return parse_classified_sentence(arg, &out->sentence)
+            ? RankOption::PARSED : RankOption::BAD;
+      case OPT_COMMON_MIN_WB_LENGTH:
+        return parse_count(arg, "--min-wb-len", &out->min_word_bag_length)
+            ? RankOption::PARSED : RankOption::BAD;
+      case OPT_COMMON_SEARCH:
+        out->search_text = arg;
+        return RankOption::PARSED;
+      case OPT_COMMON_PROSPECTS:
+        out->prospects_file = arg;
+        return RankOption::PARSED;
+      case OPT_COMMON_THREADS:
+        return parse_count(arg, "--threads", &out->threads)
+            ? RankOption::PARSED : RankOption::BAD;
+      case OPT_COMMON_PROGRESS:
+        return parse_count(arg, "--progress", &out->progress)
+            ? RankOption::PARSED : RankOption::BAD;
+      default:
+        return RankOption::NOT_ONE;
+    }
+}
+
+bool check_common_args(char const* program, struct optparse* options,
+                       BagStatsArgs* out) {
+    char const* letters = optparse_arg(options);
+    out->pairs_file = optparse_arg(options);
+    out->dictionary_file = optparse_arg(options);
+    if (out->dictionary_file == NULL || optparse_arg(options) != NULL)
+        return false;
+    out->letters = letters;
+    if (!parse_search(program, out->search_text, &out->search)) return false;
+    if (out->search.pairs == 0) {
+        fprintf(stderr, "%s: --ss needs at least one pb\n", program);
+        return false;
+    }
+    RankArgs const& rank = out->rank;
+    bool const ranked = rank.top > 0 || !rank.score.empty();
+    if ((rank.top > 0 && rank.sorts.empty()) ||
+        (!rank.sorts.empty() && !ranked) ||
+        ((rank.by_length || rank.by_pick) && rank.sorts.empty())) {
+        fprintf(stderr, "%s: -n goes with sort options, and they, "
+                "--by-length and --by-pick with -n or --score\n", program);
+        return false;
+    }
+    if (!check_rank_args(program, rank, out->search)) return false;
+    if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
+        fprintf(stderr, "%s: --pp goes with a ppb step in --ss\n", program);
+        return false;
+    }
+    int const stdin_inputs = (strcmp(out->pairs_file, "-") == 0) +
+        (strcmp(out->dictionary_file, "-") == 0) +
+        (out->prospects_file != NULL && strcmp(out->prospects_file, "-") == 0) +
+        (rank.prior_file != NULL && strcmp(rank.prior_file, "-") == 0);
+    if (stdin_inputs > 1) {
+        fprintf(stderr, "%s: only one of PAIRS, DICT, --pp and --prior can "
+                "be -\n", program);
+        return false;
+    }
+    return true;
+}
+
+void help_common_options() {
+    fprintf(stdout,
+          "  for each combination of pair letter bags that fits LETTERS, count\n"
+          "  the combinations of DICT word bags that fit what is left, and the\n"
+          "  exact pairs (pairs -m%d -x -c) of what is left after each; PAIRS,\n"
+          "  DICT or the --pp FILE may be - for stdin; pairs in\n"
+          "  $WFROOT/%s/no/no.pairs are dropped from PAIRS and --pp\n"
+          "\n"
+          "  output: %s\n"
+          "\noptions:\n", INNER_MIN_WORD_LENGTH, WORKFLOW_CLASSIFIED_PATH,
+          BAG_STATS_COLUMNS);
+    dfs_help_used_letters();
+    classified_help_sentence_no();
+    dfs_help_option("--min-wb-len N",
+                    "MIN_WB counts the fitting DICT word bag combinations "
+                    "whose every bag has at least N letters (default %d), "
+                    "MIN_WB_WITH_PAIRS those of them whose remainder has at "
+                    "least %d exact pairs; bag-stats-sort --min-wb-frac sorts "
+                    "by their ratio",
+                    DEFAULT_MIN_WB_LENGTH, int(BAG_STATS_MIN_WB_PAIRS));
+    dfs_help_option("--ss STEPS",
+                    "the search sequence, comma-separated: ppb picks a pair "
+                    "bag from the --pp FILE, pb one from PAIRS, wb a word bag "
+                    "from DICT, and p, last and once, counts the exact pairs "
+                    "left; at least one pb and one wb; order doesn't matter; "
+                    "each row names its ppb and pb picks (default %s)",
+                    DEFAULT_SEARCH);
+    dfs_help_option("--pp FILE",
+                    "the prospective pairs ppb picks from, rows as in PAIRS; "
+                    "their bags are dropped from PAIRS");
+    dfs_help_option("--threads N",
+                    "count on N threads, at most the hardware threads, 0 for "
+                    "all of them (default: 1)");
+    dfs_help_option("--progress N",
+                    "report each pass's progress to stderr every N seconds, "
+                    "and its time when it ends; 0 for never "
+                    "(default: %d)", DEFAULT_PROGRESS_SECONDS);
+    dfs_help_option("-n N",
+                    "print only the N rows that rank first, in that order, "
+                    "as bag-stats-sort ranks this run's full dump with the "
+                    "same options; needs at least one SORT option");
+    help_rank_output_options();
+}
+
+void help_common_tail() {
+    dfs_help_option("-h, --help", "show this help");
+    fputs("\nSORT options, with -n, or with --score for its rank:\n",
+          stdout);
+    help_rank_sort_options();
+}
+
+bool remaining_letters(BagStatsArgs const& args, std::string* out) {
+    std::string bag;
+    std::string remove;
+    return clean_letters(args.letters.c_str(), "letters", &bag) &&
+        clean_letters(args.used_letters.c_str(), "used letters", &remove) &&
+        subtract_letters(bag, remove, out);
+}
+
+bool load_word_bags(char const* program, char const* path,
+                    PairsCounts const& bag, std::vector<PairsCounts>* out,
+                    std::vector<std::vector<std::string>>* spellings) {
+    std::unordered_map<PairsCounts, size_t, PairsCountsHash> seen;
+    return read_lines(program, path,
+        [&](std::string const& line, size_t) {
+            PairsCounts const counts = pairs_letter_counts(line.c_str());
+            if (counts == PairsCounts{} || !pairs_fits(bag, counts))
+                return true;
+            auto const [found, inserted] = seen.emplace(counts, out->size());
+            if (inserted) out->push_back(counts);
+            if (!spellings) return true;
+            if (inserted) spellings->emplace_back();
+            std::vector<std::string>& words = (*spellings)[found->second];
+            if (std::find(words.begin(), words.end(), line) == words.end())
+                words.push_back(line);
+            return true;
+        });
+}
+
+bool load_inner_dictionary(char const* program, PairsExactCounter* out) {
+    char const* const root = require_workflow_root(program);
+    if (root == NULL) return false;
+    std::string const path =
+        (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
+    FILE* wf = fopen(path.c_str(), "r");
+    if (!wf) { perror(path.c_str()); return false; }
+
+    char line[4096];
+    std::string word;
+    while (fgets(line, sizeof(line), wf)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+        word.assign(line, len);
+        out->add(word);
+    }
+    fclose(wf);
+    out->finish();
+    return true;
+}
+
+int letter_total(PairsCounts const& counts) {
+    int total = 0;
+    for (uint8_t value : counts.values) total += value;
+    return total;
+}
+
+void filter_word_bags(std::vector<PairsCounts> const& from,
+                      PairsCounts const& rest, std::vector<PairsCounts>* out) {
+    out->clear();
+    for (PairsCounts const& word_bag : from)
+        if (pairs_fits(rest, word_bag)) out->push_back(word_bag);
+}
+
+bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
+                           BagStatsInputs* out,
+                           std::vector<std::vector<std::string>>* spellings) {
+    if (args.sentence == CLASSIFIED_NO_SENTENCE)
+        alert(program, "--sentence not supplied");
+    char const* const root = require_workflow_root(program);
+    if (root == NULL) return false;
+    DfsPairSet rejected;
+    if (!load_no_pairs(program, root, args.sentence, &rejected) ||
+        !load_pick_bags(program, args.rank, args.prospects_file,
+                        args.pairs_file, out->bag, rejected,
+                        &out->prospect_bags, &out->pair_bags,
+                        &out->has_prior) ||
+        !load_word_bags(program, args.dictionary_file, out->bag,
+                        &out->word_bags, spellings) ||
+        !load_inner_dictionary(program, &out->counter))
+        return false;
+    out->steps.assign(args.search.pairs, &out->pair_bags);
+    out->steps.insert(out->steps.end(), args.search.prospects,
+                      &out->prospect_bags);
+    return true;
+}
+
+size_t bag_stats_threads(BagStatsArgs const& args) {
+    size_t threads = resolve_search_threads(args.threads);
+    unsigned int const cores = std::thread::hardware_concurrency();
+    if (cores != 0) threads = std::min(threads, size_t(cores));
+    return threads;
+}
+
+std::string format_duration(double seconds) {
+    long const s = std::lround(seconds);
+    char out[32];
+    if (s >= 3600)
+        snprintf(out, sizeof out, "%ldh%02ldm", s / 3600, s / 60 % 60);
+    else if (s >= 60)
+        snprintf(out, sizeof out, "%ldm%02lds", s / 60, s % 60);
+    else
+        snprintf(out, sizeof out, "%lds", s);
+    return out;
+}
+
+std::string PickWalk::pair() const {
+    std::string out;
+    for (size_t k = 0; k < steps_.size(); ++k) {
+        size_t const j = (k + pair_steps_) % steps_.size();
+        if (k > 0) out += " + ";
+        out += (*steps_[j])[chosen_[j]].pair;
+    }
+    return out;
+}
+
+void PickWalk::picks(std::vector<uint32_t>* out) const {
+    out->resize(steps_.size());
+    for (size_t j = 0; j < steps_.size(); ++j)
+        (*out)[j] = uint32_t(chosen_[j] +
+                             (j < pair_steps_ ? 0 : steps_[0]->size()));
+}
+
+uint64_t PickWalk::pairs() const {
+    uint64_t out = 1;
+    for (size_t j = 0; j < steps_.size(); ++j)
+        out *= (*steps_[j])[chosen_[j]].pairs;
+    return out;
+}
+
+bool PickWalk::repeats_bag(size_t step, PairsCounts const& counts) const {
+    for (size_t j = 0; j < step; ++j)
+        if (steps_[j] != steps_[step] &&
+            (*steps_[j])[chosen_[j]].counts == counts)
+            return true;
+    return false;
+}
+
+std::vector<size_t> unit_blocks(size_t units) {
+    std::vector<size_t> out(units + 1);
+    for (size_t unit = 0; unit <= units; ++unit) out[unit] = unit;
+    return out;
+}
+
+std::vector<size_t> census_blocks(
+        std::vector<std::vector<PairBag> const*> const& steps, int pair_steps,
+        PairsCounts const& bag, size_t threads, uint64_t rows) {
+    size_t const units = steps[0]->size();
+    std::vector<uint64_t> unit_rows(units);
+    std::atomic<size_t> next{0};
+    run_threads(threads, [&](size_t) {
+        PickWalk walk(steps, pair_steps);
+        auto const enter = [](size_t, PairsCounts const&) {};
+        for (size_t unit; (unit = next.fetch_add(1)) < units;) {
+            uint64_t count = 0;
+            walk.walk(unit, bag, enter,
+                      [&](PairsCounts const&, int) { ++count; });
+            unit_rows[unit] = count;
+        }
+    });
+    std::vector<size_t> out{0};
+    uint64_t block_rows = 0;
+    for (size_t unit = 0; unit < units; ++unit) {
+        if (block_rows > 0 && block_rows + unit_rows[unit] > rows) {
+            out.push_back(unit);
+            block_rows = 0;
+        }
+        block_rows += unit_rows[unit];
+    }
+    if (out.back() != units) out.push_back(units);
+    return out;
+}
+
+PairsCounts picks_rest(WalkBase const& walk,
+                       std::vector<size_t> const& picks) {
+    PairsCounts rest = walk.bag;
+    for (size_t j = 0; j < picks.size(); ++j)
+        pairs_subtract(rest, (*walk.steps[j])[picks[j]].counts, &rest);
+    return rest;
+}
+
+void name_picks(WalkBase const& walk, std::vector<size_t> const& picks,
+                BagStatsRow* row) {
+    size_t const pair_steps = size_t(walk.args.search.pairs);
+    row->pair.clear();
+    row->pairs = 1;
+    for (size_t k = 0; k < picks.size(); ++k) {
+        size_t const j = (k + pair_steps) % picks.size();
+        PairBag const& pick = (*walk.steps[j])[picks[j]];
+        if (k > 0) row->pair += " + ";
+        row->pair += pick.pair;
+        row->pairs *= pick.pairs;
+    }
+}
+
+BagStatsRankers::BagStatsRankers(BagStatsArgs const& args,
+                                 BagStatsInputs const& inputs)
+    : ranker(sort_flag_keys(args.rank.sorts), args.rank.by_length),
+      pick_ranker(sort_flag_keys(args.rank.sorts),
+                  pick_ranks(inputs.pair_bags, inputs.prospect_bags,
+                             inputs.has_prior)),
+      passes((args.rank.top != 0 || !args.rank.score.empty()) &&
+             (args.rank.by_pick || ranker.needs_counts())) {}
