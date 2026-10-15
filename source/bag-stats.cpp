@@ -50,6 +50,7 @@ constexpr int OPT_THREADS = 259;
 constexpr int OPT_PROGRESS = 260;
 constexpr int OPT_CACHE_SIZE = 261;
 constexpr int OPT_PAIR_CACHE_SIZE = 262;
+constexpr int OPT_COMPLETIONS = 263;
 constexpr int DEFAULT_PROGRESS_SECONDS = 60;
 constexpr int DEFAULT_CACHE_SIZE_MB = 1000;
 constexpr int DEFAULT_PAIR_CACHE_SIZE_MB = 1000;
@@ -71,6 +72,7 @@ struct Args {
     int pair_cache_size_mb = DEFAULT_PAIR_CACHE_SIZE_MB;
     int progress = DEFAULT_PROGRESS_SECONDS;
     RankArgs rank;
+    int completions = 0;
     char const* pairs_file = NULL;
     char const* dictionary_file = NULL;
 };
@@ -81,8 +83,8 @@ void usage(char const* program, FILE* out) {
             "       [--threads N] [--cache-size N] [--pair-cache-size N]\n"
             "       [--progress N]\n"
             "       [-n N SORT... [--by-length | --by-pick]]\n"
-            "       [--score W1,W2... [--score-detail] SORT...\n"
-            "        [--by-length | --by-pick]]\n"
+            "       [--score W1,W2... [--score-detail] [--completions N]\n"
+            "        [SORT... [--by-length | --by-pick]]]\n"
             "       [--best-pairs appear|lead]\n"
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]] [--top-segments]\n"
@@ -138,8 +140,19 @@ void usage(char const* program, FILE* out) {
                     "as bag-stats-sort ranks this run's full dump with the "
                     "same options; needs at least one SORT option");
     help_rank_output_options();
+    dfs_help_option("--completions N",
+                    "with --score, below the rank print the row's N "
+                    "completions with the most exact pairs, ties in DICT "
+                    "order: each one's PC, MIN when its every word bag has "
+                    "at least --min-wb-len letters and PC is at least %d "
+                    "(MIN_WB_WITH_PAIRS counts it), SOLO when it leaves "
+                    "nothing, and its word bags, each as its DICT "
+                    "spellings; --score without SORT options prints the row "
+                    "without its rank, counted from what its picks leave "
+                    "alone", int(BAG_STATS_MIN_WB_PAIRS));
     dfs_help_option("-h, --help", "show this help");
-    fputs("\nSORT options, only with -n or --score:\n", stdout);
+    fputs("\nSORT options, with -n, or with --score for its rank:\n",
+          stdout);
     help_rank_sort_options();
 }
 
@@ -154,6 +167,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "cache-size", OPT_CACHE_SIZE, OPTPARSE_REQUIRED },
         { "pair-cache-size", OPT_PAIR_CACHE_SIZE, OPTPARSE_REQUIRED },
         { "progress", OPT_PROGRESS, OPTPARSE_REQUIRED },
+        { "completions", OPT_COMPLETIONS, OPTPARSE_REQUIRED },
         BAG_STATS_RANK_LONG_OPTIONS,
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
@@ -206,6 +220,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             if (!parse_count(options.optarg, "--progress", &out->progress))
                 return false;
             break;
+          case OPT_COMPLETIONS:
+            if (!parse_count(options.optarg, "--completions",
+                             &out->completions))
+                return false;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -228,13 +247,18 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
     RankArgs const& rank = out->rank;
     bool const ranked = rank.top > 0 || !rank.score.empty();
-    if (ranked != !rank.sorts.empty() ||
-        ((rank.by_length || rank.by_pick) && !ranked)) {
-        fprintf(stderr, "%s: -n or --score goes with sort options, and they, "
-                "--by-length and --by-pick with it\n", PROGRAM);
+    if ((rank.top > 0 && rank.sorts.empty()) ||
+        (!rank.sorts.empty() && !ranked) ||
+        ((rank.by_length || rank.by_pick) && rank.sorts.empty())) {
+        fprintf(stderr, "%s: -n goes with sort options, and they, "
+                "--by-length and --by-pick with -n or --score\n", PROGRAM);
         return false;
     }
     if (!check_rank_args(PROGRAM, rank, out->search)) return false;
+    if (out->completions > 0 && rank.score.empty()) {
+        fprintf(stderr, "%s: --completions goes with --score\n", PROGRAM);
+        return false;
+    }
     if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
         fprintf(stderr, "%s: --pp goes with a ppb step in --ss\n", PROGRAM);
         return false;
@@ -259,16 +283,23 @@ bool remaining_letters(Args const& args, std::string* out) {
         subtract_letters(bag, remove, out);
 }
 
+// With `spellings`, also each bag's distinct DICT lines, in DICT order.
 bool load_word_bags(char const* path, PairsCounts const& bag,
-                    std::vector<PairsCounts>* out) {
-    std::unordered_set<PairsCounts, PairsCountsHash> seen;
+                    std::vector<PairsCounts>* out,
+                    std::vector<std::vector<std::string>>* spellings) {
+    std::unordered_map<PairsCounts, size_t, PairsCountsHash> seen;
     return read_lines(PROGRAM, path,
         [&](std::string const& line, size_t) {
             PairsCounts const counts = pairs_letter_counts(line.c_str());
-            if (counts == PairsCounts{} || !pairs_fits(bag, counts) ||
-                !seen.insert(counts).second)
+            if (counts == PairsCounts{} || !pairs_fits(bag, counts))
                 return true;
-            out->push_back(counts);
+            auto const [found, inserted] = seen.emplace(counts, out->size());
+            if (inserted) out->push_back(counts);
+            if (!spellings) return true;
+            if (inserted) spellings->emplace_back();
+            std::vector<std::string>& words = (*spellings)[found->second];
+            if (std::find(words.begin(), words.end(), line) == words.end())
+                words.push_back(line);
             return true;
         });
 }
@@ -1116,6 +1147,9 @@ struct Walk {
     // How many passes walk the rows: 2 when ranking needs the sort value
     // counts first.
     int passes;
+    PairsExactCounter const& counter;
+    // With --completions, each of word_bags' DICT spellings.
+    std::vector<std::vector<std::string>> const& spellings;
 
     RowWalker walker() const {
         return RowWalker(steps, args.search.pairs, word_bags,
@@ -1316,6 +1350,149 @@ ScoreRank score_rank(Walk const& walk, R const& ranker,
     return out;
 }
 
+// One combination of one word bag per word step that fits a remainder.
+struct Completion {
+    // Indices into Walk::word_bags, non-decreasing.
+    std::vector<uint32_t> word_bags;
+    uint64_t pairs;
+    uint64_t seq;
+    bool min;
+    bool solo;
+};
+
+bool completion_before(Completion const& a, Completion const& b) {
+    return a.pairs != b.pairs ? a.pairs > b.pairs : a.seq < b.seq;
+}
+
+// A remainder's `top` completions with the most exact pairs, counted as
+// RestCounter counts them.
+class CompletionCollector {
+  public:
+    CompletionCollector(Walk const& walk, PairsCounts const& rest, size_t top)
+        : walk_(walk), top_(top) {
+        for (size_t i = 0; i < walk.word_bags.size(); ++i)
+            if (pairs_fits(rest, walk.word_bags[i]))
+                fitting_.push_back(uint32_t(i));
+        walk.counter.filter(walk.counter.groups_by_length(), rest, &groups_);
+        hashed_.build(groups_);
+        visit(1, 0, rest, true);
+        std::sort(heap_.begin(), heap_.end(), completion_before);
+    }
+
+    // The completions, best first.
+    std::vector<Completion> const& top() const { return heap_; }
+
+    // Every completion of the remainder.
+    uint64_t total() const { return seq_; }
+
+  private:
+    void visit(int word, size_t start, PairsCounts const& rest, bool is_min) {
+        PairsCounts word_rest;
+        for (size_t i = start; i < fitting_.size(); ++i) {
+            PairsCounts const& word_bag = walk_.word_bags[fitting_[i]];
+            if (!pairs_subtract(rest, word_bag, &word_rest)) continue;
+            bool const min = is_min &&
+                letter_total(word_bag) >= walk_.args.min_word_bag_length;
+            chosen_.push_back(fitting_[i]);
+            if (word < walk_.args.search.words)
+                visit(word + 1, i, word_rest, min);
+            else
+                add(word_rest, min);
+            chosen_.pop_back();
+        }
+    }
+
+    void add(PairsCounts const& word_rest, bool min) {
+        bool const solo = word_rest == PairsCounts{};
+        uint64_t const count =
+            solo || letter_total(word_rest) < 2 * INNER_MIN_WORD_LENGTH
+                ? 0 : walk_.counter.count(word_rest, groups_, hashed_);
+        Completion completion{{}, count, seq_++,
+                              min && count >= BAG_STATS_MIN_WB_PAIRS, solo};
+        if (heap_.size() == top_ &&
+            !completion_before(completion, heap_.front()))
+            return;
+        completion.word_bags = chosen_;
+        if (heap_.size() == top_) {
+            std::pop_heap(heap_.begin(), heap_.end(), completion_before);
+            heap_.pop_back();
+        }
+        heap_.push_back(std::move(completion));
+        std::push_heap(heap_.begin(), heap_.end(), completion_before);
+    }
+
+    Walk const& walk_;
+    size_t top_;
+    std::vector<uint32_t> fitting_;
+    PairsExactCounter::Groups groups_;
+    RemainderGroups hashed_;
+    std::vector<uint32_t> chosen_;
+    std::vector<Completion> heap_;
+    uint64_t seq_ = 0;
+};
+
+// What the picks `picks`, list indices in walk step order, leave.
+PairsCounts picks_rest(Walk const& walk, std::vector<size_t> const& picks) {
+    PairsCounts rest = walk.bag;
+    for (size_t j = 0; j < picks.size(); ++j) {
+        PairsCounts next;
+        pairs_subtract(rest, (*walk.steps[j])[picks[j]].counts, &next);
+        rest = next;
+    }
+    return rest;
+}
+
+// The row whose picks are `picks`, counted from what they leave alone.
+BagStatsRow score_row(Walk const& walk, std::vector<size_t> const& picks) {
+    PairsCounts const rest = picks_rest(walk, picks);
+    std::vector<PairsCounts> fitting;
+    filter_word_bags(walk.word_bags, rest, &fitting);
+    RestCounter counter(walk.args.search.words, walk.args.min_word_bag_length,
+                        walk.table, walk.inner.groups(1));
+    if (counter.needs_groups()) counter.groups().filter(0, rest);
+    BagStatsRow row{};
+    counter.count(rest, fitting, 0, &row);
+    size_t const pair_steps = size_t(walk.args.search.pairs);
+    row.pairs = 1;
+    for (size_t k = 0; k < picks.size(); ++k) {
+        size_t const j = (k + pair_steps) % picks.size();
+        PairBag const& pick = (*walk.steps[j])[picks[j]];
+        if (k > 0) row.pair += " + ";
+        row.pair += pick.pair;
+        row.pairs *= pick.pairs;
+    }
+    return row;
+}
+
+// Prints --completions for the row whose picks are `picks`.
+void print_completions(Walk const& walk, std::vector<size_t> const& picks) {
+    PairsCounts const rest = picks_rest(walk, picks);
+    CompletionCollector const collector(walk, rest,
+                                        size_t(walk.args.completions));
+    std::vector<Completion> const& top = collector.top();
+    printf("completions %zu of %llu by PC\n", top.size(),
+           (unsigned long long)collector.total());
+    int const width = top.empty()
+        ? 1 : int(std::to_string(top.front().pairs).size());
+    std::string words;
+    for (Completion const& completion : top) {
+        words.clear();
+        for (uint32_t word_bag : completion.word_bags) {
+            if (!words.empty()) words += " + ";
+            std::vector<std::string> const& spellings =
+                walk.spellings[word_bag];
+            for (size_t k = 0; k < spellings.size(); ++k) {
+                if (k > 0) words += '/';
+                words += spellings[k];
+            }
+        }
+        printf("PC %*llu %-4s %s\n", width,
+               (unsigned long long)completion.pairs,
+               completion.min ? "MIN" : completion.solo ? "SOLO" : "",
+               words.c_str());
+    }
+}
+
 // Prints the --score row and its rank.
 template <typename R>
 int print_score(Walk const& walk, R* ranker, bool passes) {
@@ -1323,6 +1500,11 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
     if (!score_picks(PROGRAM, walk.args.rank.score, walk.args.search,
                      walk.steps, walk.bag, &picks))
         return 1;
+    if (walk.args.rank.sorts.empty()) {
+        write_bag_stats_row(stdout, score_row(walk, picks));
+        if (walk.args.completions > 0) print_completions(walk, picks);
+        return 0;
+    }
     RankedRow target;
     size_t length;
     std::vector<uint32_t> target_picks;
@@ -1343,6 +1525,7 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
                                target_picks);
         }
     }
+    if (walk.args.completions > 0) print_completions(walk, picks);
     return 0;
 }
 
@@ -1391,12 +1574,14 @@ int main(int argc, char* argv[]) {
     std::vector<PairBag> prospect_bags;
     std::vector<PairBag> pair_bags;
     std::vector<PairsCounts> word_bags;
+    std::vector<std::vector<std::string>> spellings;
     PairsExactCounter counter(bag, INNER_MIN_WORD_LENGTH);
     bool has_prior;
     if (!load_pick_bags(PROGRAM, args.rank, args.prospects_file,
                         args.pairs_file, bag, rejected, &prospect_bags,
                         &pair_bags, &has_prior) ||
-        !load_word_bags(args.dictionary_file, bag, &word_bags) ||
+        !load_word_bags(args.dictionary_file, bag, &word_bags,
+                        args.completions > 0 ? &spellings : nullptr) ||
         !load_inner_dictionary(&counter))
         return 1;
     DfsPairSet().swap(rejected);
@@ -1413,22 +1598,25 @@ int main(int argc, char* argv[]) {
     // Only leftovers longer than the index reach the pair cache.
     bool const pair_cache_wanted =
         args.pair_cache_size_mb != 0 && index.max_length() < longest;
+    RankArgs const& rank = args.rank;
+    bool const one_row = !rank.score.empty() && rank.sorts.empty();
     PairCountTable const table(
-        std::move(index), bag, counter, steps.size() > 1, threads,
+        std::move(index), bag, counter, steps.size() > 1 && !one_row,
+        threads,
         pair_cache_wanted ? size_t(args.pair_cache_size_mb) : 0);
     if (!table.allocated()) {
         fprintf(stderr, "%s: can't allocate the pair count table\n", PROGRAM);
         return 1;
     }
 
-    RankArgs const& rank = args.rank;
     std::vector<BagStatsCount const*> const keys = sort_flag_keys(rank.sorts);
     Ranker ranker(keys, rank.by_length);
     PickRanker pick_ranker(keys,
                            pick_ranks(pair_bags, prospect_bags, has_prior));
     bool const passes = (rank.top != 0 || !rank.score.empty()) &&
         (rank.by_pick || ranker.needs_counts());
-    RestTable const rest_table(bag, steps.size() > 1 || passes,
+    RestTable const rest_table(bag,
+                               (steps.size() > 1 || passes) && !one_row,
                                size_t(args.cache_size_mb),
                                args.progress != 0);
     if (args.progress != 0 && rest_table.enabled())
@@ -1457,7 +1645,8 @@ int main(int argc, char* argv[]) {
                     "past 128\n", PROGRAM, inner.bits());
     }
     Walk const walk{steps, prospect_bags, bag, word_bags, args, inner, table,
-                    rest_table, threads, passes ? 2 : 1};
+                    rest_table, threads, passes ? 2 : 1, counter,
+                    spellings};
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
     if (!rank.score.empty())

@@ -99,6 +99,16 @@ actual=$("$bag_stats" --score ant,low --tp catdoglowanttan "$test_dir/pairs" \
 [[ $actual == $'low ant,1,1,1,4,4,0,0,0\nrank 2 of 2' ]] ||
   fail "--score is wrong: $actual"
 
+actual=$("$bag_stats" --score cat,dog --tp --completions 2 catdoglowanttan \
+  "$test_dir/pairs" "$test_dir/dict" | sed 1,2d)
+[[ $actual == $'completions 2 of 3 by PC\nPC 6      ant\nPC 3      low/owl' ]] ||
+  fail "--completions is wrong: $actual"
+
+actual=$("$bag_stats" --score cat,dog --score low,ant --ss pb,pb,wb,p \
+  --completions 1 catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0,0\ncompletions 1 of 1 by PC\nPC 0 SOLO ant' ]] ||
+  fail "--score without SORT options is wrong: $actual"
+
 echo '2.5 dog,cat' > "$test_dir/prior"
 actual=$("$bag_stats" --score cat,dog --score low,ant --min-wb-frac --min-wbwp \
   --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
