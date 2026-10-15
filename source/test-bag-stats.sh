@@ -46,7 +46,7 @@ x
 EOF
 
 actual=$("$bag_stats" catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
-expected="bag-stats 4
+expected="bag-stats 5
 letters aaacdglnnootttw
 min 3
 min-wb 5
@@ -55,87 +55,87 @@ pp
 sentence
 pairs $test_dir/pairs
 dict $test_dir/dict
-columns PAIR,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,MIN_WB,MIN_WB_WITH_PAIRS
+columns PAIR,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,WB_WITH_MIN_PAIRS
 
-cat dog,2,3,2,9,6,1,1,0
-low ant,1,1,1,4,4,0,0,0"
+cat dog,2,1,0,0,0,1,0
+low ant,1,0,0,0,0,0,0"
 [[ $actual == "$expected" ]] || fail "rows are wrong: $actual"
 
 actual=$("$bag_stats" --min-wb-len 3 catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed -n '/^min-wb /p; /^cat dog,/p')
-[[ $actual == $'min-wb 3\ncat dog,2,3,2,9,6,1,3,2' ]] ||
+[[ $actual == $'min-wb 3\ncat dog,2,3,2,9,6,1,2' ]] ||
   fail "--min-wb-len 3 rows are wrong: $actual"
 
 sum=$(( $("$pairs" -m3 -x -c aanntt) + $("$pairs" -m3 -x -c lowant) ))
 [[ $sum == 9 ]] || fail "pairs -m3 -x -c sum is $sum, not 9"
 
-actual=$("$bag_stats" -u cat catdoglowanttan "$test_dir/pairs" - \
+actual=$("$bag_stats" --min-wb-len 3 -u cat catdoglowanttan "$test_dir/pairs" - \
   < "$test_dir/dict" | sed '1,/^$/d')
-[[ $actual == 'low ant,1,1,0,0,0,0,0,0' ]] || fail "-u rows are wrong: $actual"
+[[ $actual == 'low ant,1,1,0,0,0,0,0' ]] || fail "-u rows are wrong: $actual"
 
-actual=$("$bag_stats" --ss pb,pb,wb,p catdoglowanttan "$test_dir/pairs" \
+actual=$("$bag_stats" --min-wb-len 3 --ss pb,pb,wb,p catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d')
-[[ $actual == 'cat dog + low ant,2,1,0,0,0,1,0,0' ]] ||
+[[ $actual == 'cat dog + low ant,2,1,0,0,0,1,0' ]] ||
   fail "pb,pb rows are wrong: $actual"
 
-actual=$("$bag_stats" --ss wb,pb,wb,p --threads 2 catdoglowanttan \
+actual=$("$bag_stats" --min-wb-len 3 --ss wb,pb,wb,p --threads 2 catdoglowanttan \
   "$test_dir/pairs" "$test_dir/dict" | sed -n '/^ss /p; /^cat dog,/p')
-[[ $actual == $'ss pb,wb,wb,p\ncat dog,2,2,0,0,0,0,0,0' ]] ||
+[[ $actual == $'ss pb,wb,wb,p\ncat dog,2,2,0,0,0,0,0' ]] ||
   fail "wb,wb rows are wrong: $actual"
 
 echo low,ant > "$test_dir/prospects"
-actual=$("$bag_stats" --ss ppb,pb,wb,p --pp "$test_dir/prospects" \
+actual=$("$bag_stats" --min-wb-len 3 --ss ppb,pb,wb,p --pp "$test_dir/prospects" \
   catdoglowanttan "$test_dir/pairs" "$test_dir/dict" | sed '1,/^$/d')
-expected=$("$bag_stats" -u lowant catdoglowanttan "$test_dir/pairs" \
+expected=$("$bag_stats" --min-wb-len 3 -u lowant catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d; s/^/low ant + /')
 [[ $actual == "$expected" ]] || fail "ppb rows aren't the -u rows: $actual"
 
-actual=$("$bag_stats" -n 1 --tp --by-length catdoglowanttan "$test_dir/pairs" \
+actual=$("$bag_stats" --min-wb-len 3 -n 1 --tp --by-length catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d')
-[[ $actual == 'cat dog,2,3,2,9,6,1,1,0' ]] || fail "-n rows are wrong: $actual"
+[[ $actual == 'cat dog,2,3,2,9,6,1,2' ]] || fail "-n rows are wrong: $actual"
 
-actual=$("$bag_stats" --score ant,low --tp catdoglowanttan "$test_dir/pairs" \
+actual=$("$bag_stats" --min-wb-len 3 --score ant,low --tp catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict")
-[[ $actual == $'low ant,1,1,1,4,4,0,0,0\nrank 2 of 2' ]] ||
+[[ $actual == $'low ant,1,1,1,4,4,0,1\nrank 2 of 2' ]] ||
   fail "--score is wrong: $actual"
 
-actual=$("$bag_stats" --score cat,dog --tp --completions 2 catdoglowanttan \
+actual=$("$bag_stats" --min-wb-len 3 --score cat,dog --tp --completions 2 catdoglowanttan \
   "$test_dir/pairs" "$test_dir/dict" | sed 1,2d)
 [[ $actual == $'completions 2 of 3 by PC\nPC 6      ant\nPC 3      low/owl' ]] ||
   fail "--completions is wrong: $actual"
 
-actual=$("$bag_stats" --score cat,dog --score low,ant --ss pb,pb,wb,p \
+actual=$("$bag_stats" --min-wb-len 3 --score cat,dog --score low,ant --ss pb,pb,wb,p \
   --completions 1 catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0,0\ncompletions 1 of 1 by PC\nPC 0 SOLO ant' ]] ||
+[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0\ncompletions 1 of 1 by PC\nPC 0 SOLO ant' ]] ||
   fail "--score without SORT options is wrong: $actual"
 
 echo '2.5 dog,cat' > "$test_dir/prior"
-actual=$("$bag_stats" --score cat,dog --score low,ant --min-wb-frac --min-wbwp \
+actual=$("$bag_stats" --min-wb-len 3 --score cat,dog --score low,ant --wbfrac-min --wbwp-min \
   --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
   "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0,0\nrank 1 of 1' ]] ||
+[[ $actual == $'cat dog + low ant,2,1,0,0,0,1,0\nrank 1 of 1' ]] ||
   fail "--by-pick --score is wrong: $actual"
 
-actual=$("$bag_stats" --score cat,dog --score low,ant --score-detail \
-  --min-wb-frac --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p \
+actual=$("$bag_stats" --min-wb-len 3 --score cat,dog --score low,ant --score-detail \
+  --wbfrac-min --by-pick --prior "$test_dir/prior" --ss pb,pb,wb,p \
   catdoglowanttan "$test_dir/pairs" "$test_dir/dict" | sed -n 3,4p)
 [[ $actual == $'KEY 0.0910297 SUM 0.248698\nPAIR cat dog PRIOR 2.5 P 0.25000 ROWS 1 TERM 0.0910297 Q 0.50000' ]] ||
   fail "--score-detail is wrong: $actual"
 
-actual=$("$bag_stats" -n 1 --best-pairs appear --min-wb-frac --by-pick \
+actual=$("$bag_stats" --min-wb-len 3 -n 1 --best-pairs appear --wbfrac-min --by-pick \
   --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
   "$test_dir/pairs" "$test_dir/dict")
 [[ $actual == $'cat,dog\nlow,ant' ]] ||
   fail "--best-pairs appear is wrong: $actual"
 
-actual=$("$bag_stats" -n 1 --best-pairs lead --min-wb-frac --by-pick \
+actual=$("$bag_stats" --min-wb-len 3 -n 1 --best-pairs lead --wbfrac-min --by-pick \
   --prior "$test_dir/prior" --ss pb,pb,wb,p catdoglowanttan \
   "$test_dir/pairs" "$test_dir/dict")
 [[ $actual == 'cat,dog' ]] || fail "--best-pairs lead is wrong: $actual"
 
-cached=$("$bag_stats" -n 2 --min-wb-frac --by-pick --prior "$test_dir/prior" \
+cached=$("$bag_stats" --min-wb-len 3 -n 2 --wbfrac-min --by-pick --prior "$test_dir/prior" \
   --ss pb,pb,wb,p catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
-uncached=$("$bag_stats" -n 2 --min-wb-frac --by-pick --prior "$test_dir/prior" \
+uncached=$("$bag_stats" --min-wb-len 3 -n 2 --wbfrac-min --by-pick --prior "$test_dir/prior" \
   --ss pb,pb,wb,p --cache-size 0 catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict")
 [[ -n $cached && $cached == "$uncached" ]] ||
@@ -144,7 +144,7 @@ uncached=$("$bag_stats" -n 2 --min-wb-frac --by-pick --prior "$test_dir/prior" \
 mkdir -p "$WFROOT/.wf/classified/no" "$WFROOT/.wf/classified/s1/no"
 echo dog,cat > "$WFROOT/.wf/classified/no/no.pairs"
 echo ant,low > "$WFROOT/.wf/classified/s1/no/no.pairs"
-actual=$("$bag_stats" -s 1 catdoglowanttan "$test_dir/pairs" \
+actual=$("$bag_stats" --min-wb-len 3 -s 1 catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d' | cut -d, -f1,2)
 [[ $actual == 'act god,1' ]] || fail "-s NO pairs aren't dropped: $actual"
 

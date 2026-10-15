@@ -96,8 +96,7 @@ GpuInputs gpu_inputs(BagStatsInputs const& inputs, BagStatsArgs const& args) {
     }
     out.min_group_length = INNER_MIN_WORD_LENGTH;
     out.words = args.search.words;
-    out.min_word_bag_length = args.min_word_bag_length;
-    out.min_word_bag_pairs = BAG_STATS_MIN_WB_PAIRS;
+    out.min_pairs = BAG_STATS_MIN_PAIRS;
     return out;
 }
 
@@ -108,8 +107,7 @@ BagStatsRow gpu_row(GpuCounts const& counts) {
     row.total_pairs = counts.total_pairs;
     row.max_pairs = counts.max_pairs;
     row.solo = counts.solo;
-    row.min_word_bags = counts.min_word_bags;
-    row.min_with_pairs = counts.min_with_pairs;
+    row.with_min_pairs = counts.with_min_pairs;
     return row;
 }
 

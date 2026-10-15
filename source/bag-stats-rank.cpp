@@ -54,7 +54,7 @@ RankOption parse_rank_option(char const* program, int option, char const* arg,
                              RankArgs* out) {
     constexpr int SORT_FLAG_COUNT =
         sizeof(BAG_STATS_SORT_FLAGS) / sizeof(BAG_STATS_SORT_FLAGS[0]);
-    static_assert(SORT_FLAG_COUNT == 7);
+    static_assert(SORT_FLAG_COUNT == 6);
     if (option >= OPT_RANK_SORT && option < OPT_RANK_SORT + SORT_FLAG_COUNT) {
         out->sorts.push_back(&BAG_STATS_SORT_FLAGS[option - OPT_RANK_SORT]);
         return RankOption::PARSED;

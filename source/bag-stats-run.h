@@ -93,11 +93,12 @@ void help_common_tail();
 // LETTERS less -u's letters.
 bool remaining_letters(BagStatsArgs const& args, std::string* out);
 
-// The distinct letter bags of DICT's lines that fit `bag`, in order of
-// their first line. With `spellings`, also each bag's distinct DICT lines,
-// in DICT order.
+// The distinct letter bags of DICT's lines that fit `bag` and have at least
+// `min_length` letters, in order of their first line. With `spellings`, also
+// each bag's distinct DICT lines, in DICT order.
 bool load_word_bags(char const* program, char const* path,
-                    PairsCounts const& bag, std::vector<PairsCounts>* out,
+                    PairsCounts const& bag, int min_length,
+                    std::vector<PairsCounts>* out,
                     std::vector<std::vector<std::string>>* spellings);
 
 // Adds the workflow dictionary's words to `out` and finishes it.
