@@ -16,17 +16,20 @@ namespace {
 struct Args {
   LetterBag bag;
   bool exact = false;
+  int min_word_length = 0;
   char** files = NULL;
 };
 
 void usage(FILE* out) {
-  fputs("usage: bag-filter [-e] [-u LETTERS] LETTERS FILE|-...\n", out);
+  fputs("usage: bag-filter [-e] [-m N] [-u LETTERS] LETTERS FILE|-...\n", out);
   if (out != stdout) return;
 
   fputs("  print the words and word,word pairs in each FILE that fit within\n"
         "  LETTERS; '-' reads standard input\n"
         "\noptions:\n", stdout);
   dfs_help_option("-e, --exact", "print only entries that use every letter");
+  dfs_help_option("-m, --min-word-len N",
+      "print only entries whose words each have at least N letters");
   dfs_help_used_letters();
   dfs_help_option("-h, --help", "show this help");
 }
@@ -34,6 +37,7 @@ void usage(FILE* out) {
 bool parse_args(char* argv[], Args* out, bool* help) {
   static struct optparse_long const long_options[] = {
     { "exact", 'e', OPTPARSE_NONE },
+    { "min-word-len", 'm', OPTPARSE_REQUIRED },
     { "used-letters", 'u', OPTPARSE_REQUIRED },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
@@ -48,6 +52,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     switch (option) {
       case 'e':
         out->exact = true;
+        break;
+      case 'm':
+        if (!parse_count(options.optarg, "--min-word-len",
+                         &out->min_word_length))
+          return false;
         break;
       case 'u':
         used_letters += options.optarg;
@@ -70,6 +79,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 }
 
 bool fits(Args const& args, DfsPairRow const& row) {
+  size_t const min = size_t(args.min_word_length);
+  if (row.left.size() < min || (!row.right.empty() && row.right.size() < min))
+    return false;
   std::string const letters = row.left + row.right;
   return fits_letter_bag(args.bag, letters) &&
       (!args.exact || letters.size() == args.bag.size);

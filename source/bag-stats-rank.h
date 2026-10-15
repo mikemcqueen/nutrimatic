@@ -23,6 +23,8 @@
 
 // How many picks of each kind a search sequence makes before its `p`.
 struct Search {
+    // --ss pf: the pair filter count, without picks.
+    bool pair_filter = false;
     int prospects = 0;
     int pairs = 0;
     int words = 0;

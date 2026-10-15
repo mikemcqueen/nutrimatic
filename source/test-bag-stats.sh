@@ -148,4 +148,24 @@ actual=$("$bag_stats" --min-wb-len 3 -s 1 catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d' | cut -d, -f1,2)
 [[ $actual == 'act god,1' ]] || fail "-s NO pairs aren't dropped: $actual"
 
+echo act,god >> "$WFROOT/.wf/classified/no/no.pairs"
+actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --threads 2 \
+  catdoglowant "$test_dir/pairs" "$test_dir/dict" | tail -n 1)
+[[ $actual == '3,2,3,2,3,2,0,0,4,2,2,1' ]] || fail "--ss pf is wrong: $actual"
+
+actual=$("$bag_stats" --min-wb-len 3 --ss pf catdoglowant \
+  "$test_dir/pairs" "$test_dir/dict" 2>/dev/null | tail -n 1)
+[[ $actual == '3,2,0,0,0,0,0,0,0,0,0,0' ]] ||
+  fail "--ss pf keeps no.pairs: $actual"
+
+actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --exact catdoglow \
+  "$test_dir/pairs" "$test_dir/dict" | tail -n 1)
+[[ $actual == '2,1,2,1,2,1,0,0,2,1,2,1' ]] ||
+  fail "--ss pf --exact is wrong: $actual"
+
+actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --completions 2 \
+  catdoglowant "$test_dir/pairs" "$test_dir/dict" | sed 1,2d)
+[[ $actual == $'completions 2 of 2 by PC\nPC 2      low/owl\nPC 2      ant' ]] ||
+  fail "--ss pf --completions is wrong: $actual"
+
 echo PASS

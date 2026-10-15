@@ -22,8 +22,8 @@ static_assert(sizeof(GpuCounts) == sizeof(BagStatsCounts));
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
-            "usage: %s [-u LETTERS] [-s N] [--min-wb-len N] [--ss STEPS] [--pp FILE]\n"
-            "       [--threads N] [--progress N]\n"
+            "usage: %s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
+            "       [--ss STEPS] [--pp FILE] [--threads N] [--progress N]\n"
             "       [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... [--score-detail]\n"
             "        [SORT... [--by-length | --by-pick]]]\n"
@@ -35,7 +35,7 @@ void usage(char const* program, FILE* out) {
     if (out != stdout) return;
 
     fputs("  bag-stats, counting every row on the GPU\n\n", stdout);
-    help_common_options();
+    help_common_options(false);
     help_common_tail();
 }
 
@@ -66,6 +66,10 @@ bool parse_args(char* argv[], BagStatsArgs* out, bool* help) {
     }
 
     if (!check_common_args(PROGRAM, &options, out)) return false;
+    if (out->search.pair_filter) {
+        fprintf(stderr, "%s: --ss pf is bag-stats only\n", PROGRAM);
+        return false;
+    }
     if (out->search.words > GPU_MAX_WORDS) {
         fprintf(stderr, "%s: --ss takes at most %d wb steps\n", PROGRAM,
                 GPU_MAX_WORDS);

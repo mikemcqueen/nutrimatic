@@ -201,7 +201,7 @@ pcomm = executable('pcomm', 'pcomm.cpp', install: true)
 pfilter_lib = static_library('pfilter', 'pfilter-impl.cpp',
   link_with: dfs_class_list_lib)
 
-executable('pfilter', 'pfilter.cpp',
+pfilter = executable('pfilter', 'pfilter.cpp',
   link_with: [pfilter_lib, dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
@@ -479,6 +479,11 @@ test(
   'bag-stats',
   bash,
   args: [files('test-bag-stats.sh'), bag_stats, pairs],
+)
+test(
+  'pfilter',
+  bash,
+  args: [files('test-pfilter.sh'), pfilter],
 )
 test(
   'pair-prior',

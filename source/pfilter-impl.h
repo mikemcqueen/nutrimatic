@@ -19,13 +19,16 @@ inline constexpr int PFILTER_DEFAULT_MAX_LETTERS = 15;
 
 // Which pairs pfilter keeps: those of at most max_letters letters (0 for no
 // limit), whose words are both in dictionary when given, that fit within bag
-// when given, and that are in index_file when not empty. Pairs classified NO
-// globally, or for sentence when given, are dropped, as are pairs classified
-// YES the same way when drop_yes.
+// when given (that use all of it when exact), and that are in index_file when
+// not empty. Pairs classified NO globally, or for sentence when given, are
+// dropped when drop_no, as are pairs classified YES the same way when
+// drop_yes.
 struct PfilterOptions {
   std::optional<LetterBag> bag;
+  bool exact = false;
   int max_letters = PFILTER_DEFAULT_MAX_LETTERS;
   int sentence = CLASSIFIED_NO_SENTENCE;
+  bool drop_no = true;
   bool drop_yes = false;
   std::optional<DictionaryRef> dictionary;
   std::string index_file;
