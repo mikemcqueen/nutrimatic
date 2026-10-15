@@ -69,7 +69,7 @@ struct Shared {
     uint32_t list_indexes[LIST_CAPACITY<RestKey>];
     int pos[MAX_HALF + 2];
     int fill[MAX_HALF + 2];
-    unsigned long long counts[7];
+    unsigned long long counts[6];
     RestKey rest;
     RestKey guards;
     uint8_t letters[GPU_LETTERS_BYTES];
@@ -97,8 +97,7 @@ struct Params {
     uint8_t bag_shifts[26];
     int min_group_length;
     int words;
-    int min_word_bag_length;
-    unsigned long long min_word_bag_pairs;
+    unsigned long long min_pairs;
     uint8_t const* rests;
     int rows;
     uint32_t stamp_base;
@@ -159,10 +158,9 @@ __device__ void count_leftover(Params<BagKey> const& p,
                                RestKey const* list_keys,
                                uint32_t const* list_indexes,
                                Slot<BagKey> const* hash, uint32_t stamp,
-                               RestKey leftover, int length, bool min,
-                               int lane, GpuCounts* counts) {
+                               RestKey leftover, int length, int lane,
+                               GpuCounts* counts) {
     ++counts->word_bags;
-    counts->min_word_bags += min;
     if (length == 0) {
         ++counts->solo;
         return;
@@ -193,7 +191,7 @@ __device__ void count_leftover(Params<BagKey> const& p,
     ++counts->with_pairs;
     counts->total_pairs += pairs;
     if (pairs > counts->max_pairs) counts->max_pairs = pairs;
-    counts->min_with_pairs += min && pairs >= p.min_word_bag_pairs;
+    counts->with_min_pairs += pairs >= p.min_pairs;
 }
 
 template <typename BagKey, typename RestKey>
@@ -214,7 +212,7 @@ count_rows(Params<BagKey> p) {
     uint8_t* const word_lengths =
         p.word_list_lengths + size_t(blockIdx.x) * p.word_count;
 
-    if (tid < 7) s.counts[tid] = 0;
+    if (tid < 6) s.counts[tid] = 0;
     while (true) {
         if (tid == 0) {
             s.row = atomicAdd(p.next, 1);
@@ -329,14 +327,12 @@ count_rows(Params<BagKey> p) {
             if (first >= words) break;
             RestKey rests[GPU_MAX_WORDS];
             int lengths[GPU_MAX_WORDS];
-            bool mins[GPU_MAX_WORDS];
             int picks[GPU_MAX_WORDS];
             fits(rest | guards, word_keys[first], guards, &rests[0]);
             lengths[0] = length - word_lengths[first];
-            mins[0] = word_lengths[first] >= p.min_word_bag_length;
             if (p.words == 1) {
                 count_leftover(p, s, list_keys, list_indexes, hash, stamp,
-                               rests[0], lengths[0], mins[0], lane, &counts);
+                               rests[0], lengths[0], lane, &counts);
                 continue;
             }
             int depth = 1;
@@ -355,18 +351,14 @@ count_rows(Params<BagKey> p) {
                     continue;
                 }
                 int const left_length = lengths[depth - 1] - word_lengths[j];
-                bool const min = mins[depth - 1] &&
-                    word_lengths[j] >= p.min_word_bag_length;
                 if (depth + 1 == p.words) {
                     count_leftover(p, s, list_keys, list_indexes, hash,
-                                   stamp, left, left_length, min, lane,
-                                   &counts);
+                                   stamp, left, left_length, lane, &counts);
                     ++picks[depth];
                     continue;
                 }
                 rests[depth] = left;
                 lengths[depth] = left_length;
-                mins[depth] = min;
                 ++depth;
                 picks[depth] = j;
             }
@@ -377,14 +369,13 @@ count_rows(Params<BagKey> p) {
             atomicAdd(&s.counts[2], counts.total_pairs);
             atomicMax(&s.counts[3], counts.max_pairs);
             atomicAdd(&s.counts[4], counts.solo);
-            atomicAdd(&s.counts[5], counts.min_word_bags);
-            atomicAdd(&s.counts[6], counts.min_with_pairs);
+            atomicAdd(&s.counts[5], counts.with_min_pairs);
         }
         __syncthreads();
         if (tid == 0) {
             p.out[row] = {s.counts[0], s.counts[1], s.counts[2], s.counts[3],
-                          s.counts[4], s.counts[5], s.counts[6]};
-            for (int k = 0; k < 7; ++k) s.counts[k] = 0;
+                          s.counts[4], s.counts[5]};
+            for (int k = 0; k < 6; ++k) s.counts[k] = 0;
         }
     }
 }
@@ -465,8 +456,7 @@ struct GpuRowCounter::Impl {
     int word_count = 0;
     int words = 0;
     int min_group_length = 0;
-    int min_word_bag_length = 0;
-    unsigned long long min_word_bag_pairs = 0;
+    unsigned long long min_pairs = 0;
     uint8_t bag_shifts[26] = {};
     Key128 bag_guards = 0;
     size_t hash_slots = 0;
@@ -567,8 +557,7 @@ struct GpuRowCounter::Impl {
         memcpy(p.bag_shifts, bag_shifts, sizeof bag_shifts);
         p.min_group_length = min_group_length;
         p.words = words;
-        p.min_word_bag_length = min_word_bag_length;
-        p.min_word_bag_pairs = min_word_bag_pairs;
+        p.min_pairs = min_pairs;
         p.rests = stream->rests + first * GPU_LETTERS_BYTES;
         p.rows = int(rows);
         p.stamp_base = stamp;
@@ -619,8 +608,7 @@ GpuRowCounter::GpuRowCounter(char const* program, GpuInputs const& inputs)
     impl.word_count = int(inputs.word_lengths.size());
     impl.words = inputs.words;
     impl.min_group_length = inputs.min_group_length;
-    impl.min_word_bag_length = inputs.min_word_bag_length;
-    impl.min_word_bag_pairs = inputs.min_word_bag_pairs;
+    impl.min_pairs = inputs.min_pairs;
 
     int const letters = rest_length(inputs.bag);
     std::vector<int> lenstart(letters + 2);

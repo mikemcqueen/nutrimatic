@@ -11,31 +11,29 @@
 #include "bad-bag-bitmap.h"
 #include "dfs-cli-help.h"
 
-char const BAG_STATS_MAGIC[] = "bag-stats 4";
+char const BAG_STATS_MAGIC[] = "bag-stats 5";
 
 char const BAG_STATS_COLUMNS[] =
-    "PAIR,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,MIN_WB,"
-    "MIN_WB_WITH_PAIRS";
+    "PAIR,PAIRS,WORDBAGS,WB_WITH_PAIRS,TOTAL_PAIRS,MAX_PAIRS,WB_SOLO,"
+    "WB_WITH_MIN_PAIRS";
 
-BagStatsCount const BAG_STATS_COUNTS[8] = {
+BagStatsCount const BAG_STATS_COUNTS[7] = {
   {"PAIRS", &BagStatsRow::pairs},
   {"WORDBAGS", &BagStatsRow::word_bags},
   {"WB_WITH_PAIRS", &BagStatsRow::with_pairs},
   {"TOTAL_PAIRS", &BagStatsRow::total_pairs},
   {"MAX_PAIRS", &BagStatsRow::max_pairs},
   {"WB_SOLO", &BagStatsRow::solo},
-  {"MIN_WB", &BagStatsRow::min_word_bags},
-  {"MIN_WB_WITH_PAIRS", &BagStatsRow::min_with_pairs},
+  {"WB_WITH_MIN_PAIRS", &BagStatsRow::with_min_pairs},
 };
 
-BagStatsSortFlag const BAG_STATS_SORT_FLAGS[7] = {
+BagStatsSortFlag const BAG_STATS_SORT_FLAGS[6] = {
   {"wb", "WORDBAGS"},
   {"wbwp", "WB_WITH_PAIRS"},
   {"tp", "TOTAL_PAIRS"},
   {"mp", "MAX_PAIRS"},
-  {"min-wb", "MIN_WB"},
-  {"min-wbwp", "MIN_WB_WITH_PAIRS"},
-  {"min-wb-frac", NULL},
+  {"wbwp-min", "WB_WITH_MIN_PAIRS"},
+  {"wbfrac-min", NULL},
 };
 
 namespace {
@@ -79,10 +77,10 @@ void bag_stats_help_sort_flags() {
     std::string const option = std::string("--") + flag.option;
     dfs_help_option(option.c_str(), "sort by %s", flag.column);
   }
-  dfs_help_option("--min-wb-frac",
-                  "sort by MIN_WB_WITH_PAIRS / MIN_WB, the fraction of "
-                  "MIN_WB word bags whose remainder has enough exact pairs "
-                  "(0 when MIN_WB is 0)");
+  dfs_help_option("--wbfrac-min",
+                  "sort by WB_WITH_MIN_PAIRS / WORDBAGS, the fraction of "
+                  "word bag combinations whose remainder has enough exact "
+                  "pairs (0 when WORDBAGS is 0)");
 }
 
 BagStatsCount const* bag_stats_sort_key(BagStatsSortFlag const& flag) {
@@ -90,8 +88,8 @@ BagStatsCount const* bag_stats_sort_key(BagStatsSortFlag const& flag) {
 }
 
 double bag_stats_min_wb_fraction(BagStatsRow const& row) {
-  return row.min_word_bags == 0
-      ? 0 : double(row.min_with_pairs) / double(row.min_word_bags);
+  return row.word_bags == 0
+      ? 0 : double(row.with_min_pairs) / double(row.word_bags);
 }
 
 double bag_stats_sort_value(BagStatsCount const* key, BagStatsRow const& row) {
@@ -130,12 +128,12 @@ void write_bag_stats_row(FILE* out, BagStatsRow const& row) {
 }
 
 void append_bag_stats_row(std::string* out, BagStatsRow const& row) {
-  char counts[8 * 21 + 2];
+  char counts[7 * 21 + 2];
   snprintf(counts, sizeof counts,
            ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
-           ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+           ",%" PRIu64 ",%" PRIu64 "\n",
            row.pairs, row.word_bags, row.with_pairs, row.total_pairs,
-           row.max_pairs, row.solo, row.min_word_bags, row.min_with_pairs);
+           row.max_pairs, row.solo, row.with_min_pairs);
   *out += row.pair;
   *out += counts;
 }
@@ -177,10 +175,10 @@ std::optional<BagStatsHeader> read_bag_stats_header(FILE* in,
 std::optional<BagStatsRow> parse_bag_stats_row(std::string const& line,
                                                std::string const& path,
                                                size_t line_number) {
-  std::string fields[9];
+  std::string fields[8];
   size_t field = 0;
   size_t start = 0;
-  for (size_t comma; field < 8 &&
+  for (size_t comma; field < 7 &&
        (comma = line.find(',', start)) != std::string::npos; ++field) {
     fields[field] = line.substr(start, comma - start);
     start = comma + 1;
@@ -189,15 +187,14 @@ std::optional<BagStatsRow> parse_bag_stats_row(std::string const& line,
 
   BagStatsRow row;
   row.pair = fields[0];
-  if (field != 8 || row.pair.empty() ||
+  if (field != 7 || row.pair.empty() ||
       !parse_count(fields[1], &row.pairs) ||
       !parse_count(fields[2], &row.word_bags) ||
       !parse_count(fields[3], &row.with_pairs) ||
       !parse_count(fields[4], &row.total_pairs) ||
       !parse_count(fields[5], &row.max_pairs) ||
       !parse_count(fields[6], &row.solo) ||
-      !parse_count(fields[7], &row.min_word_bags) ||
-      !parse_count(fields[8], &row.min_with_pairs)) {
+      !parse_count(fields[7], &row.with_min_pairs)) {
     fprintf(stderr, "%s line %zu: malformed bag-stats row\n", path.c_str(),
             line_number);
     return std::nullopt;

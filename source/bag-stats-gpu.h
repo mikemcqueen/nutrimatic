@@ -40,10 +40,9 @@ struct GpuInputs {
     int min_group_length;
     // The wb steps.
     int words;
-    int min_word_bag_length;
-    // A MIN_WB word bag combination counts in min_with_pairs from this many
-    // exact pairs.
-    uint64_t min_word_bag_pairs;
+    // A word bag combination counts in with_min_pairs from this many exact
+    // pairs.
+    uint64_t min_pairs;
 };
 
 // A row's counts, in BagStatsCounts order.
@@ -53,8 +52,7 @@ struct GpuCounts {
     uint64_t total_pairs;
     uint64_t max_pairs;
     uint64_t solo;
-    uint64_t min_word_bags;
-    uint64_t min_with_pairs;
+    uint64_t with_min_pairs;
 };
 
 // Counts rows' remainders on the GPU over two streams. A CUDA call failing

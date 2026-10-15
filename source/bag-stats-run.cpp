@@ -97,12 +97,12 @@ void help_common_options() {
     dfs_help_used_letters();
     classified_help_sentence_no();
     dfs_help_option("--min-wb-len N",
-                    "MIN_WB counts the fitting DICT word bag combinations "
-                    "whose every bag has at least N letters (default %d), "
-                    "MIN_WB_WITH_PAIRS those of them whose remainder has at "
-                    "least %d exact pairs; bag-stats-sort --min-wb-frac sorts "
-                    "by their ratio",
-                    DEFAULT_MIN_WB_LENGTH, int(BAG_STATS_MIN_WB_PAIRS));
+                    "drop DICT words of fewer than N letters (default %d); "
+                    "WB_WITH_MIN_PAIRS counts the fitting word bag "
+                    "combinations whose remainder has at least %d exact "
+                    "pairs, and --wbfrac-min sorts by WB_WITH_MIN_PAIRS / "
+                    "WORDBAGS",
+                    DEFAULT_MIN_WB_LENGTH, int(BAG_STATS_MIN_PAIRS));
     dfs_help_option("--ss STEPS",
                     "the search sequence, comma-separated: ppb picks a pair "
                     "bag from the --pp FILE, pb one from PAIRS, wb a word bag "
@@ -143,13 +143,15 @@ bool remaining_letters(BagStatsArgs const& args, std::string* out) {
 }
 
 bool load_word_bags(char const* program, char const* path,
-                    PairsCounts const& bag, std::vector<PairsCounts>* out,
+                    PairsCounts const& bag, int min_length,
+                    std::vector<PairsCounts>* out,
                     std::vector<std::vector<std::string>>* spellings) {
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> seen;
     return read_lines(program, path,
         [&](std::string const& line, size_t) {
             PairsCounts const counts = pairs_letter_counts(line.c_str());
-            if (counts == PairsCounts{} || !pairs_fits(bag, counts))
+            if (letter_total(counts) < min_length ||
+                counts == PairsCounts{} || !pairs_fits(bag, counts))
                 return true;
             auto const [found, inserted] = seen.emplace(counts, out->size());
             if (inserted) out->push_back(counts);
@@ -211,7 +213,8 @@ bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
                         &out->prospect_bags, &out->pair_bags,
                         &out->has_prior) ||
         !load_word_bags(program, args.dictionary_file, out->bag,
-                        &out->word_bags, spellings) ||
+                        args.min_word_bag_length, &out->word_bags,
+                        spellings) ||
         !load_inner_dictionary(program, &out->counter))
         return false;
     out->steps.assign(args.search.pairs, &out->pair_bags);
