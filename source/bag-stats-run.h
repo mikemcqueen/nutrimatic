@@ -39,6 +39,8 @@ struct BagStatsArgs {
     std::string letters;
     std::string used_letters;
     int sentence = CLASSIFIED_NO_SENTENCE;
+    // Whether PAIRS and --pp drop the classified no.pairs.
+    bool drop_no = true;
     int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
     char const* search_text = DEFAULT_SEARCH;
     Search search;
@@ -56,6 +58,7 @@ enum {
     OPT_COMMON_PROSPECTS,
     OPT_COMMON_THREADS,
     OPT_COMMON_PROGRESS,
+    OPT_COMMON_NO_NOPAIRS,
     // The first option id free for a tool's own options.
     OPT_COMMON_END,
 };
@@ -69,6 +72,7 @@ enum {
     { "pp", OPT_COMMON_PROSPECTS, OPTPARSE_REQUIRED }, \
     { "threads", OPT_COMMON_THREADS, OPTPARSE_REQUIRED }, \
     { "progress", OPT_COMMON_PROGRESS, OPTPARSE_REQUIRED }, \
+    { "no-nopairs", OPT_COMMON_NO_NOPAIRS, OPTPARSE_NONE }, \
     BAG_STATS_RANK_LONG_OPTIONS
 
 // Applies `option`, with `arg`, to `out` when it is one of
@@ -84,11 +88,16 @@ bool check_common_args(char const* program, struct optparse* options,
                        BagStatsArgs* out);
 
 // Prints what both tools do and the --help lines of their options through
-// the rank output options.
-void help_common_options();
+// the rank output options; `pair_filter` adds --ss pf.
+void help_common_options(bool pair_filter);
 
 // Prints the --help lines of -h and the SORT options.
 void help_common_tail();
+
+// The no.pairs `args` drops from PAIRS and --pp: the global ones and -s's,
+// or none with --no-nopairs.
+bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
+                         DfsPairSet* out);
 
 // LETTERS less -u's letters.
 bool remaining_letters(BagStatsArgs const& args, std::string* out);

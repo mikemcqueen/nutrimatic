@@ -36,6 +36,9 @@ RankOption parse_common_option(char const* program, int option,
       case OPT_COMMON_THREADS:
         return parse_count(arg, "--threads", &out->threads)
             ? RankOption::PARSED : RankOption::BAD;
+      case OPT_COMMON_NO_NOPAIRS:
+        out->drop_no = false;
+        return RankOption::PARSED;
       case OPT_COMMON_PROGRESS:
         return parse_count(arg, "--progress", &out->progress)
             ? RankOption::PARSED : RankOption::BAD;
@@ -53,11 +56,35 @@ bool check_common_args(char const* program, struct optparse* options,
         return false;
     out->letters = letters;
     if (!parse_search(program, out->search_text, &out->search)) return false;
+    if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
+        fprintf(stderr, "%s: -s doesn't go with --no-nopairs\n", program);
+        return false;
+    }
+    RankArgs const& rank = out->rank;
+    if (out->search.pair_filter) {
+        if (out->prospects_file != NULL || rank.top > 0 ||
+            !rank.sorts.empty() || rank.by_length || rank.by_pick ||
+            rank.prior_file != NULL || rank.p1 != NULL ||
+            rank.clues != NULL || rank.prior_weights != NULL ||
+            rank.top_segments || !rank.score.empty() ||
+            rank.score_detail || rank.best_pairs != BestPairs::NONE) {
+            fprintf(stderr, "%s: --ss pf goes without --pp, -n, SORT "
+                    "options, --score and the rank output options\n",
+                    program);
+            return false;
+        }
+        if (strcmp(out->pairs_file, "-") == 0 &&
+            strcmp(out->dictionary_file, "-") == 0) {
+            fprintf(stderr, "%s: only one of PAIRS and DICT can be -\n",
+                    program);
+            return false;
+        }
+        return true;
+    }
     if (out->search.pairs == 0) {
         fprintf(stderr, "%s: --ss needs at least one pb\n", program);
         return false;
     }
-    RankArgs const& rank = out->rank;
     bool const ranked = rank.top > 0 || !rank.score.empty();
     if ((rank.top > 0 && rank.sorts.empty()) ||
         (!rank.sorts.empty() && !ranked) ||
@@ -83,7 +110,7 @@ bool check_common_args(char const* program, struct optparse* options,
     return true;
 }
 
-void help_common_options() {
+void help_common_options(bool pair_filter) {
     fprintf(stdout,
           "  for each combination of pair letter bags that fits LETTERS, count\n"
           "  the combinations of DICT word bags that fit what is left, and the\n"
@@ -96,6 +123,8 @@ void help_common_options() {
           BAG_STATS_COLUMNS);
     dfs_help_used_letters();
     classified_help_sentence_no();
+    dfs_help_option("--no-nopairs",
+                    "keep the pairs listed in the no.pairs files");
     dfs_help_option("--min-wb-len N",
                     "drop DICT words of fewer than N letters (default %d); "
                     "WB_WITH_MIN_PAIRS counts the fitting word bag "
@@ -108,7 +137,11 @@ void help_common_options() {
                     "bag from the --pp FILE, pb one from PAIRS, wb a word bag "
                     "from DICT, and p, last and once, counts the exact pairs "
                     "left; at least one pb and one wb; order doesn't matter; "
-                    "each row names its ppb and pb picks (default %s)",
+                    "each row names its ppb and pb picks%s (default %s)",
+                    pair_filter
+                        ? "; pf, alone, counts instead the PAIRS rows that "
+                          "fit what each DICT word leaves"
+                        : "",
                     DEFAULT_SEARCH);
     dfs_help_option("--pp FILE",
                     "the prospective pairs ppb picks from, rows as in PAIRS; "
@@ -199,15 +232,20 @@ void filter_word_bags(std::vector<PairsCounts> const& from,
         if (pairs_fits(rest, word_bag)) out->push_back(word_bag);
 }
 
-bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
-                           BagStatsInputs* out,
-                           std::vector<std::vector<std::string>>* spellings) {
+bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
+                         DfsPairSet* out) {
+    if (!args.drop_no) return true;
     if (args.sentence == CLASSIFIED_NO_SENTENCE)
         alert(program, "--sentence not supplied");
     char const* const root = require_workflow_root(program);
-    if (root == NULL) return false;
+    return root != NULL && load_no_pairs(program, root, args.sentence, out);
+}
+
+bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
+                           BagStatsInputs* out,
+                           std::vector<std::vector<std::string>>* spellings) {
     DfsPairSet rejected;
-    if (!load_no_pairs(program, root, args.sentence, &rejected) ||
+    if (!load_rejected_pairs(program, args, &rejected) ||
         !load_pick_bags(program, args.rank, args.prospects_file,
                         args.pairs_file, out->bag, rejected,
                         &out->prospect_bags, &out->pair_bags,

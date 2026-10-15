@@ -92,3 +92,16 @@
   the same loaded data
 
 * pairs --mx M,X: allow X > 2 (PAIRS_MAX_WORDS caps it at 2 today).
+
+* port SIMD code from bag-stats to pfilter ::keep()
+
+* bag-stats: route load_pair_bags() through Pfilter / PfilterOptions for
+  every mode, so pf mode (and the rest) take their row filtering from
+  pfilter; future pfilter options (-x, -y, -i) would then reach bag-stats as
+  PfilterOptions fields.
+
+* bag-stats: record --no-nopairs in the dump header (bag-stats 6), so
+  bag-stats-sort doesn't re-apply no.pairs to a dump made without them.
+
+* pfilter can probably also use a shared pair bag loader (bag-stats'
+  load_pair_bags()) instead of reading PAIRS rows itself.

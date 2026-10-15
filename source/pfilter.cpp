@@ -22,6 +22,8 @@ namespace {
 int const OPT_NO_DICT = 256;
 int const OPT_CV = 257;
 int const OPT_CSV = 258;
+int const OPT_EXACT = 259;
+int const OPT_NO_NOPAIRS = 260;
 
 struct Args {
   PfilterOptions options;
@@ -33,8 +35,9 @@ struct Args {
 };
 
 void usage(FILE* out) {
-  fputs("usage: pfilter [-l LETTERS [-u LETTERS]...] [-x N] [-s N] [-y] "
-        "[-d FILE | --no-dict] [-i INDEX] [--cv [--csv]] PAIRS-FILE|-\n", out);
+  fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [--exact]] [-x N] [-s N] "
+        "[--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] [--cv [--csv]] "
+        "PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
   fputs("  print pairs whose two words are in the dictionary\n"
@@ -45,10 +48,14 @@ void usage(FILE* out) {
       "print only pairs that fit within LETTERS; may be given once");
   dfs_help_option("-u, --used-letters LETTERS",
       "subtract letters already used from the -l letters; may be repeated");
+  dfs_help_option("--exact",
+      "print only pairs that use all of the -l letters; requires -l");
   dfs_help_option("-x, --max-letters N",
       "print only pairs of at most N letters; 0 for no limit (default: %d)",
       PFILTER_DEFAULT_MAX_LETTERS);
   classified_help_sentence_no();
+  dfs_help_option("--no-nopairs",
+      "keep pairs listed in the no.pairs files");
   dfs_help_option("-y, --yes",
       "also drop pairs listed in $WFROOT/%s/yes/yes.pairs, and with -s N "
       "in $WFROOT/%s/sN/yes/yes.pairs",
@@ -72,8 +79,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   static struct optparse_long const long_options[] = {
     { "letters", 'l', OPTPARSE_REQUIRED },
     { "used-letters", 'u', OPTPARSE_REQUIRED },
+    { "exact", OPT_EXACT, OPTPARSE_NONE },
     { "max-letters", 'x', OPTPARSE_REQUIRED },
     CLASSIFIED_SENTENCE_LONG_OPTION,
+    { "no-nopairs", OPT_NO_NOPAIRS, OPTPARSE_NONE },
     { "yes", 'y', OPTPARSE_NONE },
     { "dict", 'd', OPTPARSE_REQUIRED },
     { "no-dict", OPT_NO_DICT, OPTPARSE_NONE },
@@ -103,6 +112,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case 'u':
         used_letters += options.optarg;
         have_used_letters = true;
+        break;
+      case OPT_EXACT:
+        out->options.exact = true;
+        break;
+      case OPT_NO_NOPAIRS:
+        out->options.drop_no = false;
         break;
       case 'x':
         if (!parse_count(options.optarg, "--max-letters",
@@ -146,6 +161,17 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     out->options.bag = bag;
   } else if (have_used_letters) {
     fputs("pfilter: --used-letters requires --letters\n", stderr);
+    return false;
+  }
+
+  if (!out->options.drop_no && !out->options.drop_yes &&
+      out->options.sentence != CLASSIFIED_NO_SENTENCE) {
+    fputs("pfilter: -s goes with -y when given --no-nopairs\n", stderr);
+    return false;
+  }
+
+  if (out->options.exact && letters == NULL) {
+    fputs("pfilter: --exact requires --letters\n", stderr);
     return false;
   }
 
@@ -214,7 +240,8 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  if (args.options.sentence == CLASSIFIED_NO_SENTENCE)
+  if (args.options.sentence == CLASSIFIED_NO_SENTENCE &&
+      (args.options.drop_no || args.options.drop_yes))
     alert("pfilter", "--sentence not supplied");
 
   DfsDictionary dictionary;

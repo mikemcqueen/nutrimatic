@@ -22,18 +22,17 @@ bool Pfilter::load(char const* program, PfilterOptions const& options,
   rejected_.clear();
   index_.reset();
 
-  char const* const root = require_workflow_root(program);
-  if (root == NULL) return false;
-
   auto const add = [&](int sentence, char const* kind) {
+    char const* const root = require_workflow_root(program);
+    if (root == NULL) return false;
     std::shared_ptr<DfsPairSet const> pairs =
         cache.get(program, root, sentence, kind);
     if (pairs == nullptr) return false;
     rejected_.push_back(std::move(pairs));
     return true;
   };
-  if (!add(CLASSIFIED_NO_SENTENCE, "no")) return false;
-  if (options_.sentence != CLASSIFIED_NO_SENTENCE &&
+  if (options_.drop_no && !add(CLASSIFIED_NO_SENTENCE, "no")) return false;
+  if (options_.drop_no && options_.sentence != CLASSIFIED_NO_SENTENCE &&
       !add(options_.sentence, "no"))
     return false;
   if (options_.drop_yes && !add(CLASSIFIED_NO_SENTENCE, "yes")) return false;
@@ -64,6 +63,9 @@ bool Pfilter::keep(DfsPairRow const& row) const {
           [entry = row.entry()](auto const& pairs) {
             return pairs->contains(entry);
           }) &&
-      (!options_.bag || fits_letter_bag(*options_.bag, row.left + row.right)) &&
+      (!options_.bag ||
+          ((!options_.exact ||
+               row.left.size() + row.right.size() == options_.bag->size) &&
+              fits_letter_bag(*options_.bag, row.left + row.right))) &&
       (index_ == nullptr || in_index(*index_, row));
 }

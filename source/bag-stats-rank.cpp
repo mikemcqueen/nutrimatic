@@ -11,10 +11,19 @@
 #include "row-input.h"
 
 bool parse_search(char const* program, char const* text, Search* out) {
+    if (strcmp(text, "pf") == 0) {
+        *out = Search{};
+        out->pair_filter = true;
+        return true;
+    }
     std::vector<std::string> steps(1);
     for (char const* c = text; *c; ++c) {
         if (*c == ',') steps.emplace_back();
         else steps.back() += *c;
+    }
+    if (std::find(steps.begin(), steps.end(), "pf") != steps.end()) {
+        fprintf(stderr, "%s: --ss pf goes alone\n", program);
+        return false;
     }
     if (steps.back() != "p") {
         fprintf(stderr, "%s: --ss has to end with p\n", program);
@@ -43,6 +52,7 @@ bool parse_search(char const* program, char const* text, Search* out) {
 }
 
 std::string search_text(Search const& search) {
+    if (search.pair_filter) return "pf";
     std::string out;
     for (int i = 0; i < search.prospects; ++i) out += "ppb,";
     for (int i = 0; i < search.pairs; ++i) out += "pb,";
