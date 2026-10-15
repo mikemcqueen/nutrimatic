@@ -258,16 +258,34 @@ pair_evidence_lib = static_library('pair-evidence',
 bag_stats_lib = static_library('bag-stats', 'bag-stats-impl.cpp',
   link_with: dfs_class_list_lib)
 
-bag_stats = executable('bag-stats', ['bag-stats.cpp', 'bag-stats-rank.cpp'],
-  link_with: [bag_stats_lib, pairs_lib, pair_evidence_lib, dfs_class_list_lib,
-              optparse_lib],
+bag_stats_rank_lib = static_library('bag-stats-rank', 'bag-stats-rank.cpp')
+
+bag_stats_run_lib = static_library('bag-stats-run', 'bag-stats-run.cpp',
+  dependencies: thread_dep)
+
+bag_stats = executable('bag-stats', 'bag-stats.cpp',
+  link_with: [bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib, pairs_lib,
+              pair_evidence_lib, dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
   install: true)
 
-bag_stats_sort = executable('bag-stats-sort',
-  ['bag-stats-sort.cpp', 'bag-stats-rank.cpp'],
-  link_with: [bag_stats_lib, pairs_lib, pair_evidence_lib, dfs_class_list_lib,
-              optparse_lib],
+have_cuda = add_languages('cuda', required: false, native: false)
+cuda_dep = have_cuda ? dependency('cuda', required: false) : disabler()
+if have_cuda and cuda_dep.found()
+  bag_stats_cuda = executable('bag-stats-cuda',
+    ['bag-stats-cuda.cpp', 'bag-stats-gpu.cu'],
+    link_with: [bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib,
+                pairs_lib, pair_evidence_lib, dfs_class_list_lib,
+                optparse_lib],
+    dependencies: [thread_dep, cuda_dep],
+    cuda_args: ['-arch=native', '-std=c++20', '-O3'],
+    link_language: 'cpp',
+    install: true)
+endif
+
+bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
+  link_with: [bag_stats_rank_lib, bag_stats_lib, pairs_lib, pair_evidence_lib,
+              dfs_class_list_lib, optparse_lib],
   install: true)
 
 pair_prior = executable('pair-prior', 'pair-prior.cpp',
@@ -467,6 +485,13 @@ test(
   bash,
   args: [files('test-pair-prior.sh'), pair_prior, make_p1_index],
 )
+if have_cuda
+  test(
+    'bag-stats-cuda',
+    bash,
+    args: [files('test-bag-stats-cuda.sh'), bag_stats_cuda, bag_stats],
+  )
+endif
 test(
   'bag-stats-sort',
   bash,
