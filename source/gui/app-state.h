@@ -134,12 +134,14 @@ struct AppState {
 
 // What a command runs with, taken when it starts so it runs unaffected by
 // later changes: app_state()'s actual letters and sentence, its Column's used
-// letters, and the dictionary its Column's D: dropdown names.
+// letters, and the dictionary its Column's D: dropdown names, null when that
+// is a column, and that dictionary's lines or that column's output.
 struct LetterToolsParams {
   std::string letters;
   std::string used_letters;
   int sentence = CLASSIFIED_NO_SENTENCE;
   SharedDictionary dictionary;
+  SharedLines dictionary_lines;
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside

@@ -39,7 +39,14 @@
 // don't. And it may have
 //   static constexpr bool reviewable
 // true when its Column's shown pairs can be reviewed (see Review); commands
-// without it can't.
+// without it can't. And it may have
+//   static constexpr bool reads_column_dictionaries
+// true when its Column's D: dropdown also offers the columns before it, and
+// choosing it sets D: to the column just before; commands without it don't.
+// And it may have
+//   static constexpr char const* default_seed
+// the seed key choosing it sets its Column's source to, when app_state()'s
+// seed_map has it; commands without it have none.
 // Holds its value by copy.
 class Command {
  public:
@@ -71,6 +78,13 @@ class Command {
 
   bool reviewable() const { return self_->reviewable(); }
 
+  bool reads_column_dictionaries() const {
+    return self_->reads_column_dictionaries();
+  }
+
+  // Empty when it has none.
+  std::string default_seed() const { return self_->default_seed(); }
+
  private:
   struct Concept {
     virtual ~Concept() = default;
@@ -83,6 +97,8 @@ class Command {
     virtual bool reads_pairs() const = 0;
     virtual bool reads_classified() const = 0;
     virtual bool reviewable() const = 0;
+    virtual bool reads_column_dictionaries() const = 0;
+    virtual std::string default_seed() const = 0;
   };
 
   template <typename T>
@@ -131,6 +147,18 @@ class Command {
       else
         return false;
     }
+    bool reads_column_dictionaries() const override {
+      if constexpr (requires { T::reads_column_dictionaries; })
+        return T::reads_column_dictionaries;
+      else
+        return false;
+    }
+    std::string default_seed() const override {
+      if constexpr (requires { T::default_seed; })
+        return T::default_seed;
+      else
+        return std::string();
+    }
     T data;
   };
 
@@ -138,11 +166,12 @@ class Command {
 };
 
 // The names every Column's dropdown offers, in order; "" names no command.
-inline constexpr std::array<char const*, 4> command_names = {
-    "", "pfilter", "freqsort", "pairs"};
+inline constexpr std::array<char const*, 5> command_names = {
+    "", "pfilter", "freqsort", "pairs", "bag-stats"};
 
 // The command a Column's dropdown names: PairFilter for "pfilter", FreqSort
-// for "freqsort", FindPairs for "pairs", none otherwise.
+// for "freqsort", FindPairs for "pairs", BagStats for "bag-stats", none
+// otherwise.
 std::optional<Command> make_command(std::string const& name);
 
 #endif

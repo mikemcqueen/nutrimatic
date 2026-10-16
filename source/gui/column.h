@@ -24,16 +24,20 @@ void load_letter_count_font();
 // source dropdown, offering "all" and those same numbers; a line of an "f:"
 // filter field and a "D:" dropdown of DICT ("sml_dict") and BIG ("big_dict"),
 // starting at DICT, naming the dictionary in app_state()'s dictionaries the
-// command runs with, and that "dict" names; then a
+// command runs with, and that "dict" names, plus, when the command reads
+// column dictionaries (see Command::reads_column_dictionaries()), the number
+// of each column before this one, naming that column's output instead; then a
 // dropdown of
 // command_names naming the command (see make_command()), sized to the longest
-// name, beside that command's option widgets, a status line, and a ListBox of
+// name, and setting the source to the command's default seed when it has one
+// (see Command::default_seed()), beside that command's option widgets, a
+// status line, and a ListBox of
 // that command's output on its input source, omitted when the source is
 // std::monostate. Each choice keeps its own options. render() reruns the
 // command, on a worker thread, when the source, the choice, its options, the
-// dictionary, app_state(), or the source or letters column's output or selection has
-// changed since it last ran; it waits for a pending source or letters column
-// to finish first. The letters column is the one letter_source names, none
+// dictionary, app_state(), or the source, letters or dictionary column's
+// output or selection has changed since it last ran; it waits for a pending
+// source, letters or dictionary column to finish first. The letters column is the one letter_source names, none
 // for "all". The command runs with the used letters passed on by the letters
 // column (see output_used_letters()), or app_state()'s (the window's u:
 // field) for "all", plus its own (see Command::used_letters()). A status line
@@ -96,6 +100,8 @@ class Column {
     unsigned letters_version;
     LetterSource letter_source;
     int dictionary;
+    std::optional<ColumnIdentifier> dictionary_column;
+    unsigned dictionary_version;
     bool operator==(Key const&) const = default;
   };
 
@@ -121,6 +127,14 @@ class Column {
   Column const* source_column() const;
   // The letters column, or null when there isn't one.
   Column const* letters_column() const;
+  // The column D: names when the command reads column dictionaries, or
+  // null.
+  Column const* dictionary_column() const;
+  // The D: dropdown's labels: dictionary_choices', then, when the command
+  // reads column dictionaries, the number of each column before this one.
+  std::vector<std::string> dictionary_labels() const;
+  // "D:" and its dropdown of `labels`, `width` wide.
+  void render_dictionary(std::vector<std::string> const& labels, float width);
   Key wanted_key() const;
   // The used letters the command runs with: the letters column's
   // output_used_letters(), or app_state()'s when there is none, plus the
@@ -140,16 +154,19 @@ class Column {
   InputSource source_;
   LetterSource letter_source_;
   char filter_[256] = {};
-  // Index of the D: dropdown's choice in dictionary_choices.
+  // Index of the D: dropdown's choice in dictionary_choices, used when
+  // dictionary_column() is null.
   int dictionary_ = 0;
+  // The column the D: dropdown names, if it names one.
+  std::optional<ColumnIdentifier> dictionary_column_;
   bool bad_filter_ = false;
   std::vector<std::optional<Command>> commands_;
   int choice_ = 0;
   unsigned options_version_ = 0;
-  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0};
+  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
-  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0};
+  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
@@ -159,7 +176,7 @@ class Column {
   std::vector<std::string> letter_count_;
   // The made_key_ and app_state()'s judged_bad_version as of the last
   // update_hidden().
-  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0};
+  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
   unsigned hidden_judged_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;

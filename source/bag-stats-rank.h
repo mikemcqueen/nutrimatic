@@ -23,7 +23,9 @@
 
 // How many picks of each kind a search sequence makes before its `p`.
 struct Search {
-    // --ss pf: the pair filter count, without picks.
+    // --ss pf: the pair filter count, without picks; with --ss wb,pf, words
+    // is 1, and with --ss pb,wb,pf pairs is 1 too: a pair bag, then the DICT
+    // word and word bag of wb,pf.
     bool pair_filter = false;
     int prospects = 0;
     int pairs = 0;
@@ -131,11 +133,33 @@ bool load_priors(char const* program, char const* path,
 // none.
 using PairPrior = std::function<bool(DfsPairRow const&, double*)>;
 
+// Collects pair bags into `out`: those of the rows added that fit `bag`, in
+// order of each bag's first row, which names it, counting each distinct pair
+// once. With `rows`, also each bag's distinct pairs as LEFT,RIGHT, in order.
+class PairBagLoader {
+  public:
+    PairBagLoader(PairsCounts const& bag, PairPrior const& prior,
+                  std::vector<PairBag>* out,
+                  std::vector<std::vector<std::string>>* rows = nullptr)
+        : bag_(bag), prior_(prior), out_(out), bag_rows_(rows) {}
+
+    void add(DfsPairRow const& row);
+
+  private:
+    PairsCounts bag_;
+    PairPrior prior_;
+    std::vector<PairBag>* out_;
+    std::vector<std::vector<std::string>>* bag_rows_;
+    std::unordered_set<std::string> rows_;
+    std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices_;
+};
+
 // Appends to `out` the bags of the rows of `path` that fit `bag` and aren't
-// `rejected`, in order of each bag's first row, which names it.
+// `rejected`, as PairBagLoader collects them, with `rows`.
 bool load_pair_bags(char const* program, char const* path,
                     PairsCounts const& bag, DfsPairSet const& rejected,
-                    PairPrior const& prior, std::vector<PairBag>* out);
+                    PairPrior const& prior, std::vector<PairBag>* out,
+                    std::vector<std::vector<std::string>>* rows = nullptr);
 
 // load_pair_bags() of PAIRS into `pair_bags`, less the bags of
 // `prospect_bags`, and, unless `prospects_file` is NULL, of it into
