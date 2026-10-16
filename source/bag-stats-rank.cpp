@@ -11,9 +11,12 @@
 #include "row-input.h"
 
 bool parse_search(char const* program, char const* text, Search* out) {
-    if (strcmp(text, "pf") == 0) {
+    if (strcmp(text, "pf") == 0 || strcmp(text, "wb,pf") == 0 ||
+        strcmp(text, "pb,wb,pf") == 0) {
         *out = Search{};
         out->pair_filter = true;
+        out->pairs = text[0] == 'p' && text[1] == 'b' ? 1 : 0;
+        out->words = strstr(text, "wb") != NULL ? 1 : 0;
         return true;
     }
     std::vector<std::string> steps(1);
@@ -22,7 +25,8 @@ bool parse_search(char const* program, char const* text, Search* out) {
         else steps.back() += *c;
     }
     if (std::find(steps.begin(), steps.end(), "pf") != steps.end()) {
-        fprintf(stderr, "%s: --ss pf goes alone\n", program);
+        fprintf(stderr, "%s: --ss pf goes alone or as wb,pf or pb,wb,pf\n",
+                program);
         return false;
     }
     if (steps.back() != "p") {
@@ -52,7 +56,9 @@ bool parse_search(char const* program, char const* text, Search* out) {
 }
 
 std::string search_text(Search const& search) {
-    if (search.pair_filter) return "pf";
+    if (search.pair_filter)
+        return std::string(search.pairs > 0 ? "pb," : "") +
+            (search.words > 0 ? "wb," : "") + "pf";
     std::string out;
     for (int i = 0; i < search.prospects; ++i) out += "ppb,";
     for (int i = 0; i < search.pairs; ++i) out += "pb,";
@@ -256,26 +262,33 @@ bool load_priors(char const* program, char const* path,
         });
 }
 
+void PairBagLoader::add(DfsPairRow const& row) {
+    PairsCounts const counts =
+        pairs_letter_counts((row.left + row.right).c_str());
+    if (!pairs_fits(bag_, counts)) return;
+    if (!rows_.insert(pair_key(row.left, row.right)).second) return;
+    auto const inserted = indices_.emplace(counts, out_->size());
+    if (inserted.second) out_->push_back({counts, row.left + " " + row.right});
+    if (bag_rows_) {
+        if (inserted.second) bag_rows_->emplace_back();
+        (*bag_rows_)[inserted.first->second].push_back(
+            row.left + "," + row.right);
+    }
+    PairBag& pair_bag = (*out_)[inserted.first->second];
+    ++pair_bag.pairs;
+    double score;
+    if (prior_ && prior_(row, &score))
+        pair_bag.prior = std::max(pair_bag.prior, score);
+}
+
 bool load_pair_bags(char const* program, char const* path,
                     PairsCounts const& bag, DfsPairSet const& rejected,
-                    PairPrior const& prior, std::vector<PairBag>* out) {
-    std::unordered_set<std::string> rows;
-    std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices;
+                    PairPrior const& prior, std::vector<PairBag>* out,
+                    std::vector<std::vector<std::string>>* rows) {
+    PairBagLoader loader(bag, prior, out, rows);
     return read_rows(program, path, "pairs", false,
         [&](DfsPairRow const& row, std::string const&) {
-            PairsCounts const counts =
-                pairs_letter_counts((row.left + row.right).c_str());
-            if (!pairs_fits(bag, counts) || rejected.contains(row.entry()))
-                return true;
-            std::string const key = pair_key(row.left, row.right);
-            if (!rows.insert(key).second) return true;
-            auto const inserted = indices.emplace(counts, out->size());
-            if (inserted.second) out->push_back({counts, row.left + " " + row.right});
-            PairBag& pair_bag = (*out)[inserted.first->second];
-            ++pair_bag.pairs;
-            double score;
-            if (prior && prior(row, &score))
-                pair_bag.prior = std::max(pair_bag.prior, score);
+            if (!rejected.contains(row.entry())) loader.add(row);
             return true;
         });
 }

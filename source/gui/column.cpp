@@ -168,25 +168,17 @@ void Column::render() {
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("f:");
   ImGui::SameLine(0, 0);
-  char const* dictionary_labels[std::size(dictionary_choices)];
-  for (size_t i = 0; i < std::size(dictionary_choices); ++i)
-    dictionary_labels[i] = dictionary_choices[i].first;
-  float const dictionary_width = combo_width(dictionary_labels);
+  std::vector<std::string> const dictionary_labels = this->dictionary_labels();
+  std::vector<char const*> dictionary_widest;
+  for (std::string const& label : dictionary_labels)
+    dictionary_widest.push_back(label.c_str());
+  float const dictionary_width = combo_width(dictionary_widest);
   if (clearable_input("filter", filter_, sizeof filter_,
                       ImGui::GetStyle().ItemSpacing.x +
                           ImGui::CalcTextSize("D:").x + dictionary_width))
     bad_filter_ = !list_.set_filter(filter_);
   ImGui::SameLine();
-  ImGui::TextUnformatted("D:");
-  ImGui::SameLine(0, 0);
-  ImGui::SetNextItemWidth(dictionary_width);
-  if (ImGui::BeginCombo("##dictionary", dictionary_labels[dictionary_])) {
-    for (int i = 0; i < static_cast<int>(std::size(dictionary_labels)); ++i) {
-      if (ImGui::Selectable(dictionary_labels[i], dictionary_ == i))
-        dictionary_ = i;
-    }
-    ImGui::EndCombo();
-  }
+  render_dictionary(dictionary_labels, dictionary_width);
 
   if (ImGui::BeginTable("##command", 2)) {
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
@@ -197,13 +189,22 @@ void Column::render() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##choice", command_names[choice_])) {
       for (int i = 0; i < static_cast<int>(command_names.size()); ++i) {
-        if (!ImGui::Selectable(command_names[i], choice_ == i)) continue;
+        if (!ImGui::Selectable(command_names[i], choice_ == i) ||
+            choice_ == i)
+          continue;
         choice_ = i;
+        if (commands_[choice_] &&
+            commands_[choice_]->reads_column_dictionaries() && id_ > 0)
+          dictionary_column_ = id_ - 1;
         if (commands_[choice_] && commands_[choice_]->reads_dictionaries() &&
             !std::holds_alternative<Dict>(source_))
           source_ = Dict{};
-        if (commands_[choice_] && commands_[choice_]->reads_pairs() &&
-            std::holds_alternative<Dict>(source_)) {
+        std::string const seed =
+            commands_[choice_] ? commands_[choice_]->default_seed() : "";
+        if (!seed.empty() && app_state().seed_map.contains(seed)) {
+          source_ = Seed{seed};
+        } else if (commands_[choice_] && commands_[choice_]->reads_pairs() &&
+                   std::holds_alternative<Dict>(source_)) {
           if (id_ > 0)
             source_ = id_ - 1;
           else if (std::string const key = "seed85" + app_state().seed_m;
@@ -222,11 +223,14 @@ void Column::render() {
   if (job_ && job_->done.load(std::memory_order_acquire)) finish();
   Column const* source = source_column();
   Column const* letters = letters_column();
+  Column const* dictionary = dictionary_column();
   std::optional<ColumnIdentifier> waiting_for;
   if (source && source->pending())
     waiting_for = std::get<ColumnIdentifier>(source_);
   else if (letters && letters->pending())
     waiting_for = letter_source_;
+  else if (dictionary && dictionary->pending())
+    waiting_for = dictionary_column_;
   bool const waiting = waiting_for.has_value();
   Key const want = wanted_key();
   if (!job_ && want != made_key_ && !waiting) start(want);
@@ -367,6 +371,37 @@ void Column::render_sources() {
   }
 }
 
+std::vector<std::string> Column::dictionary_labels() const {
+  std::vector<std::string> labels;
+  for (auto const& [label, key] : dictionary_choices) labels.push_back(label);
+  if (commands_[choice_] && commands_[choice_]->reads_column_dictionaries()) {
+    for (ColumnIdentifier id = 0; id < id_; ++id)
+      labels.push_back(std::to_string(id + 1));
+  }
+  return labels;
+}
+
+void Column::render_dictionary(std::vector<std::string> const& labels,
+                               float width) {
+  int const choices = static_cast<int>(std::size(dictionary_choices));
+  int const chosen =
+      dictionary_column() ? choices + *dictionary_column_ : dictionary_;
+  ImGui::TextUnformatted("D:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(width);
+  if (!ImGui::BeginCombo("##dictionary", labels[chosen].c_str())) return;
+  for (int i = 0; i < static_cast<int>(labels.size()); ++i) {
+    if (!ImGui::Selectable(labels[i].c_str(), chosen == i)) continue;
+    if (i < choices) {
+      dictionary_ = i;
+      dictionary_column_.reset();
+    } else {
+      dictionary_column_ = i - choices;
+    }
+  }
+  ImGui::EndCombo();
+}
+
 bool Column::pending() const {
   return job_ || wanted_key() != made_key_;
 }
@@ -392,9 +427,19 @@ Column const* Column::letters_column() const {
   return &window.get_column(*letter_source_);
 }
 
+Column const* Column::dictionary_column() const {
+  Window& window = main_window();
+  if (!dictionary_column_ || !commands_[choice_] ||
+      !commands_[choice_]->reads_column_dictionaries() ||
+      *dictionary_column_ < 0 || *dictionary_column_ >= window.column_count())
+    return nullptr;
+  return &window.get_column(*dictionary_column_);
+}
+
 Column::Key Column::wanted_key() const {
   Column const* source = source_column();
   Column const* letters = letters_column();
+  Column const* dictionary = dictionary_column();
   return {choice_,
           options_version_,
           app_state().generation,
@@ -405,7 +450,9 @@ Column::Key Column::wanted_key() const {
           source_,
           letters ? letters->version() : 0,
           letter_source_,
-          dictionary_};
+          dictionary_,
+          dictionary ? dictionary_column_ : std::nullopt,
+          dictionary ? dictionary->version() : 0};
 }
 
 std::string Column::used_letters() const {
@@ -472,8 +519,14 @@ void Column::start(Key key) {
   }
 
   AppState& state = app_state();
-  SharedDictionary dictionary =
-      state.dictionary(dictionary_choices[key.dictionary].second);
+  SharedDictionary dictionary;
+  SharedLines dictionary_lines;
+  if (Column const* words = dictionary_column()) {
+    dictionary_lines = words->output();
+  } else {
+    dictionary = state.dictionary(dictionary_choices[key.dictionary].second);
+    dictionary_lines = dictionary->lines;
+  }
   SharedLines input;
   if (auto const* id = std::get_if<ColumnIdentifier>(&source_)) {
     Column const* source = source_column();
@@ -486,13 +539,14 @@ void Column::start(Key key) {
   } else if (auto const* seed = std::get_if<Seed>(&source_)) {
     input = state.seed_lines(seed->key);
   } else if (std::holds_alternative<Dict>(source_)) {
-    input = dictionary->lines;
+    input = dictionary_lines;
   } else {
     input = empty_lines();
   }
 
   LetterToolsParams params = {state.actual_letters, used_letters(),
-                              state.sentence, std::move(dictionary)};
+                              state.sentence, std::move(dictionary),
+                              std::move(dictionary_lines)};
   auto job = std::make_shared<Job>();
   job->key = key;
   job_ = job;

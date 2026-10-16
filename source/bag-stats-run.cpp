@@ -140,7 +140,11 @@ void help_common_options(bool pair_filter) {
                     "each row names its ppb and pb picks%s (default %s)",
                     pair_filter
                         ? "; pf, alone, counts instead the PAIRS rows that "
-                          "fit what each DICT word leaves"
+                          "fit what each DICT word leaves, and wb,pf the ones "
+                          "that fit what each DICT word and then each DICT "
+                          "word bag leave, summed for each DICT word, and "
+                          "pb,wb,pf, for each PAIRS bag, the wb,pf counts of "
+                          "what it leaves, summed"
                         : "",
                     DEFAULT_SEARCH);
     dfs_help_option("--pp FILE",
@@ -175,24 +179,28 @@ bool remaining_letters(BagStatsArgs const& args, std::string* out) {
         subtract_letters(bag, remove, out);
 }
 
+void WordBagLoader::add(std::string const& line) {
+    PairsCounts const counts = pairs_letter_counts(line.c_str());
+    if (letter_total(counts) < min_length_ || counts == PairsCounts{} ||
+        !pairs_fits(bag_, counts))
+        return;
+    auto const [found, inserted] = seen_.emplace(counts, out_->size());
+    if (inserted) out_->push_back(counts);
+    if (!spellings_) return;
+    if (inserted) spellings_->emplace_back();
+    std::vector<std::string>& words = (*spellings_)[found->second];
+    if (std::find(words.begin(), words.end(), line) == words.end())
+        words.push_back(line);
+}
+
 bool load_word_bags(char const* program, char const* path,
                     PairsCounts const& bag, int min_length,
                     std::vector<PairsCounts>* out,
                     std::vector<std::vector<std::string>>* spellings) {
-    std::unordered_map<PairsCounts, size_t, PairsCountsHash> seen;
+    WordBagLoader loader(bag, min_length, out, spellings);
     return read_lines(program, path,
         [&](std::string const& line, size_t) {
-            PairsCounts const counts = pairs_letter_counts(line.c_str());
-            if (letter_total(counts) < min_length ||
-                counts == PairsCounts{} || !pairs_fits(bag, counts))
-                return true;
-            auto const [found, inserted] = seen.emplace(counts, out->size());
-            if (inserted) out->push_back(counts);
-            if (!spellings) return true;
-            if (inserted) spellings->emplace_back();
-            std::vector<std::string>& words = (*spellings)[found->second];
-            if (std::find(words.begin(), words.end(), line) == words.end())
-                words.push_back(line);
+            loader.add(line);
             return true;
         });
 }

@@ -263,9 +263,13 @@ bag_stats_rank_lib = static_library('bag-stats-rank', 'bag-stats-rank.cpp')
 bag_stats_run_lib = static_library('bag-stats-run', 'bag-stats-run.cpp',
   dependencies: thread_dep)
 
+bag_stats_cpu_lib = static_library('bag-stats-cpu', 'bag-stats-cpu.cpp',
+  dependencies: thread_dep)
+
 bag_stats = executable('bag-stats', 'bag-stats.cpp',
-  link_with: [bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib, pairs_lib,
-              pair_evidence_lib, dfs_class_list_lib, optparse_lib],
+  link_with: [bag_stats_cpu_lib, bag_stats_run_lib, bag_stats_rank_lib,
+              bag_stats_lib, pairs_lib, pair_evidence_lib, dfs_class_list_lib,
+              optparse_lib],
   dependencies: thread_dep,
   install: true)
 
@@ -561,7 +565,8 @@ subdir('gui')
 if sdl2_dep.found()
   executable('pgui', pgui_src,
     include_directories: pgui_inc,
-    link_with: [pfilter_lib, freqsort_lib, pairs_lib, lc_lib,
-      dfs_class_list_lib],
-    dependencies: imgui_backends_dep, install: true)
+    link_with: [pfilter_lib, freqsort_lib, bag_stats_cpu_lib,
+      bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib, pairs_lib,
+      pair_evidence_lib, lc_lib, dfs_class_list_lib, optparse_lib],
+    dependencies: [imgui_backends_dep, thread_dep], install: true)
 endif

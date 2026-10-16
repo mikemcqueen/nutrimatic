@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -102,9 +103,28 @@ bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
 // LETTERS less -u's letters.
 bool remaining_letters(BagStatsArgs const& args, std::string* out);
 
-// The distinct letter bags of DICT's lines that fit `bag` and have at least
-// `min_length` letters, in order of their first line. With `spellings`, also
-// each bag's distinct DICT lines, in DICT order.
+// Collects word bags into `out`: the distinct letter bags of the lines added
+// that fit `bag` and have at least `min_length` letters, in order of their
+// first line. With `spellings`, also each bag's distinct lines, in order.
+class WordBagLoader {
+  public:
+    WordBagLoader(PairsCounts const& bag, int min_length,
+                  std::vector<PairsCounts>* out,
+                  std::vector<std::vector<std::string>>* spellings)
+        : bag_(bag), min_length_(min_length), out_(out),
+          spellings_(spellings) {}
+
+    void add(std::string const& line);
+
+  private:
+    PairsCounts bag_;
+    int min_length_;
+    std::vector<PairsCounts>* out_;
+    std::vector<std::vector<std::string>>* spellings_;
+    std::unordered_map<PairsCounts, size_t, PairsCountsHash> seen_;
+};
+
+// The word bags of DICT's lines, as WordBagLoader collects them.
 bool load_word_bags(char const* program, char const* path,
                     PairsCounts const& bag, int min_length,
                     std::vector<PairsCounts>* out,
