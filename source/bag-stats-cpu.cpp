@@ -863,6 +863,7 @@ int run_pair_filter(BagStatsOptions const& options,
                         common.min_word_bag_length, &inputs.word_bags,
                         inputs.word_spellings_out()))
         return 1;
+    inputs.pick_pair_step_bags(common.min_pair_bag_length);
     std::vector<std::vector<std::string>> const& spellings =
         inputs.spellings();
     size_t const top =
@@ -1012,6 +1013,19 @@ PairFilterResult count_outer_bags(
 
 }  // namespace
 
+void PairFilterInputs::pick_pair_step_bags(int min_length) {
+    pair_step_bags.clear();
+    if (!pair_step) return;
+    size_t kept = 0;
+    for (size_t i = 0; i < pair_bags.size(); ++i) {
+        if (letter_total(pair_bags[i].counts) < min_length) continue;
+        pair_step_bags.push_back(pair_bags[i].counts);
+        if (kept != i) pair_rows[kept] = std::move(pair_rows[i]);
+        ++kept;
+    }
+    pair_rows.resize(kept);
+}
+
 PairFilterResult count_pair_filter(
         PairsCounts const& bag, PairFilterInputs const& inputs, bool exact,
         int words, PairFilterSort sort, size_t threads, size_t top) {
@@ -1019,10 +1033,7 @@ PairFilterResult count_pair_filter(
         return count_outer_bags(bag, inputs.pair_bags, inputs.word_bags,
                                 inputs.word_spellings, inputs.word_bags,
                                 exact, words, sort, threads, top);
-    std::vector<PairsCounts> pair_counts;
-    for (PairBag const& pair_bag : inputs.pair_bags)
-        pair_counts.push_back(pair_bag.counts);
-    return count_outer_bags(bag, inputs.pair_bags, pair_counts,
+    return count_outer_bags(bag, inputs.pair_bags, inputs.pair_step_bags,
                             inputs.pair_rows, inputs.word_bags, exact,
                             words + 1, sort, threads, top);
 }

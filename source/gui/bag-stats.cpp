@@ -37,6 +37,7 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
       return false;
     pair_loader.add(row);
   }
+  pf.pick_pair_step_bags(min_pair_bag_length);
 
   WordBagLoader word_loader(bag, min_word_bag_length, &pf.word_bags,
                             pf.word_spellings_out());
@@ -58,18 +59,43 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
   return true;
 }
 
+namespace {
+
+// A ":" and a two-digit field for `length`, at least 0, after the item before
+// it; true when Enter changes it.
+bool length_field(char const* id, int* length) {
+  ImGui::SameLine(0, 0);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(":");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
+                          2 * ImGui::GetStyle().FramePadding.x);
+  int value = *length;
+  if (!ImGui::InputInt(id, &value, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
+    return false;
+  value = std::max(value, 0);
+  bool const changed = value != *length;
+  *length = value;
+  return changed;
+}
+
+}  // namespace
+
 bool BagStats::render_options() {
   bool changed = false;
   if (toggle_button("ex", exact)) {
     exact = !exact;
     changed = true;
   }
-  ImGui::SameLine();
+  ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
   ImGui::BeginDisabled(!exact || !word_step);
   if (toggle_button("pb", pair_step)) {
     pair_step = !pair_step;
     changed = true;
   }
+  ImGui::BeginDisabled(!pair_step);
+  changed |= length_field("##pb", &min_pair_bag_length);
+  ImGui::EndDisabled();
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(!exact);
@@ -78,18 +104,6 @@ bool BagStats::render_options() {
     changed = true;
   }
   ImGui::EndDisabled();
-  ImGui::SameLine();
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("m:");
-  ImGui::SameLine(0, 0);
-  ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
-                          2 * ImGui::GetStyle().FramePadding.x);
-  int length = min_word_bag_length;
-  if (ImGui::InputInt("##m", &length, 0, 0,
-                      ImGuiInputTextFlags_EnterReturnsTrue)) {
-    length = std::max(length, 0);
-    changed |= length != min_word_bag_length;
-    min_word_bag_length = length;
-  }
+  changed |= length_field("##wb", &min_word_bag_length);
   return changed;
 }

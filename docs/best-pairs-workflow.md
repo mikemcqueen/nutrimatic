@@ -74,18 +74,21 @@ The details:
     
       NOTE: for cluer, i should build a dictionary that combines words.filtered & a filtered 3-letter
             wordlist (idx/words.3.bowie.filtered is a start).  and use that as pair's --dict.
-      old:
-      
-      index:   `query-index $S9 --wf -w2 -n0 --csv -m3 --dict idx/words.big.l3-10 > idx/idx.2.s9.m3`
-      cluer:   `pairs $S9 -m3 | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s9.m3`
-      combine: `pcomm idx/cluer.s9.m3 idx/idx.2.s9.m3 > idx/all.s9.m3`
+
+      old way index:   `query-index $S9 --wf -w2 -n0 --csv -m3 --dict idx/words.big.l3-10 > idx/idx.2.s9.m3`
+
+      old way cluer:   `pairs $S9 -m3 | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s9.m3`
+
+      old way combine: `pcomm idx/cluer.s9.m3 idx/idx.2.s9.m3 > idx/all.s9.m3`
 
       updated:
 
       index:   `query-index $S2 --wf -w2 -n0 --csv -m3 --dict idx/words.big.3.13 > idx/idx.2.s2.m3.3.13`
+
       # filter out non-cluer-index dict words before sending to pairs
       cluer:   `time cat idx/words.big.3.13 | ../nutrimatic/dict-filter -d cluer/data/index/tokens.txt - | pairs $S2 -d - -m3 |
                 python cluer/query_index.py -f - -j --threads 2 > cluer.s2.m3.3.13`
+
       combine: `pcomm idx/cluer.s2.m3.3.13 idx/idx.2.s2.m3.3.13 | sort -u > idx/all.s2.m3.3.13`
 
     * calculate and auto-classify remaining:

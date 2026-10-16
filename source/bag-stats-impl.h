@@ -14,10 +14,11 @@ extern char const BAG_STATS_MAGIC[];
 
 // What a bag-stats run was given. Written as a text header, each line ending
 // in '\n',
-//   bag-stats 5
+//   bag-stats 6
 //   letters LETTERS      (what is left once used letters are removed, sorted)
 //   min MIN_LENGTH       (of the words in each counted pair)
 //   min-wb MIN_WB_LENGTH (of the DICT words loaded as word bags)
+//   min-pb MIN_PB_LENGTH (of the PAIRS bags pb picks)
 //   ss STEPS             (the search sequence, in canonical order)
 //   pp PATH              (the prospective pairs; `pp` alone when none)
 //   sentence N           (-s's sentence; `sentence` alone when none)
@@ -30,6 +31,7 @@ struct BagStatsHeader {
   std::string letters;
   int min_word_length;
   int min_word_bag_length;
+  int min_pair_bag_length;
   std::string search;
   std::string prospects;
   // CLASSIFIED_NO_SENTENCE when none.

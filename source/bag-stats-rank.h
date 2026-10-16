@@ -154,6 +154,8 @@ class PairBagLoader {
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices_;
 };
 
+int letter_total(PairsCounts const& counts);
+
 // Appends to `out` the bags of the rows of `path` that fit `bag` and aren't
 // `rejected`, as PairBagLoader collects them, with `rows`.
 bool load_pair_bags(char const* program, char const* path,
@@ -162,14 +164,14 @@ bool load_pair_bags(char const* program, char const* path,
                     std::vector<std::vector<std::string>>* rows = nullptr);
 
 // load_pair_bags() of PAIRS into `pair_bags`, less the bags of
-// `prospect_bags`, and, unless `prospects_file` is NULL, of it into
-// `prospect_bags`, their priors from `args`' --prior or
-// --p1, --clues and --prior-weights, freed before it returns. `has_prior`:
-// whether `args` gives one.
+// `prospect_bags` and those of fewer than `min_pair_length` letters, and,
+// unless `prospects_file` is NULL, of it into `prospect_bags`, their priors
+// from `args`' --prior or --p1, --clues and --prior-weights, freed before it
+// returns. `has_prior`: whether `args` gives one.
 bool load_pick_bags(char const* program, RankArgs const& args,
                     char const* prospects_file, char const* pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
-                    std::vector<PairBag>* prospect_bags,
+                    int min_pair_length, std::vector<PairBag>* prospect_bags,
                     std::vector<PairBag>* pair_bags, bool* has_prior);
 
 struct LengthValueHash {

@@ -25,13 +25,13 @@ printf '%s\n' low owl ant tan cat bee rat x dog > "$test_dir/dict"
 printf '%s\n' '2.5 dog,cat' '1.0 bee,rat' '0.5 low,ant' > "$test_dir/prior"
 
 letters=catdoglowanttanbeerat
-"$bag_stats" --min-wb-len 3 --ss pb,pb,wb,p $letters "$test_dir/pairs" "$test_dir/dict" \
+"$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss pb,pb,wb,p $letters "$test_dir/pairs" "$test_dir/dict" \
   > "$test_dir/dump" 2> /dev/null
 
 for options in "-n 5 --wbfrac-min --tp --by-pick" \
                "--score cat,dog --score ant,bee --score-detail --tp --mp --by-pick" \
                "-n 5 --tp --by-pick --best-pairs lead"; do
-  expected=$("$bag_stats" --min-wb-len 3 --ss pb,pb,wb,p $options --prior "$test_dir/prior" \
+  expected=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss pb,pb,wb,p $options --prior "$test_dir/prior" \
     $letters "$test_dir/pairs" "$test_dir/dict" 2> /dev/null)
   actual=$("$bag_stats_sort" $options --prior "$test_dir/prior" \
     "$test_dir/dump" 2> /dev/null)
@@ -41,7 +41,7 @@ done
 printf '%s\n' dog,cat owl,tan ant,bee > "$test_dir/pp"
 for options in "-n 50 --tp --mp --by-pick" \
                "--score dog,cat --score bee,rat --tp --by-pick"; do
-  expected=$("$bag_stats" --min-wb-len 3 --ss ppb,pb,wb,p --pp "$test_dir/pp" $options \
+  expected=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss ppb,pb,wb,p --pp "$test_dir/pp" $options \
     --prior "$test_dir/prior" $letters "$test_dir/pairs" "$test_dir/dict" \
     2> /dev/null)
   actual=$("$bag_stats_sort" --ss ppb,pb,wb,p --pp "$test_dir/pp" $options \

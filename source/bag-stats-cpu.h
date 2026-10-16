@@ -94,7 +94,7 @@ struct PairFilterResult {
 
 // The bags a --ss pf count runs over, loaded by the caller: the pair bags and
 // word bags, and with pair_step (pb,wb,pf) each pair bag's rows, otherwise
-// each word bag's spellings.
+// each word bag's spellings. The caller then calls pick_pair_step_bags().
 struct PairFilterInputs {
     explicit PairFilterInputs(bool pair_step) : pair_step(pair_step) {}
 
@@ -113,8 +113,14 @@ struct PairFilterInputs {
         return pair_step ? pair_rows : word_spellings;
     }
 
+    // With pair_step, lists in pair_step_bags the pair bags of at least
+    // `min_length` letters, the ones pb picks, and keeps only their rows in
+    // pair_rows.
+    void pick_pair_step_bags(int min_length);
+
     bool pair_step;
     std::vector<PairBag> pair_bags;
+    std::vector<PairsCounts> pair_step_bags;
     std::vector<std::vector<std::string>> pair_rows;
     std::vector<PairsCounts> word_bags;
     std::vector<std::vector<std::string>> word_spellings;

@@ -59,5 +59,6 @@ run_both() {
 }
 
 run_both
-run_both --min-wb-len 3
-run_both --ss pb,pb,wb,wb,p -n 5 --wb --mp
+run_both --min-pb-len 6
+run_both --min-pb-len 6 --min-wb-len 3
+run_both --min-pb-len 6 --ss pb,pb,wb,wb,p -n 5 --wb --mp
