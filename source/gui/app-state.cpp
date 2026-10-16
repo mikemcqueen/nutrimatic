@@ -52,10 +52,17 @@ std::string get_seed_key(std::string const& name) {
   return "seed";
 }
 
-// The name of the `type` seed file with the sN of the seed file `name` and
-// the mN `m`: seed.S.M.all.CUTOFF.pairs for "seed", all.S.M for "all", or
-// none when `name` has no sN, or `type` is "seed" with no `cutoff`, or is
-// neither.
+// The universe component of the seed file `name`: U for seed.S.M.U.CUTOFF[...]
+// .pairs, "all" otherwise.
+std::string_view get_seed_universe(std::string_view name) {
+  std::vector<std::string_view> const pieces = split(name, '.');
+  return pieces[0] == "seed" && pieces.size() > 4 ? pieces[3] : "all";
+}
+
+// The name of the `type` seed file with the sN and universe of the seed file
+// `name` and the mN `m`: seed.S.M.U.CUTOFF.pairs for "seed", all.S.M for
+// "all", or none when `name` has no sN, or `type` is "seed" with no
+// `cutoff`, or is neither.
 std::optional<std::string> build_seed_name(std::string const& name,
                                            std::string_view type,
                                            std::string_view m,
@@ -65,7 +72,8 @@ std::optional<std::string> build_seed_name(std::string const& name,
   std::string const sm = std::string(pieces[1]) + "." + std::string(m);
   if (type == "seed") {
     if (cutoff.empty()) return std::nullopt;
-    return "seed." + sm + ".all." + std::string(cutoff) + ".pairs";
+    return "seed." + sm + "." + std::string(get_seed_universe(name)) + "." +
+           std::string(cutoff) + ".pairs";
   }
   if (type == "all") return "all." + sm;
   return std::nullopt;
@@ -83,7 +91,7 @@ void add_seed_if_exists(SeedMap& map, std::string const& directory,
 }
 
 // Adds to `map` the seed50, seed85, and all seed files in `directory` with
-// the sN of the seed file `name`, for each of m3 and m4, under keys suffixed
+// the sN (and, for seed50 and seed85, the universe) of the seed file `name`, for each of m3 and m4, under keys suffixed
 // with m3 or m4.
 void add_other_seed_files(SeedMap& map, std::string const& directory,
                           std::string const& name) {

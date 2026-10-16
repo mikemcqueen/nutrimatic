@@ -46,9 +46,10 @@ struct AppState {
   // seed.S.M.all.CUTOFF[...].pairs, "all" and its M for all.S.M, or "seed"
   // otherwise; sets seed_m to name's M; sets seed_map to seed_name under
   // seed_key plus, for each M of m3 and m4, whichever of
-  // seed.S.M.all.50.pairs (seed50M), seed.S.M.all.85.15.pairs (seed85M),
+  // seed.S.M.U.50.pairs (seed50M), seed.S.M.U.85.15.pairs (seed85M),
   // and all.S.M (allM) exist in seed_directory under keys not already
-  // taken, S being name's; and bumps generation. An unreadable seed is
+  // taken, S being name's and U its universe (all unless name is
+  // seed.S.M.U.CUTOFF[...].pairs); and bumps generation. An unreadable seed is
   // diagnosed.
   void load_seed(std::string name);
 
