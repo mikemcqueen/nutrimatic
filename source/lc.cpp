@@ -106,7 +106,7 @@ bool parse_args(char* argv[], LetterCountOptions* out, bool* help) {
     out->text = text;
   }
   for (char* arg; (arg = optparse_arg(&options)) != NULL;)
-    out->used_letters += lowercase_letters(arg);
+    out->used_letters += az_letters(arg);
   return true;
 }
 

@@ -130,7 +130,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   char const* const letters = optparse_arg(&options);
   if (letters == NULL || optparse_arg(&options) != NULL) return false;
-  if (!clean_letters(letters, "letters", &out->letters)) return false;
+  out->letters = bag_letters(letters);
   std::sort(out->letters.begin(), out->letters.end());
 
   if (out->letters.size() < size_t(out->min_word_length)) {

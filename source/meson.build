@@ -166,6 +166,7 @@ dump_index = executable('dump-index', 'dump-index.cpp',
   link_with: [optparse_lib, index_lib], install: true)
 
 find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
+  'letter-bag.cpp',
   link_with: [optparse_lib, search_lib, index_lib], install: true)
 
 dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
@@ -333,7 +334,7 @@ query_index = executable('query-index', 'query-index.cpp',
   install: true)
 
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
-executable('measure-f', 'measure-f.cpp',
+executable('measure-f', 'measure-f.cpp', 'letter-bag.cpp',
   link_with: [optparse_lib, index_lib], install: false)
 
 measure_coherence = executable(

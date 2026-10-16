@@ -172,11 +172,8 @@ void help_common_tail() {
 }
 
 bool remaining_letters(BagStatsArgs const& args, std::string* out) {
-    std::string bag;
-    std::string remove;
-    return clean_letters(args.letters.c_str(), "letters", &bag) &&
-        clean_letters(args.used_letters.c_str(), "used letters", &remove) &&
-        subtract_letters(bag, remove, out);
+    return subtract_letters(bag_letters(args.letters),
+                            bag_letters(args.used_letters), out);
 }
 
 void WordBagLoader::add(std::string const& line) {

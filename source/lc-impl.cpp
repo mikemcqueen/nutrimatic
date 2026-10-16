@@ -127,8 +127,8 @@ void table(LetterCounts const& counts, int total,
 bool letter_count_lines(
     LetterCountOptions const& options, std::vector<std::string>* out) {
   out->clear();
-  std::string const text = lowercase_letters(options.text);
-  std::string const used = lowercase_letters(options.used_letters);
+  std::string const text = az_letters(options.text);
+  std::string const used = az_letters(options.used_letters);
   std::string remaining;
   if (!subtract_letters(text, used, &remaining)) return false;
 

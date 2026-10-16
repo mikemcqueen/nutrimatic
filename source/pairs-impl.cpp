@@ -41,12 +41,9 @@ bool Pairs::load(PairsOptions const& options) {
   groups_.clear();
   group_indices_.clear();
 
-  std::string bag;
-  std::string remove;
   std::string letters;
-  if (!clean_letters(options_.letters.c_str(), "letters", &bag) ||
-      !clean_letters(options_.used_letters.c_str(), "used letters", &remove) ||
-      !subtract_letters(bag, remove, &letters))
+  if (!subtract_letters(bag_letters(options_.letters),
+                        bag_letters(options_.used_letters), &letters))
     return false;
   bag_ = pairs_letter_counts(letters.c_str());
   return true;

@@ -1,4 +1,5 @@
 #include "index.h"
+#include "letter-bag.h"
 #include "optparse.h"
 #include "search.h"
 
@@ -52,7 +53,7 @@ class AnagramFilter: public SearchFilter {
     // than calling has_transition() once per child.
     num_letters = 0;
     for (size_t i = 0; i < sizeof(value) / sizeof(State); ++i)
-      if (value[i] != 0) bag_letters[num_letters++] = (unsigned char) i;
+      if (value[i] != 0) distinct_letters[num_letters++] = (unsigned char) i;
 
     if (product > (INT_MAX - 1) / (min_len + 1)) {
       fputs("anagram too long\n", stderr);
@@ -102,7 +103,7 @@ class AnagramFilter: public SearchFilter {
     if (word >= min_len) out->set(' ');
 
     for (int i = 0; i < num_letters; ++i) {
-      unsigned char const ch = bag_letters[i];
+      unsigned char const ch = distinct_letters[i];
       State const v = value[ch];
       if ((bag + v) % count[ch] >= v) out->set(ch);
     }
@@ -115,54 +116,9 @@ class AnagramFilter: public SearchFilter {
   State terminal;
   State min_len;
 
-  unsigned char bag_letters[256];  // the distinct letters of the bag
+  unsigned char distinct_letters[256];  // the distinct letters of the bag
   int num_letters;
 };
-
-// Copies the alphanumerics of "in" to "out", dropping spaces so that
-// multi-word arguments like "word1 word2" are accepted.  Anything else is an
-// error; in particular a space left in the letter bag would be counted into
-// AnagramFilter's radix but could never be consumed (has_transition handles
-// ' ' before it looks at value[]), so the search would silently never accept.
-static bool clean_letters(char const* in, char const* what, std::string* out) {
-  for (; *in != '\0'; ++in) {
-    if (*in == ' ') continue;
-    if ((*in < 'a' || *in > 'z') && (*in < '0' || *in > '9')) {
-      fprintf(stderr, "error: bad character '%c' in %s\n", *in, what);
-      return false;
-    }
-    out->push_back(*in);
-  }
-  return true;
-}
-
-// Removes one occurrence of each letter of "used" from "bag", writing what's
-// left to "out" (sorted, which AnagramFilter doesn't care about).  Errors if
-// the bag runs out of some letter, or if nothing is left to search for.
-static bool subtract_letters(std::string const& bag, std::string const& used,
-                             std::string* out) {
-  int have[UCHAR_MAX + 1] = { 0 };
-  for (size_t i = 0; i < bag.size(); ++i) ++have[(unsigned char) bag[i]];
-
-  for (size_t i = 0; i < used.size(); ++i) {
-    unsigned char ch = used[i];
-    if (have[ch] == 0) {
-      fprintf(stderr, "error: no '%c' left in \"%s\" to use\n",
-          ch, bag.c_str());
-      return false;
-    }
-    --have[ch];
-  }
-
-  out->clear();
-  for (int c = 0; c <= UCHAR_MAX; ++c) out->append(have[c], (char) c);
-
-  if (out->empty()) {
-    fprintf(stderr, "error: no letters left after removing used letters\n");
-    return false;
-  }
-  return true;
-}
 
 // Parses a non-negative decimal count, e.g. the argument to -m or -p.
 static bool parse_count(char const* in, char const* what, int* out) {
@@ -270,12 +226,10 @@ static bool parse_args(char *argv[], Args* out) {
     return false;
   }
 
-  std::string bag, remove;
-  if (!clean_letters(letters, "letters", &bag)) return false;
-  if (!clean_letters(used.c_str(), "used letters", &remove)) return false;
-
   out->index_file = index_file;
-  if (!subtract_letters(bag, remove, &out->letters)) return false;
+  if (!subtract_letters(bag_letters(letters), bag_letters(used),
+                        &out->letters))
+    return false;
 
   // A bag too small for the *default* minimum is a bag the user never asked to
   // constrain, so back the default off instead of refusing to search at all.

@@ -22,22 +22,23 @@ struct LetterBag {
   explicit LetterBag(std::string const& letters);
 };
 
-// Copies in-only lowercase a-z/0-9 characters from `in` into `out`, skipping
-// spaces. Prints an error naming `what` and returns false on any other
-// character.
-bool clean_letters(char const* in, char const* what, std::string* out);
-
 // Removes the multiset `used` from the multiset `bag`, writing the remainder
-// (sorted by character) to `out`. Prints an error and returns false if `used`
-// contains a letter not available in `bag`, or if nothing is left.
+// (sorted by character) to `out`. Prints an error and returns false if `bag`
+// is empty, if `used` contains a letter not available in `bag`, or if nothing
+// is left.
 bool subtract_letters(std::string const& bag, std::string const& used,
                       std::string* out);
 
-// The a-z letters of `in`, lowercased.
-std::string lowercase_letters(std::string const& in);
+// The a-z/0-9 characters of `in`, lowercased; every other character is
+// dropped. Every LETTERS bag and used-letters argument goes through this.
+std::string bag_letters(std::string const& in);
 
-// Cleans `letters` and `used_letters` and fills `out` with what is left of
-// the first once the second is removed. Errors are diagnosed already.
+// bag_letters() without the digits, for tools that count only a-z.
+std::string az_letters(std::string const& in);
+
+// Filters `letters` and `used_letters` through bag_letters() and fills `out`
+// with what is left of the first once the second is removed. Errors are
+// diagnosed already.
 bool make_letter_bag(
     char const* letters, std::string const& used_letters, LetterBag* out);
 

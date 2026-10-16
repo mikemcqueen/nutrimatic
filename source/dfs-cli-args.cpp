@@ -1099,13 +1099,8 @@ bool load_dfs_workflow_target_settings(
          (sentence.back() == '\n' || sentence.back() == '\r'))
     sentence.pop_back();
 
-  std::string sentence_bag;
-  std::string named_bag;
-  if (!clean_letters(
-          sentence.c_str(), "workflow sentence letters", &sentence_bag) ||
-      !clean_letters(
-          parts[1].c_str() + 2, "workflow target letters", &named_bag))
-    return false;
+  std::string const sentence_bag = bag_letters(sentence);
+  std::string const named_bag = bag_letters(parts[1].substr(2));
   if (parts[1][0] == 'o') {
     std::string unused;
     if (!subtract_letters(sentence_bag, named_bag, &unused)) return false;

@@ -150,7 +150,7 @@ bool parse_args(char* argv[], FreqsortOptions* out, char const** dict,
 
   out->letters = letters;
   for (char* arg; (arg = optparse_arg(&options)) != NULL;)
-    out->used_letters += lowercase_letters(arg);
+    out->used_letters += az_letters(arg);
   return true;
 }
 
