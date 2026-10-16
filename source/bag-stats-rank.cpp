@@ -281,6 +281,12 @@ void PairBagLoader::add(DfsPairRow const& row) {
         pair_bag.prior = std::max(pair_bag.prior, score);
 }
 
+int letter_total(PairsCounts const& counts) {
+    int total = 0;
+    for (uint8_t value : counts.values) total += value;
+    return total;
+}
+
 bool load_pair_bags(char const* program, char const* path,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     PairPrior const& prior, std::vector<PairBag>* out,
@@ -296,7 +302,7 @@ bool load_pair_bags(char const* program, char const* path,
 bool load_pick_bags(char const* program, RankArgs const& args,
                     char const* prospects_file, char const* pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
-                    std::vector<PairBag>* prospect_bags,
+                    int min_pair_length, std::vector<PairBag>* prospect_bags,
                     std::vector<PairBag>* pair_bags, bool* has_prior) {
     std::unordered_map<std::string, double> priors;
     PairEvidenceSource evidence;
@@ -332,7 +338,8 @@ bool load_pick_bags(char const* program, RankArgs const& args,
     for (PairBag const& prospect : *prospect_bags)
         prospects.insert(prospect.counts);
     std::erase_if(*pair_bags, [&](PairBag const& pair_bag) {
-        return prospects.contains(pair_bag.counts);
+        return prospects.contains(pair_bag.counts) ||
+            letter_total(pair_bag.counts) < min_pair_length;
     });
     return true;
 }
@@ -605,7 +612,8 @@ bool score_picks(char const* program, std::vector<std::string> const& score,
             found == bags.end()) {
             fprintf(stderr, "%s: --score %s isn't two words whose bag is "
                     "in %s and fits the letters\n", program, name.c_str(),
-                    i < prospects ? "--pp" : "PAIRS");
+                    i < prospects
+                        ? "--pp" : "PAIRS, of at least --min-pb-len letters,");
             return false;
         }
         picks[step] = size_t(found - bags.begin());

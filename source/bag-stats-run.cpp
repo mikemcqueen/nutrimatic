@@ -27,6 +27,9 @@ RankOption parse_common_option(char const* program, int option,
       case OPT_COMMON_MIN_WB_LENGTH:
         return parse_count(arg, "--min-wb-len", &out->min_word_bag_length)
             ? RankOption::PARSED : RankOption::BAD;
+      case OPT_COMMON_MIN_PB_LENGTH:
+        return parse_count(arg, "--min-pb-len", &out->min_pair_bag_length)
+            ? RankOption::PARSED : RankOption::BAD;
       case OPT_COMMON_SEARCH:
         out->search_text = arg;
         return RankOption::PARSED;
@@ -132,6 +135,10 @@ void help_common_options(bool pair_filter) {
                     "pairs, and --wbfrac-min sorts by WB_WITH_MIN_PAIRS / "
                     "WORDBAGS",
                     DEFAULT_MIN_WB_LENGTH, int(BAG_STATS_MIN_PAIRS));
+    dfs_help_option("--min-pb-len N",
+                    "pb picks only PAIRS bags of at least N letters "
+                    "(default %d)%s", DEFAULT_MIN_PB_LENGTH,
+                    pair_filter ? "; pf still counts every PAIRS row" : "");
     dfs_help_option("--ss STEPS",
                     "the search sequence, comma-separated: ppb picks a pair "
                     "bag from the --pp FILE, pb one from PAIRS, wb a word bag "
@@ -224,12 +231,6 @@ bool load_inner_dictionary(char const* program, PairsExactCounter* out) {
     return true;
 }
 
-int letter_total(PairsCounts const& counts) {
-    int total = 0;
-    for (uint8_t value : counts.values) total += value;
-    return total;
-}
-
 void filter_word_bags(std::vector<PairsCounts> const& from,
                       PairsCounts const& rest, std::vector<PairsCounts>* out) {
     out->clear();
@@ -253,7 +254,8 @@ bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
     if (!load_rejected_pairs(program, args, &rejected) ||
         !load_pick_bags(program, args.rank, args.prospects_file,
                         args.pairs_file, out->bag, rejected,
-                        &out->prospect_bags, &out->pair_bags,
+                        args.min_pair_bag_length, &out->prospect_bags,
+                        &out->pair_bags,
                         &out->has_prior) ||
         !load_word_bags(program, args.dictionary_file, out->bag,
                         args.min_word_bag_length, &out->word_bags,

@@ -29,6 +29,7 @@
 
 inline constexpr int INNER_MIN_WORD_LENGTH = 3;
 inline constexpr int DEFAULT_MIN_WB_LENGTH = 5;
+inline constexpr int DEFAULT_MIN_PB_LENGTH = 9;
 inline constexpr char DEFAULT_SEARCH[] = "pb,wb,p";
 inline constexpr int DEFAULT_PROGRESS_SECONDS = 60;
 // How many counted rows may wait to be printed, per thread, before workers
@@ -43,6 +44,7 @@ struct BagStatsArgs {
     // Whether PAIRS and --pp drop the classified no.pairs.
     bool drop_no = true;
     int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
+    int min_pair_bag_length = DEFAULT_MIN_PB_LENGTH;
     char const* search_text = DEFAULT_SEARCH;
     Search search;
     char const* prospects_file = NULL;
@@ -55,6 +57,7 @@ struct BagStatsArgs {
 
 enum {
     OPT_COMMON_MIN_WB_LENGTH = 256,
+    OPT_COMMON_MIN_PB_LENGTH,
     OPT_COMMON_SEARCH,
     OPT_COMMON_PROSPECTS,
     OPT_COMMON_THREADS,
@@ -69,6 +72,7 @@ enum {
     { "used-letters", 'u', OPTPARSE_REQUIRED }, \
     CLASSIFIED_SENTENCE_LONG_OPTION, \
     { "min-wb-len", OPT_COMMON_MIN_WB_LENGTH, OPTPARSE_REQUIRED }, \
+    { "min-pb-len", OPT_COMMON_MIN_PB_LENGTH, OPTPARSE_REQUIRED }, \
     { "ss", OPT_COMMON_SEARCH, OPTPARSE_REQUIRED }, \
     { "pp", OPT_COMMON_PROSPECTS, OPTPARSE_REQUIRED }, \
     { "threads", OPT_COMMON_THREADS, OPTPARSE_REQUIRED }, \
@@ -132,8 +136,6 @@ bool load_word_bags(char const* program, char const* path,
 
 // Adds the workflow dictionary's words to `out` and finishes it.
 bool load_inner_dictionary(char const* program, PairsExactCounter* out);
-
-int letter_total(PairsCounts const& counts);
 
 // Writes the bags of `from` that fit `rest` to `out`.
 void filter_word_bags(std::vector<PairsCounts> const& from,
@@ -642,6 +644,7 @@ int run_bag_stats(Walk const& walk, std::string const& letters,
     if (!rank.top_segments && rank.best_pairs == BestPairs::NONE)
         write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
                                         args.min_word_bag_length,
+                                        args.min_pair_bag_length,
                                         search_text(args.search),
                                         bag_stats_header_path(args.prospects_file),
                                         args.sentence,

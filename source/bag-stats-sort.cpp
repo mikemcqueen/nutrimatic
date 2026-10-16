@@ -339,7 +339,8 @@ bool load_dump(Args const& args, Dump* dump) {
             !load_pick_bags(PROGRAM, args.rank,
                             h.prospects.empty() ? NULL : h.prospects.c_str(),
                             h.pairs.c_str(), bag, rejected,
-                            &dump->prospect_bags, &dump->pair_bags,
+                            h.min_pair_bag_length, &dump->prospect_bags,
+                            &dump->pair_bags,
                             &dump->has_prior))
             return false;
         dump->steps.insert(dump->steps.end(), dump->search.pairs,

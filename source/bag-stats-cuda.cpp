@@ -23,6 +23,7 @@ static_assert(sizeof(GpuCounts) == sizeof(BagStatsCounts));
 void usage(char const* program, FILE* out) {
     fprintf(out,
             "usage: %s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
+            "       [--min-pb-len N]\n"
             "       [--ss STEPS] [--pp FILE] [--threads N] [--progress N]\n"
             "       [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... [--score-detail]\n"

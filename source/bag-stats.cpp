@@ -25,6 +25,7 @@ constexpr int OPT_SORT = OPT_COMMON_END + 5;
 void usage(char const* program, FILE* out) {
     fprintf(out,
             "usage: %s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
+            "       [--min-pb-len N]\n"
             "       [--ss STEPS] [--pp FILE] [--threads N] [--cache-size N]\n"
             "       [--pair-cache-size N]\n"
             "       [--progress N]\n"
@@ -36,8 +37,8 @@ void usage(char const* program, FILE* out) {
             "        [--prior-weights SPEC]] [--top-segments]\n"
             "       LETTERS PAIRS DICT\n"
             "       %s --ss pf|wb,pf|pb,wb,pf [-u LETTERS]\n"
-            "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
-            "       [--exact]\n"
+            "       [-s N | --no-nopairs] [--min-wb-len N] [--min-pb-len N]\n"
+            "       [--threads N] [--exact]\n"
             "       [--completions N | --all] [--sort TP|UP]\n"
             "       LETTERS PAIRS DICT\n",
             program, program);

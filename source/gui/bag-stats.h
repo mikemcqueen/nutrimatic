@@ -15,8 +15,9 @@
 // it uses all the letters. Its option widgets are an "ex" toggle button
 // setting exact (--exact), a "pb" toggle button, enabled only with exact and
 // word_step, setting pair_step (--ss pb,wb,pf, which lists each PAIRS row in
-// place of each DICT word), a "wb" toggle button, enabled only with exact,
-// setting word_step (--ss wb,pf instead of --ss pf) and an "m:" field
+// place of each DICT word), then a ":" field, enabled with pair_step, setting
+// min_pair_bag_length (--min-pb-len), a "wb" toggle button, enabled only with
+// exact, setting word_step (--ss wb,pf instead of --ss pf), then a ":" field
 // setting min_word_bag_length (--min-wb-len). It starts exact. Choosing it sets its Column's source to the seed50m3 seed
 // and its D: dropdown to the column before it.
 struct BagStats {
@@ -32,6 +33,7 @@ struct BagStats {
   bool word_step = false;
   bool pair_step = false;
   int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
+  int min_pair_bag_length = DEFAULT_MIN_PB_LENGTH;
 };
 
 #endif
