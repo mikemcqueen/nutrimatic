@@ -100,7 +100,7 @@ The details:
 
     * merge them into final pairs file:
 
-      `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4 > idx/pairs.s8.m4`
+      `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4  | sort -u > idx/all.s8.m4`
 
     * TBD: for fine tuning later with specific subsets:
 

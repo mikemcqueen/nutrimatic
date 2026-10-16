@@ -220,6 +220,12 @@ void Column::render() {
     ImGui::TableNextColumn();
     if (commands_[choice_] && commands_[choice_]->render_options())
       ++options_version_;
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
+    ImGui::TableNextColumn();
+    if (commands_[choice_] && commands_[choice_]->render_display_options())
+      ++options_version_;
     ImGui::EndTable();
   }
 
@@ -246,7 +252,8 @@ void Column::render() {
   }
   if (made_key_ == remaining_key_ &&
       (made_key_ != hidden_key_ ||
-       app_state().judged_bad_version != hidden_judged_version_))
+       app_state().judged_bad_version != hidden_judged_version_ ||
+       display_version() != hidden_display_version_))
     update_hidden();
   ImVec2 const status_min = ImGui::GetCursorScreenPos();
   float const status_width = ImGui::GetContentRegionAvail().x;
@@ -484,11 +491,22 @@ std::string Column::output_used_letters() const {
   return used;
 }
 
+Command const* Column::made_command() const {
+  if (made_key_.choice < 0 || !commands_[made_key_.choice]) return nullptr;
+  return &*commands_[made_key_.choice];
+}
+
+unsigned Column::display_version() const {
+  Command const* const command = made_command();
+  return command ? command->display_version() : 0;
+}
+
 void Column::update_hidden() {
   bool const rerun = made_key_ != hidden_key_;
   hidden_key_ = made_key_;
   AppState const& state = app_state();
   hidden_judged_version_ = state.judged_bad_version;
+  hidden_display_version_ = display_version();
   std::vector<char> hidden;
   if (state.judged_bad_filter &&
       (!state.judged_bad.empty() || state.bad_bags_bitmap) &&
@@ -512,6 +530,14 @@ void Column::update_hidden() {
       for (int j = 0; j < 26; ++j) key.append(counts[j], 'a' + j);
       if (!state.is_judged_bad(key, counts)) continue;
       if (hidden.empty()) hidden.resize(items.size());
+      hidden[i] = 1;
+    }
+  }
+  if (Command const* const command = made_command()) {
+    Lines const& values = *list_.values();
+    for (size_t i = 0; i < values.size(); ++i) {
+      if (!command->display_hides(values[i])) continue;
+      if (hidden.empty()) hidden.resize(values.size());
       hidden[i] = 1;
     }
   }
