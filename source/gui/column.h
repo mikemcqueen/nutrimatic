@@ -38,7 +38,8 @@ void load_letter_count_font();
 // std::monostate. Each choice keeps its own options. render() reruns the
 // command, on a worker thread, when the source, the choice, its options, the
 // dictionary, app_state(), or the source, letters or dictionary column's
-// output or selection has changed since it last ran; it waits for a pending
+// output or selection, or the seed file the source names, has changed since
+// it last ran; it waits for a pending
 // source, letters or dictionary column to finish first. The letters column is the one letter_source names, none
 // for "all". The command runs with the used letters passed on by the letters
 // column (see output_used_letters()), or app_state()'s (the window's u:
@@ -103,6 +104,9 @@ class Column {
     unsigned classified_version;
     unsigned source_version;
     InputSource source;
+    // The version of app_state()'s seed file the source names, or 0 when it
+    // isn't a seed.
+    unsigned seed_version;
     unsigned letters_version;
     LetterSource letter_source;
     int dictionary;
@@ -179,10 +183,10 @@ class Column {
   std::vector<std::optional<Command>> commands_;
   int choice_ = 0;
   unsigned options_version_ = 0;
-  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
+  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0};
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
-  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
+  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
@@ -192,7 +196,7 @@ class Column {
   std::vector<std::string> letter_count_;
   // The made_key_, app_state()'s judged_bad_version, and display_version()
   // as of the last update_hidden().
-  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
+  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0};
   unsigned hidden_judged_version_ = 0;
   unsigned hidden_display_version_ = 0;
   unsigned version_ = 0;

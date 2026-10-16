@@ -469,6 +469,7 @@ Column::Key Column::wanted_key() const {
   Column const* source = source_column();
   Column const* letters = letters_column();
   Column const* dictionary = dictionary_column();
+  auto const* seed = std::get_if<Seed>(&source_);
   return {choice_,
           options_version_,
           app_state().generation,
@@ -477,6 +478,7 @@ Column::Key Column::wanted_key() const {
               : 0,
           source ? source->version() : 0,
           source_,
+          seed ? app_state().seed_file(seed->key).version : 0,
           letters ? letters->version() : 0,
           letter_source_,
           dictionary_,
@@ -585,7 +587,7 @@ void Column::start(Key key) {
     }
     input = source->output();
   } else if (auto const* seed = std::get_if<Seed>(&source_)) {
-    input = state.seed_lines(seed->key);
+    input = state.seed_file(seed->key).lines;
   } else if (std::holds_alternative<Dict>(source_)) {
     input = dictionary_lines;
   } else {

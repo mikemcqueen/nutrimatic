@@ -162,13 +162,18 @@ NEW WAY:
 
     `cat seed.pairs | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > resutls/s8/pairs/bowie.llo`
 
-2. manual  review
+3. manual  review
 
     `./wf review p2 results/s9/pairs/pairs.ooo --as s9.pairs.ooo -s9 --checked no`
     ** manual review **
     `./wf complete p2 s9.pairs.ooo`
 
+4. finding dictionary words to review/eliminate:
 
+    basically, filter a seed file by a already-filtered $DICT, because seed files are built with the unfiltered dict.
+    extract unique words, grep those words for whatever letter(-pair) you're interested in trimming.
+
+    `cat idx/seed.s1.m4.dict.85.15.pairs | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
 
 
 
