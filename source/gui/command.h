@@ -23,6 +23,15 @@
 // drawing its option widgets in the current content region and returning
 // true when an option changed; commands without it have no options. And it
 // may have
+//   bool render_display_options()
+// drawing its second row of option widgets the same way; commands without it
+// leave that row empty. And it may have
+//   unsigned display_version() const
+//   bool display_hides(std::string const& value) const
+// a display filter on its output: display_hides() says whether the item with
+// `value` (see Column::output()) is hidden, and display_version() goes up
+// each time its answers change; commands without them hide nothing. And it
+// may have
 //   std::string used_letters() const
 // returning the letters it adds to the used letters it runs with, and those
 // of the Columns downstream of it; commands without it add none. And it may
@@ -71,6 +80,14 @@ class Command {
 
   bool render_options() { return self_->render_options(); }
 
+  bool render_display_options() { return self_->render_display_options(); }
+
+  unsigned display_version() const { return self_->display_version(); }
+
+  bool display_hides(std::string const& value) const {
+    return self_->display_hides(value);
+  }
+
   std::string used_letters() const { return self_->used_letters(); }
 
   bool reads_dictionaries() const { return self_->reads_dictionaries(); }
@@ -97,6 +114,9 @@ class Command {
     virtual bool run(std::vector<SharedLines> const& inputs,
                      LetterToolsParams const& params, Lines* output) const = 0;
     virtual bool render_options() = 0;
+    virtual bool render_display_options() = 0;
+    virtual unsigned display_version() const = 0;
+    virtual bool display_hides(std::string const& value) const = 0;
     virtual std::string used_letters() const = 0;
     virtual bool reads_dictionaries() const = 0;
     virtual bool reads_pairs() const = 0;
@@ -120,6 +140,24 @@ class Command {
     bool render_options() override {
       if constexpr (requires { data.render_options(); })
         return data.render_options();
+      else
+        return false;
+    }
+    bool render_display_options() override {
+      if constexpr (requires { data.render_display_options(); })
+        return data.render_display_options();
+      else
+        return false;
+    }
+    unsigned display_version() const override {
+      if constexpr (requires { data.display_version(); })
+        return data.display_version();
+      else
+        return 0;
+    }
+    bool display_hides(std::string const& value) const override {
+      if constexpr (requires { data.display_hides(value); })
+        return data.display_hides(value);
       else
         return false;
     }

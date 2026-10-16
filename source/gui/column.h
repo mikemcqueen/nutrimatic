@@ -31,8 +31,9 @@ void load_letter_count_font();
 // command_names, less "bag-stats" in the first column, naming the command (see
 // make_command()), sized to the longest name, and setting the source to the
 // command's default seed when it has one
-// (see Command::default_seed()), beside that command's option widgets, a
-// status line, and a ListBox of
+// (see Command::default_seed()), beside that command's option widgets, with
+// its display option widgets on the line below (see
+// Command::render_display_options()); a status line, and a ListBox of
 // that command's output on its input source, omitted when the source is
 // std::monostate. Each choice keeps its own options. render() reruns the
 // command, on a worker thread, when the source, the choice, its options, the
@@ -48,10 +49,13 @@ void load_letter_count_font();
 // letter_count_lines()). Items that would leave letters judged bad (see
 // AppState::is_judged_bad()), were they taken from the letters left, are,
 // while app_state()'s judged_bad_filter is on, hidden from the ListBox (see
-// ListBox::set_hidden()), once output() is up to date. A selected item
+// ListBox::set_hidden()), once output() is up to date, as are those the
+// command that made output() hides by their values (see
+// Command::display_hides()). A selected item
 // hidden this way is deselected
 // when it was kept across a rerun, or stepped off (see
-// ListBox::step_off_hidden()) when judged_bad_version went up. Pressing Enter
+// ListBox::step_off_hidden()) when judged_bad_version or the command's
+// display_version() went up. Pressing Enter
 // in the filter field applies it as a regex to the ListBox (see
 // ListBox::set_filter()), and the X button beside it clears and applies it;
 // the filter changes only what is shown, never output(), selected_item(), or
@@ -145,6 +149,10 @@ class Column {
   // output_used_letters(), or app_state()'s when there is none, plus the
   // command's own.
   std::string used_letters() const;
+  // The command that made output(), or null when there is none.
+  Command const* made_command() const;
+  // made_command()'s display_version(), or 0 when there is none.
+  unsigned display_version() const;
   // Hides the ListBox items leaving letters judged bad, and deselects or
   // steps off a hidden selection; see the class comment.
   void update_hidden();
@@ -179,10 +187,11 @@ class Column {
   std::string remaining_sorted_;
   // lc's output, as of the last press on the remaining letters status line.
   std::vector<std::string> letter_count_;
-  // The made_key_ and app_state()'s judged_bad_version as of the last
-  // update_hidden().
+  // The made_key_, app_state()'s judged_bad_version, and display_version()
+  // as of the last update_hidden().
   Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, {}, 0, {}, 0};
   unsigned hidden_judged_version_ = 0;
+  unsigned hidden_display_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;
   // Whether the last finished run, made_key_'s, was cancelled.

@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <utility>
 
+#include "dfs-cli-args.h"
 #include "letter-bag.h"
 #include "widgets.h"
 
@@ -71,9 +73,7 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
 }
 
 bool PairFilter::render_options() {
-  bool changed = toggle_button("cv", cv);
-  if (changed) cv = !cv;
-  ImGui::SameLine();
+  bool changed = false;
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("x:");
   ImGui::SameLine(0, 0);
@@ -94,4 +94,40 @@ bool PairFilter::render_options() {
     return changed;
   used = used_text;
   return true;
+}
+
+bool PairFilter::render_display_options() {
+  bool const changed = toggle_button("cv", cv);
+  if (changed) {
+    cv = !cv;
+    ++display_version_;
+  }
+  float const width = ImGui::CalcTextSize("00.00").x +
+                      2 * ImGui::GetStyle().FramePadding.x;
+  auto const field = [&](char const* label, char const* id, char* text,
+                         size_t size, double* bound) {
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(0, 0);
+    ImGui::SetNextItemWidth(width);
+    double parsed;
+    if (ImGui::InputText(id, text, size,
+                         ImGuiInputTextFlags_EnterReturnsTrue) &&
+        parse_double(text, "cv bound", &parsed) && parsed != *bound) {
+      *bound = parsed;
+      ++display_version_;
+    }
+  };
+  ImGui::BeginDisabled(!cv);
+  field("m:", "##min_cv", min_cv_text, sizeof min_cv_text, &min_cv);
+  field("x:", "##max_cv", max_cv_text, sizeof max_cv_text, &max_cv);
+  ImGui::EndDisabled();
+  return changed;
+}
+
+bool PairFilter::display_hides(std::string const& value) const {
+  if (!cv || value.empty()) return false;
+  double const ratio = std::strtod(value.c_str(), nullptr);
+  return ratio < min_cv || ratio > max_cv;
 }
