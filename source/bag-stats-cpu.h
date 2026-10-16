@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -131,10 +132,13 @@ struct PairFilterInputs {
 // `words` word bags (with pair_step, one more), each fitting what the ones
 // before it leave, and the pair bags that fit what that leaves, or with
 // `exact` the one that uses all of it, and their pairs. The best `top` with
-// pairs, or SOLO, go by `sort`. Word steps need `exact`.
+// pairs, or SOLO, go by `sort`. Word steps need `exact`. Once `stop` is
+// requested, each thread quits after the bag it is on, leaving the result
+// partial.
 PairFilterResult count_pair_filter(
     PairsCounts const& bag, PairFilterInputs const& inputs, bool exact,
-    int words, PairFilterSort sort, size_t threads, size_t top);
+    int words, PairFilterSort sort, size_t threads, size_t top,
+    std::stop_token stop = {});
 
 // Runs bag-stats with `options` on `letters`, its LETTERS less its used
 // letters, printing to standard output. Returns the exit status; errors are

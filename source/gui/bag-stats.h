@@ -23,6 +23,7 @@
 struct BagStats {
   static constexpr bool reads_pairs = true;
   static constexpr bool reads_column_dictionaries = true;
+  static constexpr bool cancellable = true;
   static constexpr char const* default_seed = "seed50m3";
 
   bool run(std::vector<SharedLines> const& inputs,

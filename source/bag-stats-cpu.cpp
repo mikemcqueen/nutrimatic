@@ -904,7 +904,8 @@ PairFilterResult count_outer_bags(
         std::vector<PairsCounts> const& outer,
         std::vector<std::vector<std::string>> const& spellings,
         std::vector<PairsCounts> const& word_bags, bool exact, int word_steps,
-        PairFilterSort sort, size_t threads, size_t top) {
+        PairFilterSort sort, size_t threads, size_t top,
+        std::stop_token const& stop) {
     assert(exact || word_steps == 0);
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> exact_bags;
     if (exact)
@@ -921,7 +922,8 @@ PairFilterResult count_outer_bags(
         std::vector<size_t> reached;
         std::vector<std::vector<PairsCounts>> fitting(
             size_t(std::max(word_steps, 0)));
-        for (size_t i; (i = next.fetch_add(1)) < outer.size();) {
+        for (size_t i; !stop.stop_requested() &&
+                       (i = next.fetch_add(1)) < outer.size();) {
             PairsCounts rest;
             pairs_subtract(bag, outer[i], &rest);
             uint64_t pairs = 0;
@@ -1028,14 +1030,15 @@ void PairFilterInputs::pick_pair_step_bags(int min_length) {
 
 PairFilterResult count_pair_filter(
         PairsCounts const& bag, PairFilterInputs const& inputs, bool exact,
-        int words, PairFilterSort sort, size_t threads, size_t top) {
+        int words, PairFilterSort sort, size_t threads, size_t top,
+        std::stop_token stop) {
     if (!inputs.pair_step)
         return count_outer_bags(bag, inputs.pair_bags, inputs.word_bags,
                                 inputs.word_spellings, inputs.word_bags,
-                                exact, words, sort, threads, top);
+                                exact, words, sort, threads, top, stop);
     return count_outer_bags(bag, inputs.pair_bags, inputs.pair_step_bags,
                             inputs.pair_rows, inputs.word_bags, exact,
-                            words + 1, sort, threads, top);
+                            words + 1, sort, threads, top, stop);
 }
 
 int bag_stats(BagStatsOptions const& options, std::string const& letters) {

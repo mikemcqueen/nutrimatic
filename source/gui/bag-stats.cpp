@@ -31,6 +31,7 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
                             pf.pair_rows_out());
   Lines const& lines = *inputs[0];
   for (size_t i = 0; i < lines.size(); ++i) {
+    if (params.stop.stop_requested()) return false;
     DfsPairRow row;
     if (!parse_pair_row(lines[i], "pairs", "bag-stats input", i + 1, false,
                         &row))
@@ -41,13 +42,17 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
 
   WordBagLoader word_loader(bag, min_word_bag_length, &pf.word_bags,
                             pf.word_spellings_out());
-  for (std::string const& line : *params.dictionary_lines)
+  for (std::string const& line : *params.dictionary_lines) {
+    if (params.stop.stop_requested()) return false;
     word_loader.add(line);
+  }
 
   std::vector<std::vector<std::string>> const& spellings = pf.spellings();
   PairFilterResult const result =
       count_pair_filter(bag, pf, exact, word_step ? 1 : 0, PairFilterSort::TP,
-                        bag_stats_threads(args), spellings.size());
+                        bag_stats_threads(args), spellings.size(),
+                        params.stop);
+  if (params.stop.stop_requested()) return false;
   Lines kept;
   for (BagStatsCompletion const& completion : result.best) {
     std::string const value =
