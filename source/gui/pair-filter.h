@@ -26,6 +26,7 @@ struct PairFilter {
   static constexpr bool reads_pairs = true;
   static constexpr bool reads_classified = true;
   static constexpr bool reviewable = true;
+  static constexpr bool uses_dictionary = true;
 
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;

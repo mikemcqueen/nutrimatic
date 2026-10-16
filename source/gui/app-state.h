@@ -81,10 +81,26 @@ struct AppState {
   // version 0.
   SeedFile const& seed_file(std::string const& key);
 
+  // A word list file, and, once loaded, its words, its modification time
+  // when read, the earliest time when it can't be stat'ed, and a version
+  // unique to that load.
+  struct Dictionary {
+    std::string path;
+    SharedDictionary words;
+    std::filesystem::file_time_type mtime;
+    unsigned version = 0;
+  };
+
   // The dictionary under `key` in dictionaries, loaded from its path if it
-  // isn't yet; empty when `key` isn't in dictionaries or its file can't be
-  // read, which is diagnosed. Only called on the main thread.
-  SharedDictionary dictionary(std::string const& key);
+  // isn't yet; empty, with version 0, when `key` isn't in dictionaries, and
+  // empty when its file can't be read, which is diagnosed. Only called on
+  // the main thread.
+  Dictionary const& dictionary(std::string const& key);
+
+  // Reloads the loaded dictionaries whose files are newer than when they
+  // were loaded, keeping a dictionary as it was when its file can't be
+  // read, which is diagnosed.
+  void refresh_dictionaries();
 
   // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't
   // there already, bumps judged_bad_version, and appends it as a line to the
@@ -96,16 +112,12 @@ struct AppState {
   bool is_judged_bad(std::string const& letters,
                      LetterCounts const& letter_counts) const;
 
-  // A word list file, and its words once loaded.
-  struct Dictionary {
-    std::string path;
-    SharedDictionary words;
-  };
-
   // Dictionaries by key, set only by load_app_state(): "big_dict", $WFROOT's
   // filtered dictionary, loaded there, and "sml_dict", $WFROOT's filtered
   // small dictionary, loaded by dictionary().
   std::unordered_map<std::string, Dictionary> dictionaries;
+  // The last Dictionary version given out.
+  unsigned dictionary_version = 0;
   std::string visual_letters;
   std::string actual_letters;
   std::string used_letters;
