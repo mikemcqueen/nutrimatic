@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -152,6 +153,32 @@ void load_bags(std::string const& path, std::unordered_set<std::string>& bags,
     std::fprintf(stderr, "pgui: can't read %s\n", path.c_str());
 }
 
+// The path of the seed file `name` in `directory`.
+std::string seed_path(std::string const& directory, std::string const& name) {
+  return (std::filesystem::path(directory) / name).string();
+}
+
+// The modification time of the file at `path`, or the earliest time when it
+// can't be stat'ed.
+std::filesystem::file_time_type modification_time(std::string const& path) {
+  std::error_code error;
+  std::filesystem::file_time_type const mtime =
+      std::filesystem::last_write_time(path, error);
+  return error ? std::filesystem::file_time_type::min() : mtime;
+}
+
+// The seed file at `path`, read now, with version `version`.
+AppState::SeedFile read_seed_file(std::string const& path, unsigned version) {
+  AppState::SeedFile file;
+  file.mtime = modification_time(path);
+  auto lines = std::make_shared<Lines>();
+  file.readable = read_file_lines(path, lines.get());
+  if (!file.readable) lines->clear();
+  file.lines = std::move(lines);
+  file.version = version;
+  return file;
+}
+
 // The words of the word list at `path`, empty when it can't be read, which is
 // diagnosed. Sets `ok` to whether it could.
 SharedDictionary read_dictionary(std::string const& path, bool* ok) {
@@ -207,14 +234,21 @@ void AppState::load_seed(std::string name) {
   seed_map.emplace(seed_key, seed_name);
   add_other_seed_files(seed_map, seed_directory, seed_name);
   seed_keys = sorted_keys(seed_map);
-  auto lines = std::make_shared<Lines>();
-  seed_readable = read_file_lines(
-      (std::filesystem::path(seed_directory) / seed_name).string(),
-      lines.get());
-  if (!seed_readable) lines->clear();
-  seeds.clear();
-  seeds.emplace(seed_key, std::move(lines));
-  ++generation;
+}
+
+void AppState::refresh_seed_files(std::vector<std::string> const& keys) {
+  std::unordered_set<std::string> used = {seed_name};
+  for (std::string const& key : keys) {
+    if (auto const file = seed_map.find(key); file != seed_map.end())
+      used.insert(file->second);
+  }
+  std::erase_if(seed_files,
+                [&](auto const& loaded) { return !used.contains(loaded.first); });
+  for (auto& [file_name, file] : seed_files) {
+    std::string const path = seed_path(seed_directory, file_name);
+    if (modification_time(path) > file.mtime)
+      file = read_seed_file(path, ++seed_file_version);
+  }
 }
 
 void AppState::load_seed_and_bad_bags(std::string name) {
@@ -241,17 +275,18 @@ void AppState::load_seed_and_bad_bags(std::string name) {
   ++judged_bad_version;
 }
 
-SharedLines AppState::seed_lines(std::string const& key) {
-  if (auto const found = seeds.find(key); found != seeds.end())
-    return found->second;
-  auto lines = std::make_shared<Lines>();
+AppState::SeedFile const& AppState::seed_file(std::string const& key) {
+  static SeedFile const none = {{}, std::make_shared<Lines const>(), false, 0};
   auto const file = seed_map.find(key);
-  if (file == seed_map.end() ||
-      !read_file_lines(
-          (std::filesystem::path(seed_directory) / file->second).string(),
-          lines.get()))
-    lines->clear();
-  return seeds.emplace(key, std::move(lines)).first->second;
+  if (file == seed_map.end()) return none;
+  if (auto const found = seed_files.find(file->second);
+      found != seed_files.end())
+    return found->second;
+  return seed_files
+      .emplace(file->second,
+               read_seed_file(seed_path(seed_directory, file->second),
+                              ++seed_file_version))
+      .first->second;
 }
 
 SharedDictionary AppState::dictionary(std::string const& key) {

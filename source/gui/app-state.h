@@ -1,6 +1,7 @@
 #ifndef NUTRIMATIC_GUI_APP_STATE_H
 #define NUTRIMATIC_GUI_APP_STATE_H
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -30,7 +31,7 @@ using SeedMap = std::unordered_map<std::string, std::string>;
 // options every command runs with. visual_letters is the letters as typed and
 // actual_letters what commands use; set_letters() sets both. sentence is 1
 // through 9, or CLASSIFIED_NO_SENTENCE for none. generation goes up whenever
-// letters, used_letters, sentence, or seed change. seed_name is a word or
+// letters, used_letters, or sentence change. seed_name is a word or
 // word,word pair file in seed_directory. seed_map holds seed_name under
 // seed_key, plus the other seed files in seed_directory named like it (see
 // load_seed()).
@@ -40,17 +41,14 @@ struct AppState {
   // is unset, or to `letters` itself otherwise.
   void set_letters(std::string letters);
 
-  // Sets seed_name to `name`, loads that file's lines, or none when it can't
-  // be read, and sets seed_readable to whether it could; sets seed_key to
-  // name's key, "seed", its cutoff, and its M for
-  // seed.S.M.all.CUTOFF[...].pairs, "all" and its M for all.S.M, or "seed"
-  // otherwise; sets seed_m to name's M; sets seed_map to seed_name under
-  // seed_key plus, for each M of m3 and m4, whichever of
-  // seed.S.M.U.50.pairs (seed50M), seed.S.M.U.85.15.pairs (seed85M),
-  // and all.S.M (allM) exist in seed_directory under keys not already
-  // taken, S being name's and U its universe (all unless name is
-  // seed.S.M.U.CUTOFF[...].pairs); and bumps generation. An unreadable seed is
-  // diagnosed.
+  // Sets seed_name to `name`; sets seed_key to name's key, "seed", its
+  // cutoff, and its M for seed.S.M.all.CUTOFF[...].pairs, "all" and its M
+  // for all.S.M, or "seed" otherwise; sets seed_m to name's M; and sets seed_map to seed_name under
+  // seed_key plus, for each M of m3 and m4, whichever of seed.S.M.U.50.pairs
+  // (seed50M), seed.S.M.U.85.15.pairs (seed85M), and all.S.M (allM) exist in
+  // seed_directory under keys not already taken, S being name's and U its
+  // universe (all unless name is seed.S.M.U.CUTOFF[...].pairs). Reads no
+  // seed files; see refresh_seed_files() and seed_file().
   void load_seed(std::string name);
 
   // load_seed()s `name`, diagnosing a name whose sN component,
@@ -63,10 +61,25 @@ struct AppState {
   // judged_bad_version. A missing file is diagnosed and adds nothing.
   void load_seed_and_bad_bags(std::string name);
 
-  // The lines of the seed file under `key` in seed_map, read the first time
-  // they're asked for since load_seed(); none when `key` isn't in seed_map
-  // or the file can't be read, which is diagnosed.
-  SharedLines seed_lines(std::string const& key);
+  // A seed file's lines, none when it can't be read, which is diagnosed,
+  // with its modification time when read, the earliest time when it can't
+  // be stat'ed, and a version unique to this load.
+  struct SeedFile {
+    std::filesystem::file_time_type mtime;
+    SharedLines lines;
+    bool readable = false;
+    unsigned version = 0;
+  };
+
+  // Drops from seed_files all but seed_name's file and those `keys` name in
+  // seed_map, and reloads those left that are older than the files in
+  // seed_directory.
+  void refresh_seed_files(std::vector<std::string> const& keys);
+
+  // The seed file under `key` in seed_map, read into seed_files the first
+  // time it's asked for, or, when `key` isn't in seed_map, no lines and
+  // version 0.
+  SeedFile const& seed_file(std::string const& key);
 
   // The dictionary under `key` in dictionaries, loaded from its path if it
   // isn't yet; empty when `key` isn't in dictionaries or its file can't be
@@ -99,7 +112,6 @@ struct AppState {
   int sentence = 1;
   std::string seed_directory;
   std::string seed_name;
-  bool seed_readable = false;
   std::string seed_key;
   // The mN component of seed_name, <prefix>.sN.mN.<suffix>; empty when it
   // has none.
@@ -107,8 +119,10 @@ struct AppState {
   SeedMap seed_map;
   // seed_map's keys, sorted.
   std::vector<std::string> seed_keys;
-  // The lines read by seed_lines(), by key.
-  std::unordered_map<std::string, SharedLines> seeds;
+  // The seed files read by seed_file(), by file name.
+  std::unordered_map<std::string, SeedFile> seed_files;
+  // The last SeedFile version given out.
+  unsigned seed_file_version = 0;
   unsigned generation = 0;
   // Remaining letters judged bad, each lowercase a-z and sorted, whatever
   // letters, used letters, seed, or sentence they were judged under; loaded

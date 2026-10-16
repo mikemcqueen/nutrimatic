@@ -13,8 +13,12 @@
 // used-letters (u) fields splitting its width evenly, followed by a BAD
 // checkbox that toggles app_state()'s judged_bad_filter and sentence buttons
 // S1-S9 (s), then the columns side by side. The seed field starts
-// from app_state()'s seed_name, and Enter in it reloads the seed from the
-// name typed, with its bad bags (see AppState::load_seed_and_bad_bags()).
+// from app_state()'s seed_name, and Enter in it loads the seed from the
+// name typed, with its bad bags (see AppState::load_seed_and_bad_bags()),
+// points each column whose source is a seed key no longer in app_state()'s
+// seed_map at its seed_key, then keeps and refreshes only the seed files the
+// columns' seed keys and the seed name name (see
+// AppState::refresh_seed_files()).
 // The letters fields start from app_state(), and Enter in either stores both
 // there. The buttons start from app_state()'s sentence; clicking
 // one selects it alone, or deselects it when already selected, and stores the

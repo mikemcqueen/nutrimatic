@@ -5,7 +5,9 @@
 #include <imgui_internal.h>
 
 #include <cstdio>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "app-state.h"
 #include "widgets.h"
@@ -55,7 +57,8 @@ void Window::render() {
         "##seed", seed_, sizeof seed_, ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
-    if (!app_state().seed_readable) ImGui::TextDisabled("unreadable");
+    if (!app_state().seed_file(app_state().seed_key).readable)
+      ImGui::TextDisabled("unreadable");
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("l:");
@@ -84,8 +87,19 @@ void Window::render() {
         sentence_ = selected ? CLASSIFIED_NO_SENTENCE : i;
     }
     ImGui::EndTable();
-    if (seed_entered) app_state().load_seed_and_bad_bags(seed_);
     AppState& state = app_state();
+    if (seed_entered) {
+      state.load_seed_and_bad_bags(seed_);
+      std::vector<std::string> keys;
+      for (Column& column : columns_) {
+        auto const* seed = std::get_if<Seed>(&column.source_);
+        if (!seed) continue;
+        if (!state.seed_map.contains(seed->key))
+          column.source_ = Seed{state.seed_key};
+        keys.push_back(std::get<Seed>(column.source_).key);
+      }
+      state.refresh_seed_files(keys);
+    }
     if (entered && (state.visual_letters != letters_ ||
                     state.used_letters != used_letters_)) {
       state.set_letters(letters_);
