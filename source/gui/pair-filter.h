@@ -10,11 +10,12 @@
 
 // A pfilter call on one input, taking its dictionary and sentence from the
 // LetterToolsParams. Its option widgets are an "x:" field setting
-// max_letters, and a "u:" field with a clear button; entering letters there,
-// or clearing it, sets used, which the Column adds to its used letters. Its
-// display option widgets are a "cv" toggle button, setting cv, then "m:" and
-// "x:" fields, starting at 0.00 and 10.0 and greyed out unless cv is set,
-// setting min_cv and max_cv. While cv is set, items whose ratio lies outside
+// max_letters, and a "u:" field with a clear button setting used, which the
+// Column adds to its used letters; clearing it counts as Enter. Its display
+// option widgets are a "cv" toggle button, setting cv, then "m:" and "x:"
+// fields, starting at 0.00 and 10.0 and greyed out unless cv is set, setting
+// min_cv and max_cv. Its fields set their options when apply_fields() is
+// called. While cv is set, items whose ratio lies outside
 // [min_cv, max_cv] are hidden (see display_hides()).
 // With cv, which requires letters, each kept line is followed by a space and
 // the consonant/vowel ratio of the letters its pair leaves (see
@@ -28,8 +29,9 @@ struct PairFilter {
 
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;
-  bool render_options();
-  bool render_display_options();
+  bool render_options(bool* entered);
+  bool render_display_options(bool* entered);
+  bool apply_fields();
   unsigned display_version() const { return display_version_; }
   bool display_hides(std::string const& value) const;
   std::string used_letters() const { return used; }
@@ -37,6 +39,7 @@ struct PairFilter {
   bool yes = false;  // -y
   bool cv = false;   // --cv
   int max_letters = PFILTER_DEFAULT_MAX_LETTERS;  // -x
+  int max_letters_field = PFILTER_DEFAULT_MAX_LETTERS;
   std::string used;
   char used_text[64] = {};
   double min_cv = 0;

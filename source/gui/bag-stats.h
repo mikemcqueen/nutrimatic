@@ -18,7 +18,8 @@
 // place of each DICT word), then a ":" field, enabled with pair_step, setting
 // min_pair_bag_length (--min-pb-len), a "wb" toggle button, enabled only with
 // exact, setting word_step (--ss wb,pf instead of --ss pf), then a ":" field
-// setting min_word_bag_length (--min-wb-len). It starts exact. Choosing it sets its Column's source to the seed50m3 seed
+// setting min_word_bag_length (--min-wb-len); the fields set their lengths
+// when apply_fields() is called. It starts exact. Choosing it sets its Column's source to the seed50m3 seed
 // and its D: dropdown to the column before it.
 struct BagStats {
   static constexpr bool reads_pairs = true;
@@ -28,13 +29,16 @@ struct BagStats {
 
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;
-  bool render_options();
+  bool render_options(bool* entered);
+  bool apply_fields();
 
   bool exact = true;
   bool word_step = false;
   bool pair_step = false;
   int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
   int min_pair_bag_length = DEFAULT_MIN_PB_LENGTH;
+  int min_word_bag_length_field = DEFAULT_MIN_WB_LENGTH;
+  int min_pair_bag_length_field = DEFAULT_MIN_PB_LENGTH;
 };
 
 #endif

@@ -12,7 +12,7 @@
 // toggle button, starting on, setting options' mode to cv (-v cv) or back to
 // freqsort's default. Beside it a "min:" field, starting at 1.0 and greyed
 // out unless the mode is cv, sets options' min_cv, and an "m:" field sets its
-// min_letters. It reads dictionaries as well as seeds and columns.
+// min_letters, when apply_fields() is called. It reads dictionaries as well as seeds and columns.
 struct FreqSort {
   static constexpr bool reads_dictionaries = true;
 
@@ -20,10 +20,12 @@ struct FreqSort {
 
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;
-  bool render_options();
+  bool render_options(bool* entered);
+  bool apply_fields();
 
   FreqsortOptions options;
   char min_cv[32];
+  int min_letters;
 };
 
 #endif
