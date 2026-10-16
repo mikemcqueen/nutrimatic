@@ -19,13 +19,18 @@
 // call fails. It may run on any thread, reading app_state() only for its
 // classified pairs.
 // It may also have
-//   bool render_options()
-// drawing its option widgets in the current content region and returning
-// true when an option changed; commands without it have no options. And it
-// may have
-//   bool render_display_options()
+//   bool render_options(bool* entered)
+// drawing its option widgets in the current content region, returning true
+// when an option changed, and setting *entered when Enter is pressed in one of
+// its fields, which set nothing themselves; commands without it have no
+// options. And it may have
+//   bool render_display_options(bool* entered)
 // drawing its second row of option widgets the same way; commands without it
 // leave that row empty. And it may have
+//   bool apply_fields()
+// setting the options its fields name, both rows', from what they hold,
+// called when Enter is pressed in any field of its Column, and returning true
+// when an option changed; commands without it have no fields. And it may have
 //   unsigned display_version() const
 //   bool display_hides(std::string const& value) const
 // a display filter on its output: display_hides() says whether the item with
@@ -78,9 +83,15 @@ class Command {
     return self_->run(inputs, params, output);
   }
 
-  bool render_options() { return self_->render_options(); }
+  bool render_options(bool* entered) {
+    return self_->render_options(entered);
+  }
 
-  bool render_display_options() { return self_->render_display_options(); }
+  bool render_display_options(bool* entered) {
+    return self_->render_display_options(entered);
+  }
+
+  bool apply_fields() { return self_->apply_fields(); }
 
   unsigned display_version() const { return self_->display_version(); }
 
@@ -113,8 +124,9 @@ class Command {
     virtual std::unique_ptr<Concept> copy() const = 0;
     virtual bool run(std::vector<SharedLines> const& inputs,
                      LetterToolsParams const& params, Lines* output) const = 0;
-    virtual bool render_options() = 0;
-    virtual bool render_display_options() = 0;
+    virtual bool render_options(bool* entered) = 0;
+    virtual bool render_display_options(bool* entered) = 0;
+    virtual bool apply_fields() = 0;
     virtual unsigned display_version() const = 0;
     virtual bool display_hides(std::string const& value) const = 0;
     virtual std::string used_letters() const = 0;
@@ -137,15 +149,21 @@ class Command {
              LetterToolsParams const& params, Lines* output) const override {
       return data.run(inputs, params, output);
     }
-    bool render_options() override {
-      if constexpr (requires { data.render_options(); })
-        return data.render_options();
+    bool render_options(bool* entered) override {
+      if constexpr (requires { data.render_options(entered); })
+        return data.render_options(entered);
       else
         return false;
     }
-    bool render_display_options() override {
-      if constexpr (requires { data.render_display_options(); })
-        return data.render_display_options();
+    bool render_display_options(bool* entered) override {
+      if constexpr (requires { data.render_display_options(entered); })
+        return data.render_display_options(entered);
+      else
+        return false;
+    }
+    bool apply_fields() override {
+      if constexpr (requires { data.apply_fields(); })
+        return data.apply_fields();
       else
         return false;
     }

@@ -56,9 +56,10 @@ void load_letter_count_font();
 // when it was kept across a rerun, or stepped off (see
 // ListBox::step_off_hidden()) when judged_bad_version or the command's
 // display_version() went up. Pressing Enter
-// in the filter field applies it as a regex to the ListBox (see
-// ListBox::set_filter()), and the X button beside it clears and applies it;
-// the filter changes only what is shown, never output(), selected_item(), or
+// in any field of the column, the filter field's or the command's, applies
+// them all (see Command::apply_fields()), the filter field as a regex to the
+// ListBox (see ListBox::set_filter()); the X button beside a field clears it
+// and counts as Enter. The filter changes only what is shown, never output(), selected_item(), or
 // version(). Widget IDs are scoped to the Column, so any number can be
 // rendered side by side in a Window. Both dropdowns offer only columns before
 // this one, so sources never form a cycle.
@@ -167,6 +168,8 @@ class Column {
   InputSource source_;
   LetterSource letter_source_;
   char filter_[256] = {};
+  // filter_ as of the last set_filter().
+  std::string applied_filter_;
   // Index of the D: dropdown's choice in dictionary_choices, used when
   // dictionary_column() is null.
   int dictionary_ = 0;

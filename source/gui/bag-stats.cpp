@@ -66,8 +66,8 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
 
 namespace {
 
-// A ":" and a two-digit field for `length`, at least 0, after the item before
-// it; true when Enter changes it.
+// A ":" and a two-digit field for `length` after the item before it; true
+// when Enter is pressed in it.
 bool length_field(char const* id, int* length) {
   ImGui::SameLine(0, 0);
   ImGui::AlignTextToFramePadding();
@@ -75,18 +75,21 @@ bool length_field(char const* id, int* length) {
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
                           2 * ImGui::GetStyle().FramePadding.x);
-  int value = *length;
-  if (!ImGui::InputInt(id, &value, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
-    return false;
-  value = std::max(value, 0);
-  bool const changed = value != *length;
-  *length = value;
+  return ImGui::InputInt(id, length, 0, 0,
+                         ImGuiInputTextFlags_EnterReturnsTrue);
+}
+
+// Sets `length` from `field`, at least 0; true when that changes it.
+bool apply_length(int* field, int* length) {
+  *field = std::max(*field, 0);
+  bool const changed = *field != *length;
+  *length = *field;
   return changed;
 }
 
 }  // namespace
 
-bool BagStats::render_options() {
+bool BagStats::render_options(bool* entered) {
   bool changed = false;
   if (toggle_button("ex", exact)) {
     exact = !exact;
@@ -99,7 +102,7 @@ bool BagStats::render_options() {
     changed = true;
   }
   ImGui::BeginDisabled(!pair_step);
-  changed |= length_field("##pb", &min_pair_bag_length);
+  *entered |= length_field("##pb", &min_pair_bag_length_field);
   ImGui::EndDisabled();
   ImGui::EndDisabled();
   ImGui::SameLine();
@@ -109,6 +112,14 @@ bool BagStats::render_options() {
     changed = true;
   }
   ImGui::EndDisabled();
-  changed |= length_field("##wb", &min_word_bag_length);
+  *entered |= length_field("##wb", &min_word_bag_length_field);
   return changed;
+}
+
+bool BagStats::apply_fields() {
+  bool const pair =
+      apply_length(&min_pair_bag_length_field, &min_pair_bag_length);
+  bool const word =
+      apply_length(&min_word_bag_length_field, &min_word_bag_length);
+  return pair || word;
 }

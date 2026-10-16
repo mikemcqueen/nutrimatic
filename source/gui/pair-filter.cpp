@@ -72,31 +72,23 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   return true;
 }
 
-bool PairFilter::render_options() {
-  bool changed = false;
+bool PairFilter::render_options(bool* entered) {
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("x:");
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
                           2 * ImGui::GetStyle().FramePadding.x);
-  int letters = max_letters;
-  if (ImGui::InputInt("##x", &letters, 0, 0,
-                      ImGuiInputTextFlags_EnterReturnsTrue)) {
-    letters = std::max(letters, 0);
-    changed |= letters != max_letters;
-    max_letters = letters;
-  }
+  *entered |= ImGui::InputInt("##x", &max_letters_field, 0, 0,
+                              ImGuiInputTextFlags_EnterReturnsTrue);
   ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
   ImGui::SameLine(0, 0);
-  if (!clearable_input("u", used_text, sizeof used_text) || used == used_text)
-    return changed;
-  used = used_text;
-  return true;
+  *entered |= clearable_input("u", used_text, sizeof used_text);
+  return false;
 }
 
-bool PairFilter::render_display_options() {
+bool PairFilter::render_display_options(bool* entered) {
   bool const changed = toggle_button("cv", cv);
   if (changed) {
     cv = !cv;
@@ -105,24 +97,41 @@ bool PairFilter::render_display_options() {
   float const width = ImGui::CalcTextSize("00.00").x +
                       2 * ImGui::GetStyle().FramePadding.x;
   auto const field = [&](char const* label, char const* id, char* text,
-                         size_t size, double* bound) {
+                         size_t size) {
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
     ImGui::SameLine(0, 0);
     ImGui::SetNextItemWidth(width);
+    *entered |= ImGui::InputText(id, text, size,
+                                 ImGuiInputTextFlags_EnterReturnsTrue);
+  };
+  ImGui::BeginDisabled(!cv);
+  field("m:", "##min_cv", min_cv_text, sizeof min_cv_text);
+  field("x:", "##max_cv", max_cv_text, sizeof max_cv_text);
+  ImGui::EndDisabled();
+  return changed;
+}
+
+bool PairFilter::apply_fields() {
+  for (auto [text, bound] : {std::pair{min_cv_text, &min_cv},
+                             std::pair{max_cv_text, &max_cv}}) {
     double parsed;
-    if (ImGui::InputText(id, text, size,
-                         ImGuiInputTextFlags_EnterReturnsTrue) &&
-        parse_double(text, "cv bound", &parsed) && parsed != *bound) {
+    if (parse_double(text, "cv bound", &parsed) && parsed != *bound) {
       *bound = parsed;
       ++display_version_;
     }
-  };
-  ImGui::BeginDisabled(!cv);
-  field("m:", "##min_cv", min_cv_text, sizeof min_cv_text, &min_cv);
-  field("x:", "##max_cv", max_cv_text, sizeof max_cv_text, &max_cv);
-  ImGui::EndDisabled();
+  }
+  bool changed = false;
+  max_letters_field = std::max(max_letters_field, 0);
+  if (max_letters_field != max_letters) {
+    max_letters = max_letters_field;
+    changed = true;
+  }
+  if (used != used_text) {
+    used = used_text;
+    changed = true;
+  }
   return changed;
 }
 

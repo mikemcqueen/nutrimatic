@@ -174,10 +174,10 @@ void Column::render() {
   for (std::string const& label : dictionary_labels)
     dictionary_widest.push_back(label.c_str());
   float const dictionary_width = combo_width(dictionary_widest);
-  if (clearable_input("filter", filter_, sizeof filter_,
-                      ImGui::GetStyle().ItemSpacing.x +
-                          ImGui::CalcTextSize("D:").x + dictionary_width))
-    bad_filter_ = !list_.set_filter(filter_);
+  bool entered = clearable_input("filter", filter_, sizeof filter_,
+                                 ImGui::GetStyle().ItemSpacing.x +
+                                     ImGui::CalcTextSize("D:").x +
+                                     dictionary_width);
   ImGui::SameLine();
   render_dictionary(dictionary_labels, dictionary_width);
 
@@ -218,15 +218,24 @@ void Column::render() {
       ImGui::EndCombo();
     }
     ImGui::TableNextColumn();
-    if (commands_[choice_] && commands_[choice_]->render_options())
+    if (commands_[choice_] && commands_[choice_]->render_options(&entered))
       ++options_version_;
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
     ImGui::TableNextColumn();
-    if (commands_[choice_] && commands_[choice_]->render_display_options())
+    if (commands_[choice_] &&
+        commands_[choice_]->render_display_options(&entered))
       ++options_version_;
     ImGui::EndTable();
+  }
+  if (entered) {
+    if (applied_filter_ != filter_) {
+      applied_filter_ = filter_;
+      bad_filter_ = !list_.set_filter(filter_);
+    }
+    if (commands_[choice_] && commands_[choice_]->apply_fields())
+      ++options_version_;
   }
 
   if (job_ && job_->done.load(std::memory_order_acquire)) finish();

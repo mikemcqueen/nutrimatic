@@ -12,6 +12,9 @@ FindPairs::FindPairs() {
   options.exact = true;
   options.min_words = 1;
   options.max_words = 2;
+  min_word_length = options.min_word_length;
+  min_words = options.min_words;
+  max_words = options.max_words;
 }
 
 bool FindPairs::run(std::vector<SharedLines> const& inputs,
@@ -33,20 +36,15 @@ bool FindPairs::run(std::vector<SharedLines> const& inputs,
   return true;
 }
 
-bool FindPairs::render_options() {
+bool FindPairs::render_options(bool* entered) {
   bool changed = false;
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("m:");
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
                           2 * ImGui::GetStyle().FramePadding.x);
-  int length = options.min_word_length;
-  if (ImGui::InputInt("##m", &length, 0, 0,
-                      ImGuiInputTextFlags_EnterReturnsTrue)) {
-    length = std::max(length, 0);
-    changed = length != options.min_word_length;
-    options.min_word_length = length;
-  }
+  *entered |= ImGui::InputInt("##m", &min_word_length, 0, 0,
+                              ImGuiInputTextFlags_EnterReturnsTrue);
   ImGui::SameLine();
   if (toggle_button("ex", options.exact)) {
     options.exact = !options.exact;
@@ -59,23 +57,32 @@ bool FindPairs::render_options() {
   float const words_width = ImGui::CalcTextSize("0").x +
                             2 * ImGui::GetStyle().FramePadding.x;
   ImGui::SetNextItemWidth(words_width);
-  int min_words = options.min_words;
-  if (ImGui::InputInt("##min_words", &min_words, 0, 0,
-                      ImGuiInputTextFlags_EnterReturnsTrue)) {
-    min_words = std::clamp(min_words, 1, PAIRS_MAX_WORDS);
-    changed |= min_words != options.min_words;
+  *entered |= ImGui::InputInt("##min_words", &min_words, 0, 0,
+                              ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(words_width);
+  *entered |= ImGui::InputInt("##max_words", &max_words, 0, 0,
+                              ImGuiInputTextFlags_EnterReturnsTrue);
+  return changed;
+}
+
+bool FindPairs::apply_fields() {
+  PairsOptions const before = options;
+  options.min_word_length = std::max(min_word_length, 0);
+  min_words = std::clamp(min_words, 1, PAIRS_MAX_WORDS);
+  max_words = std::clamp(max_words, 1, PAIRS_MAX_WORDS);
+  if (min_words != before.min_words) {
     options.min_words = min_words;
     options.max_words = std::max(options.max_words, min_words);
   }
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(words_width);
-  int max_words = options.max_words;
-  if (ImGui::InputInt("##max_words", &max_words, 0, 0,
-                      ImGuiInputTextFlags_EnterReturnsTrue)) {
-    max_words = std::clamp(max_words, 1, PAIRS_MAX_WORDS);
-    changed |= max_words != options.max_words;
+  if (max_words != before.max_words) {
     options.max_words = max_words;
     options.min_words = std::min(options.min_words, max_words);
   }
-  return changed;
+  min_word_length = options.min_word_length;
+  min_words = options.min_words;
+  max_words = options.max_words;
+  return options.min_word_length != before.min_word_length ||
+         options.min_words != before.min_words ||
+         options.max_words != before.max_words;
 }
