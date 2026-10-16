@@ -22,6 +22,7 @@
 // approach B.
 
 #include "index.h"
+#include "letter-bag.h"
 #include "optparse.h"
 
 #include <inttypes.h>
@@ -37,11 +38,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-// The letters a bag can hold, matching find-anagrams: lowercase and digits.
-static bool is_bag_char(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
-}
 
 static double now_seconds() {
   struct timespec ts;
@@ -290,7 +286,7 @@ class PhrasePass: public Extractor {
 // findings/phrase-recovery-cost.md predicts.  Deliberately faithful to ancc so
 // its published node counts (5,488,296 at 19 letters, words only) reproduce.
 //
-// The 36 bag symbols, matching is_bag_char: a-z then 0-9.
+// The 36 index symbols: a-z then 0-9.
 static int const NSYM = 36;
 static int sym_index(unsigned char c) {
   if (c >= 'a' && c <= 'z') return c - 'a';
@@ -523,26 +519,10 @@ int main(int argc, char* argv[]) {
     return 2;
   }
 
-  int have[256] = { 0 };
-  for (char const* p = letters_arg; *p; ++p) {
-    if (*p == ' ') continue;
-    if (!is_bag_char(*p)) {
-      fprintf(stderr, "error: bad character '%c' in letters\n", *p);
-      return 2;
-    }
-    ++have[(unsigned char) *p];
-  }
-  for (size_t i = 0; i < used.size(); ++i) {
-    if (used[i] == ' ') continue;
-    if (have[(unsigned char) used[i]]-- <= 0) {
-      fprintf(stderr, "error: no '%c' left to use\n", used[i]);
-      return 2;
-    }
-  }
-
   std::string letters;
-  for (int c = 0; c < 256; ++c)
-    letters.append(size_t(have[c] > 0 ? have[c] : 0), char(c));
+  if (!subtract_letters(bag_letters(letters_arg),
+                        bag_letters(used), &letters))
+    return 2;
 
   if (min_len < 1) min_len = 1;
   if (max_words <= 0) max_words = int(letters.size()) / min_len;

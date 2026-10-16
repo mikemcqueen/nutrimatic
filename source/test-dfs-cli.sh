@@ -981,7 +981,11 @@ grep -Eq "${diagnostic_prefix}"'2 letters "cd"$' \
   "$test_dir/used.stderr" ||
   fail "--used-letters diagnostic did not show the remaining bag"
 
-expect_status 2 "$dfs_anagrams" -i "$index_file" 'ab!'
+"$dfs_anagrams" -i "$index_file" 'C, D!' -m 2 -n 10 \
+  > "$test_dir/filtered.stdout" 2> /dev/null
+cmp "$test_dir/filtered.stdout" "$test_dir/left.stdout" ||
+  fail "case and punctuation in letters were not filtered out"
+
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc -p 0
 expect_status 2 "$dfs_anagrams" -i "$index_file" abc \
   --cache-size nope

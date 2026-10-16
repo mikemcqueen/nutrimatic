@@ -136,10 +136,7 @@ static bool parse_args(
           return false;
         }
         if (!used_letters) used_letters.emplace();
-        if (!clean_letters(value, "used letters", &*used_letters)) {
-          usage(argv[0]);
-          return false;
-        }
+        *used_letters += bag_letters(value);
         continue;
       }
     }

@@ -389,12 +389,10 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
-  std::string bag;
-  std::string remove;
-  if (!clean_letters(letters, "letters", &bag)) return false;
-  if (!clean_letters(out->common.used_letters.c_str(), "used letters", &remove))
+  if (!subtract_letters(bag_letters(letters),
+                        bag_letters(out->common.used_letters),
+                        &out->letters))
     return false;
-  if (!subtract_letters(bag, remove, &out->letters)) return false;
   if (!check_bag_length(out->letters)) return false;
   return finalize_min_word_length(
       out->letters, out->common.min_word_len_given, &out->common.min_word_len);

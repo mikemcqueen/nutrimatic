@@ -953,12 +953,6 @@ if awk 'NF > 2 { exit 1 }' "$test_dir/word-count-one.stdout"; then :; else
 fi
 
 set +e
-"$query_index" -i "$IDX" 'ab!' > /dev/null 2>&1
-status=$?
-set -e
-[[ $status -eq 2 ]] || fail "bad letters should exit 2, got $status"
-
-set +e
 "$query_index" -i "$IDX" penbuilt -m nope > /dev/null 2>&1
 status=$?
 set -e

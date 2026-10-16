@@ -11,20 +11,12 @@ double const ENGLISH_PERCENT[26] = {
   6.327, 9.056, 2.758, 0.978, 2.360, 0.150, 1.974, 0.074,
 };
 
-bool clean_letters(char const* in, char const* what, std::string* out) {
-  for (; *in != '\0'; ++in) {
-    if (*in == ' ') continue;
-    if ((*in < 'a' || *in > 'z') && (*in < '0' || *in > '9')) {
-      fprintf(stderr, "error: bad character '%c' in %s\n", *in, what);
-      return false;
-    }
-    out->push_back(*in);
-  }
-  return true;
-}
-
 bool subtract_letters(std::string const& bag, std::string const& used,
                       std::string* out) {
+  if (bag.empty()) {
+    fputs("error: no letters given\n", stderr);
+    return false;
+  }
   int have[UCHAR_MAX + 1] = { 0 };
   for (size_t i = 0; i < bag.size(); ++i)
     ++have[(unsigned char) bag[i]];
@@ -50,7 +42,17 @@ bool subtract_letters(std::string const& bag, std::string const& used,
   return true;
 }
 
-std::string lowercase_letters(std::string const& in) {
+std::string bag_letters(std::string const& in) {
+  std::string out;
+  for (char c : in) {
+    int const ch = tolower((unsigned char) c);
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+      out.push_back(char(ch));
+  }
+  return out;
+}
+
+std::string az_letters(std::string const& in) {
   std::string out;
   for (char c : in) {
     int const ch = tolower((unsigned char) c);
@@ -66,12 +68,9 @@ LetterBag::LetterBag(std::string const& letters) : size(letters.size()) {
 
 bool make_letter_bag(
     char const* letters, std::string const& used_letters, LetterBag* out) {
-  std::string bag;
-  std::string remove;
   std::string remaining;
-  if (!clean_letters(letters, "letters", &bag) ||
-      !clean_letters(used_letters.c_str(), "used letters", &remove) ||
-      !subtract_letters(bag, remove, &remaining))
+  if (!subtract_letters(bag_letters(letters),
+                        bag_letters(used_letters), &remaining))
     return false;
   *out = LetterBag(remaining);
   return true;

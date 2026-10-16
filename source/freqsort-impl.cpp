@@ -65,8 +65,8 @@ bool Freqsort::load(FreqsortOptions const& options) {
   entries_.clear();
 
   std::string remaining;
-  if (!subtract_letters(lowercase_letters(options.letters),
-          lowercase_letters(options.used_letters), &remaining))
+  if (!subtract_letters(az_letters(options.letters),
+          az_letters(options.used_letters), &remaining))
     return false;
   for (char ch : remaining) ++counts_[ch - 'a'];
   total_ = int(remaining.size());
