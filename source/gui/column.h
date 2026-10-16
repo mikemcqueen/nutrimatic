@@ -28,8 +28,9 @@ void load_letter_count_font();
 // column dictionaries (see Command::reads_column_dictionaries()), the number
 // of each column before this one, naming that column's output instead; then a
 // dropdown of
-// command_names naming the command (see make_command()), sized to the longest
-// name, and setting the source to the command's default seed when it has one
+// command_names, less "bag-stats" in the first column, naming the command (see
+// make_command()), sized to the longest name, and setting the source to the
+// command's default seed when it has one
 // (see Command::default_seed()), beside that command's option widgets, a
 // status line, and a ListBox of
 // that command's output on its input source, omitted when the source is
@@ -106,8 +107,12 @@ class Column {
   };
 
   // A run on the worker thread; done is set once ok, output, and values are.
+  // cancellable is its command's; cancelled, read and written on the main
+  // thread only, is set when its x button is pressed.
   struct Job {
     Key key;
+    bool cancellable = false;
+    bool cancelled = false;
     std::atomic<bool> done = false;
     bool ok = false;
     SharedLines output;
@@ -180,6 +185,8 @@ class Column {
   unsigned hidden_judged_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;
+  // Whether the last finished run, made_key_'s, was cancelled.
+  bool cancelled_ = false;
   std::shared_ptr<Job> job_;
   std::jthread worker_;
   ListBox list_;

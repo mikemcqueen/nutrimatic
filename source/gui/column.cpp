@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -189,6 +190,8 @@ void Column::render() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##choice", command_names[choice_])) {
       for (int i = 0; i < static_cast<int>(command_names.size()); ++i) {
+        if (id_ == 0 && std::string_view(command_names[i]) == "bag-stats")
+          continue;
         if (!ImGui::Selectable(command_names[i], choice_ == i) ||
             choice_ == i)
           continue;
@@ -233,6 +236,7 @@ void Column::render() {
     waiting_for = dictionary_column_;
   bool const waiting = waiting_for.has_value();
   Key const want = wanted_key();
+  if (job_ && job_->cancellable && job_->key != want) worker_.request_stop();
   if (!job_ && want != made_key_ && !waiting) start(want);
 
   if (want != remaining_key_) {
@@ -269,9 +273,18 @@ void Column::render() {
     render_letter_count(status_min.x, ImGui::GetItemRectMax().y);
 
   if (job_) {
-    ImGui::TextDisabled("running");
+    ImGui::TextDisabled("%s", job_->cancelled ? "cancelling" : "running");
+    if (job_->cancellable && !worker_.get_stop_token().stop_requested()) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("x")) {
+        job_->cancelled = true;
+        worker_.request_stop();
+      }
+    }
   } else if (waiting) {
     ImGui::TextDisabled("waiting for column %d", *waiting_for + 1);
+  } else if (cancelled_) {
+    ImGui::TextDisabled("cancelled");
   } else if (failed_) {
     ImGui::TextDisabled("failed");
   } else if (bad_filter_) {
@@ -546,13 +559,16 @@ void Column::start(Key key) {
 
   LetterToolsParams params = {state.actual_letters, used_letters(),
                               state.sentence, std::move(dictionary),
-                              std::move(dictionary_lines)};
+                              std::move(dictionary_lines), {}};
   auto job = std::make_shared<Job>();
   job->key = key;
+  job->cancellable = command->cancellable();
   job_ = job;
   worker_ = std::jthread([job, command = std::move(*command),
                           params = std::move(params),
-                          input = std::move(input)] {
+                          input = std::move(input)](
+                             std::stop_token stop) mutable {
+    params.stop = std::move(stop);
     Lines output;
     job->ok = command.run({input}, params, &output);
     job->values = split_values(&output);
@@ -564,11 +580,17 @@ void Column::start(Key key) {
 
 void Column::finish() {
   worker_.join();
+  bool const stopped = worker_.get_stop_token().stop_requested();
   std::shared_ptr<Job> const job = std::move(job_);
-  if (job->key == wanted_key()) {
-    publish(job->key, job->ok, job->ok ? job->output : empty_lines(),
-            job->ok ? job->values : empty_lines());
+  if (job->key != wanted_key() || (stopped && !job->cancelled && !job->ok))
+    return;
+  if (job->cancelled) {
+    publish(job->key, false, empty_lines(), empty_lines());
+    cancelled_ = true;
+    return;
   }
+  publish(job->key, job->ok, job->ok ? job->output : empty_lines(),
+          job->ok ? job->values : empty_lines());
 }
 
 void Column::publish(Key key, bool ok, SharedLines output,
@@ -577,4 +599,5 @@ void Column::publish(Key key, bool ok, SharedLines output,
   ++version_;
   made_key_ = key;
   failed_ = !ok;
+  cancelled_ = false;
 }

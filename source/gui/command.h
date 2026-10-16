@@ -44,6 +44,9 @@
 // true when its Column's D: dropdown also offers the columns before it, and
 // choosing it sets D: to the column just before; commands without it don't.
 // And it may have
+//   static constexpr bool cancellable
+// true when run() checks its params' stop token, so its Column offers an x
+// button that cancels it; commands without it aren't. And it may have
 //   static constexpr char const* default_seed
 // the seed key choosing it sets its Column's source to, when app_state()'s
 // seed_map has it; commands without it have none.
@@ -78,6 +81,8 @@ class Command {
 
   bool reviewable() const { return self_->reviewable(); }
 
+  bool cancellable() const { return self_->cancellable(); }
+
   bool reads_column_dictionaries() const {
     return self_->reads_column_dictionaries();
   }
@@ -97,6 +102,7 @@ class Command {
     virtual bool reads_pairs() const = 0;
     virtual bool reads_classified() const = 0;
     virtual bool reviewable() const = 0;
+    virtual bool cancellable() const = 0;
     virtual bool reads_column_dictionaries() const = 0;
     virtual std::string default_seed() const = 0;
   };
@@ -144,6 +150,12 @@ class Command {
     bool reviewable() const override {
       if constexpr (requires { T::reviewable; })
         return T::reviewable;
+      else
+        return false;
+    }
+    bool cancellable() const override {
+      if constexpr (requires { T::cancellable; })
+        return T::cancellable;
       else
         return false;
     }
