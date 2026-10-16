@@ -23,7 +23,8 @@
 // and its D: dropdown to the column before it.
 struct BagStats {
   static constexpr bool reads_pairs = true;
-  static constexpr bool reads_column_dictionaries = true;
+  static constexpr bool has_columns_in_dictionaries = true;
+  static constexpr bool uses_dictionary = true;
   static constexpr bool cancellable = true;
   static constexpr char const* default_seed = "seed50m3";
 

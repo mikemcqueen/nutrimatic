@@ -179,16 +179,19 @@ AppState::SeedFile read_seed_file(std::string const& path, unsigned version) {
   return file;
 }
 
-// The words of the word list at `path`, empty when it can't be read, which is
-// diagnosed. Sets `ok` to whether it could.
-SharedDictionary read_dictionary(std::string const& path, bool* ok) {
-  auto dictionary = std::make_shared<LoadedDictionary>();
-  *ok = load_dictionary(path.c_str(), &dictionary->words);
-  if (!*ok) dictionary->words.clear();
-  Lines lines(dictionary->words.begin(), dictionary->words.end());
+// Loads `dictionary`'s words from its path, empty when it can't be read,
+// which is diagnosed, with version `version`. Returns whether it could be.
+bool read_dictionary(AppState::Dictionary* dictionary, unsigned version) {
+  dictionary->mtime = modification_time(dictionary->path);
+  auto words = std::make_shared<LoadedDictionary>();
+  bool const ok = load_dictionary(dictionary->path.c_str(), &words->words);
+  if (!ok) words->words.clear();
+  Lines lines(words->words.begin(), words->words.end());
   std::ranges::sort(lines);
-  dictionary->lines = std::make_shared<Lines const>(std::move(lines));
-  return dictionary;
+  words->lines = std::make_shared<Lines const>(std::move(lines));
+  dictionary->words = std::move(words);
+  dictionary->version = version;
+  return ok;
 }
 
 // The keys of `map`, sorted.
@@ -216,9 +219,7 @@ bool load_app_state(std::string const& seed_path) {
   state.dictionaries["sml_dict"].path = small_path;
   AppState::Dictionary& big = state.dictionaries["big_dict"];
   big.path = path;
-  bool ok;
-  big.words = read_dictionary(path, &ok);
-  if (!ok) return false;
+  if (!read_dictionary(&big, ++state.dictionary_version)) return false;
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
   state.bad_bags_sentence.reset();
@@ -289,19 +290,31 @@ AppState::SeedFile const& AppState::seed_file(std::string const& key) {
       .first->second;
 }
 
-SharedDictionary AppState::dictionary(std::string const& key) {
+AppState::Dictionary const& AppState::dictionary(std::string const& key) {
   auto const found = dictionaries.find(key);
   if (found == dictionaries.end()) {
-    static SharedDictionary const empty = std::make_shared<LoadedDictionary>(
-        LoadedDictionary{{}, std::make_shared<Lines const>()});
+    static Dictionary const empty = {
+        {},
+        std::make_shared<LoadedDictionary>(
+            LoadedDictionary{{}, std::make_shared<Lines const>()}),
+        {},
+        0};
     return empty;
   }
   Dictionary& dictionary = found->second;
-  if (!dictionary.words) {
-    bool ok;
-    dictionary.words = read_dictionary(dictionary.path, &ok);
+  if (!dictionary.words) read_dictionary(&dictionary, ++dictionary_version);
+  return dictionary;
+}
+
+void AppState::refresh_dictionaries() {
+  for (auto& [key, dictionary] : dictionaries) {
+    if (!dictionary.words ||
+        modification_time(dictionary.path) <= dictionary.mtime)
+      continue;
+    Dictionary reloaded = dictionary;
+    if (read_dictionary(&reloaded, ++dictionary_version))
+      dictionary = std::move(reloaded);
   }
-  return dictionary.words;
 }
 
 bool AppState::is_judged_bad(std::string const& letters,

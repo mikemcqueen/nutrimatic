@@ -13,10 +13,10 @@
 // fields setting min_words and max_words, when apply_fields() is called; a
 // changed min_words raises max_words to it, and a changed max_words lowers
 // min_words to it. It starts with a minimum length of
-// 3, exact, and 1 to 2 words. It reads dictionaries as well as seeds and
-// columns.
+// 3, exact, and 1 to 2 words. Its source can be its D: dictionary as well as
+// a seed or a column.
 struct FindPairs {
-  static constexpr bool reads_dictionaries = true;
+  static constexpr bool has_dictionary_in_src = true;
 
   FindPairs();
 

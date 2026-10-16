@@ -41,7 +41,7 @@
 // returning the letters it adds to the used letters it runs with, and those
 // of the Columns downstream of it; commands without it add none. And it may
 // have
-//   static constexpr bool reads_dictionaries
+//   static constexpr bool has_dictionary_in_src
 // true when its Column's source dropdown offers "dict", its D: dictionary;
 // commands without it don't. And it may have
 //   static constexpr bool reads_pairs
@@ -54,10 +54,14 @@
 //   static constexpr bool reviewable
 // true when its Column's shown pairs can be reviewed (see Review); commands
 // without it can't. And it may have
-//   static constexpr bool reads_column_dictionaries
+//   static constexpr bool has_columns_in_dictionaries
 // true when its Column's D: dropdown also offers the columns before it, and
 // choosing it sets D: to the column just before; commands without it don't.
 // And it may have
+//   static constexpr bool uses_dictionary
+// true when run() reads its params' dictionary or dictionary_lines whatever
+// its source, so it reruns when that dictionary is reloaded; commands
+// without it read them only through a "dict" source. And it may have
 //   static constexpr bool cancellable
 // true when run() checks its params' stop token, so its Column offers an x
 // button that cancels it; commands without it aren't. And it may have
@@ -101,7 +105,7 @@ class Command {
 
   std::string used_letters() const { return self_->used_letters(); }
 
-  bool reads_dictionaries() const { return self_->reads_dictionaries(); }
+  bool has_dictionary_in_src() const { return self_->has_dictionary_in_src(); }
 
   bool reads_pairs() const { return self_->reads_pairs(); }
 
@@ -111,9 +115,11 @@ class Command {
 
   bool cancellable() const { return self_->cancellable(); }
 
-  bool reads_column_dictionaries() const {
-    return self_->reads_column_dictionaries();
+  bool has_columns_in_dictionaries() const {
+    return self_->has_columns_in_dictionaries();
   }
+
+  bool uses_dictionary() const { return self_->uses_dictionary(); }
 
   // Empty when it has none.
   std::string default_seed() const { return self_->default_seed(); }
@@ -130,12 +136,13 @@ class Command {
     virtual unsigned display_version() const = 0;
     virtual bool display_hides(std::string const& value) const = 0;
     virtual std::string used_letters() const = 0;
-    virtual bool reads_dictionaries() const = 0;
+    virtual bool has_dictionary_in_src() const = 0;
     virtual bool reads_pairs() const = 0;
     virtual bool reads_classified() const = 0;
     virtual bool reviewable() const = 0;
     virtual bool cancellable() const = 0;
-    virtual bool reads_column_dictionaries() const = 0;
+    virtual bool has_columns_in_dictionaries() const = 0;
+    virtual bool uses_dictionary() const = 0;
     virtual std::string default_seed() const = 0;
   };
 
@@ -185,9 +192,9 @@ class Command {
       else
         return std::string();
     }
-    bool reads_dictionaries() const override {
-      if constexpr (requires { T::reads_dictionaries; })
-        return T::reads_dictionaries;
+    bool has_dictionary_in_src() const override {
+      if constexpr (requires { T::has_dictionary_in_src; })
+        return T::has_dictionary_in_src;
       else
         return false;
     }
@@ -215,9 +222,15 @@ class Command {
       else
         return false;
     }
-    bool reads_column_dictionaries() const override {
-      if constexpr (requires { T::reads_column_dictionaries; })
-        return T::reads_column_dictionaries;
+    bool has_columns_in_dictionaries() const override {
+      if constexpr (requires { T::has_columns_in_dictionaries; })
+        return T::has_columns_in_dictionaries;
+      else
+        return false;
+    }
+    bool uses_dictionary() const override {
+      if constexpr (requires { T::uses_dictionary; })
+        return T::uses_dictionary;
       else
         return false;
     }

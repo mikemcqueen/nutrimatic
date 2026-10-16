@@ -99,6 +99,7 @@ void Window::render() {
         keys.push_back(std::get<Seed>(column.source_).key);
       }
       state.refresh_seed_files(keys);
+      state.refresh_dictionaries();
     }
     if (entered && (state.visual_letters != letters_ ||
                     state.used_letters != used_letters_)) {

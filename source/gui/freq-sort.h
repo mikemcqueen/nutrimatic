@@ -12,9 +12,10 @@
 // toggle button, starting on, setting options' mode to cv (-v cv) or back to
 // freqsort's default. Beside it a "min:" field, starting at 1.0 and greyed
 // out unless the mode is cv, sets options' min_cv, and an "m:" field sets its
-// min_letters, when apply_fields() is called. It reads dictionaries as well as seeds and columns.
+// min_letters, when apply_fields() is called. Its source can be its D:
+// dictionary as well as a seed or a column.
 struct FreqSort {
-  static constexpr bool reads_dictionaries = true;
+  static constexpr bool has_dictionary_in_src = true;
 
   FreqSort();
 

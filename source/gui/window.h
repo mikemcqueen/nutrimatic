@@ -18,7 +18,8 @@
 // points each column whose source is a seed key no longer in app_state()'s
 // seed_map at its seed_key, then keeps and refreshes only the seed files the
 // columns' seed keys and the seed name name (see
-// AppState::refresh_seed_files()).
+// AppState::refresh_seed_files()), and reloads the loaded dictionaries whose
+// files are newer (see AppState::refresh_dictionaries()).
 // The letters fields start from app_state(), and Enter in either stores both
 // there. The buttons start from app_state()'s sentence; clicking
 // one selects it alone, or deselects it when already selected, and stores the

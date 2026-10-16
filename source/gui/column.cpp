@@ -197,9 +197,10 @@ void Column::render() {
           continue;
         choice_ = i;
         if (commands_[choice_] &&
-            commands_[choice_]->reads_column_dictionaries() && id_ > 0)
+            commands_[choice_]->has_columns_in_dictionaries() && id_ > 0)
           dictionary_column_ = id_ - 1;
-        if (commands_[choice_] && commands_[choice_]->reads_dictionaries() &&
+        if (commands_[choice_] &&
+            commands_[choice_]->has_dictionary_in_src() &&
             !std::holds_alternative<Dict>(source_))
           source_ = Dict{};
         std::string const seed =
@@ -355,12 +356,12 @@ void Column::render_letter_count(float x, float y) const {
 
 void Column::render_sources() {
   std::vector<std::string> const& keys = app_state().seed_keys;
-  bool const reads_dictionaries =
-      commands_[choice_] && commands_[choice_]->reads_dictionaries();
+  bool const has_dictionary_in_src =
+      commands_[choice_] && commands_[choice_]->has_dictionary_in_src();
   std::string const label = source_label(source_);
   std::vector<char const*> widest = {label.c_str()};
   for (std::string const& key : keys) widest.push_back(key.c_str());
-  if (reads_dictionaries) widest.push_back("dict");
+  if (has_dictionary_in_src) widest.push_back("dict");
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("src:");
   ImGui::SameLine(0, 0);
@@ -370,7 +371,7 @@ void Column::render_sources() {
       InputSource const choice = Seed{key};
       if (ImGui::Selectable(key.c_str(), source_ == choice)) source_ = choice;
     }
-    if (reads_dictionaries) {
+    if (has_dictionary_in_src) {
       InputSource const choice = Dict{};
       if (ImGui::Selectable("dict", source_ == choice)) source_ = choice;
     }
@@ -403,7 +404,8 @@ void Column::render_sources() {
 std::vector<std::string> Column::dictionary_labels() const {
   std::vector<std::string> labels;
   for (auto const& [label, key] : dictionary_choices) labels.push_back(label);
-  if (commands_[choice_] && commands_[choice_]->reads_column_dictionaries()) {
+  if (commands_[choice_] &&
+      commands_[choice_]->has_columns_in_dictionaries()) {
     for (ColumnIdentifier id = 0; id < id_; ++id)
       labels.push_back(std::to_string(id + 1));
   }
@@ -459,7 +461,7 @@ Column const* Column::letters_column() const {
 Column const* Column::dictionary_column() const {
   Window& window = main_window();
   if (!dictionary_column_ || !commands_[choice_] ||
-      !commands_[choice_]->reads_column_dictionaries() ||
+      !commands_[choice_]->has_columns_in_dictionaries() ||
       *dictionary_column_ < 0 || *dictionary_column_ >= window.column_count())
     return nullptr;
   return &window.get_column(*dictionary_column_);
@@ -478,12 +480,20 @@ Column::Key Column::wanted_key() const {
               : 0,
           source ? source->version() : 0,
           source_,
-          seed ? app_state().seed_file(seed->key).version : 0,
+          seed && commands_[choice_] ? app_state().seed_file(seed->key).version
+                                     : 0,
           letters ? letters->version() : 0,
           letter_source_,
           dictionary_,
           dictionary ? dictionary_column_ : std::nullopt,
-          dictionary ? dictionary->version() : 0};
+          dictionary ? dictionary->version() : 0,
+          !dictionary && commands_[choice_] &&
+                  (std::holds_alternative<Dict>(source_) ||
+                   commands_[choice_]->uses_dictionary())
+              ? app_state()
+                    .dictionary(dictionary_choices[dictionary_].second)
+                    .version
+              : 0};
 }
 
 std::string Column::used_letters() const {
@@ -574,7 +584,8 @@ void Column::start(Key key) {
   if (Column const* words = dictionary_column()) {
     dictionary_lines = words->output();
   } else {
-    dictionary = state.dictionary(dictionary_choices[key.dictionary].second);
+    dictionary =
+        state.dictionary(dictionary_choices[key.dictionary].second).words;
     dictionary_lines = dictionary->lines;
   }
   SharedLines input;
