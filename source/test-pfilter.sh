@@ -23,18 +23,21 @@ act,god
 low,ant
 PAIRS
 
-actual=$("$pfilter" --no-dict -l catdogx "$test_dir/pairs" 2>/dev/null)
+actual=$("$pfilter" --no-dict -m 0 -l catdogx "$test_dir/pairs" 2>/dev/null)
 [[ $actual == 'cat,dog' ]] || fail "no.pairs aren't dropped: $actual"
 
-actual=$("$pfilter" --no-dict --no-nopairs -l catdogx "$test_dir/pairs")
+actual=$("$pfilter" --no-dict -m 0 --no-nopairs -l catdogx "$test_dir/pairs")
 [[ $actual == $'cat,dog\nact,god' ]] || fail "--no-nopairs is wrong: $actual"
 
-actual=$("$pfilter" --no-dict --no-nopairs --exact -l catdogx \
+actual=$("$pfilter" --no-dict -m 0 --no-nopairs --exact -l catdogx \
   "$test_dir/pairs")
 [[ -z $actual ]] || fail "--exact keeps a pair with letters left: $actual"
 
-actual=$("$pfilter" --no-dict --no-nopairs --exact -l catdog \
+actual=$("$pfilter" --no-dict -m 0 --no-nopairs --exact -l catdog \
   "$test_dir/pairs")
 [[ $actual == $'cat,dog\nact,god' ]] || fail "--exact is wrong: $actual"
+
+actual=$("$pfilter" --no-dict --no-nopairs -m 7 -l catdogx "$test_dir/pairs")
+[[ -z $actual ]] || fail "-m keeps a short pair: $actual"
 
 echo PASS

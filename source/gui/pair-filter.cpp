@@ -32,6 +32,7 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
     fputs("pgui: pfilter cv requires letters\n", stderr);
     return false;
   }
+  options.min_letters = min_letters;
   options.max_letters = max_letters;
   options.sentence = params.sentence;
   options.drop_yes = yes;
@@ -74,14 +75,6 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
 
 bool PairFilter::render_options(bool* entered) {
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("x:");
-  ImGui::SameLine(0, 0);
-  ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
-                          2 * ImGui::GetStyle().FramePadding.x);
-  *entered |= ImGui::InputInt("##x", &max_letters_field, 0, 0,
-                              ImGuiInputTextFlags_EnterReturnsTrue);
-  ImGui::SameLine();
-  ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
   ImGui::SameLine(0, 0);
   *entered |= clearable_input("u", used_text, sizeof used_text);
@@ -89,12 +82,26 @@ bool PairFilter::render_options(bool* entered) {
 }
 
 bool PairFilter::render_display_options(bool* entered) {
+  float const letters_width = ImGui::CalcTextSize("00").x +
+                              2 * ImGui::GetStyle().FramePadding.x;
+  auto const letters_field = [&](char const* label, char const* id,
+                                 int* value) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(0, 0);
+    ImGui::SetNextItemWidth(letters_width);
+    *entered |= ImGui::InputInt(id, value, 0, 0,
+                                ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+  };
+  letters_field("m:", "##m", &min_letters_field);
+  letters_field("x:", "##x", &max_letters_field);
   bool const changed = toggle_button("cv", cv);
   if (changed) {
     cv = !cv;
     ++display_version_;
   }
-  float const width = ImGui::CalcTextSize("00.00").x +
+  float const width = ImGui::CalcTextSize("0.00").x +
                       2 * ImGui::GetStyle().FramePadding.x;
   auto const field = [&](char const* label, char const* id, char* text,
                          size_t size) {
@@ -109,6 +116,20 @@ bool PairFilter::render_display_options(bool* entered) {
   ImGui::BeginDisabled(!cv);
   field("m:", "##min_cv", min_cv_text, sizeof min_cv_text);
   field("x:", "##max_cv", max_cv_text, sizeof max_cv_text);
+  float const side = ImGui::GetFrameHeight();
+  ImGui::SameLine();
+  float const gap = ImGui::GetContentRegionAvail().x - side;
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, gap));
+  if (ImGui::Button("X##reset_cv", ImVec2(side, side))) {
+    PairFilter const defaults;
+    std::ranges::copy(defaults.min_cv_text, min_cv_text);
+    std::ranges::copy(defaults.max_cv_text, max_cv_text);
+    if (min_cv != defaults.min_cv || max_cv != defaults.max_cv) {
+      min_cv = defaults.min_cv;
+      max_cv = defaults.max_cv;
+      ++display_version_;
+    }
+  }
   ImGui::EndDisabled();
   return changed;
 }
@@ -123,10 +144,13 @@ bool PairFilter::apply_fields() {
     }
   }
   bool changed = false;
-  max_letters_field = std::max(max_letters_field, 0);
-  if (max_letters_field != max_letters) {
-    max_letters = max_letters_field;
-    changed = true;
+  for (auto [field, value] : {std::pair{&min_letters_field, &min_letters},
+                              std::pair{&max_letters_field, &max_letters}}) {
+    *field = std::max(*field, 0);
+    if (*field != *value) {
+      *value = *field;
+      changed = true;
+    }
   }
   if (used != used_text) {
     used = used_text;

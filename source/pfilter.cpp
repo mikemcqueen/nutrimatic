@@ -35,9 +35,9 @@ struct Args {
 };
 
 void usage(FILE* out) {
-  fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [--exact]] [-x N] [-s N] "
-        "[--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] [--cv [--csv]] "
-        "PAIRS-FILE|-\n", out);
+  fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [--exact]] [-m N] [-x N] "
+        "[-s N] [--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] "
+        "[--cv [--csv]] PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
   fputs("  print pairs whose two words are in the dictionary\n"
@@ -50,6 +50,9 @@ void usage(FILE* out) {
       "subtract letters already used from the -l letters; may be repeated");
   dfs_help_option("--exact",
       "print only pairs that use all of the -l letters; requires -l");
+  dfs_help_option("-m, --min-letters N",
+      "print only pairs of at least N letters (default: %d)",
+      PFILTER_DEFAULT_MIN_LETTERS);
   dfs_help_option("-x, --max-letters N",
       "print only pairs of at most N letters; 0 for no limit (default: %d)",
       PFILTER_DEFAULT_MAX_LETTERS);
@@ -80,6 +83,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "letters", 'l', OPTPARSE_REQUIRED },
     { "used-letters", 'u', OPTPARSE_REQUIRED },
     { "exact", OPT_EXACT, OPTPARSE_NONE },
+    { "min-letters", 'm', OPTPARSE_REQUIRED },
     { "max-letters", 'x', OPTPARSE_REQUIRED },
     CLASSIFIED_SENTENCE_LONG_OPTION,
     { "no-nopairs", OPT_NO_NOPAIRS, OPTPARSE_NONE },
@@ -118,6 +122,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         break;
       case OPT_NO_NOPAIRS:
         out->options.drop_no = false;
+        break;
+      case 'm':
+        if (!parse_count(options.optarg, "--min-letters",
+                &out->options.min_letters))
+          return false;
         break;
       case 'x':
         if (!parse_count(options.optarg, "--max-letters",
