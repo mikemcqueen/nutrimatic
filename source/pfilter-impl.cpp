@@ -53,9 +53,10 @@ bool Pfilter::load(char const* program, PfilterOptions const& options,
 }
 
 bool Pfilter::keep(DfsPairRow const& row) const {
-  return (options_.max_letters == 0 ||
-             row.left.size() + row.right.size() <=
-                 size_t(options_.max_letters)) &&
+  size_t const letters = row.left.size() + row.right.size();
+  return letters >= size_t(options_.min_letters) &&
+      (options_.max_letters == 0 ||
+          letters <= size_t(options_.max_letters)) &&
       (!options_.dictionary ||
           (options_.dictionary->get().contains(row.left) &&
               options_.dictionary->get().contains(row.right))) &&
@@ -64,8 +65,7 @@ bool Pfilter::keep(DfsPairRow const& row) const {
             return pairs->contains(entry);
           }) &&
       (!options_.bag ||
-          ((!options_.exact ||
-               row.left.size() + row.right.size() == options_.bag->size) &&
+          ((!options_.exact || letters == options_.bag->size) &&
               fits_letter_bag(*options_.bag, row.left + row.right))) &&
       (index_ == nullptr || in_index(*index_, row));
 }

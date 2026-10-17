@@ -221,15 +221,15 @@ void Column::render() {
     ImGui::TableNextColumn();
     if (commands_[choice_] && commands_[choice_]->render_options(&entered))
       ++options_version_;
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
-    ImGui::TableNextColumn();
-    if (commands_[choice_] &&
-        commands_[choice_]->render_display_options(&entered))
-      ++options_version_;
     ImGui::EndTable();
   }
+  ImGui::BeginGroup();
+  ImGui::Dummy(ImVec2(0, ImGui::GetFrameHeight()));
+  ImGui::SameLine(0, 0);
+  if (commands_[choice_] &&
+      commands_[choice_]->render_display_options(&entered))
+    ++options_version_;
+  ImGui::EndGroup();
   if (entered) {
     if (applied_filter_ != filter_) {
       applied_filter_ = filter_;

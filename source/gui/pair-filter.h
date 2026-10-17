@@ -9,12 +9,14 @@
 #include "pfilter-impl.h"
 
 // A pfilter call on one input, taking its dictionary and sentence from the
-// LetterToolsParams. Its option widgets are an "x:" field setting
-// max_letters, and a "u:" field with a clear button setting used, which the
-// Column adds to its used letters; clearing it counts as Enter. Its display
-// option widgets are a "cv" toggle button, setting cv, then "m:" and "x:"
+// LetterToolsParams. Its option widget is a "u:" field with a clear button
+// setting used, which the Column adds to its used letters; clearing it counts
+// as Enter. Its second row has "m:" and "x:" fields setting min_letters and
+// max_letters, then a "cv" toggle button, setting cv, then "m:" and "x:"
 // fields, starting at 0.00 and 10.0 and greyed out unless cv is set, setting
-// min_cv and max_cv. Its fields set their options when apply_fields() is
+// min_cv and max_cv, then, at the row's right edge, an "X" button, greyed
+// out like them, resetting min_cv and max_cv and their fields to those
+// defaults. Its fields set their options when apply_fields() is
 // called. While cv is set, items whose ratio lies outside
 // [min_cv, max_cv] are hidden (see display_hides()).
 // With cv, which requires letters, each kept line is followed by a space and
@@ -39,6 +41,8 @@ struct PairFilter {
 
   bool yes = false;  // -y
   bool cv = false;   // --cv
+  int min_letters = PFILTER_DEFAULT_MIN_LETTERS;  // -m
+  int min_letters_field = PFILTER_DEFAULT_MIN_LETTERS;
   int max_letters = PFILTER_DEFAULT_MAX_LETTERS;  // -x
   int max_letters_field = PFILTER_DEFAULT_MAX_LETTERS;
   std::string used;
