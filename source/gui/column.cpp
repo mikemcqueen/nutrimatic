@@ -437,6 +437,15 @@ bool Column::pending() const {
   return job_ || wanted_key() != made_key_;
 }
 
+bool Column::running() const {
+  return job_ && !job_->done.load(std::memory_order_acquire);
+}
+
+void Column::stop() {
+  worker_.request_stop();
+  if (worker_.joinable()) worker_.join();
+}
+
 std::string Column::selected_item() const {
   int const i = list_.selected();
   return i < 0 ? std::string() : (*output())[i];

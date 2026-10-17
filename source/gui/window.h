@@ -33,6 +33,8 @@
 // classified_version goes up. Keyboard focus returns to the column's ListBox
 // when the Review closes. Tapping Alt doesn't move keyboard focus, so the
 // Alt release that follows Alt-Tab back into the window leaves it in place.
+// A request to close pgui goes through the open Review, if any (see
+// Review::request_close()).
 class Window {
  public:
   Window();
@@ -61,6 +63,17 @@ class Window {
   // refused toggle_judge().
   bool judge_flashing() const;
 
+  // Asks to close pgui; closed() says once it may.
+  void request_close();
+  bool closed() const { return closed_; }
+
+  // Whether a column or the Review is still running something.
+  bool running() const;
+
+  // Stops the columns' runs, waits for them and any SUBMIT, and closes the
+  // Review.
+  void stop();
+
  private:
   // Opens a Review of column `id`; see the class comment.
   void open_review(ColumnIdentifier id);
@@ -76,6 +89,7 @@ class Window {
   // The open Review, if any, and the column it reviews.
   std::unique_ptr<Review> review_;
   ColumnIdentifier reviewed_ = 0;
+  bool closed_ = false;
 };
 
 // pgui's one Window, constructed on first use, which must follow
