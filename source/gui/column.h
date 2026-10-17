@@ -94,6 +94,12 @@ class Column {
   // waiting on the source or letters column.
   bool pending() const;
 
+  // Whether a run is still going on the worker thread.
+  bool running() const;
+
+  // Asks the run, if any, to stop, and waits for it.
+  void stop();
+
  private:
   // What an output is made from.
   struct Key {

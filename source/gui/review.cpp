@@ -202,6 +202,7 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
   if (confirm_ == Confirm::none && !job_ &&
       ImGui::Shortcut(ImGuiKey_Escape))
     confirm_ = Confirm::cancel;
+  if (close_requested_) confirm_ = Confirm::cancel;
   if (confirm_ == Confirm::cancel && checked_count_ == 0) {
     confirm_ = Confirm::none;
     result = Result::cancelled;
@@ -215,11 +216,23 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
                 sentence_);
   if (render_confirm("Submit?", question)) submit();
   if (render_confirm("Cancel?", "Discard these checks?"))
-    result = Result::cancelled;
+    result = close_requested_ ? Result::closed : Result::cancelled;
+  else if (confirm_ == Confirm::none)
+    close_requested_ = false;
 
   if (result != Result::open) ImGui::CloseCurrentPopup();
   ImGui::EndPopup();
   return result;
+}
+
+bool Review::request_close() {
+  if (checked_count_ == 0 || job_) return true;
+  close_requested_ = true;
+  return false;
+}
+
+bool Review::running() const {
+  return job_ && !job_->done.load(std::memory_order_acquire);
 }
 
 void Review::render_rows() {

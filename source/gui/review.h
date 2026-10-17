@@ -17,12 +17,13 @@
 // left out of what is recorded. Space or Enter toggles the focused pair. A
 // last row holds SUBMIT and CANCEL, each asking for confirmation, NO first;
 // Esc asks to cancel, or cancels outright when nothing is checked, and Esc
-// in a confirmation answers NO. A confirmed SUBMIT runs `$WF -d "$WFROOT"
+// in a confirmation answers NO. A request to close pgui asks the same as
+// CANCEL when anything is checked. A confirmed SUBMIT runs `$WF -d "$WFROOT"
 // classify pairs` on a worker thread, during which the review is locked. When
 // it fails, its output is shown and the checks are kept.
 class Review {
  public:
-  enum class Result { open, cancelled, submitted };
+  enum class Result { open, cancelled, submitted, closed };
 
   // A review of `rows` of `items`, the values beside them taken from
   // `values`, either empty or one per item, for `sentence`. Null, with the
@@ -34,6 +35,14 @@ class Review {
   // Draws the review with its list over the screen rect from `min` to `max`
   // and its status line just above, in the colors of a focused ListBox.
   Result render(ImVec2 min, ImVec2 max);
+
+  // Asks to close pgui. True when it can close now: nothing is checked, or a
+  // SUBMIT is recording the checks. Otherwise asks, as CANCEL does, to discard
+  // them, and render() returns closed once that is confirmed.
+  bool request_close();
+
+  // Whether a SUBMIT is still recording the checks.
+  bool running() const;
 
  private:
   // A `wf classify pairs` run; done is set once ok and output are.
@@ -64,6 +73,7 @@ class Review {
   bool opened_ = false;
   bool focus_first_ = true;
   Confirm confirm_ = Confirm::none;
+  bool close_requested_ = false;
   std::string failure_;
   std::shared_ptr<Job> job_;
   std::jthread worker_;

@@ -129,6 +129,7 @@ int main(int, char**) {
   ImGui::CreateContext();
   load_window_geometry();
 
+  SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
     std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return 1;
@@ -160,15 +161,18 @@ int main(int, char**) {
   // Frames still to render before blocking for the next event; ImGui can
   // take a frame after an event to settle.
   int frames_due = 2;
-  bool running = true;
   bool measured = false;
-  while (running) {
+  bool interrupted = false;
+  while (!interrupted && !top.closed()) {
     SDL_Event event;
     if (frames_due > 0 ? SDL_PollEvent(&event) : SDL_WaitEvent(&event)) {
       do {
         keypad_to_navigation(event);
         ImGui_ImplSDL2_ProcessEvent(&event);
-        if (event.type == SDL_QUIT) running = false;
+        if (event.type == SDL_QUIT) interrupted = true;
+        if (event.type == SDL_WINDOWEVENT &&
+            event.window.event == SDL_WINDOWEVENT_CLOSE)
+          top.request_close();
         if (event.type == SDL_WINDOWEVENT &&
             (event.window.event == SDL_WINDOWEVENT_MOVED ||
              event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED))
@@ -198,11 +202,16 @@ int main(int, char**) {
     SDL_RenderPresent(renderer);
   }
 
+  if (top.running())
+    std::fputs("Exiting: waiting on running tasks...\n", stderr);
+  top.stop();
+
   ImGui_ImplSDLRenderer2_Shutdown();
   ImGui_ImplSDL2_Shutdown();
   ImGui::DestroyContext();
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
+  std::fputs("Exiting.\n", stderr);
   return 0;
 }

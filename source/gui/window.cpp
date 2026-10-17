@@ -149,11 +149,28 @@ void Window::render() {
     if (result != Review::Result::open) {
       if (result == Review::Result::submitted)
         ++app_state().classified_version;
+      if (result == Review::Result::closed) closed_ = true;
       review_.reset();
       columns_[reviewed_].list_.focus();
     }
   }
   ImGui::End();
+}
+
+void Window::request_close() {
+  closed_ = !review_ || review_->request_close();
+}
+
+bool Window::running() const {
+  if (review_ && review_->running()) return true;
+  for (Column const& column : columns_)
+    if (column.running()) return true;
+  return false;
+}
+
+void Window::stop() {
+  for (Column& column : columns_) column.stop();
+  review_.reset();
 }
 
 void Window::open_review(ColumnIdentifier id) {
