@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <map>
 
 #include "dfs-cli-help.h"
@@ -11,31 +12,19 @@
 #include "row-input.h"
 
 bool parse_search(char const* program, char const* text, Search* out) {
-    if (strcmp(text, "pf") == 0 || strcmp(text, "wb,pf") == 0 ||
-        strcmp(text, "pb,wb,pf") == 0) {
-        *out = Search{};
-        out->pair_filter = true;
-        out->pairs = text[0] == 'p' && text[1] == 'b' ? 1 : 0;
-        out->words = strstr(text, "wb") != NULL ? 1 : 0;
-        return true;
-    }
     std::vector<std::string> steps(1);
     for (char const* c = text; *c; ++c) {
         if (*c == ',') steps.emplace_back();
         else steps.back() += *c;
     }
-    if (std::find(steps.begin(), steps.end(), "pf") != steps.end()) {
-        fprintf(stderr, "%s: --ss pf goes alone or as wb,pf or pb,wb,pf\n",
-                program);
-        return false;
-    }
-    if (steps.back() != "p") {
-        fprintf(stderr, "%s: --ss has to end with p\n", program);
+    Search search;
+    search.pair_filter = steps.back() == "pf";
+    if (steps.back() != "p" && !search.pair_filter) {
+        fprintf(stderr, "%s: --ss has to end with p or pf\n", program);
         return false;
     }
     steps.pop_back();
 
-    Search search;
     for (std::string const& step : steps) {
         if (step == "ppb") ++search.prospects;
         else if (step == "pb") ++search.pairs;
@@ -46,24 +35,16 @@ bool parse_search(char const* program, char const* text, Search* out) {
             return false;
         }
     }
-    if (search.prospects + search.pairs == 0 || search.words == 0) {
-        fprintf(stderr, "%s: --ss needs at least one ppb or pb and one wb\n",
-                program);
-        return false;
-    }
     *out = search;
     return true;
 }
 
 std::string search_text(Search const& search) {
-    if (search.pair_filter)
-        return std::string(search.pairs > 0 ? "pb," : "") +
-            (search.words > 0 ? "wb," : "") + "pf";
     std::string out;
     for (int i = 0; i < search.prospects; ++i) out += "ppb,";
     for (int i = 0; i < search.pairs; ++i) out += "pb,";
     for (int i = 0; i < search.words; ++i) out += "wb,";
-    return out + "p";
+    return out + (search.pair_filter ? "pf" : "p");
 }
 
 RankOption parse_rank_option(char const* program, int option, char const* arg,
@@ -299,11 +280,26 @@ bool load_pair_bags(char const* program, char const* path,
         });
 }
 
+PairPickFilter::PairPickFilter(std::vector<PairBag> const& prospect_bags,
+                               int min_length)
+        : min_length_(min_length) {
+    for (PairBag const& prospect : prospect_bags)
+        prospects_.insert(prospect.counts);
+}
+
+bool PairPickFilter::dropped(PairBag const& pair_bag) const {
+    return prospects_.contains(pair_bag.counts) ||
+        letter_total(pair_bag.counts) < min_length_;
+}
+
 bool load_pick_bags(char const* program, RankArgs const& args,
                     char const* prospects_file, char const* pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     int min_pair_length, std::vector<PairBag>* prospect_bags,
-                    std::vector<PairBag>* pair_bags, bool* has_prior) {
+                    std::vector<PairBag>* pair_bags,
+                    std::vector<PairBag>* final_bags,
+                    std::vector<std::vector<std::string>>* final_rows,
+                    bool* has_prior) {
     std::unordered_map<std::string, double> priors;
     PairEvidenceSource evidence;
     PriorWeights weights;
@@ -329,18 +325,24 @@ bool load_pick_bags(char const* program, RankArgs const& args,
         };
     }
     *has_prior = bool(prior);
+    std::vector<PairBag>* const loaded = final_bags ? final_bags : pair_bags;
     if ((prospects_file != NULL &&
          !load_pair_bags(program, prospects_file, bag, rejected, prior,
                          prospect_bags)) ||
-        !load_pair_bags(program, pairs_file, bag, rejected, prior, pair_bags))
+        (loaded != nullptr &&
+         !load_pair_bags(program, pairs_file, bag, rejected, prior, loaded,
+                         final_rows)))
         return false;
-    std::unordered_set<PairsCounts, PairsCountsHash> prospects;
-    for (PairBag const& prospect : *prospect_bags)
-        prospects.insert(prospect.counts);
-    std::erase_if(*pair_bags, [&](PairBag const& pair_bag) {
-        return prospects.contains(pair_bag.counts) ||
-            letter_total(pair_bag.counts) < min_pair_length;
-    });
+    if (pair_bags == nullptr) return true;
+    PairPickFilter const filter(*prospect_bags, min_pair_length);
+    auto const dropped = [&](PairBag const& pair_bag) {
+        return filter.dropped(pair_bag);
+    };
+    if (final_bags)
+        std::remove_copy_if(final_bags->begin(), final_bags->end(),
+                            std::back_inserter(*pair_bags), dropped);
+    else
+        std::erase_if(*pair_bags, dropped);
     return true;
 }
 

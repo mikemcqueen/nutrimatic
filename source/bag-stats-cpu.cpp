@@ -6,13 +6,14 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cassert>
 #include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -406,6 +407,10 @@ class InnerGroups {
     // How many pairs of distinct words use exactly the letters of `bag`,
     // which must fit the hashed step's rest.
     virtual uint64_t count(PairsCounts const& bag) = 0;
+
+    // Groups that count() from this one's hashed step, without filter() or
+    // hash() of their own; this one must outlive them, unchanged.
+    virtual std::unique_ptr<InnerGroups> view() const = 0;
 };
 
 class ExactInnerGroups : public InnerGroups {
@@ -421,18 +426,27 @@ class ExactInnerGroups : public InnerGroups {
 
     void hash(size_t step) override {
         hashed_groups_ = &groups_[step];
-        hashed_.build(groups_[step]);
+        own_hashed_.build(groups_[step]);
+        hashed_ = &own_hashed_;
     }
 
     uint64_t count(PairsCounts const& bag) override {
-        return counter_.count(bag, *hashed_groups_, hashed_);
+        return counter_.count(bag, *hashed_groups_, *hashed_);
+    }
+
+    std::unique_ptr<InnerGroups> view() const override {
+        auto out = std::make_unique<ExactInnerGroups>(counter_, 0);
+        out->hashed_groups_ = hashed_groups_;
+        out->hashed_ = hashed_;
+        return out;
     }
 
   private:
     PairsExactCounter const& counter_;
     std::vector<PairsExactCounter::Groups> groups_;
     PairsExactCounter::Groups const* hashed_groups_ = nullptr;
-    RemainderGroups hashed_;
+    RemainderGroups own_hashed_;
+    RemainderGroups const* hashed_ = nullptr;
 };
 
 template <typename Key>
@@ -449,18 +463,27 @@ class PackedInnerGroups : public InnerGroups {
 
     void hash(size_t step) override {
         hashed_groups_ = &groups_[step];
-        hashed_.build(groups_[step]);
+        own_hashed_.build(groups_[step]);
+        hashed_ = &own_hashed_;
     }
 
     uint64_t count(PairsCounts const& bag) override {
-        return counter_.count(bag, *hashed_groups_, hashed_, &scratch_);
+        return counter_.count(bag, *hashed_groups_, *hashed_, &scratch_);
+    }
+
+    std::unique_ptr<InnerGroups> view() const override {
+        auto out = std::make_unique<PackedInnerGroups>(counter_, 0);
+        out->hashed_groups_ = hashed_groups_;
+        out->hashed_ = hashed_;
+        return out;
     }
 
   private:
     PackedPairsCounter<Key> const& counter_;
     std::vector<PackedGroups<Key>> groups_;
     PackedGroups<Key> const* hashed_groups_ = nullptr;
-    PackedRemainderGroups<Key> hashed_;
+    PackedRemainderGroups<Key> own_hashed_;
+    PackedRemainderGroups<Key> const* hashed_ = nullptr;
     typename PackedPairsCounter<Key>::Scratch scratch_;
 };
 
@@ -499,27 +522,91 @@ class InnerCounters {
     std::optional<PackedPairsCounter<PairsKey128>> packed128_;
 };
 
+// The PAIRS bags a last pf counts in what is left: with `exact` the one
+// whose letters are all of it, otherwise every one that fits in it.
+class FinalPairBags {
+  public:
+    FinalPairBags(std::vector<PairBag> const& bags, bool exact)
+        : bags_(bags), exact_(exact) {
+        if (!exact) return;
+        for (size_t i = 0; i < bags.size(); ++i)
+            index_.emplace(bags[i].counts, i);
+    }
+
+    std::vector<PairBag> const& bags() const { return bags_; }
+
+    // Calls reach(i) for each bag counted in `rest`, by its index.
+    template <typename Reach>
+    void each(PairsCounts const& rest, Reach const& reach) const {
+        if (exact_) {
+            auto const found = index_.find(rest);
+            if (found != index_.end()) reach(found->second);
+            return;
+        }
+        for (size_t i = 0; i < bags_.size(); ++i)
+            if (pairs_fits(rest, bags_[i].counts)) reach(i);
+    }
+
+    // The pairs of the bags counted in `rest`.
+    uint64_t count(PairsCounts const& rest) const {
+        uint64_t out = 0;
+        each(rest, [&](size_t i) { out += bags_[i].pairs; });
+        return out;
+    }
+
+  private:
+    std::vector<PairBag> const& bags_;
+    bool exact_;
+    std::unordered_map<PairsCounts, size_t, PairsCountsHash> index_;
+};
+
+// What a remainder's word bag combinations are handed to, as RestCounter
+// counts them: add(chosen, rest, pairs) at each, `chosen` its word bags in
+// the fitting list, `rest` what it leaves. With a pf and no word steps,
+// add_final(i, pairs) instead for each PAIRS bag counted in a nonempty
+// `rest`, by its index.
+class CompletionSink {
+  public:
+    virtual ~CompletionSink() = default;
+    virtual void add(std::vector<PairsCounts const*> const& chosen,
+                     PairsCounts const& rest, uint64_t pairs) = 0;
+    virtual void add_final(size_t bag, uint64_t pairs) = 0;
+};
+
 // Fills a remainder's counts over every combination of one word bag per
-// word step, word bags in non-decreasing order.
+// word step, word bags in non-decreasing order, the last step's pairs those
+// of `table` (p) or `final_bags` (pf), the other null.
 class RestCounter {
   public:
-    RestCounter(int words, PairCountTable const& table,
+    RestCounter(int words, PairCountTable const* table,
+                FinalPairBags const* final_bags,
                 std::unique_ptr<InnerGroups> groups)
-        : words_(words), table_(table), groups_(std::move(groups)) {}
+        : words_(words), table_(table), final_bags_(final_bags),
+          groups_(std::move(groups)) {}
 
-    bool needs_groups() const { return table_.needs_groups(); }
+    bool needs_groups() const { return table_ && table_->needs_groups(); }
 
     // The inner dictionary groups per pick step.
     InnerGroups& groups() { return *groups_; }
 
-    // `fitting`: the word bags that fit `rest`; groups() step `step`: the
-    // inner dictionary groups, holding every one that fits `rest`.
+    // `fitting`: the word bags that fit `rest`; groups(): the inner
+    // dictionary groups, hashed from a step holding every one that fits
+    // `rest`. With `sink`, hands it each combination.
     void count(PairsCounts const& rest,
-               std::vector<PairsCounts> const& fitting, size_t step,
-               BagStatsCounts* out) {
-        fitting_ = &fitting;
-        if (needs_groups()) groups_->hash(step);
-        visit(1, 0, rest, out);
+               std::vector<PairsCounts> const& fitting, BagStatsCounts* out,
+               CompletionSink* sink = nullptr) {
+        begin(fitting, sink);
+        if (words_ == 0) leaf(rest, out);
+        else visit(1, 0, fitting.size(), rest, out);
+    }
+
+    // As count(), with at least one word step, over only the combinations
+    // whose first word bag is fitting[first].
+    void count_first(PairsCounts const& rest,
+                     std::vector<PairsCounts> const& fitting, size_t first,
+                     BagStatsCounts* out, CompletionSink* sink = nullptr) {
+        begin(fitting, sink);
+        visit(1, first, first + 1, rest, out);
     }
 
     // The PairCountCache lookups since the last call.
@@ -530,37 +617,75 @@ class RestCounter {
     }
 
   private:
-    void visit(int word, size_t start, PairsCounts const& rest,
+    void begin(std::vector<PairsCounts> const& fitting,
+               CompletionSink* sink) {
+        fitting_ = &fitting;
+        sink_ = sink;
+        chosen_.clear();
+    }
+
+    // Whether the sink takes add_final().
+    bool lists_final_bags() const {
+        return sink_ && final_bags_ && words_ == 0;
+    }
+
+    void visit(int word, size_t start, size_t end, PairsCounts const& rest,
                BagStatsCounts* out) {
         PairsCounts word_rest;
         std::vector<PairsCounts> const& fitting = *fitting_;
-        for (size_t i = start; i < fitting.size(); ++i) {
+        for (size_t i = start; i < end; ++i) {
             PairsCounts const& word_bag = fitting[i];
             if (!pairs_subtract(rest, word_bag, &word_rest)) continue;
-            if (word < words_) {
-                visit(word + 1, i, word_rest, out);
-                continue;
-            }
-            ++out->word_bags;
-            if (word_rest == PairsCounts{}) {
-                ++out->solo;
-                continue;
-            }
-            if (letter_total(word_rest) < 2 * INNER_MIN_WORD_LENGTH) continue;
-            uint64_t const count = table_.count(
-                word_rest, [&] { return groups_->count(word_rest); },
-                &pair_cache_counts_);
-            if (count == 0) continue;
-            ++out->with_pairs;
-            out->total_pairs += count;
-            out->max_pairs = std::max(out->max_pairs, count);
-            out->with_min_pairs += count >= BAG_STATS_MIN_PAIRS;
+            if (sink_) chosen_.push_back(&word_bag);
+            if (word < words_)
+                visit(word + 1, i, fitting.size(), word_rest, out);
+            else
+                leaf(word_rest, out);
+            if (sink_) chosen_.pop_back();
         }
     }
 
+    // Counts one combination, leaving `rest`.
+    void leaf(PairsCounts const& rest, BagStatsCounts* out) {
+        ++out->word_bags;
+        bool const solo = rest == PairsCounts{};
+        uint64_t const count = solo ? 0 : pairs(rest);
+        if (sink_ && (solo || !lists_final_bags()))
+            sink_->add(chosen_, rest, count);
+        if (solo) {
+            ++out->solo;
+            return;
+        }
+        if (count == 0) return;
+        ++out->with_pairs;
+        out->total_pairs += count;
+        out->max_pairs = std::max(out->max_pairs, count);
+        out->with_min_pairs += count >= BAG_STATS_MIN_PAIRS;
+    }
+
+    // The last step's pairs in `rest`.
+    uint64_t pairs(PairsCounts const& rest) {
+        if (lists_final_bags()) {
+            uint64_t out = 0;
+            final_bags_->each(rest, [&](size_t i) {
+                uint64_t const pairs = final_bags_->bags()[i].pairs;
+                sink_->add_final(i, pairs);
+                out += pairs;
+            });
+            return out;
+        }
+        if (final_bags_) return final_bags_->count(rest);
+        if (letter_total(rest) < 2 * INNER_MIN_WORD_LENGTH) return 0;
+        return table_->count(rest, [&] { return groups_->count(rest); },
+                             &pair_cache_counts_);
+    }
+
     int words_;
-    PairCountTable const& table_;
+    PairCountTable const* table_;
+    FinalPairBags const* final_bags_;
     std::vector<PairsCounts> const* fitting_ = nullptr;
+    CompletionSink* sink_ = nullptr;
+    std::vector<PairsCounts const*> chosen_;
     std::unique_ptr<InnerGroups> groups_;
     CacheCounts pair_cache_counts_;
 };
@@ -570,9 +695,10 @@ class RestCounter {
 class RowWalker : public PickWalk {
   public:
     RowWalker(std::vector<std::vector<PairBag> const*> const& steps,
-              int pair_steps, std::vector<PairsCounts> const& word_bags,
+              int pair_steps, size_t pair_bags,
+              std::vector<PairsCounts> const& word_bags,
               RestCounter rest_counter, RestTable const& rest_table)
-        : PickWalk(steps, pair_steps), word_bags_(word_bags),
+        : PickWalk(steps, pair_steps, pair_bags), word_bags_(word_bags),
           fitting_(steps.size()), rest_counter_(std::move(rest_counter)),
           rest_table_(rest_table) {}
 
@@ -594,8 +720,9 @@ class RowWalker : public PickWalk {
                     ++rest_counts_.hits;
                 } else {
                     filter(last_step, rest);
-                    rest_counter_.count(rest, fitting_[last_step], last_step,
-                                        &row);
+                    if (rest_counter_.needs_groups())
+                        rest_counter_.groups().hash(last_step);
+                    rest_counter_.count(rest, fitting_[last_step], &row);
                     rest_table_.put(rest, row);
                 }
                 visit(unit, row, size_t(letters - letter_total(rest)));
@@ -634,7 +761,8 @@ class RowWalker : public PickWalk {
 // Progress hooks: the cache and pair cache lookups of each finished block.
 class CacheHooks {
   public:
-    CacheHooks(RestTable const& rest_table, PairCountCache const& pair_cache)
+    // `pair_cache`: null without one.
+    CacheHooks(RestTable const& rest_table, PairCountCache const* pair_cache)
         : rest_table_(rest_table), pair_cache_(pair_cache) {}
 
     void finished(RowWalker* walker) {
@@ -647,7 +775,8 @@ class CacheHooks {
     std::string text() const {
         std::string out = rest_table_.enabled()
             ? cache_.text("cache") : ", cache off";
-        if (pair_cache_.enabled()) out += pair_cache_counts_.text("pair cache");
+        if (pair_cache_ && pair_cache_->enabled())
+            out += pair_cache_counts_.text("pair cache");
         return out;
     }
 
@@ -676,35 +805,42 @@ class CacheHooks {
     };
 
     RestTable const& rest_table_;
-    PairCountCache const& pair_cache_;
+    PairCountCache const* pair_cache_;
     SharedCacheCounts cache_;
     SharedCacheCounts pair_cache_counts_;
 };
 
 struct Walk : WalkBase {
     InnerCounters const& inner;
-    PairCountTable const& table;
+    // With a last p, the DICT pair counts; with pf, the PAIRS bags; the
+    // other null.
+    PairCountTable const* table;
+    FinalPairBags const* final_bags;
     RestTable const& rest_table;
-    PairsExactCounter const& counter;
-    // With --completions, each of word_bags' DICT spellings.
+    // With --completions or --all, each of word_bags' DICT spellings, and
+    // with a last pf each final bag's rows.
     std::vector<std::vector<std::string>> const& spellings;
+    std::vector<std::vector<std::string>> const& final_rows;
     int completions;
+    bool all;
 
     RowWalker walker() const {
-        return RowWalker(steps, args.search.pairs, word_bags,
-                         RestCounter(args.search.words, table,
+        return RowWalker(steps, args.search.pairs, pair_bags.size(),
+                         word_bags,
+                         RestCounter(args.search.words, table, final_bags,
                                      inner.groups(steps.size())),
                          rest_table);
     }
 
     CacheHooks progress_hooks() const {
-        return CacheHooks(rest_table, table.cache());
+        return CacheHooks(rest_table, table ? &table->cache() : nullptr);
     }
 
-    // The row whose picks are `picks`, counted from what they leave alone.
-    BagStatsRow score_row(std::vector<size_t> const& picks) const;
+    // Prints the row whose picks are `picks`, counted from what they leave
+    // alone, then its --completions or --all.
+    void print_score_row(std::vector<size_t> const& picks) const;
 
-    // Prints --completions for the --score row whose picks are `picks`.
+    // Prints --completions or --all for the row whose picks are `picks`.
     void after_score(std::vector<size_t> const& picks) const;
 };
 
@@ -720,9 +856,14 @@ bool completion_wanted(std::vector<BagStatsCompletion> const& heap, size_t top,
 }
 
 // Adds `completion`, which completion_wanted takes, to a heap of the `top`
-// best completions.
+// best completions, or with `top` SIZE_MAX to the unordered list of all of
+// them.
 void push_completion(std::vector<BagStatsCompletion>* heap, size_t top,
                      BagStatsCompletion completion) {
+    if (top == SIZE_MAX) {
+        heap->push_back(std::move(completion));
+        return;
+    }
     if (heap->size() == top) {
         std::pop_heap(heap->begin(), heap->end(), completion_before);
         heap->pop_back();
@@ -760,316 +901,193 @@ void print_completion_list(
     }
 }
 
-// A remainder's `top` completions with the most exact pairs, counted as
-// RestCounter counts them.
-class CompletionCollector {
+// One thread's share of a remainder's `top` completions with the most
+// pairs, counted as RestCounter counts them, of `fitting`, the word bags
+// that fit it, whose indices in the walk's word bags are `indices`; with
+// `with_pairs`, only those with pairs, or SOLO.
+class CompletionHeap : public CompletionSink {
   public:
-    CompletionCollector(Walk const& walk, PairsCounts const& rest, size_t top)
-        : walk_(walk), top_(top) {
-        for (size_t i = 0; i < walk.word_bags.size(); ++i)
-            if (pairs_fits(rest, walk.word_bags[i]))
-                fitting_.push_back(uint32_t(i));
-        walk.counter.filter(walk.counter.groups_by_length(), rest, &groups_);
-        hashed_.build(groups_);
-        visit(1, 0, rest);
-        std::sort(heap_.begin(), heap_.end(), completion_before);
-    }
+    CompletionHeap(std::vector<PairsCounts> const& fitting,
+                   std::vector<uint32_t> const& indices, size_t top,
+                   bool with_pairs)
+        : fitting_(fitting), indices_(indices), top_(top),
+          with_pairs_(with_pairs) {}
 
-    // The completions, best first.
-    std::vector<BagStatsCompletion> const& top() const { return heap_; }
+    // Numbers the completions that follow from `seq`, in walk order.
+    void start(uint64_t seq) { seq_ = seq; }
 
-    // Every completion of the remainder.
-    uint64_t total() const { return seq_; }
-
-  private:
-    void visit(int word, size_t start, PairsCounts const& rest) {
-        PairsCounts word_rest;
-        for (size_t i = start; i < fitting_.size(); ++i) {
-            PairsCounts const& word_bag = walk_.word_bags[fitting_[i]];
-            if (!pairs_subtract(rest, word_bag, &word_rest)) continue;
-            chosen_.push_back(fitting_[i]);
-            if (word < walk_.args.search.words)
-                visit(word + 1, i, word_rest);
-            else
-                add(word_rest);
-            chosen_.pop_back();
-        }
-    }
-
-    void add(PairsCounts const& word_rest) {
-        bool const solo = word_rest == PairsCounts{};
-        uint64_t const count =
-            solo || letter_total(word_rest) < 2 * INNER_MIN_WORD_LENGTH
-                ? 0 : walk_.counter.count(word_rest, groups_, hashed_);
-        BagStatsCompletion completion{{}, count, seq_++, solo};
-        if (!completion_wanted(heap_, top_, completion)) return;
-        completion.word_bags = chosen_;
+    void add(std::vector<PairsCounts const*> const& chosen,
+             PairsCounts const& rest, uint64_t pairs) override {
+        bool const solo = rest == PairsCounts{};
+        ++total_;
+        BagStatsCompletion completion{{}, pairs, seq_++, solo};
+        if ((with_pairs_ && pairs == 0 && !solo) ||
+            !completion_wanted(heap_, top_, completion))
+            return;
+        for (PairsCounts const* word_bag : chosen)
+            completion.word_bags.push_back(
+                indices_[size_t(word_bag - fitting_.data())]);
         push_completion(&heap_, top_, std::move(completion));
     }
 
-    Walk const& walk_;
+    void add_final(size_t bag, uint64_t pairs) override {
+        ++total_;
+        BagStatsCompletion completion{{uint32_t(bag)}, pairs, seq_++, false};
+        if (completion_wanted(heap_, top_, completion))
+            push_completion(&heap_, top_, std::move(completion));
+    }
+
+    std::vector<BagStatsCompletion>& heap() { return heap_; }
+    uint64_t total() const { return total_; }
+
+  private:
+    std::vector<PairsCounts> const& fitting_;
+    std::vector<uint32_t> const& indices_;
     size_t top_;
-    std::vector<uint32_t> fitting_;
-    PairsExactCounter::Groups groups_;
-    RemainderGroups hashed_;
-    std::vector<uint32_t> chosen_;
+    bool with_pairs_;
     std::vector<BagStatsCompletion> heap_;
     uint64_t seq_ = 0;
+    uint64_t total_ = 0;
 };
 
-BagStatsRow Walk::score_row(std::vector<size_t> const& picks) const {
-    Walk const& walk = *this;
-    PairsCounts const rest = picks_rest(walk, picks);
+// A remainder's counts, as RestCounter counts them, and with `top` > 0 its
+// `top` completions with the most pairs, best first, ties in DICT order, of
+// `total`.
+struct RemainderCount {
+    BagStatsCounts counts{};
+    std::vector<BagStatsCompletion> best;
+    uint64_t total = 0;
+};
+
+// One thread's share of count_remainder, on cache lines of its own.
+struct alignas(64) RemainderPart {
+    BagStatsCounts counts;
+    CompletionHeap heap;
+};
+
+// Counts `rest` on the walk's threads, split by first word bag; with `top`
+// and `with_pairs` as CompletionHeap takes them. Once `stop` is requested,
+// quits early, leaving the counts partial.
+RemainderCount count_remainder(Walk const& walk, PairsCounts const& rest,
+                               size_t top, bool with_pairs,
+                               std::stop_token const& stop = {}) {
     std::vector<PairsCounts> fitting;
-    filter_word_bags(walk.word_bags, rest, &fitting);
-    RestCounter counter(walk.args.search.words, walk.table,
-                        walk.inner.groups(1));
-    if (counter.needs_groups()) counter.groups().filter(0, rest);
-    BagStatsRow row{};
-    counter.count(rest, fitting, 0, &row);
-    name_picks(walk, picks, &row);
-    return row;
-}
-
-// Prints --completions for the row whose picks are `picks`.
-void print_completions(Walk const& walk, std::vector<size_t> const& picks) {
-    PairsCounts const rest = picks_rest(walk, picks);
-    CompletionCollector const collector(walk, rest,
-                                        size_t(walk.completions));
-    print_completion_list(collector.top(), collector.total(),
-                          walk.spellings);
-}
-
-void Walk::after_score(std::vector<size_t> const& picks) const {
-    if (completions > 0) print_completions(*this, picks);
-}
-
-constexpr char PAIR_FILTER_COLUMNS[] =
-    "WORDS,WORDBAGS,W_WITH_PAIRS,WB_WITH_PAIRS,W_WITH_MIN_PAIRS,"
-    "WB_WITH_MIN_PAIRS,W_SOLO,WB_SOLO,TOTAL_PAIRS,TOTAL_PAIR_BAGS,MAX_PAIRS,"
-    "MAX_PAIR_BAGS,TOTAL_UNIQUE_PAIRS,MAX_UNIQUE_PAIRS";
-
-int run_pair_filter(BagStatsOptions const& options,
-                    std::string const& letters) {
-    BagStatsArgs const& common = options.common;
-    PairsCounts const bag = pairs_letter_counts(letters.c_str());
-    PairFilterInputs inputs(common.search.pairs > 0);
-    DfsPairSet rejected;
-    if (!load_rejected_pairs(PROGRAM, common, &rejected) ||
-        !load_pair_bags(PROGRAM, common.pairs_file, bag, rejected,
-                        PairPrior{}, &inputs.pair_bags,
-                        inputs.pair_rows_out()) ||
-        !load_word_bags(PROGRAM, common.dictionary_file, bag,
-                        common.min_word_bag_length, &inputs.word_bags,
-                        inputs.word_spellings_out()))
-        return 1;
-    inputs.pick_pair_step_bags(common.min_pair_bag_length);
-    std::vector<std::vector<std::string>> const& spellings =
-        inputs.spellings();
-    size_t const top =
-        options.all ? spellings.size() : size_t(options.completions);
-    PairFilterResult const result = count_pair_filter(
-        bag, inputs, options.exact, common.search.words, options.sort,
-        bag_stats_threads(common), top);
-    char const* const key = options.sort == PairFilterSort::UP ? "UP" : "TP";
-    if (options.all || inputs.pair_step) {
-        print_completion_list(result.best, spellings.size(), spellings, key);
-        return fflush(stdout) == 0 ? 0 : 1;
+    std::vector<uint32_t> indices;
+    for (size_t i = 0; i < walk.word_bags.size(); ++i) {
+        if (!pairs_fits(rest, walk.word_bags[i])) continue;
+        fitting.push_back(walk.word_bags[i]);
+        indices.push_back(uint32_t(i));
     }
-    PairFilterCounts const& counts = result.counts;
-    printf("%s\n%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
-           "%llu,%llu\n",
-           PAIR_FILTER_COLUMNS,
-           (unsigned long long)counts.words,
-           (unsigned long long)counts.word_bags,
-           (unsigned long long)counts.words_with_pairs,
-           (unsigned long long)counts.word_bags_with_pairs,
-           (unsigned long long)counts.words_with_min_pairs,
-           (unsigned long long)counts.word_bags_with_min_pairs,
-           (unsigned long long)counts.words_solo,
-           (unsigned long long)counts.word_bags_solo,
-           (unsigned long long)counts.total_pairs,
-           (unsigned long long)counts.total_pair_bags,
-           (unsigned long long)counts.max_pairs,
-           (unsigned long long)counts.max_pair_bags,
-           (unsigned long long)counts.total_unique_pairs,
-           (unsigned long long)counts.max_unique_pairs);
-    if (top > 0)
-        print_completion_list(result.best, spellings.size(), spellings, key);
-    return fflush(stdout) == 0 ? 0 : 1;
-}
-
-PairFilterResult count_outer_bags(
-        PairsCounts const& bag, std::vector<PairBag> const& pair_bags,
-        std::vector<PairsCounts> const& outer,
-        std::vector<std::vector<std::string>> const& spellings,
-        std::vector<PairsCounts> const& word_bags, bool exact, int word_steps,
-        PairFilterSort sort, size_t threads, size_t top,
-        std::stop_token const& stop) {
-    assert(exact || word_steps == 0);
-    std::unordered_map<PairsCounts, size_t, PairsCountsHash> exact_bags;
-    if (exact)
-        for (size_t i = 0; i < pair_bags.size(); ++i)
-            exact_bags.emplace(pair_bags[i].counts, i);
-
-    std::vector<PairFilterCounts> thread_counts(threads);
-    std::vector<std::vector<BagStatsCompletion>> thread_completions(threads);
+    int const words = walk.args.search.words;
+    size_t const threads = words == 0
+        ? 1 : std::max<size_t>(1, std::min(walk.threads, fitting.size()));
+    std::vector<RemainderPart> parts;
+    for (size_t t = 0; t < threads; ++t)
+        parts.push_back({{}, {fitting, indices, top, with_pairs}});
+    std::unique_ptr<InnerGroups> const groups = walk.inner.groups(1);
+    if (walk.table && walk.table->needs_groups()) {
+        groups->filter(0, rest);
+        groups->hash(0);
+    }
     std::atomic<size_t> next{0};
     run_threads(threads, [&](size_t thread) {
-        PairFilterCounts& out = thread_counts[thread];
-        std::vector<BagStatsCompletion>& completions =
-            thread_completions[thread];
-        std::vector<size_t> reached;
-        std::vector<std::vector<PairsCounts>> fitting(
-            size_t(std::max(word_steps, 0)));
+        RemainderPart& part = parts[thread];
+        RestCounter counter(words, walk.table, walk.final_bags,
+                            groups->view());
+        CompletionSink* const sink = top > 0 ? &part.heap : nullptr;
+        if (words == 0) {
+            counter.count(rest, fitting, &part.counts, sink);
+            return;
+        }
         for (size_t i; !stop.stop_requested() &&
-                       (i = next.fetch_add(1)) < outer.size();) {
-            PairsCounts rest;
-            pairs_subtract(bag, outer[i], &rest);
-            uint64_t pairs = 0;
-            uint64_t bags = 0;
-            reached.clear();
-            auto const add_pairs = [&](PairsCounts const& left) {
-                if (exact) {
-                    auto const found = exact_bags.find(left);
-                    if (found != exact_bags.end()) {
-                        pairs += pair_bags[found->second].pairs;
-                        ++bags;
-                        if (word_steps > 1) reached.push_back(found->second);
-                    }
-                } else {
-                    for (PairBag const& pair_bag : pair_bags) {
-                        if (!pairs_fits(left, pair_bag.counts)) continue;
-                        pairs += pair_bag.pairs;
-                        ++bags;
-                    }
-                }
-            };
-            auto const add_word_steps = [&](auto const& self,
-                                            PairsCounts const& left,
-                                            size_t step) -> void {
-                if (step == fitting.size()) {
-                    add_pairs(left);
-                    return;
-                }
-                filter_word_bags(step == 0 ? word_bags : fitting[step - 1],
-                                 left, &fitting[step]);
-                PairsCounts after;
-                for (PairsCounts const& word_bag : fitting[step]) {
-                    pairs_subtract(left, word_bag, &after);
-                    self(self, after, step + 1);
-                }
-            };
-            add_word_steps(add_word_steps, rest, 0);
-            uint64_t unique_pairs = pairs;
-            if (word_steps > 1) {
-                std::sort(reached.begin(), reached.end());
-                reached.erase(std::unique(reached.begin(), reached.end()),
-                              reached.end());
-                unique_pairs = 0;
-                for (size_t const pair_bag : reached)
-                    unique_pairs += pair_bags[pair_bag].pairs;
-            }
-            bool const solo = rest == PairsCounts{};
-            uint64_t const words = spellings[i].size();
-            out.words += words;
-            ++out.word_bags;
-            if (pairs > 0) {
-                out.words_with_pairs += words;
-                ++out.word_bags_with_pairs;
-            }
-            if (pairs >= BAG_STATS_MIN_PAIRS) {
-                out.words_with_min_pairs += words;
-                ++out.word_bags_with_min_pairs;
-            }
-            if (solo) {
-                out.words_solo += words;
-                ++out.word_bags_solo;
-            }
-            out.total_pairs += pairs;
-            out.total_pair_bags += bags;
-            out.max_pairs = std::max(out.max_pairs, pairs);
-            out.max_pair_bags = std::max(out.max_pair_bags, bags);
-            out.total_unique_pairs += unique_pairs;
-            out.max_unique_pairs = std::max(out.max_unique_pairs, unique_pairs);
-            if (top > 0 && (pairs > 0 || solo)) {
-                BagStatsCompletion completion{
-                    {}, sort == PairFilterSort::UP ? unique_pairs : pairs, i,
-                    solo};
-                if (completion_wanted(completions, top, completion)) {
-                    completion.word_bags = {uint32_t(i)};
-                    push_completion(&completions, top, std::move(completion));
-                }
-            }
+                       (i = next.fetch_add(1)) < fitting.size();) {
+            part.heap.start(uint64_t(i) << 40);
+            counter.count_first(rest, fitting, i, &part.counts, sink);
         }
     });
-    PairFilterResult out;
-    for (PairFilterCounts const& part : thread_counts) out.counts.add(part);
-    for (std::vector<BagStatsCompletion>& part : thread_completions)
-        for (BagStatsCompletion& completion : part)
-            out.best.push_back(std::move(completion));
+    RemainderCount out;
+    for (RemainderPart& part : parts) {
+        out.counts.add(part.counts);
+        out.total += part.heap.total();
+        std::vector<BagStatsCompletion>& heap = part.heap.heap();
+        std::move(heap.begin(), heap.end(), std::back_inserter(out.best));
+    }
     std::sort(out.best.begin(), out.best.end(), completion_before);
     if (out.best.size() > top) out.best.resize(top);
     return out;
 }
 
-}  // namespace
-
-void PairFilterInputs::pick_pair_step_bags(int min_length) {
-    pair_step_bags.clear();
-    if (!pair_step) return;
-    size_t kept = 0;
-    for (size_t i = 0; i < pair_bags.size(); ++i) {
-        if (letter_total(pair_bags[i].counts) < min_length) continue;
-        pair_step_bags.push_back(pair_bags[i].counts);
-        if (kept != i) pair_rows[kept] = std::move(pair_rows[i]);
-        ++kept;
-    }
-    pair_rows.resize(kept);
+// The completions --completions or --all lists.
+size_t listed_completions(Walk const& walk) {
+    return walk.all ? SIZE_MAX : size_t(walk.completions);
 }
 
-PairFilterResult count_pair_filter(
-        PairsCounts const& bag, PairFilterInputs const& inputs, bool exact,
-        int words, PairFilterSort sort, size_t threads, size_t top,
-        std::stop_token stop) {
-    if (!inputs.pair_step)
-        return count_outer_bags(bag, inputs.pair_bags, inputs.word_bags,
-                                inputs.word_spellings, inputs.word_bags,
-                                exact, words, sort, threads, top, stop);
-    return count_outer_bags(bag, inputs.pair_bags, inputs.pair_step_bags,
-                            inputs.pair_rows, inputs.word_bags, exact,
-                            words + 1, sort, threads, top, stop);
+// Prints `count`'s completions as --completions and --all list them.
+void print_completions(Walk const& walk, RemainderCount const& count) {
+    print_completion_list(count.best, count.total,
+                          walk.args.search.words > 0 ? walk.spellings
+                                                     : walk.final_rows);
 }
 
-int bag_stats(BagStatsOptions const& options, std::string const& letters) {
-    if (options.common.search.pair_filter)
-        return run_pair_filter(options, letters);
+// A row of `counts`, without its PAIR or PAIRS.
+BagStatsRow counts_row(BagStatsCounts const& counts) {
+    BagStatsRow row{};
+    static_cast<BagStatsCounts&>(row) = counts;
+    return row;
+}
 
+void Walk::print_score_row(std::vector<size_t> const& picks) const {
+    RemainderCount const count = count_remainder(
+        *this, picks_rest(*this, picks), listed_completions(*this), all);
+    BagStatsRow row = counts_row(count.counts);
+    name_picks(*this, picks, &row);
+    write_bag_stats_row(stdout, row);
+    if (listed_completions(*this) != 0) print_completions(*this, count);
+}
+
+void Walk::after_score(std::vector<size_t> const& picks) const {
+    if (listed_completions(*this) == 0) return;
+    print_completions(*this, count_remainder(*this, picks_rest(*this, picks),
+                                             listed_completions(*this), all));
+}
+
+// Sets up the counting for `options` over `inputs` and calls f(walk,
+// rankers), returning what it returns, or 1 when the pair count table can't
+// be allocated.
+template <typename F>
+int with_walk(BagStatsOptions const& options, std::string const& letters,
+              BagStatsInputs const& inputs,
+              std::vector<std::vector<std::string>> const& spellings,
+              F const& f) {
     BagStatsArgs const& common = options.common;
-    BagStatsInputs inputs(pairs_letter_counts(letters.c_str()));
-    std::vector<std::vector<std::string>> spellings;
-    if (!load_bag_stats_inputs(PROGRAM, common, &inputs,
-                               options.completions > 0 ? &spellings : nullptr))
-        return 1;
     PairsCounts const& bag = inputs.bag;
     std::vector<std::vector<PairBag> const*> const& steps = inputs.steps;
     PairsExactCounter const& counter = inputs.counter;
     size_t const threads = bag_stats_threads(common);
-    size_t const longest = longest_leftover(bag, steps, inputs.word_bags,
-                                            common.search.words);
-    SubBagIndex index = pair_count_index(letters, longest);
-    // Only leftovers longer than the index reach the pair cache.
-    bool const pair_cache_wanted =
-        options.pair_cache_size_mb != 0 && index.max_length() < longest;
     RankArgs const& rank = common.rank;
     bool const one_row = !rank.score.empty() && rank.sorts.empty();
-    PairCountTable const table(
-        std::move(index), bag, counter, steps.size() > 1 && !one_row,
-        threads,
-        pair_cache_wanted ? size_t(options.pair_cache_size_mb) : 0);
-    if (!table.allocated()) {
-        fprintf(stderr, "%s: can't allocate the pair count table\n", PROGRAM);
-        return 1;
+
+    std::optional<PairCountTable> table;
+    std::optional<FinalPairBags> final_bags;
+    bool pair_cache_wanted = false;
+    if (common.search.pair_filter) {
+        final_bags.emplace(inputs.final_bags, options.exact);
+    } else {
+        size_t const longest = longest_leftover(bag, steps, inputs.word_bags,
+                                                common.search.words);
+        SubBagIndex index = pair_count_index(letters, longest);
+        // Only leftovers longer than the index reach the pair cache.
+        pair_cache_wanted =
+            options.pair_cache_size_mb != 0 && index.max_length() < longest;
+        table.emplace(
+            std::move(index), bag, counter, steps.size() > 1 && !one_row,
+            threads,
+            pair_cache_wanted ? size_t(options.pair_cache_size_mb) : 0);
+        if (!table->allocated()) {
+            fprintf(stderr, "%s: can't allocate the pair count table\n",
+                    PROGRAM);
+            return 1;
+        }
     }
 
     BagStatsRankers rankers(common, inputs);
@@ -1084,18 +1102,21 @@ int bag_stats(BagStatsOptions const& options, std::string const& letters) {
                 double(rest_table.capacity() * REST_CACHE_ENTRY_BYTES) /
                     (1024 * 1024),
                 rest_table.remainders());
-    PairCountCache const& pair_cache = table.cache();
-    if (common.progress != 0 && pair_cache.enabled())
-        fprintf(stderr, "%s: pair cache holds %zu entries (%.1f MB)\n",
-                PROGRAM, pair_cache.capacity(),
-                double(pair_cache.bytes()) / (1024 * 1024));
-    else if (common.progress != 0 && pair_cache_wanted && table.needs_groups())
-        fprintf(stderr, "%s: pair cache off: %s\n", PROGRAM,
-                pair_cache.too_many_sub_bags()
-                    ? "the letters have too many sub-bags to key"
-                    : "can't allocate it");
-    InnerCounters const inner(counter, table.needs_groups());
-    if (common.progress != 0 && table.needs_groups()) {
+    bool const needs_groups = table && table->needs_groups();
+    if (table && common.progress != 0) {
+        PairCountCache const& pair_cache = table->cache();
+        if (pair_cache.enabled())
+            fprintf(stderr, "%s: pair cache holds %zu entries (%.1f MB)\n",
+                    PROGRAM, pair_cache.capacity(),
+                    double(pair_cache.bytes()) / (1024 * 1024));
+        else if (pair_cache_wanted && needs_groups)
+            fprintf(stderr, "%s: pair cache off: %s\n", PROGRAM,
+                    pair_cache.too_many_sub_bags()
+                        ? "the letters have too many sub-bags to key"
+                        : "can't allocate it");
+    }
+    InnerCounters const inner(counter, needs_groups);
+    if (common.progress != 0 && needs_groups) {
         if (inner.key_bits() != 0)
             fprintf(stderr, "%s: pair counts use %d-bit keys, %d bits "
                     "packed\n", PROGRAM, inner.key_bits(), inner.bits());
@@ -1103,10 +1124,73 @@ int bag_stats(BagStatsOptions const& options, std::string const& letters) {
             fprintf(stderr, "%s: pair counts use unpacked keys, %d bits, "
                     "past 128\n", PROGRAM, inner.bits());
     }
-    Walk const walk{{PROGRAM, steps, inputs.prospect_bags, bag,
-                     inputs.word_bags, common, threads, passes ? 2 : 1,
-                     unit_blocks(steps[0]->size())},
-                    inner, table, rest_table, counter, spellings,
-                    options.completions};
-    return run_bag_stats(walk, letters, &rankers);
+    Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
+                     bag, inputs.word_bags, common, threads, passes ? 2 : 1,
+                     unit_blocks(walk_units(steps))},
+                    inner, table ? &*table : nullptr,
+                    final_bags ? &*final_bags : nullptr, rest_table,
+                    spellings, inputs.final_rows, options.completions,
+                    options.all};
+    return f(walk, &rankers);
+}
+
+}  // namespace
+
+bool list_bag_stats(BagStatsOptions const& options,
+                    std::string const& letters, BagStatsInputs const& inputs,
+                    std::stop_token stop,
+                    std::vector<BagStatsCompletion>* out) {
+    out->clear();
+    std::vector<std::vector<std::string>> const spellings;
+    return with_walk(options, letters, inputs, spellings,
+              [&](Walk const& walk, BagStatsRankers*) {
+        if (walk.steps.empty()) {
+            *out = count_remainder(walk, walk.bag, SIZE_MAX, true, stop).best;
+            return 0;
+        }
+        std::atomic<size_t> next{0};
+        std::vector<std::vector<BagStatsCompletion>> parts(walk.threads);
+        run_threads(walk.threads, [&](size_t thread) {
+            RowWalker walker = walk.walker();
+            for (size_t unit; !stop.stop_requested() &&
+                              (unit = next.fetch_add(1)) < walk.units();) {
+                uint64_t seq = uint64_t(unit) << 32;
+                walker.walk(unit, unit + 1, walk.bag,
+                            [&](size_t, BagStatsRow const& row, size_t) {
+                    uint64_t const order = seq++;
+                    if (row.total_pairs == 0 && row.solo == 0) return;
+                    BagStatsCompletion completion{
+                        {}, row.total_pairs, order, row.total_pairs == 0};
+                    walker.picks(&completion.word_bags);
+                    parts[thread].push_back(std::move(completion));
+                });
+            }
+        });
+        for (std::vector<BagStatsCompletion>& part : parts)
+            std::move(part.begin(), part.end(), std::back_inserter(*out));
+        std::sort(out->begin(), out->end(), completion_before);
+        return 0;
+    }) == 0;
+}
+
+int bag_stats(BagStatsOptions const& options, std::string const& letters) {
+    BagStatsArgs const& common = options.common;
+    BagStatsInputs inputs(pairs_letter_counts(letters.c_str()));
+    std::vector<std::vector<std::string>> spellings;
+    bool const listed = options.completions > 0 || options.all;
+    if (!load_bag_stats_inputs(PROGRAM, common, &inputs,
+                               listed ? &spellings : nullptr))
+        return 1;
+    return with_walk(options, letters, inputs, spellings,
+                     [&](Walk const& walk, BagStatsRankers* rankers) {
+        if (!walk.steps.empty()) return run_bag_stats(walk, letters, rankers);
+        RemainderCount const count =
+            count_remainder(walk, walk.bag, listed_completions(walk), true);
+        write_walk_header(walk, letters);
+        BagStatsRow row = counts_row(count.counts);
+        row.pairs = 1;
+        write_bag_stats_row(stdout, row);
+        if (listed) print_completions(walk, count);
+        return fflush(stdout) == 0 ? 0 : 1;
+    });
 }

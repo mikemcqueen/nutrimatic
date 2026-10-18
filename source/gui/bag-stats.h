@@ -7,19 +7,21 @@
 #include "bag-stats-run.h"
 #include "input-source.h"
 
-// A bag-stats --ss pf call on all threads, its input as PAIRS and its D:
-// dictionary as DICT, taking its letters and used letters from the
-// LetterToolsParams and keeping the classified no.pairs (--no-nopairs). It
-// prints, for each DICT word whose word bag the pair bags fit, best first as
-// --completions lists them, the word and its pairs, or the word and SOLO when
-// it uses all the letters. Its option widgets are an "ex" toggle button
-// setting exact (--exact), a "pb" toggle button, enabled only with exact and
-// word_step, setting pair_step (--ss pb,wb,pf, which lists each PAIRS row in
-// place of each DICT word), then a ":" field, enabled with pair_step, setting
+// A bag-stats call on all threads, its input as PAIRS and its D: dictionary
+// as DICT, taking its letters and used letters from the LetterToolsParams and
+// keeping the classified no.pairs (--no-nopairs). It runs --ss pf, wb,pf with
+// word_step, or pb,wb,pf with pair_step too, and prints, best first, for pf
+// each PAIRS row that fits the letters with its bag's pairs, for wb,pf each
+// DICT word whose word bag leaves pairs with them, or SOLO when it uses all
+// the letters, as --all lists them, and for pb,wb,pf each PAIRS row of each
+// pb pick that leaves pairs with its TOTAL_PAIRS, or SOLO with only WB_SOLO.
+// Its option widgets are an "ex" toggle button setting exact (--exact), a
+// "pb" toggle button, enabled only with exact and word_step, setting
+// pair_step, then a ":" field, enabled with pair_step, setting
 // min_pair_bag_length (--min-pb-len), a "wb" toggle button, enabled only with
-// exact, setting word_step (--ss wb,pf instead of --ss pf), then a ":" field
-// setting min_word_bag_length (--min-wb-len); the fields set their lengths
-// when apply_fields() is called. It starts exact. Choosing it sets its Column's source to the seed50m3 seed
+// exact, setting word_step, then a ":" field setting min_word_bag_length
+// (--min-wb-len); the fields set their lengths when apply_fields() is called.
+// It starts exact. Choosing it sets its Column's source to the seed50m3 seed
 // and its D: dropdown to the column before it.
 struct BagStats {
   static constexpr bool reads_pairs = true;

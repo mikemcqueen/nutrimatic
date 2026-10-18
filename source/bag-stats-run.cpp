@@ -64,36 +64,44 @@ bool check_common_args(char const* program, struct optparse* options,
         return false;
     }
     RankArgs const& rank = out->rank;
-    if (out->search.pair_filter) {
-        if (out->prospects_file != NULL || rank.top > 0 ||
-            !rank.sorts.empty() || rank.by_length || rank.by_pick ||
-            rank.prior_file != NULL || rank.p1 != NULL ||
-            rank.clues != NULL || rank.prior_weights != NULL ||
-            rank.top_segments || !rank.score.empty() ||
-            rank.score_detail || rank.best_pairs != BestPairs::NONE) {
-            fprintf(stderr, "%s: --ss pf goes without --pp, -n, SORT "
-                    "options, --score and the rank output options\n",
-                    program);
+    if (out->search.prospects + out->search.pairs == 0) {
+        std::string const sort =
+            rank.sorts.empty() ? "" : std::string("--") +
+                rank.sorts[0]->option;
+        std::pair<bool, char const*> const rank_options[] = {
+            {rank.top > 0, "-n"},
+            {!rank.sorts.empty(), sort.c_str()},
+            {rank.by_length, "--by-length"},
+            {rank.by_pick, "--by-pick"},
+            {!rank.score.empty(), "--score"},
+            {rank.score_detail, "--score-detail"},
+            {rank.prior_file != NULL, "--prior"},
+            {rank.p1 != NULL, "--p1"},
+            {rank.clues != NULL, "--clues"},
+            {rank.prior_weights != NULL, "--prior-weights"},
+            {rank.top_segments, "--top-segments"},
+            {rank.best_pairs != BestPairs::NONE, "--best-pairs"},
+        };
+        for (auto const& [given, option] : rank_options) {
+            if (!given) continue;
+            fprintf(stderr, "%s: --ss without a ppb or pb step can't take "
+                    "%s\n", program, option);
             return false;
         }
-        if (strcmp(out->pairs_file, "-") == 0 &&
-            strcmp(out->dictionary_file, "-") == 0) {
-            fprintf(stderr, "%s: only one of PAIRS and DICT can be -\n",
-                    program);
-            return false;
-        }
-        return true;
-    }
-    if (out->search.pairs == 0) {
-        fprintf(stderr, "%s: --ss needs at least one pb\n", program);
-        return false;
     }
     bool const ranked = rank.top > 0 || !rank.score.empty();
-    if ((rank.top > 0 && rank.sorts.empty()) ||
-        (!rank.sorts.empty() && !ranked) ||
-        ((rank.by_length || rank.by_pick) && rank.sorts.empty())) {
-        fprintf(stderr, "%s: -n goes with sort options, and they, "
-                "--by-length and --by-pick with -n or --score\n", program);
+    if (rank.top > 0 && rank.sorts.empty()) {
+        fprintf(stderr, "%s: -n needs a SORT option, such as --tp\n",
+                program);
+        return false;
+    }
+    if (!rank.sorts.empty() && !ranked) {
+        fprintf(stderr, "%s: SORT options need -n or --score\n", program);
+        return false;
+    }
+    if ((rank.by_length || rank.by_pick) && rank.sorts.empty()) {
+        fprintf(stderr, "%s: --by-length and --by-pick need a SORT option, "
+                "with -n or --score\n", program);
         return false;
     }
     if (!check_rank_args(program, rank, out->search)) return false;
@@ -138,20 +146,19 @@ void help_common_options(bool pair_filter) {
     dfs_help_option("--min-pb-len N",
                     "pb picks only PAIRS bags of at least N letters "
                     "(default %d)%s", DEFAULT_MIN_PB_LENGTH,
-                    pair_filter ? "; pf still counts every PAIRS row" : "");
+                    pair_filter ? "; pf counts every PAIRS row" : "");
     dfs_help_option("--ss STEPS",
                     "the search sequence, comma-separated: ppb picks a pair "
                     "bag from the --pp FILE, pb one from PAIRS, wb a word bag "
                     "from DICT, and p, last and once, counts the exact pairs "
-                    "left; at least one pb and one wb; order doesn't matter; "
-                    "each row names its ppb and pb picks%s (default %s)",
+                    "left%s; order doesn't matter; each row names its ppb "
+                    "and pb picks%s (default %s)",
                     pair_filter
-                        ? "; pf, alone, counts instead the PAIRS rows that "
-                          "fit what each DICT word leaves, and wb,pf the ones "
-                          "that fit what each DICT word and then each DICT "
-                          "word bag leave, summed for each DICT word, and "
-                          "pb,wb,pf, for each PAIRS bag, the wb,pf counts of "
-                          "what it leaves, summed"
+                        ? ", or pf instead the PAIRS rows that fit what is "
+                          "left; any number of each"
+                        : "; at least one ppb or pb and one wb",
+                    pair_filter
+                        ? ", and without them the one row is all of LETTERS"
                         : "",
                     DEFAULT_SEARCH);
     dfs_help_option("--pp FILE",
@@ -250,17 +257,22 @@ bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
 bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
                            BagStatsInputs* out,
                            std::vector<std::vector<std::string>>* spellings) {
+    bool const pair_filter = args.search.pair_filter;
     DfsPairSet rejected;
     if (!load_rejected_pairs(program, args, &rejected) ||
         !load_pick_bags(program, args.rank, args.prospects_file,
                         args.pairs_file, out->bag, rejected,
                         args.min_pair_bag_length, &out->prospect_bags,
-                        &out->pair_bags,
+                        args.search.pairs == 0 ? nullptr : &out->pair_bags,
+                        pair_filter ? &out->final_bags : nullptr,
+                        pair_filter && spellings && args.search.words == 0
+                            ? &out->final_rows : nullptr,
                         &out->has_prior) ||
-        !load_word_bags(program, args.dictionary_file, out->bag,
-                        args.min_word_bag_length, &out->word_bags,
-                        spellings) ||
-        !load_inner_dictionary(program, &out->counter))
+        (args.search.words > 0 &&
+         !load_word_bags(program, args.dictionary_file, out->bag,
+                         args.min_word_bag_length, &out->word_bags,
+                         spellings)) ||
+        (!pair_filter && !load_inner_dictionary(program, &out->counter)))
         return false;
     out->steps.assign(args.search.pairs, &out->pair_bags);
     out->steps.insert(out->steps.end(), args.search.prospects,
@@ -301,7 +313,7 @@ void PickWalk::picks(std::vector<uint32_t>* out) const {
     out->resize(steps_.size());
     for (size_t j = 0; j < steps_.size(); ++j)
         (*out)[j] = uint32_t(chosen_[j] +
-                             (j < pair_steps_ ? 0 : steps_[0]->size()));
+                             (j < pair_steps_ ? 0 : pair_bags_));
 }
 
 uint64_t PickWalk::pairs() const {
@@ -328,11 +340,11 @@ std::vector<size_t> unit_blocks(size_t units) {
 std::vector<size_t> census_blocks(
         std::vector<std::vector<PairBag> const*> const& steps, int pair_steps,
         PairsCounts const& bag, size_t threads, uint64_t rows) {
-    size_t const units = steps[0]->size();
+    size_t const units = walk_units(steps);
     std::vector<uint64_t> unit_rows(units);
     std::atomic<size_t> next{0};
     run_threads(threads, [&](size_t) {
-        PickWalk walk(steps, pair_steps);
+        PickWalk walk(steps, pair_steps, 0);
         auto const enter = [](size_t, PairsCounts const&) {};
         for (size_t unit; (unit = next.fetch_add(1)) < units;) {
             uint64_t count = 0;
@@ -374,6 +386,18 @@ void name_picks(WalkBase const& walk, std::vector<size_t> const& picks,
         row->pair += pick.pair;
         row->pairs *= pick.pairs;
     }
+}
+
+void write_walk_header(WalkBase const& walk, std::string const& letters) {
+    BagStatsArgs const& args = walk.args;
+    write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
+                                    args.min_word_bag_length,
+                                    args.min_pair_bag_length,
+                                    search_text(args.search),
+                                    bag_stats_header_path(args.prospects_file),
+                                    args.sentence,
+                                    bag_stats_header_path(args.pairs_file),
+                                    bag_stats_header_path(args.dictionary_file)});
 }
 
 BagStatsRankers::BagStatsRankers(BagStatsArgs const& args,

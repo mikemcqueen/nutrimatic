@@ -96,6 +96,11 @@ expected=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 -u lowant catdoglowanttan 
   "$test_dir/dict" | sed '1,/^$/d; s/^/low ant + /')
 [[ $actual == "$expected" ]] || fail "ppb rows aren't the -u rows: $actual"
 
+actual=$("$bag_stats" --min-wb-len 3 --ss ppb,wb,p --pp "$test_dir/prospects" \
+  -n 1 --tp --best-pairs appear catdoglowanttan "$test_dir/pairs" \
+  "$test_dir/dict")
+[[ $actual == 'low,ant' ]] || fail "ppb,wb,p --best-pairs is wrong: $actual"
+
 actual=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 -n 1 --tp --by-length catdoglowanttan "$test_dir/pairs" \
   "$test_dir/dict" | sed '1,/^$/d')
 [[ $actual == 'cat dog,2,3,2,9,6,1,2' ]] || fail "-n rows are wrong: $actual"
@@ -155,43 +160,32 @@ actual=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 -s 1 catdoglowanttan "$test_
 [[ $actual == 'act god,1' ]] || fail "-s NO pairs aren't dropped: $actual"
 
 echo act,god >> "$WFROOT/.wf/classified/no/no.pairs"
-actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --threads 2 \
-  catdoglowant "$test_dir/pairs" "$test_dir/dict" | tail -n 1)
-[[ $actual == '3,2,3,2,3,2,0,0,4,2,2,1,4,2' ]] || fail "--ss pf is wrong: $actual"
-
-actual=$("$bag_stats" --min-wb-len 3 --ss pf catdoglowant \
-  "$test_dir/pairs" "$test_dir/dict" 2>/dev/null | tail -n 1)
-[[ $actual == '3,2,0,0,0,0,0,0,0,0,0,0,0,0' ]] ||
-  fail "--ss pf keeps no.pairs: $actual"
-
-actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --exact catdoglow \
-  "$test_dir/pairs" "$test_dir/dict" | tail -n 1)
-[[ $actual == '2,1,2,1,2,1,0,0,2,1,2,1,2,2' ]] ||
-  fail "--ss pf --exact is wrong: $actual"
-
-actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --completions 2 \
-  catdoglowant "$test_dir/pairs" "$test_dir/dict" | sed 1,2d)
-[[ $actual == $'completions 2 of 2 by TP\nTP 2      low/owl\nTP 2      ant' ]] ||
-  fail "--ss pf --completions is wrong: $actual"
-
-actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --all \
-  catdoglowant "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'completions 2 of 2 by TP\nTP 2      low/owl\nTP 2      ant' ]] ||
-  fail "--ss pf --all is wrong: $actual"
-
 actual=$("$bag_stats" --min-wb-len 3 --ss wb,pf --no-nopairs --exact --all \
-  catdoglowant "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'completions 2 of 2 by TP\nTP 2      low/owl\nTP 2      ant' ]] ||
+  catdoglow "$test_dir/pairs" "$test_dir/dict" | sed '1,/^$/d')
+[[ $actual == $',1,1,1,2,2,0,1\ncompletions 1 of 1 by PC\nPC 2      low/owl' ]] ||
   fail "--ss wb,pf is wrong: $actual"
+"$bag_stats" --ss wb,pf --no-nopairs --all catdoglow "$test_dir/pairs" \
+  "$test_dir/dict" >/dev/null 2>&1 && fail "--ss wb,pf runs without --exact"
+"$bag_stats" --min-pb-len 6 --ss pb,pf --no-nopairs catdoglow "$test_dir/pairs" \
+  "$test_dir/dict" >/dev/null 2>&1 && fail "--ss pb,pf runs without --exact"
 
-actual=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss pb,wb,pf --no-nopairs --exact --all \
-  catdoglowantowlant "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'completions 2 of 2 by TP\nTP 4      low,ant\nTP 2      cat,dog/act,god' ]] ||
+actual=$("$bag_stats" --min-wb-len 3 --ss pf --no-nopairs --all --threads 2 \
+  catdoglowant "$test_dir/pairs" "$test_dir/dict" | sed '1,/^$/d')
+[[ $actual == $',1,1,1,3,3,0,1\ncompletions 2 of 2 by PC\nPC 2      cat,dog/act,god\nPC 1      low,ant' ]] ||
+  fail "--ss pf is wrong: $actual"
+
+actual=$("$bag_stats" --min-wb-len 3 --ss pf --all catdoglowant \
+  "$test_dir/pairs" "$test_dir/dict" 2>/dev/null | tail -n 1)
+[[ $actual == 'PC 1      low,ant' ]] || fail "--ss pf keeps no.pairs: $actual"
+
+actual=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss pb,wb,pf --no-nopairs \
+  --exact -n 2 --tp catdoglowantlow "$test_dir/pairs" "$test_dir/dict" |
+  sed '1,/^$/d')
+[[ $actual == $'low ant,1,1,1,2,2,0,1\ncat dog,2,2,1,1,1,0,0' ]] ||
   fail "--ss pb,wb,pf is wrong: $actual"
 
-actual=$("$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss pb,wb,pf --no-nopairs --exact --all \
-  --sort UP catdoglowantowlant "$test_dir/pairs" "$test_dir/dict")
-[[ $actual == $'completions 2 of 2 by UP\nUP 2      low,ant\nUP 1      cat,dog/act,god' ]] ||
-  fail "--sort UP is wrong: $actual"
+actual=$("$bag_stats" --min-wb-len 3 --ss wb,p catdoglow "$test_dir/pairs" \
+  "$test_dir/dict" 2>/dev/null | tail -n 1)
+[[ $actual == ',1,1,1,4,4,0,1' ]] || fail "--ss wb,p is wrong: $actual"
 
 echo PASS
