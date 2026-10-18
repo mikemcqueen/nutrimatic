@@ -502,6 +502,9 @@ Column::Key Column::wanted_key() const {
               ? app_state()
                     .dictionary(dictionary_choices[dictionary_].second)
                     .version
+              : 0,
+          commands_[choice_] && commands_[choice_]->uses_big_dictionary()
+              ? app_state().dictionary("big_dict").version
               : 0};
 }
 
@@ -616,7 +619,8 @@ void Column::start(Key key) {
 
   LetterToolsParams params = {state.actual_letters, used_letters(),
                               state.sentence, std::move(dictionary),
-                              std::move(dictionary_lines), {}};
+                              std::move(dictionary_lines),
+                              state.dictionary("big_dict").words, {}};
   auto job = std::make_shared<Job>();
   job->key = key;
   job->cancellable = command->cancellable();

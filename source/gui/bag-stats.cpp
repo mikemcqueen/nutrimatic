@@ -25,11 +25,13 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
   args.progress = 0;
   args.min_word_bag_length = min_word_bag_length;
   args.min_pair_bag_length = min_pair_bag_length;
-  bool const word_step = exact && this->word_step;
-  args.search.pairs = word_step && pair_step ? 1 : 0;
-  args.search.words = word_step ? 1 : 0;
-  args.search.pair_filter = true;
+  args.search = search;
   options.exact = exact;
+  if (search.pair_filter && search.words + search.pairs > 0 && !exact) {
+    fprintf(stderr, "pgui: bag-stats --ss %s needs ex\n",
+            search_text(search).c_str());
+    return false;
+  }
   std::string letters;
   if (!remaining_letters(args, &letters)) return false;
 
@@ -61,11 +63,18 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
   std::vector<std::vector<std::string>> spellings;
   WordBagLoader word_loader(bag, min_word_bag_length, &loaded.word_bags,
                             &spellings);
-  if (word_step) {
+  if (args.search.words > 0) {
     for (std::string const& line : *params.dictionary_lines) {
       if (params.stop.stop_requested()) return false;
       word_loader.add(line);
     }
+  }
+  if (!search.pair_filter) {
+    for (std::string const& word : *params.big_dictionary->lines) {
+      if (params.stop.stop_requested()) return false;
+      loaded.counter.add(word);
+    }
+    loaded.counter.finish();
   }
 
   std::vector<BagStatsCompletion> listed;
@@ -119,25 +128,26 @@ bool BagStats::render_options(bool* entered) {
     exact = !exact;
     changed = true;
   }
-  ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
-  ImGui::BeginDisabled(!exact || !word_step);
-  if (toggle_button("pb", pair_step)) {
-    pair_step = !pair_step;
-    changed = true;
-  }
-  ImGui::BeginDisabled(!pair_step);
-  *entered |= length_field("##pb", &min_pair_bag_length_field);
-  ImGui::EndDisabled();
-  ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::BeginDisabled(!exact);
-  if (toggle_button("wb", word_step)) {
-    word_step = !word_step;
-    changed = true;
-  }
-  ImGui::EndDisabled();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("pb");
+  *entered |= length_field("##pb", &min_pair_bag_length_field);
+  ImGui::SameLine();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("wb");
   *entered |= length_field("##wb", &min_word_bag_length_field);
   return changed;
+}
+
+bool BagStats::render_display_options(bool* entered) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("ss:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(ImGui::CalcTextSize("pb,wb,pf").x +
+                          2 * ImGui::GetStyle().FramePadding.x);
+  *entered |= ImGui::InputText("##ss", search_field, sizeof search_field,
+                               ImGuiInputTextFlags_EnterReturnsTrue);
+  return false;
 }
 
 bool BagStats::apply_fields() {
@@ -145,5 +155,15 @@ bool BagStats::apply_fields() {
       apply_length(&min_pair_bag_length_field, &min_pair_bag_length);
   bool const word =
       apply_length(&min_word_bag_length_field, &min_word_bag_length);
-  return pair || word;
+  Search parsed;
+  if (!parse_search("pgui: bag-stats", search_field, &parsed))
+    return pair || word;
+  if (parsed.prospects > 0 || parsed.pairs > 1 || parsed.words > 1) {
+    fprintf(stderr, "pgui: bag-stats --ss takes at most one pb and one wb "
+            "step\n");
+    return pair || word;
+  }
+  bool const steps = search_text(parsed) != search_text(search);
+  search = parsed;
+  return pair || word || steps;
 }

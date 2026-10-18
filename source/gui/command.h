@@ -62,6 +62,9 @@
 // true when run() reads its params' dictionary or dictionary_lines whatever
 // its source, so it reruns when that dictionary is reloaded; commands
 // without it read them only through a "dict" source. And it may have
+//   static constexpr bool uses_big_dictionary
+// true when run() reads its params' big_dictionary, so it reruns when
+// "big_dict" is reloaded; commands without it don't. And it may have
 //   static constexpr bool cancellable
 // true when run() checks its params' stop token, so its Column offers an x
 // button that cancels it; commands without it aren't. And it may have
@@ -121,6 +124,8 @@ class Command {
 
   bool uses_dictionary() const { return self_->uses_dictionary(); }
 
+  bool uses_big_dictionary() const { return self_->uses_big_dictionary(); }
+
   // Empty when it has none.
   std::string default_seed() const { return self_->default_seed(); }
 
@@ -143,6 +148,7 @@ class Command {
     virtual bool cancellable() const = 0;
     virtual bool has_columns_in_dictionaries() const = 0;
     virtual bool uses_dictionary() const = 0;
+    virtual bool uses_big_dictionary() const = 0;
     virtual std::string default_seed() const = 0;
   };
 
@@ -231,6 +237,12 @@ class Command {
     bool uses_dictionary() const override {
       if constexpr (requires { T::uses_dictionary; })
         return T::uses_dictionary;
+      else
+        return false;
+    }
+    bool uses_big_dictionary() const override {
+      if constexpr (requires { T::uses_big_dictionary; })
+        return T::uses_big_dictionary;
       else
         return false;
     }

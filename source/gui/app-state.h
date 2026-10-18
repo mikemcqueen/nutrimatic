@@ -163,14 +163,16 @@ struct AppState {
 // What a command runs with, taken when it starts so it runs unaffected by
 // later changes: app_state()'s actual letters and sentence, its Column's used
 // letters, and the dictionary its Column's D: dropdown names, null when that
-// is a column, and that dictionary's lines or that column's output; and the
-// token a command may check to quit early, its output then discarded.
+// is a column, and that dictionary's lines or that column's output; the
+// "big_dict" dictionary, whatever D: names; and the token a command may
+// check to quit early, its output then discarded.
 struct LetterToolsParams {
   std::string letters;
   std::string used_letters;
   int sentence = CLASSIFIED_NO_SENTENCE;
   SharedDictionary dictionary;
   SharedLines dictionary_lines;
+  SharedDictionary big_dictionary;
   std::stop_token stop;
 };
 

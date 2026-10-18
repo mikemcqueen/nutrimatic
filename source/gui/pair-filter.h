@@ -9,7 +9,8 @@
 #include "pfilter-impl.h"
 
 // A pfilter call on one input, taking its dictionary and sentence from the
-// LetterToolsParams. Its option widget is a "u:" field with a clear button
+// LetterToolsParams. Its option widgets are an "ex" toggle button setting
+// exact, which requires letters, then a "u:" field with a clear button
 // setting used, which the Column adds to its used letters; clearing it counts
 // as Enter. Its second row has "m:" and "x:" fields setting min_letters and
 // max_letters, then a "cv" toggle button, setting cv, then "m:" and "x:"
@@ -40,6 +41,7 @@ struct PairFilter {
   std::string used_letters() const { return used; }
 
   bool yes = false;  // -y
+  bool exact = false;  // --exact
   bool cv = false;   // --cv
   int min_letters = PFILTER_DEFAULT_MIN_LETTERS;  // -m
   int min_letters_field = PFILTER_DEFAULT_MIN_LETTERS;

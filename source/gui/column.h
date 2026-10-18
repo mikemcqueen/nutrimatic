@@ -122,6 +122,9 @@ class Column {
     // The version of app_state()'s dictionary D: names when the source is
     // "dict" or the command uses it (see Command::uses_dictionary()), else 0.
     unsigned dictionary_file_version;
+    // The version of app_state()'s "big_dict" when the command uses it (see
+    // Command::uses_big_dictionary()), else 0.
+    unsigned big_dictionary_version;
     bool operator==(Key const&) const = default;
   };
 
@@ -194,10 +197,10 @@ class Column {
   std::vector<std::optional<Command>> commands_;
   int choice_ = 0;
   unsigned options_version_ = 0;
-  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0, 0};
+  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0, 0, 0};
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
-  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0, 0};
+  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0, 0, 0};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
@@ -207,7 +210,7 @@ class Column {
   std::vector<std::string> letter_count_;
   // The made_key_, app_state()'s judged_bad_version, and display_version()
   // as of the last update_hidden().
-  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0, 0};
+  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, {}, 0, 0, 0};
   unsigned hidden_judged_version_ = 0;
   unsigned hidden_display_version_ = 0;
   unsigned version_ = 0;
