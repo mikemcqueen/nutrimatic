@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
@@ -52,6 +53,16 @@ struct BagStatsCounts {
   uint64_t max_pairs;
   uint64_t solo;
   uint64_t with_min_pairs;
+
+  // Adds `part`'s counts, of another share of the same remainder.
+  void add(BagStatsCounts const& part) {
+    word_bags += part.word_bags;
+    with_pairs += part.with_pairs;
+    total_pairs += part.total_pairs;
+    max_pairs = std::max(max_pairs, part.max_pairs);
+    solo += part.solo;
+    with_min_pairs += part.with_min_pairs;
+  }
 };
 
 // One combination of pair bags' counts, written as BAG_STATS_COLUMNS lists

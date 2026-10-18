@@ -17,18 +17,26 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
     return false;
   }
 
-  BagStatsArgs args;
+  BagStatsOptions options;
+  BagStatsArgs& args = options.common;
   args.letters = params.letters;
   args.used_letters = params.used_letters;
   args.threads = 0;
+  args.progress = 0;
+  args.min_word_bag_length = min_word_bag_length;
+  args.min_pair_bag_length = min_pair_bag_length;
+  bool const word_step = exact && this->word_step;
+  args.search.pairs = word_step && pair_step ? 1 : 0;
+  args.search.words = word_step ? 1 : 0;
+  args.search.pair_filter = true;
+  options.exact = exact;
   std::string letters;
   if (!remaining_letters(args, &letters)) return false;
 
-  bool const word_step = exact && this->word_step;
   PairsCounts const bag = pairs_letter_counts(letters.c_str());
-  PairFilterInputs pf(word_step && pair_step);
-  PairBagLoader pair_loader(bag, PairPrior{}, &pf.pair_bags,
-                            pf.pair_rows_out());
+  BagStatsInputs loaded(bag);
+  PairBagLoader pair_loader(bag, PairPrior{}, &loaded.final_bags,
+                            &loaded.final_rows);
   Lines const& lines = *inputs[0];
   for (size_t i = 0; i < lines.size(); ++i) {
     if (params.stop.stop_requested()) return false;
@@ -38,27 +46,43 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
       return false;
     pair_loader.add(row);
   }
-  pf.pick_pair_step_bags(min_pair_bag_length);
+  // Each pb pick's rows.
+  std::vector<std::vector<std::string> const*> pick_rows;
+  if (args.search.pairs > 0) {
+    PairPickFilter const filter(loaded.prospect_bags, min_pair_bag_length);
+    for (size_t i = 0; i < loaded.final_bags.size(); ++i) {
+      if (filter.dropped(loaded.final_bags[i])) continue;
+      loaded.pair_bags.push_back(loaded.final_bags[i]);
+      pick_rows.push_back(&loaded.final_rows[i]);
+    }
+  }
+  loaded.steps.assign(size_t(args.search.pairs), &loaded.pair_bags);
 
-  WordBagLoader word_loader(bag, min_word_bag_length, &pf.word_bags,
-                            pf.word_spellings_out());
-  for (std::string const& line : *params.dictionary_lines) {
-    if (params.stop.stop_requested()) return false;
-    word_loader.add(line);
+  std::vector<std::vector<std::string>> spellings;
+  WordBagLoader word_loader(bag, min_word_bag_length, &loaded.word_bags,
+                            &spellings);
+  if (word_step) {
+    for (std::string const& line : *params.dictionary_lines) {
+      if (params.stop.stop_requested()) return false;
+      word_loader.add(line);
+    }
   }
 
-  std::vector<std::vector<std::string>> const& spellings = pf.spellings();
-  PairFilterResult const result =
-      count_pair_filter(bag, pf, exact, word_step ? 1 : 0, PairFilterSort::TP,
-                        bag_stats_threads(args), spellings.size(),
-                        params.stop);
-  if (params.stop.stop_requested()) return false;
+  std::vector<BagStatsCompletion> listed;
+  if (!list_bag_stats(options, letters, loaded, params.stop, &listed) ||
+      params.stop.stop_requested())
+    return false;
   Lines kept;
-  for (BagStatsCompletion const& completion : result.best) {
+  for (BagStatsCompletion const& completion : listed) {
+    if (completion.word_bags.empty()) continue;
     std::string const value =
         completion.solo ? " SOLO" : " " + std::to_string(completion.pairs);
-    for (std::string const& word : spellings[completion.word_bags[0]])
-      kept.push_back(word + value);
+    uint32_t const index = completion.word_bags[0];
+    std::vector<std::string> const& names =
+        args.search.pairs > 0 ? *pick_rows[index]
+        : args.search.words > 0 ? spellings[index]
+        : loaded.final_rows[index];
+    for (std::string const& name : names) kept.push_back(name + value);
   }
   *output = std::move(kept);
   return true;

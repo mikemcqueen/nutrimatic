@@ -68,7 +68,13 @@ bool parse_args(char* argv[], BagStatsArgs* out, bool* help) {
 
     if (!check_common_args(PROGRAM, &options, out)) return false;
     if (out->search.pair_filter) {
-        fprintf(stderr, "%s: --ss pf is bag-stats only\n", PROGRAM);
+        fprintf(stderr, "%s: a last pf is bag-stats only\n", PROGRAM);
+        return false;
+    }
+    if (out->search.prospects + out->search.pairs == 0 ||
+        out->search.words == 0) {
+        fprintf(stderr, "%s: --ss needs a ppb or pb step and a wb step\n",
+                PROGRAM);
         return false;
     }
     if (out->search.words > GPU_MAX_WORDS) {
@@ -130,8 +136,9 @@ struct NoHooks {
 class GpuRowWalker : public PickWalk {
   public:
     GpuRowWalker(std::vector<std::vector<PairBag> const*> const& steps,
-                 int pair_steps, GpuRowCounter const& counter)
-        : PickWalk(steps, pair_steps), counter_(counter) {}
+                 int pair_steps, size_t pair_bags,
+                 GpuRowCounter const& counter)
+        : PickWalk(steps, pair_steps, pair_bags), counter_(counter) {}
 
     // Calls visit(unit, row, pair_length) for each row of units [first,
     // last), in order, with the row's counts but not its PAIR or PAIRS.
@@ -188,19 +195,21 @@ struct Walk : WalkBase {
     GpuRowCounter const& counter;
 
     GpuRowWalker walker() const {
-        return GpuRowWalker(steps, args.search.pairs, counter);
+        return GpuRowWalker(steps, args.search.pairs, pair_bags.size(),
+                            counter);
     }
 
     NoHooks progress_hooks() const { return {}; }
 
-    // The row whose picks are `picks`, counted from what they leave alone.
-    BagStatsRow score_row(std::vector<size_t> const& picks) const {
+    // Prints the row whose picks are `picks`, counted from what they leave
+    // alone.
+    void print_score_row(std::vector<size_t> const& picks) const {
         PairsCounts const rest = picks_rest(*this, picks);
         GpuCounts counts;
         counter.count(rest.values.data(), 1, &counts);
         BagStatsRow row = gpu_row(counts);
         name_picks(*this, picks, &row);
-        return row;
+        write_bag_stats_row(stdout, row);
     }
 
     void after_score(std::vector<size_t> const&) const {}
@@ -239,8 +248,8 @@ int main(int argc, char* argv[]) {
     BagStatsRankers rankers(args, inputs);
     std::vector<std::vector<PairBag> const*> const& steps = inputs.steps;
     bool const one_row = !args.rank.score.empty() && args.rank.sorts.empty();
-    Walk const walk{{PROGRAM, steps, inputs.prospect_bags, inputs.bag,
-                     inputs.word_bags, args, threads,
+    Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
+                     inputs.bag, inputs.word_bags, args, threads,
                      rankers.passes ? 2 : 1,
                      one_row ? unit_blocks(steps[0]->size())
                              : census_blocks(steps, args.search.pairs,

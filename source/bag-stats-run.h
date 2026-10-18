@@ -3,7 +3,8 @@
 
 // The command line, input loading, row walk and passes bag-stats and
 // bag-stats-cuda share. Each tool supplies a Walk deriving from WalkBase
-// that adds walker(), progress_hooks(), score_row() and after_score().
+// that adds walker(), progress_hooks(), print_score_row() and
+// after_score().
 
 #include <stdint.h>
 #include <stdio.h>
@@ -93,7 +94,7 @@ bool check_common_args(char const* program, struct optparse* options,
                        BagStatsArgs* out);
 
 // Prints what both tools do and the --help lines of their options through
-// the rank output options; `pair_filter` adds --ss pf.
+// the rank output options; `pair_filter` adds a last pf.
 void help_common_options(bool pair_filter);
 
 // Prints the --help lines of -h and the SORT options.
@@ -141,8 +142,9 @@ bool load_inner_dictionary(char const* program, PairsExactCounter* out);
 void filter_word_bags(std::vector<PairsCounts> const& from,
                       PairsCounts const& rest, std::vector<PairsCounts>* out);
 
-// What both tools load: the pick lists, the word bags and the inner
-// dictionary, and the steps the walk picks from.
+// What both tools load: the pick lists, the word bags, and the inner
+// dictionary a last p counts over or the PAIRS bags a last pf counts, with
+// their rows when they are listed; and the steps the walk picks from.
 struct BagStatsInputs {
     explicit BagStatsInputs(PairsCounts const& bag)
         : bag(bag), counter(bag, INNER_MIN_WORD_LENGTH) {}
@@ -152,12 +154,16 @@ struct BagStatsInputs {
     std::vector<PairBag> pair_bags;
     std::vector<PairsCounts> word_bags;
     PairsExactCounter counter;
+    std::vector<PairBag> final_bags;
+    std::vector<std::vector<std::string>> final_rows;
     bool has_prior = false;
     // Each pick step's list: the pb steps, then the ppb steps.
     std::vector<std::vector<PairBag> const*> steps;
 };
 
-// Loads `out` for `args`, with `spellings` as load_word_bags() takes it.
+// Loads `out` for `args`, DICT only with wb steps and PAIRS only with pb
+// steps or a last pf, with `spellings` as load_word_bags() takes it; with
+// `spellings` and a last pf, the final bags' rows too.
 bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
                            BagStatsInputs* out,
                            std::vector<std::vector<std::string>>* spellings);
@@ -179,13 +185,14 @@ std::string format_duration(double seconds);
 
 // The row walk: every combination of one pick per pair step that fits, with
 // picks from one list in increasing order and no bag picked twice. The pb
-// steps come first, so a row's first pick, its unit, is a PAIRS bag.
+// steps come first, so a row's first pick, its unit, is a PAIRS bag unless
+// there are none. `pair_bags`: how many PAIRS bags pb picks from.
 class PickWalk {
   public:
     PickWalk(std::vector<std::vector<PairBag> const*> const& steps,
-             int pair_steps)
+             int pair_steps, size_t pair_bags)
         : chosen_(steps.size()), steps_(steps),
-          pair_steps_(size_t(pair_steps)) {}
+          pair_steps_(size_t(pair_steps)), pair_bags_(pair_bags) {}
 
     // Walks the rows whose first pick is `unit`, calling enter(step, rest)
     // before each step's picks past the first, `rest` what the picks of
@@ -246,7 +253,15 @@ class PickWalk {
 
     std::vector<std::vector<PairBag> const*> const& steps_;
     size_t pair_steps_;
+    size_t pair_bags_;
 };
+
+// How many units PickWalk walks over `steps`: the first step's picks, or 1
+// without steps, where nothing walks them.
+inline size_t walk_units(
+        std::vector<std::vector<PairBag> const*> const& steps) {
+    return steps.empty() ? 1 : steps[0]->size();
+}
 
 // Block boundaries of one unit each: block b is units [b, b + 1).
 std::vector<size_t> unit_blocks(size_t units);
@@ -328,6 +343,8 @@ class Progress {
 struct WalkBase {
     char const* program;
     std::vector<std::vector<PairBag> const*> const& steps;
+    // The PAIRS bags pb picks from and the --pp bags ppb picks from.
+    std::vector<PairBag> const& pair_bags;
     std::vector<PairBag> const& prospect_bags;
     PairsCounts const& bag;
     std::vector<PairsCounts> const& word_bags;
@@ -339,7 +356,7 @@ struct WalkBase {
     // Block b is units [blocks[b], blocks[b + 1]).
     std::vector<size_t> blocks;
 
-    size_t units() const { return steps[0]->size(); }
+    size_t units() const { return walk_units(steps); }
     size_t block_count() const { return blocks.size() - 1; }
     size_t block_units(size_t block) const {
         return blocks[block + 1] - blocks[block];
@@ -565,7 +582,8 @@ ScoreRank score_rank(Walk const& walk, R const& ranker,
     return out;
 }
 
-// Prints the --score row and its rank, then the walk's after_score().
+// Prints the --score row, without SORT options by the walk's
+// print_score_row(), else with its rank, then the walk's after_score().
 template <typename Walk, typename R>
 int print_score(Walk const& walk, R* ranker, bool passes) {
     std::vector<size_t> picks;
@@ -573,8 +591,7 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
                      walk.steps, walk.bag, &picks))
         return 1;
     if (walk.args.rank.sorts.empty()) {
-        write_bag_stats_row(stdout, walk.score_row(picks));
-        walk.after_score(picks);
+        walk.print_score_row(picks);
         return 0;
     }
     RankedRow target;
@@ -613,7 +630,7 @@ void print_top(Walk const& walk, R* ranker, bool passes) {
         line.clear();
         if (walk.args.rank.best_pairs == BestPairs::NONE)
             append_row(&line, ranked.row, walk.args.rank.top_segments);
-        append_best_pairs(&line, &seen, ranked.best, *walk.steps[0],
+        append_best_pairs(&line, &seen, ranked.best, walk.pair_bags,
                           walk.prospect_bags);
         fwrite(line.data(), 1, line.size(), stdout);
     }
@@ -629,6 +646,9 @@ struct BagStatsRankers {
     bool passes;
 };
 
+// Writes the header of `walk`'s rows on `letters` to standard output.
+void write_walk_header(WalkBase const& walk, std::string const& letters);
+
 // The output for `walk`: the --score row, the -n rows, or every row.
 template <typename Walk>
 int run_bag_stats(Walk const& walk, std::string const& letters,
@@ -642,14 +662,7 @@ int run_bag_stats(Walk const& walk, std::string const& letters,
             ? print_score(walk, &rankers->pick_ranker, passes)
             : print_score(walk, &rankers->ranker, passes);
     if (!rank.top_segments && rank.best_pairs == BestPairs::NONE)
-        write_bag_stats_header(stdout, {letters, INNER_MIN_WORD_LENGTH,
-                                        args.min_word_bag_length,
-                                        args.min_pair_bag_length,
-                                        search_text(args.search),
-                                        bag_stats_header_path(args.prospects_file),
-                                        args.sentence,
-                                        bag_stats_header_path(args.pairs_file),
-                                        bag_stats_header_path(args.dictionary_file)});
+        write_walk_header(walk, letters);
     if (rank.top == 0) {
         print_rows(walk);
         return 0;

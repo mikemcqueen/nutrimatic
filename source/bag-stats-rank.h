@@ -21,15 +21,14 @@
 #include "optparse.h"
 #include "pairs-impl.h"
 
-// How many picks of each kind a search sequence makes before its `p`.
+// How many picks of each kind a search sequence makes before its last step,
+// and which last step it is: p, counting DICT pairs, or pf, counting PAIRS
+// rows (pair_filter).
 struct Search {
-    // --ss pf: the pair filter count, without picks; with --ss wb,pf, words
-    // is 1, and with --ss pb,wb,pf pairs is 1 too: a pair bag, then the DICT
-    // word and word bag of wb,pf.
-    bool pair_filter = false;
     int prospects = 0;
     int pairs = 0;
     int words = 0;
+    bool pair_filter = false;
 };
 
 // Parses --ss STEPS into `out`. False, diagnosed prefixed by `program`, when
@@ -163,16 +162,34 @@ bool load_pair_bags(char const* program, char const* path,
                     PairPrior const& prior, std::vector<PairBag>* out,
                     std::vector<std::vector<std::string>>* rows = nullptr);
 
-// load_pair_bags() of PAIRS into `pair_bags`, less the bags of
-// `prospect_bags` and those of fewer than `min_pair_length` letters, and,
+// Whether pb may not pick a bag of PAIRS: one of `prospect_bags`' bags, or
+// one of fewer than `min_length` letters.
+class PairPickFilter {
+  public:
+    PairPickFilter(std::vector<PairBag> const& prospect_bags, int min_length);
+
+    bool dropped(PairBag const& pair_bag) const;
+
+  private:
+    std::unordered_set<PairsCounts, PairsCountsHash> prospects_;
+    int min_length_;
+};
+
+// load_pair_bags() of PAIRS into `pair_bags`, less PairPickFilter's, and,
 // unless `prospects_file` is NULL, of it into `prospect_bags`, their priors
 // from `args`' --prior or --p1, --clues and --prior-weights, freed before it
-// returns. `has_prior`: whether `args` gives one.
+// returns. Unless `final_bags` is null, also every bag of PAIRS into it, with
+// `final_rows` as load_pair_bags() takes `rows`. `pair_bags` may be null to
+// skip it, and with `final_bags` null too PAIRS isn't read. `has_prior`:
+// whether `args` gives one.
 bool load_pick_bags(char const* program, RankArgs const& args,
                     char const* prospects_file, char const* pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     int min_pair_length, std::vector<PairBag>* prospect_bags,
-                    std::vector<PairBag>* pair_bags, bool* has_prior);
+                    std::vector<PairBag>* pair_bags,
+                    std::vector<PairBag>* final_bags,
+                    std::vector<std::vector<std::string>>* final_rows,
+                    bool* has_prior);
 
 struct LengthValueHash {
     size_t operator()(std::pair<size_t, double> const& key) const {

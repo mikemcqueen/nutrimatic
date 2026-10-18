@@ -294,16 +294,23 @@ bool load_dump(Args const& args, Dump* dump) {
             fprintf(stderr, "%s: malformed bag-stats header\n", path.c_str());
             return false;
         }
+        if (dump->search.prospects + dump->search.pairs == 0) {
+            fprintf(stderr, "%s: the dump's search has no ppb or pb step, "
+                    "so no rows to rank\n", PROGRAM);
+            return false;
+        }
         if (args.search != NULL) {
             Search search;
             if (!parse_search(PROGRAM, args.search, &search)) return false;
             if (search.prospects + search.pairs !=
                     dump->search.prospects + dump->search.pairs ||
-                search.words != dump->search.words) {
+                search.words != dump->search.words ||
+                search.pair_filter != dump->search.pair_filter) {
                 fprintf(stderr, "%s: --ss has to have the dump's %d ppb and "
-                        "pb steps and %d wb steps\n", PROGRAM,
+                        "pb steps, %d wb steps and last step %s\n", PROGRAM,
                         dump->search.prospects + dump->search.pairs,
-                        dump->search.words);
+                        dump->search.words,
+                        dump->search.pair_filter ? "pf" : "p");
                 return false;
             }
             dump->search = search;
@@ -324,7 +331,8 @@ bool load_dump(Args const& args, Dump* dump) {
             return false;
         }
         if (!check_rank_args(PROGRAM, args.rank, dump->search)) return false;
-        if (h.pairs == "-") {
+        bool const pick_pairs = dump->search.pairs > 0;
+        if (pick_pairs && h.pairs == "-") {
             fprintf(stderr, "%s: the dump's PAIRS was standard input; can't "
                     "rebuild its bags\n", PROGRAM);
             return false;
@@ -340,7 +348,8 @@ bool load_dump(Args const& args, Dump* dump) {
                             h.prospects.empty() ? NULL : h.prospects.c_str(),
                             h.pairs.c_str(), bag, rejected,
                             h.min_pair_bag_length, &dump->prospect_bags,
-                            &dump->pair_bags,
+                            pick_pairs ? &dump->pair_bags : nullptr,
+                            nullptr, nullptr,
                             &dump->has_prior))
             return false;
         dump->steps.insert(dump->steps.end(), dump->search.pairs,
