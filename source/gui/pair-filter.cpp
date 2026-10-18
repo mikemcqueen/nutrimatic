@@ -31,7 +31,11 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   } else if (cv) {
     fputs("pgui: pfilter cv requires letters\n", stderr);
     return false;
+  } else if (exact) {
+    fputs("pgui: pfilter ex requires letters\n", stderr);
+    return false;
   }
+  options.exact = exact;
   options.min_letters = min_letters;
   options.max_letters = max_letters;
   options.sentence = params.sentence;
@@ -74,11 +78,14 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
 }
 
 bool PairFilter::render_options(bool* entered) {
+  bool const changed = toggle_button("ex", exact);
+  if (changed) exact = !exact;
+  ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
   ImGui::SameLine(0, 0);
   *entered |= clearable_input("u", used_text, sizeof used_text);
-  return false;
+  return changed;
 }
 
 bool PairFilter::render_display_options(bool* entered) {
