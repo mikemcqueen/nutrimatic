@@ -105,3 +105,7 @@
 
 * pfilter can probably also use a shared pair bag loader (bag-stats'
   load_pair_bags()) instead of reading PAIRS rows itself.
+
+* bag-stats: consolidate the sort flags (--wb, --wbwp, --tp, --mp,
+  --wbwp-min, --wbfrac-min) into one --sort flag,flag,flag, in bag-stats,
+  bag-stats-cuda and bag-stats-sort.
