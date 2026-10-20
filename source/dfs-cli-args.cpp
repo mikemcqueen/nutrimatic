@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -1083,25 +1082,9 @@ bool load_dfs_workflow_target_settings(
   if (!require_regular_file(
           letters_path, program, "workflow sentence letters file"))
     return false;
-  std::ifstream input(letters_path, std::ios::binary);
-  if (!input.is_open()) {
-    fprintf(stderr, "%s: can't open workflow sentence letters \"%s\"\n",
-            program, letters_path.c_str());
+  std::string sentence_bag;
+  if (!load_letter_bag(letters_path, program, &sentence_bag))
     return false;
-  }
-  std::string sentence(
-      (std::istreambuf_iterator<char>(input)),
-      std::istreambuf_iterator<char>());
-  if (input.bad()) {
-    fprintf(stderr, "%s: can't read workflow sentence letters \"%s\"\n",
-            program, letters_path.c_str());
-    return false;
-  }
-  while (!sentence.empty() &&
-         (sentence.back() == '\n' || sentence.back() == '\r'))
-    sentence.pop_back();
-
-  std::string const sentence_bag = bag_letters(sentence);
   std::string const named_bag = bag_letters(parts[1].substr(2));
   if (parts[1][0] == 'o') {
     std::string unused;

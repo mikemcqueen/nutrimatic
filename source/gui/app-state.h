@@ -36,10 +36,25 @@ using SeedMap = std::unordered_map<std::string, std::string>;
 // seed_key, plus the other seed files in seed_directory named like it (see
 // load_seed()).
 struct AppState {
-  // Sets visual_letters to `letters`, and actual_letters to the value of the
-  // environment variable it names when it is $NAME, empty when that variable
-  // is unset, or to `letters` itself otherwise.
+  // Sets visual_letters to `letters`, and actual_letters to `letters` itself
+  // unless one of its space-separated pieces is $NAME. Then it is the value of
+  // the environment variable NAME followed by the other pieces, each after a
+  // space. Sets letters_error, with the error diagnosed, when NAME is unset or
+  // empty or there is more than one $NAME piece, which also leaves
+  // actual_letters empty.
   void set_letters(std::string letters);
+
+  // Sets sentence_letters to the bag_letters() of sentence's
+  // $WFROOT/.wf/best/sN/letters file, none when sentence is
+  // CLASSIFIED_NO_SENTENCE or that file can't be read, with the error
+  // diagnosed, then validate_letters().
+  void load_sentence_letters();
+
+  // Sets letters_valid to whether actual_letters fit within sentence_letters,
+  // diagnosing letters that don't. Without a sentence they always do; with a
+  // sentence whose letters weren't loaded, or after letters_error, they never
+  // do.
+  void validate_letters();
 
   // Sets seed_name to `name`; sets seed_key to name's key, "seed", its
   // cutoff, and its M for seed.S.M.all.CUTOFF[...].pairs, "all" and its M
@@ -122,6 +137,11 @@ struct AppState {
   std::string actual_letters;
   std::string used_letters;
   int sentence = 1;
+  std::optional<std::string> sentence_letters;
+  // Whether set_letters() failed; see set_letters().
+  bool letters_error = false;
+  // Whether commands may run; see validate_letters().
+  bool letters_valid = true;
   std::string seed_directory;
   std::string seed_name;
   std::string seed_key;
@@ -177,8 +197,9 @@ struct LetterToolsParams {
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
-// "sml_dict", not loaded yet, with letters "$S1", empty used letters, the
-// seed at `seed_path`, and judged_bad and bad_bags_bitmap from the
+// "sml_dict", not loaded yet, with letters "$S1", empty used letters,
+// sentence 1's letters (see AppState::load_sentence_letters()), the seed at
+// `seed_path`, and judged_bad and bad_bags_bitmap from the
 // judged-bad and bad.sN files beside it (see
 // AppState::load_seed_and_bad_bags()). Returns false, with the error
 // diagnosed, when the dictionary can't be read; a seed that can't be read is

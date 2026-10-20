@@ -64,8 +64,17 @@ void Window::render() {
     ImGui::TextUnformatted("l:");
     ImGui::SameLine(0, 0);
     ImGui::SetNextItemWidth(-FLT_MIN);
+    bool const letters_invalid = !app_state().letters_valid;
+    if (letters_invalid) {
+      ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(255, 96, 96, 255));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    }
     bool entered = ImGui::InputText("##letters", letters_, sizeof letters_,
                                     ImGuiInputTextFlags_EnterReturnsTrue);
+    if (letters_invalid) {
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor();
+    }
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("u:");
@@ -105,6 +114,7 @@ void Window::render() {
                     state.used_letters != used_letters_)) {
       state.set_letters(letters_);
       state.used_letters = used_letters_;
+      state.validate_letters();
       ++state.generation;
     }
     if (judged_bad_filter_toggled) {
@@ -113,6 +123,7 @@ void Window::render() {
     }
     if (state.sentence != sentence_) {
       state.sentence = sentence_;
+      state.load_sentence_letters();
       ++state.generation;
     }
   }

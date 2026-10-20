@@ -1,6 +1,7 @@
 #include "letter-bag.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -59,6 +60,32 @@ std::string az_letters(std::string const& in) {
     if (ch >= 'a' && ch <= 'z') out.push_back(char(ch));
   }
   return out;
+}
+
+bool load_letter_bag(std::filesystem::path const& path,
+                     std::string_view program, std::string* out) {
+  FILE* const file = fopen(path.c_str(), "rb");
+  if (file == NULL) {
+    fprintf(stderr, "%.*s: can't open letters \"%s\": %s\n",
+            int(program.size()), program.data(), path.c_str(),
+            strerror(errno));
+    return false;
+  }
+  std::string text;
+  char buffer[4096];
+  size_t got;
+  while ((got = fread(buffer, 1, sizeof buffer, file)) > 0)
+    text.append(buffer, got);
+  int const error = ferror(file) ? errno : 0;
+  fclose(file);
+  if (error != 0) {
+    fprintf(stderr, "%.*s: can't read letters \"%s\": %s\n",
+            int(program.size()), program.data(), path.c_str(),
+            strerror(error));
+    return false;
+  }
+  *out = bag_letters(text);
+  return true;
 }
 
 LetterBag::LetterBag(std::string const& letters) : size(letters.size()) {

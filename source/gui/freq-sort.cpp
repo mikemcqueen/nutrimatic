@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
+#include <utility>
 
 #include "dfs-cli-args.h"
 #include "widgets.h"
@@ -11,7 +13,8 @@
 FreqSort::FreqSort() {
   options.mode = FREQSORT_SCORE_CV;
   options.min_cv = 1.0;
-  std::snprintf(min_cv, sizeof min_cv, "%.1f", options.min_cv);
+  std::snprintf(min_cv, sizeof min_cv, "%.2f", options.min_cv);
+  std::snprintf(max_cv, sizeof max_cv, "%.2f", 0.0);
   min_letters = options.min_letters;
 }
 
@@ -34,24 +37,6 @@ bool FreqSort::run(std::vector<SharedLines> const& inputs,
 }
 
 bool FreqSort::render_options(bool* entered) {
-  float const width = ImGui::CalcTextSize("00.0").x +
-                      2 * ImGui::GetStyle().FramePadding.x;
-  bool changed = false;
-  bool const cv = options.mode == FREQSORT_SCORE_CV;
-  if (toggle_button("cv", cv)) {
-    options.mode = cv ? FreqsortOptions{}.mode : FREQSORT_SCORE_CV;
-    changed = true;
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(options.mode != FREQSORT_SCORE_CV);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("min:");
-  ImGui::SameLine(0, 0);
-  ImGui::SetNextItemWidth(width);
-  *entered |= ImGui::InputText("##min_cv", min_cv, sizeof min_cv,
-                               ImGuiInputTextFlags_EnterReturnsTrue);
-  ImGui::EndDisabled();
-  ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("m:");
   ImGui::SameLine(0, 0);
@@ -59,16 +44,32 @@ bool FreqSort::render_options(bool* entered) {
                           2 * ImGui::GetStyle().FramePadding.x);
   *entered |= ImGui::InputInt("##m", &min_letters, 0, 0,
                               ImGuiInputTextFlags_EnterReturnsTrue);
+  return false;
+}
+
+bool FreqSort::render_display_options(bool* entered) {
+  bool const cv = options.mode == FREQSORT_SCORE_CV;
+  bool const changed = toggle_button("cv", cv);
+  if (changed) options.mode = cv ? FreqsortOptions{}.mode : FREQSORT_SCORE_CV;
+  ImGui::SameLine();
+  static FreqSort const defaults;
+  cv_range_input(min_cv, max_cv, sizeof min_cv, defaults.min_cv,
+                 defaults.max_cv, options.mode == FREQSORT_SCORE_CV, entered);
   return changed;
 }
 
 bool FreqSort::apply_fields() {
   bool changed = false;
-  double parsed;
-  if (parse_double(min_cv, "min: value", &parsed) &&
-      parsed != options.min_cv) {
-    options.min_cv = parsed;
-    changed = true;
+  for (auto [text, bound] : {std::pair{min_cv, &options.min_cv},
+                             std::pair{max_cv, &options.max_cv}}) {
+    double parsed;
+    if (!parse_double(text, "cv bound", &parsed)) continue;
+    if (bound == &options.max_cv && parsed == 0)
+      parsed = std::numeric_limits<double>::infinity();
+    if (parsed != *bound) {
+      *bound = parsed;
+      changed = true;
+    }
   }
   min_letters = std::max(min_letters, 0);
   if (min_letters != options.min_letters) {

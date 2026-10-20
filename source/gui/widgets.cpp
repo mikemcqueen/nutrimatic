@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdio>
 
 bool clearable_input(char const* id, char* text, size_t size,
                      float reserve) {
@@ -55,4 +56,33 @@ bool toggle_button(char const* label, bool on) {
     ImGui::PopStyleColor(2);
   }
   return clicked;
+}
+
+void cv_range_input(char* min_text, char* max_text, size_t size,
+                    char const* default_min, char const* default_max,
+                    bool enabled, bool* entered) {
+  ImGui::PushID("cv_range");
+  float const pad = ImGui::GetStyle().FramePadding.x;
+  float const width = ImGui::CalcTextSize("0.00").x + 2 * pad;
+  auto const field = [&](char const* label, char const* id, char* text) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(0, 0);
+    ImGui::SetNextItemWidth(width);
+    *entered |= ImGui::InputText(id, text, size,
+                                 ImGuiInputTextFlags_EnterReturnsTrue);
+  };
+  ImGui::BeginDisabled(!enabled);
+  field("m", "##min", min_text);
+  ImGui::SameLine(0, pad);
+  field("x", "##max", max_text);
+  ImGui::SameLine(0, pad);
+  float const side = ImGui::GetFrameHeight();
+  if (ImGui::Button("X", ImVec2(side, side))) {
+    std::snprintf(min_text, size, "%s", default_min);
+    std::snprintf(max_text, size, "%s", default_max);
+    *entered = true;
+  }
+  ImGui::EndDisabled();
+  ImGui::PopID();
 }
