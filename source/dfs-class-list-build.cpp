@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include <array>
+#include <vector>
 
 #include "dfs-diagnostic.h"
 #include "index.h"
@@ -124,7 +125,7 @@ bool prepare_dfs_scoring_inputs(
   if (!load_weighted_pair_files(
           args, score_mode, args.min_word_len,
           &out->weighted_pairs, &out->exception_prefixes,
-          &out->external_rows, &out->best_rows))
+          &out->external_rows, &out->best_rows, &out->seed_rows))
     return false;
 
   DfsBestBonusPolicy const best_bonus =
@@ -166,6 +167,15 @@ bool prepare_dfs_class_list(
           *reject_files, /*allow_single_words=*/true,
           &out->rejected))
     return false;
+  std::vector<DfsPairRow> synthesis_keys;
+  synthesis_keys.swap(out->seed_rows);
+  std::erase_if(synthesis_keys,
+                [](DfsPairRow const& row) { return row.right.empty(); });
+  for (std::vector<DfsPairRow> const* rows :
+       { &out->external_rows, &out->best_rows })
+    for (size_t i = 0; i < rows->size(); ++i)
+      if (!(*rows)[i].right.empty()) synthesis_keys.push_back((*rows)[i]);
+
   if (dictionary_filter != NULL && !args.workflow_root.empty())
     admit_best_words(out->best_rows, &out->dictionary);
   if (!remove_rejected_words(
@@ -188,7 +198,7 @@ bool prepare_dfs_class_list(
       !out->exception_prefixes.empty() ? &out->exception_prefixes : NULL,
       out->solo_words.get(),
       !out->rejected.empty() ? &out->rejected : NULL,
-      DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING));
+      &synthesis_keys));
   dfs_diagnostic(
       "phase 1 external pairs: %zu synthetic entries\n",
       out->classes->synthetic_external_pair_count());

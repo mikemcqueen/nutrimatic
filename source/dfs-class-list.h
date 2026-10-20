@@ -81,11 +81,24 @@ enum DfsMemberFilter {
   DFS_RETAIN_PHRASES,
 };
 
-// Whether positive pair inputs only annotate index-backed entries or may also
-// contribute eligible two-word entries that the index does not contain.
-enum DfsExternalPairPolicy {
-  DFS_EXTERNAL_PAIRS_INDEX_ONLY,
-  DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING,
+// Whether retain_members() keeps every word order of a multi-word phrase or
+// only the class's best-ranked spelling of each set of words.
+enum DfsWordOrders {
+  DFS_KEEP_ALL_ORDERS,
+  DFS_KEEP_BEST_ORDER,
+};
+
+// One normalized pair-file row in written order. right is empty for a
+// standalone word; line_number is 1-based.
+struct DfsPairRow {
+  std::string left;
+  std::string right;
+  size_t line_number;
+
+  std::string entry(bool reverse = false) const {
+    if (right.empty()) return left;
+    return reverse ? right + " " + left : left + " " + right;
+  }
 };
 
 struct DfsMemberSpan {
@@ -148,9 +161,11 @@ class DfsClassList {
   // earn its configurable pair bonus; `weighted_pairs` assigns fixed seed,
   // YES, or BEST tiers. exception_prefixes permits traversal to exact oriented
   // pair entries containing a word shorter than min_word_len; every input is
-  // borrowed. external_pair_policy optionally admits otherwise eligible
-  // two-word positive keys absent from the index with corpus count 1. Member 0
-  // is therefore the class's best member under the caller's admissible upper
+  // borrowed. synthesis_keys optionally lists two-word positive rows in written
+  // order; each otherwise eligible one is admitted with corpus count 1 when
+  // the index holds neither its order nor, for a reversible key, the reverse,
+  // and only the first written order of a reversible pair is admitted.
+  // Member 0 is therefore the class's best member under the caller's admissible upper
   // score. solo_words is mutable only while phase 1 registers profiles.
   // With no model that is raw count order. rejected drops any entry whose
   // whole spelling it holds, so no phase-2 result can contain one. The test is
@@ -167,8 +182,7 @@ class DfsClassList {
                DfsPairSet const* exception_prefixes = NULL,
                DfsSoloWords* solo_words = NULL,
                DfsPairSet const* rejected = NULL,
-               DfsExternalPairPolicy external_pair_policy =
-                   DFS_EXTERNAL_PAIRS_INDEX_ONLY);
+               std::vector<DfsPairRow> const* synthesis_keys = NULL);
 
   DfsClassSpan classes() const {
     DfsClassSpan const span = { class_records.get(), class_count };
@@ -224,11 +238,14 @@ class DfsClassList {
 
   // Moves to the front of the member arena every member of every class whose
   // keep_class entry is true, dropping members the filter excludes, and
-  // returns a mutable span of the survivors. This reorders members across class
-  // boundaries, so it drops the class -> member grouping; the survivors stay
-  // valid until release_members().
+  // returns a mutable span of the survivors. With DFS_KEEP_BEST_ORDER, a
+  // multi-word member whose words, in any order, match an earlier member of
+  // its class is dropped. This reorders members across class boundaries, so it
+  // drops the class -> member grouping; the survivors stay valid until
+  // release_members().
   DfsMemberSpan retain_members(
-      std::vector<bool> const& keep_class, DfsMemberFilter filter);
+      std::vector<bool> const& keep_class, DfsMemberFilter filter,
+      DfsWordOrders orders);
 
   // Drops the class -> member grouping: zeroes every record's members pointer
   // and member_count, and latches the flag. The member records and their text

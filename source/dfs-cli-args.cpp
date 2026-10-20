@@ -649,7 +649,8 @@ bool load_extraction_pair_file(
 bool load_weighted_pair_files(
     DfsCommonArgs const& args, bool score_mode, int min_word_len,
     DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes,
-    std::vector<DfsPairRow>* rows, std::vector<DfsPairRow>* best_rows) {
+    std::vector<DfsPairRow>* rows, std::vector<DfsPairRow>* best_rows,
+    std::vector<DfsPairRow>* seed_rows) {
   struct Source {
     std::vector<std::string> const* paths;
     char const* description;
@@ -657,7 +658,8 @@ bool load_weighted_pair_files(
     std::vector<DfsPairRow>* rows;
   };
   Source const sources[] = {
-    { &args.seed_pair_files, "seed pair list", DFS_PAIR_BONUS_SEED, NULL },
+    { &args.seed_pair_files, "seed pair list", DFS_PAIR_BONUS_SEED,
+      seed_rows },
     { &args.yes_pair_files, "YES pair list", DFS_PAIR_BONUS_YES, rows },
     { &args.best_pair_files, "BEST pair list", DFS_PAIR_BONUS_BEST,
       best_rows },

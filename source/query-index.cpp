@@ -64,6 +64,8 @@ static void usage(char const* program, FILE* out) {
       program, program, program);
   if (out != stdout) return;
 
+  fputs("\nlisting prints each set of words once, in its best-ranked order\n",
+      stdout);
   fputs("\noptions:\n", stdout);
   dfs_help_index(true);
   dfs_help_used_letters();
@@ -1142,7 +1144,8 @@ int main(int argc, char* argv[]) {
   // setup and its search is already destroyed, and printing needs only each
   // member's count and text.
   DfsMemberSpan const survivors =
-      classes.retain_members(completable, DFS_RETAIN_ALL);
+      classes.retain_members(
+          completable, DFS_RETAIN_ALL, DFS_KEEP_BEST_ORDER);
   DfsPackedMember* const first = survivors.data;
   DfsPackedMember* const last = args.num_words == 0 && args.min_words == 0
       ? first + survivors.count
