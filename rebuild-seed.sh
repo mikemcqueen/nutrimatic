@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: rebuild-seed.sh sN|SN
+# usage: rebuild-seed.sh [-f|--force] sN|SN
 # requires: source ./setup.sh
 
 # braces make bash parse the whole script before running it, so editing the
@@ -13,11 +13,19 @@ die() {
 }
 
 usage() {
-    die "usage: $0 sN|SN (N is 1-9)"
+    die "usage: $0 [-f|--force] sN|SN (N is 1-9)"
 }
 
-[ $# -eq 1 ] || usage
-[[ $1 =~ ^[sS]([1-9])$ ]] || usage
+force=
+seed=
+for arg; do
+    case $arg in
+        -f|--force) force=1 ;;
+        -*) usage ;;
+        *) [ -z "$seed" ] || usage; seed=$arg ;;
+    esac
+done
+[[ $seed =~ ^[sS]([1-9])$ ]] || usage
 snum=${BASH_REMATCH[1]}
 S=S${snum}
 letters=${!S:-}
@@ -29,6 +37,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 wf=$here/wf
 cluer=$(dirname "$(readlink -f "$wf")")/cluer
 tokens=$here/cluer/data/index/tokens.txt
+extra_pairs=$IDX_DIR/s${snum}.pairs
 
 for tool in query-index pairs pcomm python; do
     command -v "$tool" > /dev/null || die "$tool not found on PATH; source ./setup.sh"
@@ -41,14 +50,35 @@ msg() {
     echo "$*" >&2
 }
 
-# unless $2 already exists and is nonempty, print $1 and write the stdout of
-# the remaining command to $2, only if the command succeeds; set slow=1 to
-# warn that the command takes a while
+# true if $1 exists, is nonempty, and is no older than any of the remaining
+# files
+up_to_date() {
+    local out=$1 src
+    shift
+    [ -s "$out" ] || return 1
+    for src; do
+        if [ "$src" -nt "$out" ]; then
+            return 1
+        fi
+    done
+}
+
+# usage: run_to WHAT OUT [SRC...] -- CMD...
+# skip if OUT is up to date with the SRC files and --force is not set;
+# otherwise print WHAT and write the stdout of CMD to OUT, only if CMD
+# succeeds; set slow=1 to warn that CMD takes a while
 run_to() {
     local what=$1 out=$2
+    local srcs=()
     shift 2
-    if [ -s "$out" ]; then
-        msg "Skipping $what, $(basename "$out") exists"
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+        srcs+=("$1")
+        shift
+    done
+    [ $# -gt 1 ] || die "usage: run_to WHAT OUT [SRC...] -- CMD..."
+    shift
+    if [ -z "$force" ] && up_to_date "$out" ${srcs[@]+"${srcs[@]}"}; then
+        msg "Skipping $what, $(basename "$out") is up to date"
         return
     fi
     msg "Generating $what${slow:+, this might take a while...}"
@@ -67,8 +97,13 @@ cluer_pairs() {
         python "$cluer/query_index.py" -f - -j --threads 2
 }
 
+# adds $extra_pairs when it exists
 all_pairs() {
-    pcomm "$cluer_out" "$idx_out" | sort -u
+    if [ -f "$extra_pairs" ]; then
+        pcomm "$cluer_out" "$idx_out" | pcomm - "$extra_pairs"
+    else
+        pcomm "$cluer_out" "$idx_out"
+    fi | sort -u
 }
 
 build_pairs() {
@@ -84,12 +119,11 @@ build_pairs() {
     idx_out=$IDX_DIR/idx.2.s${snum}.${ext}.${base}
     cluer_out=$IDX_DIR/cluer.s${snum}.${ext}.${base}
 
-    run_to "$ext wiki-index pairs" "$idx_out" idx_pairs
-    slow=1 run_to "$ext cluer pairs" "$cluer_out" cluer_pairs
-    run_to "$ext combined pairs" "$IDX_DIR/${base}.s${snum}.${ext}" all_pairs
+    run_to "$ext wiki-index pairs" "$idx_out" -- idx_pairs
+    slow=1 run_to "$ext cluer pairs" "$cluer_out" -- cluer_pairs
+    run_to "$ext combined pairs" "$IDX_DIR/${base}.s${snum}.${ext}" \
+        "$cluer_out" "$idx_out" "$extra_pairs" -- all_pairs
 }
-
-# example function call
 
 build_pairs dict  dict 3 10
 build_pairs dict  dict 3 13
