@@ -5,7 +5,9 @@
 #include <stddef.h>
 
 #include <array>
+#include <filesystem>
 #include <string>
+#include <string_view>
 
 // How many of each letter a through z a bag holds, 'a' + j at j.
 using LetterCounts = std::array<int, 26>;
@@ -35,6 +37,11 @@ std::string bag_letters(std::string const& in);
 
 // bag_letters() without the digits, for tools that count only a-z.
 std::string az_letters(std::string const& in);
+
+// Sets *out to the bag_letters() of the file at `path`. Diagnoses a file that
+// can't be opened or read, prefixed by `program`.
+bool load_letter_bag(std::filesystem::path const& path,
+                     std::string_view program, std::string* out);
 
 // Filters `letters` and `used_letters` through bag_letters() and fills `out`
 // with what is left of the first once the second is removed. Errors are

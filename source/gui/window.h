@@ -21,11 +21,13 @@
 // AppState::refresh_seed_files()), and reloads the loaded dictionaries whose
 // files are newer (see AppState::refresh_dictionaries()).
 // The letters fields start from app_state(), and Enter in either stores both
-// there. The buttons start from app_state()'s sentence; clicking
-// one selects it alone, or deselects it when already selected, and stores the
-// result there. Left and Right, while a column's ListBox has keyboard focus,
-// move it to the ListBox of the nearest column that shows one on that side
-// (see ListBox::focus()).
+// there and validates them (see AppState::validate_letters()); the l: field
+// is framed red while app_state()'s letters_valid is false. The buttons
+// start from app_state()'s sentence; clicking one selects it alone, or
+// deselects it when already selected, and stores the result there, loading
+// its letters (see AppState::load_sentence_letters()). Left and Right, while
+// a column's ListBox has keyboard focus, move it to the ListBox of the
+// nearest column that shows one on that side (see ListBox::focus()).
 // Shift+R, while a column's ListBox has keyboard focus, opens a Review of the
 // items it shows, when its command is reviewable (see Command::reviewable()),
 // its output is up to date, and a sentence is selected, and otherwise says

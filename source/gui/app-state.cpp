@@ -18,6 +18,7 @@
 #include "bad-bag-bitmap.h"
 #include "dfs-cli-args.h"
 #include "input-source.h"
+#include "letter-bag.h"
 #include "workflow-paths.h"
 
 namespace {
@@ -215,6 +216,7 @@ bool load_app_state(std::string const& seed_path) {
   AppState& state = app_state();
   state.set_letters("$S1");
   state.used_letters.clear();
+  state.load_sentence_letters();
   state.dictionaries.clear();
   state.dictionaries["sml_dict"].path = small_path;
   AppState::Dictionary& big = state.dictionaries["big_dict"];
@@ -334,13 +336,67 @@ void AppState::add_judged_bad(std::string letters) {
 }
 
 void AppState::set_letters(std::string letters) {
-  if (letters.starts_with('$')) {
-    char const* const value = std::getenv(letters.c_str() + 1);
-    actual_letters = value ? value : "";
-  } else {
+  std::string_view name;
+  std::string added;
+  int names = 0;
+  for (std::string_view const piece : split(letters, ' ')) {
+    if (piece.starts_with('$')) {
+      name = piece.substr(1);
+      ++names;
+    } else if (!piece.empty()) {
+      added += ' ';
+      added += piece;
+    }
+  }
+  letters_error = false;
+  if (names == 0) {
     actual_letters = letters;
+  } else if (names > 1) {
+    std::fputs("pgui: only one letters $ENV_VAR is allowed\n", stderr);
+    actual_letters.clear();
+    letters_error = true;
+  } else {
+    std::string const variable(name);
+    char const* const value = std::getenv(variable.c_str());
+    if (!value || !*value) {
+      std::fprintf(stderr, "pgui: letters $%s is unset\n", variable.c_str());
+      actual_letters.clear();
+      letters_error = true;
+    } else {
+      actual_letters = value + added;
+    }
   }
   visual_letters = std::move(letters);
+}
+
+void AppState::load_sentence_letters() {
+  sentence_letters.reset();
+  char const* const root = require_workflow_root("pgui");
+  if (sentence != CLASSIFIED_NO_SENTENCE && root) {
+    std::filesystem::path const path =
+        std::filesystem::path(root) / WORKFLOW_BEST_PATH /
+        ("s" + std::to_string(sentence)) / "letters";
+    std::string letters;
+    if (load_letter_bag(path, "pgui", &letters))
+      sentence_letters = std::move(letters);
+  }
+  validate_letters();
+}
+
+void AppState::validate_letters() {
+  if (letters_error) {
+    letters_valid = false;
+  } else if (sentence == CLASSIFIED_NO_SENTENCE) {
+    letters_valid = true;
+  } else if (!sentence_letters) {
+    letters_valid = false;
+  } else {
+    letters_valid = fits_letter_bag(LetterBag(*sentence_letters),
+                                    bag_letters(actual_letters));
+    if (!letters_valid)
+      std::fprintf(stderr, "pgui: letters don't fit within S%d's letters\n",
+                   sentence);
+  }
 }
 
 AppState& app_state() {

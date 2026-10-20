@@ -99,45 +99,21 @@ bool PairFilter::render_display_options(bool* entered) {
     ImGui::SetNextItemWidth(letters_width);
     *entered |= ImGui::InputInt(id, value, 0, 0,
                                 ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
   };
-  letters_field("m:", "##m", &min_letters_field);
-  letters_field("x:", "##x", &max_letters_field);
+  float const pad = ImGui::GetStyle().FramePadding.x;
+  letters_field("m", "##m", &min_letters_field);
+  ImGui::SameLine(0, pad);
+  letters_field("x", "##x", &max_letters_field);
+  ImGui::SameLine();
   bool const changed = toggle_button("cv", cv);
   if (changed) {
     cv = !cv;
     ++display_version_;
   }
-  float const width = ImGui::CalcTextSize("0.00").x +
-                      2 * ImGui::GetStyle().FramePadding.x;
-  auto const field = [&](char const* label, char const* id, char* text,
-                         size_t size) {
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(0, 0);
-    ImGui::SetNextItemWidth(width);
-    *entered |= ImGui::InputText(id, text, size,
-                                 ImGuiInputTextFlags_EnterReturnsTrue);
-  };
-  ImGui::BeginDisabled(!cv);
-  field("m:", "##min_cv", min_cv_text, sizeof min_cv_text);
-  field("x:", "##max_cv", max_cv_text, sizeof max_cv_text);
-  float const side = ImGui::GetFrameHeight();
   ImGui::SameLine();
-  float const gap = ImGui::GetContentRegionAvail().x - side;
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, gap));
-  if (ImGui::Button("X##reset_cv", ImVec2(side, side))) {
-    PairFilter const defaults;
-    std::ranges::copy(defaults.min_cv_text, min_cv_text);
-    std::ranges::copy(defaults.max_cv_text, max_cv_text);
-    if (min_cv != defaults.min_cv || max_cv != defaults.max_cv) {
-      min_cv = defaults.min_cv;
-      max_cv = defaults.max_cv;
-      ++display_version_;
-    }
-  }
-  ImGui::EndDisabled();
+  static PairFilter const defaults;
+  cv_range_input(min_cv_text, max_cv_text, sizeof min_cv_text,
+                 defaults.min_cv_text, defaults.max_cv_text, cv, entered);
   return changed;
 }
 

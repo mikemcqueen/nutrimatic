@@ -141,7 +141,7 @@ class Column {
     SharedLines values;
   };
 
-  // "src:" and the source dropdown, which sets source_, then "ltrs:" and
+  // "src:" and the source dropdown, which sets source_, then "l:" and
   // the letter source dropdown, which sets letter_source_.
   void render_sources();
   // letter_count_ in a tooltip whose top left is at `x`, `y`.

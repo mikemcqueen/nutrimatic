@@ -313,7 +313,7 @@ void Column::render() {
     ImGui::TextDisabled("%zu items", output()->size());
   }
   char cv_text[32];
-  std::snprintf(cv_text, sizeof cv_text, "CV: %.2f", remaining_cv_);
+  std::snprintf(cv_text, sizeof cv_text, "CV %.2f", remaining_cv_);
   float const cv_width = ImGui::CalcTextSize(cv_text).x;
   ImGui::SameLine();
   float const cv_gap = ImGui::GetContentRegionAvail().x - cv_width;
@@ -384,7 +384,7 @@ void Column::render_sources() {
   }
 
   ImGui::SameLine();
-  ImGui::TextUnformatted("ltrs:");
+  ImGui::TextUnformatted("l:");
   ImGui::SameLine(0, 0);
   static constexpr char const* letters_widest[] = {"all"};
   ImGui::SetNextItemWidth(combo_width(letters_widest));
@@ -591,6 +591,10 @@ void Column::start(Key key) {
   }
 
   AppState& state = app_state();
+  if (!state.letters_valid) {
+    publish(key, false, empty_lines(), empty_lines());
+    return;
+  }
   SharedDictionary dictionary;
   SharedLines dictionary_lines;
   if (Column const* words = dictionary_column()) {
