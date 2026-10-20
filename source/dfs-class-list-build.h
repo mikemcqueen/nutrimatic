@@ -27,6 +27,10 @@ struct DfsPreparedClassList {
   // keeping no row order.
   std::vector<DfsPairRow> external_rows;
   std::vector<DfsPairRow> best_rows;
+  // Seed rows in written order; they choose which order a synthesized pair
+  // takes but stay out of the dictionary reports. prepare_dfs_class_list()
+  // moves them out, leaving this empty.
+  std::vector<DfsPairRow> seed_rows;
   std::unique_ptr<DfsScoreModel> model;
   // Present only when ptm is on and the fit succeeds; borrowed by `model`.
   std::unique_ptr<DfsBaseRemap> base_remap;

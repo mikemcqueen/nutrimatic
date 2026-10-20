@@ -286,9 +286,9 @@ assert_close "$(awk '$2 == "ba" && $3 == "dc" { print $1 }' \
     "$test_dir/missing-index-legacy.stdout")" \
   1000000 "synthetic legacy pair did not use count 1 and its pair bonus"
 grep -Eq \
-  "${diagnostic_prefix}phase 1 external pairs: 2 synthetic entries$" \
+  "${diagnostic_prefix}phase 1 external pairs: 1 synthetic entries$" \
   "$test_dir/missing-index-legacy.stderr" ||
-  fail "both eligible orientations were not synthesized"
+  fail "a missing pair was not synthesized in written order only"
 printf 'zz\n' > "$test_dir/missing-index-standalone.pairs"
 "$dfs_anagrams" -i "$index_file" zz -m 2 -n 10 \
   --pairs "$test_dir/missing-index-standalone.pairs" \

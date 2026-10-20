@@ -549,7 +549,12 @@ printf '2345,1\n' > "$test_dir/short-last.pairs"
   > "$test_dir/short-first.stdout" 2> "$test_dir/short-first.stderr"
 grep -q ' 1 2345$' "$test_dir/short-first.stdout" ||
   fail "query-index did not extract a listed short-first pair"
-! grep -q ' 2345 1$' "$test_dir/short-first.stdout" ||
+# Listing prints one order per word set, so count phase 1 entries instead.
+phase1_entries() {
+  sed -n 's/.*phase 1 complete: \([0-9]*\) entries,.*/\1/p' "$1"
+}
+[[ $(phase1_entries "$test_dir/short-first.stderr") -eq \
+   $(($(phase1_entries "$test_dir/short-none.stderr") + 1)) ]] ||
   fail "query-index matched a short-first pair in reverse"
 "$query_index" -i "$synthetic_index" 12345 -m 4 -n 10 \
   --pairs "$test_dir/short-last.pairs" --pair-bonus 0 \
@@ -574,6 +579,19 @@ grep -q ' 2345 1$' "$test_dir/short-last.stdout" ||
 ! grep -q ' 1 2345$' "$test_dir/short-word-count.stdout" ||
   fail "-w 1 displayed a short-pair phrase"
 
+# A short-word pair written in both orders keeps each order's own tier.
+printf 'mudd,poopie\n' > "$test_dir/short-yes.pairs"
+printf 'poopie,mudd\n' > "$test_dir/short-best.pairs"
+"$query_index" -i "$synthetic_index" poopiemudd -m 5 -n 1 \
+  --yes-pairs "$test_dir/short-yes.pairs" \
+  --best-pairs "$test_dir/short-best.pairs" \
+  > "$test_dir/short-tiers.stdout" 2> "$test_dir/short-tiers.stderr"
+grep -q 'phase 1 external pairs: 2 synthetic entries$' \
+  "$test_dir/short-tiers.stderr" ||
+  fail "a YES short-word pair suppressed its BEST reverse"
+grep -q ' poopie mudd$' "$test_dir/short-tiers.stdout" ||
+  fail "the BEST order of a short-word pair did not rank first"
+
 # --score remains symmetric and does not apply the extraction minimum.
 assert_close "$(score_value '2345 1' --word-bonus 0 \
     --pairs "$test_dir/short-first.pairs")" \
@@ -585,15 +603,14 @@ printf 'ab,cd\ncd,ab\n' > "$test_dir/pairs.txt"
   > "$test_dir/pair-list.stdout" 2> "$test_dir/pair-list.stderr"
 grep -q 'pair list: 2 pairs, 2 keys$' "$test_dir/pair-list.stderr" ||
   fail "the pair-list diagnostic did not report reversal and dedup"
-grep -v ' cd ab$' "$test_dir/pair-list.stdout" \
-  > "$test_dir/pair-list-indexed.stdout"
-cmp "$test_dir/extract-uncapped.stdout" \
-    "$test_dir/pair-list-indexed.stdout" ||
+! grep -q ' cd ab$' "$test_dir/pair-list.stdout" ||
+  fail "listing printed a second word order of an indexed pair"
+grep -q 'phase 1 external pairs: 0 synthetic entries$' \
+  "$test_dir/pair-list.stderr" ||
+  fail "listing synthesized the reverse of an indexed pair"
+cmp "$test_dir/extract-uncapped.stdout" "$test_dir/pair-list.stdout" ||
   fail "a loaded pair list changed an index-backed row at --pair-bonus 0"
-grep -q '^1 cd ab$' "$test_dir/pair-list.stdout" ||
-  fail "query-index did not synthesize a missing listed-pair orientation"
-# Listing still synthesizes the missing orientation above; --score scores only
-# what the index has.
+# --score scores only what the index has.
 expect_score_failure 'cd ab' unindexed-asserted \
   --pairs "$test_dir/pairs.txt" --pair-bonus 0 --word-bonus 0 -P 1
 grep -q 'index has no entry "cd ab"' \

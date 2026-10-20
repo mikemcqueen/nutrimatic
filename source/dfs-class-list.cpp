@@ -12,6 +12,9 @@
 #include <string.h>
 
 #include <algorithm>
+#include <array>
+#include <functional>
+#include <string_view>
 
 int dfs_symbol_index(unsigned char ch) {
   if (ch >= 'a' && ch <= 'z') return ch - 'a';
@@ -205,7 +208,7 @@ class DfsExtractor {
                DfsPairBonusMap const* weighted_pairs,
                DfsPairSet const* exception_prefixes,
                DfsSoloWords* solo_words, DfsPairSet const* rejected,
-               DfsExternalPairPolicy external_pair_policy):
+               std::vector<DfsPairRow> const* synthesis_keys):
       text_arena(1),
       member_arena(sizeof(IntermediateMember)),
       entries(0),
@@ -224,7 +227,7 @@ class DfsExtractor {
           exception_prefixes != NULL && !exception_prefixes->empty()),
       solo_words(solo_words),
       rejected(rejected),
-      external_pair_policy(external_pair_policy),
+      synthesis_keys(synthesis_keys),
       letters_left(int(letters.size())),
       nodes(0),
       signature(0) {
@@ -259,8 +262,7 @@ class DfsExtractor {
     text.clear();
     walk(reader->root(), reader->count(), 0, 0, 0,
          /*requires_pair_match=*/false);
-    if (external_pair_policy == DFS_EXTERNAL_PAIRS_SYNTHESIZE_MISSING)
-      synthesize_missing_external_pairs();
+    if (synthesis_keys != NULL) synthesize_missing_external_pairs();
   }
 
   int64_t nodes_visited() const { return nodes; }
@@ -305,32 +307,33 @@ class DfsExtractor {
     return true;
   }
 
-  void synthesize_missing_external_pair(std::string const& key) {
-    uint64_t key_signature;
-    if (!synthetic_pair_signature(key, &key_signature)) return;
+  bool is_indexed(std::string const& key) const {
     int64_t indexed_count;
-    if (reader->aggregate_entry_count(key, &indexed_count)) return;
-
-    text = key;
-    text.push_back(' ');
-    signature = key_signature;
-    emit(/*count=*/1, /*word_count=*/2, IndexReader::Node(-1));
-    signature = 0;
-    text.clear();
-    ++synthetic_external_pairs;
+    return reader->aggregate_entry_count(key, &indexed_count);
   }
 
   void synthesize_missing_external_pairs() {
-    if (weighted_pairs != NULL) {
-      for (DfsPairBonusMap::const_iterator it = weighted_pairs->begin();
-           it != weighted_pairs->end(); ++it)
-        synthesize_missing_external_pair(it->first);
-    }
-    if (pairs != NULL) {
-      for (DfsPairSet::const_iterator it = pairs->begin();
-           it != pairs->end(); ++it)
-        if (weighted_pairs == NULL || weighted_pairs->count(*it) == 0)
-          synthesize_missing_external_pair(*it);
+    std::unordered_set<std::string> seen;
+    for (size_t i = 0; i < synthesis_keys->size(); ++i) {
+      DfsPairRow const& row = (*synthesis_keys)[i];
+      std::string const key = row.entry();
+      std::string const reverse = row.entry(/*reverse=*/true);
+      if (!seen.insert(key).second) continue;
+      if (row.left.size() >= min_len && row.right.size() >= min_len)
+        seen.insert(reverse);
+
+      uint64_t key_signature;
+      if (!synthetic_pair_signature(key, &key_signature)) continue;
+      if (is_indexed(key)) continue;
+      if (has_positive_pair(reverse) && is_indexed(reverse)) continue;
+
+      text = key;
+      text.push_back(' ');
+      signature = key_signature;
+      emit(/*count=*/1, /*word_count=*/2, IndexReader::Node(-1));
+      signature = 0;
+      text.clear();
+      ++synthetic_external_pairs;
     }
   }
 
@@ -479,7 +482,7 @@ class DfsExtractor {
   bool const has_exception_prefixes;
   DfsSoloWords* const solo_words;
   DfsPairSet const* const rejected;
-  DfsExternalPairPolicy const external_pair_policy;
+  std::vector<DfsPairRow> const* const synthesis_keys;
   std::array<int, 256> bag;
   std::array<uint64_t, 256> multiplier_by_char;
   int letters_left;
@@ -542,7 +545,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
                            DfsPairSet const* exception_prefixes,
                            DfsSoloWords* solo_words,
                            DfsPairSet const* rejected,
-                           DfsExternalPairPolicy external_pair_policy):
+                           std::vector<DfsPairRow> const* synthesis_keys):
     class_count(0),
     minimum_word_len(std::max(min_word_len, 1)),
     entries(0),
@@ -572,7 +575,7 @@ DfsClassList::DfsClassList(IndexReader const* reader,
   DfsExtractor extractor(
       reader, letters, minimum_word_len, include_phrases, dictionary,
       max_extract_words, pairs, weighted_pairs, exception_prefixes, solo_words,
-      rejected, external_pair_policy);
+      rejected, synthesis_keys);
   extractor.run();
   if (solo_words != NULL) solo_words->freeze();
   nodes = extractor.nodes_visited();
@@ -784,8 +787,53 @@ void DfsClassList::resort_members(DfsScoreModel const& score_model) {
   }
 }
 
+namespace {
+
+template <typename Visit>
+void for_each_word(DfsPackedMember const& member, Visit visit) {
+  std::string_view const text(member.text, member.text_length);
+  size_t start = 0;
+  for (;;) {
+    size_t end = text.find(' ', start);
+    if (end == std::string_view::npos) end = text.size();
+    visit(text.substr(start, end - start));
+    if (end == text.size()) return;
+    start = end + 1;
+  }
+}
+
+// Equal for every order of the same words.
+uint64_t word_set_hash(DfsPackedMember const& member) {
+  std::hash<std::string_view> const hash;
+  uint64_t sum = 0;
+  for_each_word(member, [&](std::string_view word) {
+    sum += mix_bits(hash(word));
+  });
+  return sum;
+}
+
+struct WordSetEntry {
+  uint64_t hash;
+  uint32_t member;
+
+  bool operator<(WordSetEntry const& other) const {
+    if (hash != other.hash) return hash < other.hash;
+    return member < other.member;
+  }
+};
+
+// A member of one hash run and where its sorted words sit in the run's buffer.
+struct SortedWords {
+  uint32_t member;
+  uint32_t first;
+  uint32_t count;
+};
+
+}  // namespace
+
 DfsMemberSpan DfsClassList::retain_members(
-    std::vector<bool> const& keep_class, DfsMemberFilter filter) {
+    std::vector<bool> const& keep_class, DfsMemberFilter filter,
+    DfsWordOrders orders) {
   assert(keep_class.size() == class_count);
   assert(!grouping_dropped);
   DfsPackedMember* const members = members_arena.get();
@@ -794,15 +842,63 @@ DfsMemberSpan DfsClassList::retain_members(
   // in address order, and compacting in record order would overwrite ranges not
   // yet read. Mark first, then compact forward.
   std::vector<bool> keep_member(entries, false);
+  std::vector<WordSetEntry> phrases;
+  std::vector<std::string_view> run_words;
+  std::vector<SortedWords> run_members;
   DfsClassRecord const* const records = class_records.get();
   for (size_t ci = 0; ci < class_count; ++ci) {
     if (!keep_class[ci]) continue;
     DfsClassRecord const& record = records[ci];
     size_t const start = size_t(record.members - members);
+    size_t phrase_count = 0;
     for (size_t mi = 0; mi < record.member_count; ++mi) {
       int const words = record.members[mi].word_count;
       bool const keep = filter == DFS_RETAIN_ALL || words > 1;
       if (keep) keep_member[start + mi] = true;
+      if (keep && words > 1) ++phrase_count;
+    }
+    if (orders == DFS_KEEP_ALL_ORDERS || phrase_count < 2) continue;
+
+    phrases.clear();
+    for (size_t mi = 0; mi < record.member_count; ++mi)
+      if (keep_member[start + mi] && record.members[mi].word_count > 1)
+        phrases.push_back(
+            WordSetEntry{word_set_hash(record.members[mi]), uint32_t(mi)});
+    std::sort(phrases.begin(), phrases.end());
+    for (size_t run = 0; run < phrases.size();) {
+      size_t run_end = run + 1;
+      while (run_end < phrases.size() &&
+             phrases[run_end].hash == phrases[run].hash)
+        ++run_end;
+      if (run_end - run > 1) {
+        run_words.clear();
+        run_members.clear();
+        for (size_t i = run; i < run_end; ++i) {
+          uint32_t const first = uint32_t(run_words.size());
+          for_each_word(record.members[phrases[i].member],
+                        [&](std::string_view word) {
+                          run_words.push_back(word);
+                        });
+          std::sort(run_words.begin() + first, run_words.end());
+          run_members.push_back(SortedWords{
+              phrases[i].member, first, uint32_t(run_words.size() - first)});
+        }
+        for (size_t later = 1; later < run_members.size(); ++later) {
+          SortedWords const& member = run_members[later];
+          auto const words = run_words.begin() + member.first;
+          for (size_t earlier = 0; earlier < later; ++earlier) {
+            SortedWords const& kept = run_members[earlier];
+            auto const kept_words = run_words.begin() + kept.first;
+            if (keep_member[start + kept.member] &&
+                std::equal(kept_words, kept_words + kept.count, words,
+                           words + member.count)) {
+              keep_member[start + member.member] = false;
+              break;
+            }
+          }
+        }
+      }
+      run = run_end;
     }
   }
 

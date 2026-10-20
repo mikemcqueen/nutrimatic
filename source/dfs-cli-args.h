@@ -207,19 +207,6 @@ size_t resolve_search_threads(int requested);
 // false if the file can't be opened or read.
 bool load_dictionary(char const* path, DfsDictionary* dictionary);
 
-// One normalized pair-file row in written order. right is empty for a
-// standalone word; line_number is 1-based.
-struct DfsPairRow {
-  std::string left;
-  std::string right;
-  size_t line_number;
-
-  std::string entry(bool reverse = false) const {
-    if (right.empty()) return left;
-    return reverse ? right + " " + left : left + " " + right;
-  }
-};
-
 // Parse one PAIRS line using the same validation and normalization as the
 // shared file loader. Prints a source/line diagnostic on failure.
 bool parse_pair_row(
@@ -274,13 +261,15 @@ bool load_extraction_pair_file(
 // YES file's rows and non-NULL best_rows every BEST file's rows, as
 // load_extraction_pair_file() reports them. A nonempty `args.one_best_pair`
 // is loaded after the BEST files as one further BEST entry, with the same
-// semantics a BEST file holding that one line would have. Seed rows are
-// currently turned off due to excessive occurrences of non-dictionary words.
+// semantics a BEST file holding that one line would have. Seed rows go to
+// their own seed_rows, not rows, which feeds the dictionary reports: seeds hold
+// too many non-dictionary words to report.
 bool load_weighted_pair_files(
     DfsCommonArgs const& args, bool score_mode, int min_word_len,
     DfsPairBonusMap* pairs, DfsPairSet* exception_prefixes,
     std::vector<DfsPairRow>* rows = NULL,
-    std::vector<DfsPairRow>* best_rows = NULL);
+    std::vector<DfsPairRow>* best_rows = NULL,
+    std::vector<DfsPairRow>* seed_rows = NULL);
 
 // Loads and combines exclusion lists in the same format from regular files and
 // at most one workflow root, which resolves to
