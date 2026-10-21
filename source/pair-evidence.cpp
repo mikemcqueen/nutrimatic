@@ -5,16 +5,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <optional>
 
-bool PairEvidenceSource::open(char const* p1, char const* cluedata,
-                              std::string* error) {
-    if (p1 != NULL) {
+bool PairEvidenceSource::open(
+        std::optional<std::filesystem::path> const& p1,
+        std::optional<std::filesystem::path> const& cluedata,
+        std::string* error) {
+    if (p1) {
         p1_ = std::make_unique<P1Index>();
-        if (!p1_->open(p1, error)) return false;
+        if (!p1_->open(p1->string(), error)) return false;
     }
-    if (cluedata != NULL) {
+    if (cluedata) {
         clues_ = std::make_unique<ClueIndex>();
-        if (!clues_->open(cluedata, error)) return false;
+        if (!clues_->open(cluedata->string(), error)) return false;
     }
     return true;
 }
@@ -126,20 +130,23 @@ double prior_score(PairEvidence const& evidence, PriorWeights const& weights) {
     return out;
 }
 
-bool open_prior(char const* p1, char const* cluedata, char const* spec,
-                bool all, PriorWeights* weights, PairEvidenceSource* source,
+bool open_prior(std::optional<std::filesystem::path> const& p1,
+                std::optional<std::filesystem::path> const& cluedata,
+                std::optional<std::string> const& spec, bool all,
+                PriorWeights* weights, PairEvidenceSource* source,
                 std::string* error) {
-    if (!parse_prior_weights(spec != NULL ? spec : PRIOR_WEIGHTS_DEFAULT,
-                             weights, error)) {
+    if (!parse_prior_weights(spec.value_or(PRIOR_WEIGHTS_DEFAULT), weights,
+                             error)) {
         *error = "--prior-weights: " + *error;
         return false;
     }
-    bool use_p1 = all && p1 != NULL;
-    bool use_clues = all && cluedata != NULL;
+    bool use_p1 = all && p1;
+    bool use_clues = all && cluedata;
     for (size_t i = 0; i < PRIOR_TERM_COUNT; ++i) {
         if (weights->weights[i] == 0) continue;
-        bool const given = PRIOR_TERMS[i].p1 ? p1 != NULL : cluedata != NULL;
-        if (!given && spec == NULL) {
+        bool const given = PRIOR_TERMS[i].p1 ? p1.has_value()
+                                             : cluedata.has_value();
+        if (!given && !spec) {
             weights->weights[i] = 0;
         } else if (!given) {
             *error = std::string("--prior-weights ") + PRIOR_TERMS[i].name +
@@ -149,8 +156,8 @@ bool open_prior(char const* p1, char const* cluedata, char const* spec,
             (PRIOR_TERMS[i].p1 ? use_p1 : use_clues) = true;
         }
     }
-    return source->open(use_p1 ? p1 : NULL, use_clues ? cluedata : NULL,
-                        error);
+    return source->open(use_p1 ? p1 : std::nullopt,
+                        use_clues ? cluedata : std::nullopt, error);
 }
 
 std::string pair_key(std::string_view a, std::string_view b) {

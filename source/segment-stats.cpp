@@ -5,10 +5,11 @@
 #include <string.h>
 
 #include <algorithm>
-#include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -18,14 +19,15 @@
 #include "index.h"
 #include "log.h"
 #include "optparse.h"
+#include "row-input.h"
 #include "segment-output.h"
 #include "segment-rows.h"
 
 constexpr char PROGRAM[] = "segment-stats";
 
 struct Args {
-  char const* input_path = NULL;
-  char const* index_path = NULL;
+  std::filesystem::path input_path = "-";
+  std::optional<std::filesystem::path> index_path;
   std::vector<std::string> allow_paths;
 };
 
@@ -366,12 +368,13 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
     }
   }
 
-  out->input_path = optparse_arg(&options);
-  if (out->input_path != NULL && optparse_arg(&options) != NULL) {
+  char const* const input_path = optparse_arg(&options);
+  if (input_path != NULL && optparse_arg(&options) != NULL) {
     report(PROGRAM, "at most one FILE may be given");
     return false;
   }
-  if (out->index_path == NULL) {
+  if (input_path != NULL) out->input_path = input_path;
+  if (!out->index_path) {
     char const* idx = getenv("IDX");
     if (idx != NULL && idx[0] != '\0') out->index_path = idx;
   }
@@ -402,10 +405,10 @@ int main(int argc, char* argv[]) {
       args.allow_paths.empty() ? NULL : &allowed;
 
   FILE* index_file = NULL;
-  if (args.index_path != NULL) {
-    index_file = fopen(args.index_path, "rb");
+  if (args.index_path) {
+    index_file = fopen(args.index_path->c_str(), "rb");
     if (index_file == NULL) {
-      report(PROGRAM, "can't open \"%s\": %s", args.index_path,
+      report(PROGRAM, "can't open \"%s\": %s", args.index_path->c_str(),
              strerror(errno));
       return 1;
     }
@@ -416,23 +419,13 @@ int main(int argc, char* argv[]) {
   {
     std::unique_ptr<IndexReader> index;
     if (index_file != NULL) index.reset(new IndexReader(index_file));
-    if (args.input_path == NULL || strcmp(args.input_path, "-") == 0) {
-      ok = read_stats(&std::cin, "-", allowed_pairs, index.get(), &stats);
-    } else {
-      errno = 0;
-      std::ifstream input(args.input_path);
-      if (!input.is_open()) {
-        report(PROGRAM, "can't open \"%s\": %s", args.input_path,
-               strerror(errno));
-        ok = false;
-      } else {
-        ok = read_stats(
-            &input, args.input_path, allowed_pairs, index.get(), &stats);
-      }
-    }
+    ok = read_input_file(PROGRAM, args.input_path, [&](std::istream& input) {
+      return read_stats(&input, args.input_path.native(), allowed_pairs,
+                        index.get(), &stats);
+    });
   }
   if (index_file != NULL && fclose(index_file) != 0 && ok) {
-    report(PROGRAM, "can't close index \"%s\"", args.index_path);
+    report(PROGRAM, "can't close index \"%s\"", args.index_path->c_str());
     ok = false;
   }
   if (!ok) return 1;

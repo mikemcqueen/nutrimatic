@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -38,7 +39,7 @@
 static int const DEFAULT_TOP = 100;
 
 struct Args {
-  char const* index_file;
+  std::optional<std::filesystem::path> index_file;
   std::string letters;
   std::string score_sequence;
   std::string near_input;
@@ -53,8 +54,8 @@ struct Args {
   bool near;
   bool sd;
   bool ptm;
-  char const* score_incompatible_option;
-  char const* near_incompatible_option;
+  std::string_view score_incompatible_option;
+  std::string_view near_incompatible_option;
 };
 
 static void usage(std::string_view program, FILE* out) {
@@ -190,13 +191,13 @@ static struct optparse_long const long_options[] = {
   { NULL, 0, OPTPARSE_NONE },
 };
 
-static void mark_score_incompatible(Args* args, char const* option) {
-  if (args->score_incompatible_option == NULL)
+static void mark_score_incompatible(Args* args, std::string_view option) {
+  if (args->score_incompatible_option.empty())
     args->score_incompatible_option = option;
 }
 
-static void mark_near_incompatible(Args* args, char const* option) {
-  if (args->near_incompatible_option == NULL)
+static void mark_near_incompatible(Args* args, std::string_view option) {
+  if (args->near_incompatible_option.empty())
     args->near_incompatible_option = option;
 }
 
@@ -223,7 +224,7 @@ static bool validate_literal_entry(std::string const& entry) {
 
 static bool index_from_env(std::string_view program,
                            std::string_view missing_hint,
-                           char const** index_file) {
+                           std::optional<std::filesystem::path>* index_file) {
   char const* idx = getenv("IDX");
   if (idx == NULL || *idx == '\0') {
     fprintf(stderr, "error: missing index; use %.*s or set IDX\n",
@@ -241,7 +242,7 @@ static bool index_from_env(std::string_view program,
 }
 
 static bool parse_args(char* argv[], Args* out, bool* help) {
-  out->index_file = NULL;
+  out->index_file.reset();
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
   out->num_words = 0;
@@ -252,8 +253,8 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
   out->near = false;
   out->sd = false;
   out->ptm = true;
-  out->score_incompatible_option = NULL;
-  out->near_incompatible_option = NULL;
+  out->score_incompatible_option = {};
+  out->near_incompatible_option = {};
 
   struct optparse options;
   optparse_init(&options, argv);
@@ -338,12 +339,12 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
   if (out->near) {
-    if (out->near_incompatible_option != NULL) {
-      fprintf(stderr, "error: %s cannot be used with --near\n",
-              out->near_incompatible_option);
+    if (!out->near_incompatible_option.empty()) {
+      fprintf(stderr, "error: %.*s cannot be used with --near\n",
+              SV_ARG(out->near_incompatible_option));
       return false;
     }
-    if (out->index_file == NULL &&
+    if (!out->index_file &&
         !index_from_env(argv[0], "-i INDEX", &out->index_file))
       return false;
     out->near_input = letters;
@@ -356,14 +357,14 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
           out->score ? NULL : &out->workflow_reject_files,
           /*allow_targetless_workflow=*/true))
     return false;
-  if (out->index_file == NULL &&
+  if (!out->index_file &&
       !index_from_env(argv[0], "-i INDEX or --wfroot DIR", &out->index_file))
     return false;
 
   if (out->score) {
-    if (out->score_incompatible_option != NULL) {
-      fprintf(stderr, "error: %s cannot be used with --score\n",
-              out->score_incompatible_option);
+    if (!out->score_incompatible_option.empty()) {
+      fprintf(stderr, "error: %.*s cannot be used with --score\n",
+              SV_ARG(out->score_incompatible_option));
       return false;
     }
     out->score_sequence = letters;
@@ -1070,9 +1071,9 @@ int main(int argc, char* argv[]) {
           args.score_sequence, &positional_score_value))
     return 2;
 
-  FILE* fp = fopen(args.index_file, "rb");
+  FILE* fp = fopen(args.index_file->c_str(), "rb");
   if (fp == NULL) {
-    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
+    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file->c_str());
     return 1;
   }
   IndexReader reader(fp);

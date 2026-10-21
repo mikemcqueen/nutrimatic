@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -76,8 +77,8 @@ inline constexpr int DFS_OPT_BEST_BONUS = 315;
 // two CLIs disagree on it; each sets its own before the option loop.
 struct DfsCommonArgs {
   std::string used_letters;
-  char const* dictionary_file = NULL;
-  char const* pair_file = NULL;
+  std::optional<std::filesystem::path> dictionary_file;
+  std::optional<std::filesystem::path> pair_file;
   int min_word_len = DFS_DEFAULT_MIN_WORD_LEN;
   int max_extract_words = 0;
   int top = 0;
@@ -98,8 +99,6 @@ struct DfsCommonArgs {
   std::string workflow_root;
   std::string target;
   bool target_complete = false;
-  std::string workflow_index_file;
-  std::string workflow_dictionary_file;
   std::vector<std::string> solo_words;
   bool hide_solo_words = false;
   bool show_score = true;
@@ -117,7 +116,7 @@ enum DfsOptionResult {
 // `score_incompatible` is false only for options that still mean something
 // when no phase-1 extraction runs.
 struct DfsCommonOption {
-  char const* name;
+  std::string_view name;
   bool score_incompatible;
 };
 
@@ -137,7 +136,8 @@ DfsOptionResult dfs_parse_common_option(
 // workflow without a target or seed, and skips its classified YES source
 // when no target is selected.
 bool finalize_dfs_common_args(
-    DfsCommonArgs* args, std::string_view program, char const** index_file,
+    DfsCommonArgs* args, std::string_view program,
+    std::optional<std::filesystem::path>* index_file,
     std::vector<std::string>* workflow_reject_files,
     bool allow_targetless_workflow = false);
 

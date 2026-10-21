@@ -126,8 +126,8 @@ enum OrderMode { ORDER_PRINTED, ORDER_BEST };
 enum SortMode { SORT_INPUT, SORT_COHERENCE };
 
 struct Args {
-  char const* index_path;
-  char const* input_path;
+  std::filesystem::path index_path;
+  std::filesystem::path input_path;
   InputFormat format;
   OrderMode order;
   SortMode sort;
@@ -433,15 +433,17 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
     }
   }
 
-  out->index_path = optparse_arg(&options);
-  out->input_path = optparse_arg(&options);
-  if (out->index_path == NULL || out->input_path == NULL ||
+  char const* const index_path = optparse_arg(&options);
+  char const* const input_path = optparse_arg(&options);
+  if (index_path == NULL || input_path == NULL ||
       optparse_arg(&options) != NULL ||
       !seen_format || !seen_order) {
     short_usage(argv[0]);
     return false;
   }
-  if (strcmp(out->input_path, "-") == 0) {
+  out->index_path = index_path;
+  out->input_path = input_path;
+  if (out->input_path == "-") {
     report(PROGRAM, "INPUT must be a regular file, not stdin");
     return false;
   }
@@ -579,7 +581,7 @@ static bool summarize_input(
     FILE* fp, Args const& args, CoherenceResourceLimits const& limits,
     InputSummary* summary) {
   *summary = {};
-  std::string_view const path(args.input_path);
+  std::string_view const path = args.input_path.native();
   ParsedLine row;
   uint64_t line = 0;
   while (true) {
@@ -624,14 +626,14 @@ static bool summarize_input(
           total > limits.order_relaxations) {
         report(PROGRAM, "ordering phase estimated more than %" PRIu64
                " relaxations at %s:%" PRIu64, limits.order_relaxations,
-               args.input_path, line);
+               args.input_path.c_str(), line);
         return false;
       }
       summary->order_relaxation_count = total;
     }
   }
   if (summary->answer_count == 0) {
-    report(PROGRAM, "%s: input is empty", args.input_path);
+    report(PROGRAM, "%s: input is empty", args.input_path.c_str());
     return false;
   }
   if (summary->word_occurrence_count > UINT32_MAX ||
@@ -716,7 +718,7 @@ static bool load_candidates(
     std::vector<WordInfo>* words,
     std::vector<Candidate>* candidates,
     std::vector<WordId>* candidate_words) {
-  std::string_view const path(args.input_path);
+  std::string_view const path = args.input_path.native();
   ParsedLine row;
   uint64_t line = 0;
   uint64_t occurrences = 0;
@@ -1450,15 +1452,16 @@ int run_measure_coherence(int argc, char* argv[],
     return 1;
   }
 
-  FILE* input = fopen(args.input_path, "rb");
+  FILE* input = fopen(args.input_path.c_str(), "rb");
   if (input == NULL) {
-    report(PROGRAM, "can't open INPUT \"%s\"", args.input_path);
+    report(PROGRAM, "can't open INPUT \"%s\"", args.input_path.c_str());
     return 1;
   }
   struct stat opened_status;
   if (fstat(fileno(input), &opened_status) != 0 ||
       !S_ISREG(opened_status.st_mode)) {
-    report(PROGRAM, "INPUT \"%s\" is not a regular file", args.input_path);
+    report(PROGRAM, "INPUT \"%s\" is not a regular file",
+           args.input_path.c_str());
     fclose(input);
     return 1;
   }
@@ -1512,9 +1515,9 @@ int run_measure_coherence(int argc, char* argv[],
         pair_occurrence_charge, &pair_occurrences, &pairs);
     double const pair_build_seconds = seconds_since(started);
 
-    index = fopen(args.index_path, "rb");
+    index = fopen(args.index_path.c_str(), "rb");
     if (index == NULL) {
-      report(PROGRAM, "can't open INDEX \"%s\"", args.index_path);
+      report(PROGRAM, "can't open INDEX \"%s\"", args.index_path.c_str());
       return 1;
     }
     double word_lookup_seconds = 0.0;

@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <iterator>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -50,16 +51,16 @@ struct BagStatsArgs {
     bool drop_no = true;
     int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
     int min_pair_bag_length = DEFAULT_MIN_PB_LENGTH;
-    char const* search_text = DEFAULT_SEARCH;
+    std::string search_text = DEFAULT_SEARCH;
     Search search;
-    char const* prospects_file = NULL;
+    std::optional<std::filesystem::path> prospects_file;
     int threads = 1;
     // At most this many MB of cached remainder counts, 0 for none.
     int cache_size_mb = BAG_STATS_DEFAULT_CACHE_SIZE_MB;
     int progress = DEFAULT_PROGRESS_SECONDS;
     RankArgs rank;
-    char const* pairs_file = NULL;
-    char const* dictionary_file = NULL;
+    std::filesystem::path pairs_file;
+    std::filesystem::path dictionary_file;
 };
 
 enum {

@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -123,9 +124,8 @@ inline double bag_stats_percentile(uint64_t below, uint64_t through,
   return double(below + through) / 2 / double(size);
 }
 
-// `path` as the header names it: absolute, `-` for standard input, empty for
-// none.
-std::string bag_stats_header_path(char const* path);
+// `path` as the header names it: absolute, or `-` for standard input.
+std::string bag_stats_header_path(std::filesystem::path const& path);
 
 void write_bag_stats_header(FILE* out, BagStatsHeader const& header);
 

@@ -112,12 +112,12 @@ DfsBestBonusPolicy dfs_best_bonus_policy(
 bool prepare_dfs_scoring_inputs(
     IndexReader* reader, DfsCommonArgs const& args, bool score_mode,
     size_t exact_segments, DfsPreparedClassList* out) {
-  if (args.pair_file != NULL) {
+  if (args.pair_file) {
     bool const loaded = score_mode
         ? load_pair_file(
-              args.pair_file, "pair list", &out->pairs, false, false, true)
+              *args.pair_file, "pair list", &out->pairs, false, false, true)
         : load_extraction_pair_file(
-              args.pair_file, "pair list", args.min_word_len,
+              *args.pair_file, "pair list", args.min_word_len,
               &out->pairs, &out->exception_prefixes, false, false,
               &out->external_rows);
     if (!loaded) return false;
@@ -138,7 +138,7 @@ bool prepare_dfs_scoring_inputs(
        !out->weighted_pairs.empty()))
     out->solo_words.reset(new DfsSoloWords(
         reader, args.solo_words,
-        args.pair_file != NULL ? &out->pairs : NULL, out->model.get(),
+        args.pair_file ? &out->pairs : NULL, out->model.get(),
         !out->weighted_pairs.empty() ? &out->weighted_pairs : NULL));
   return true;
 }
@@ -150,8 +150,9 @@ bool prepare_dfs_class_list(
     size_t exact_segments, DfsPreparedClassList* out, bool ptm,
     std::vector<std::string> const* reject_files) {
   DfsDictionary const* dictionary_filter = NULL;
-  if (args.dictionary_file != NULL) {
-    if (!load_dictionary(args.dictionary_file, &out->dictionary)) return false;
+  if (args.dictionary_file) {
+    if (!load_dictionary(*args.dictionary_file, &out->dictionary))
+      return false;
     dictionary_filter = &out->dictionary;
   }
 
@@ -193,7 +194,7 @@ bool prepare_dfs_class_list(
   out->classes.reset(new DfsClassList(
       reader, letters, args.min_word_len, /*include_phrases=*/true,
       dictionary_filter, args.max_extract_words, out->model.get(),
-      args.pair_file != NULL ? &out->pairs : NULL,
+      args.pair_file ? &out->pairs : NULL,
       !out->weighted_pairs.empty() ? &out->weighted_pairs : NULL,
       !out->exception_prefixes.empty() ? &out->exception_prefixes : NULL,
       out->solo_words.get(),

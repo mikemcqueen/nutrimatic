@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,11 +30,11 @@ int const OPT_NO_NOPAIRS = 260;
 
 struct Args {
   PfilterOptions options;
-  char const* dictionary_file = NULL;
+  std::optional<std::filesystem::path> dictionary_file;
   bool no_dict = false;
   bool cv = false;
   bool csv = false;
-  char const* source = NULL;
+  std::filesystem::path source;
 };
 
 void usage(FILE* out) {
@@ -196,13 +197,15 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
-  if (out->no_dict && out->dictionary_file != NULL) {
+  if (out->no_dict && out->dictionary_file) {
     report(PROGRAM, "--dict and --no-dict can't be combined");
     return false;
   }
 
-  out->source = optparse_arg(&options);
-  return out->source != NULL && optparse_arg(&options) == NULL;
+  char const* const source = optparse_arg(&options);
+  if (source == NULL || optparse_arg(&options) != NULL) return false;
+  out->source = source;
+  return true;
 }
 
 // Prints the lines of `source` that `filter` keeps, each padded and followed
@@ -259,8 +262,8 @@ int main(int argc, char* argv[]) {
   DfsDictionary dictionary;
   if (!args.no_dict) {
     std::filesystem::path dict_path;
-    if (args.dictionary_file != NULL) {
-      dict_path = args.dictionary_file;
+    if (args.dictionary_file) {
+      dict_path = *args.dictionary_file;
     } else {
       char const* const root = require_workflow_root(PROGRAM);
       if (root == NULL) return 1;

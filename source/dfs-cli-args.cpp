@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -349,7 +350,7 @@ static bool finalize_dfs_bonuses(DfsCommonArgs* args) {
       return false;
     }
   }
-  if (args->pair_file == NULL) args->pair_bonus = 0.0;
+  if (!args->pair_file) args->pair_bonus = 0.0;
   return true;
 }
 
@@ -774,7 +775,7 @@ DfsOptionResult dfs_parse_common_option(
     int option, struct optparse* options, DfsCommonArgs* out,
     DfsCommonOption* which) {
   DfsCommonOption info;
-  info.name = NULL;
+  info.name = {};
   info.score_incompatible = true;
 
   switch (option) {
@@ -947,7 +948,7 @@ DfsOptionResult dfs_parse_common_option(
 }
 
 // Resolves --wf/--wfroot defaults and pair sources after option parsing.
-// Workflow mode supplies a default index when `*index_file` is NULL, plus a
+// Workflow mode supplies a default index when `*index_file` is empty, plus a
 // default dictionary. Classified YES is loaded when a target is selected, or
 // when the caller requires the usual workflow sources. An explicit index is
 // retained.
@@ -955,11 +956,12 @@ DfsOptionResult dfs_parse_common_option(
 // target whose sentence identifies one sentence seed; a complete target also
 // supplies its optional best.pairs unless --best-pairs replaced it.
 static bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, std::string_view program, char const** index_file,
+    DfsCommonArgs* args, std::string_view program,
+    std::optional<std::filesystem::path>* index_file,
     bool allow_targetless_workflow) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
-  if (args->pair_file != NULL &&
+  if (args->pair_file &&
       (weighted || args->workflow || !args->workflow_root.empty())) {
     fputs("error: --pairs cannot be combined with --seed-pairs, "
           "--yes-pairs, --best-pairs, or --more-best-pairs\n", stderr);
@@ -1000,15 +1002,8 @@ static bool finalize_dfs_workflow_args(
       return false;
   }
 
-  if (*index_file == NULL) {
-    args->workflow_index_file = (root / WORKFLOW_INDEX_PATH).string();
-    *index_file = args->workflow_index_file.c_str();
-  }
-  if (args->dictionary_file == NULL) {
-    args->workflow_dictionary_file =
-        (root / WORKFLOW_DICT_PATH).string();
-    args->dictionary_file = args->workflow_dictionary_file.c_str();
-  }
+  if (!*index_file) *index_file = root / WORKFLOW_INDEX_PATH;
+  if (!args->dictionary_file) args->dictionary_file = root / WORKFLOW_DICT_PATH;
 
   if (!allow_targetless_workflow || !target_parts.empty()) {
     fs::path const yes = root / WORKFLOW_YES_PAIRS_PATH;
@@ -1116,7 +1111,8 @@ static bool collect_workflow_reject_files(
 }
 
 bool finalize_dfs_common_args(
-    DfsCommonArgs* args, std::string_view program, char const** index_file,
+    DfsCommonArgs* args, std::string_view program,
+    std::optional<std::filesystem::path>* index_file,
     std::vector<std::string>* workflow_reject_files,
     bool allow_targetless_workflow) {
   if (!finalize_dfs_bonuses(args)) return false;

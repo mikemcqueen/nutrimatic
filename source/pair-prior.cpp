@@ -9,6 +9,8 @@
 #include "row-input.h"
 
 #include <cstdio>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -23,11 +25,11 @@ constexpr int OPT_FEATURES = 258;
 constexpr int OPT_PRIOR_WEIGHTS = 259;
 
 struct Args {
-    char const* p1 = NULL;
-    char const* clues = NULL;
-    char const* prior_weights = NULL;
+    std::optional<std::filesystem::path> p1;
+    std::optional<std::filesystem::path> clues;
+    std::optional<std::string> prior_weights;
     bool features = false;
-    std::vector<char const*> pairs;
+    std::vector<std::filesystem::path> pairs;
 };
 
 void usage(std::string_view program, FILE* out) {
@@ -100,11 +102,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     for (char const* arg; (arg = optparse_arg(&options)) != NULL;)
         out->pairs.push_back(arg);
     if (out->pairs.empty()) return false;
-    if (out->p1 == NULL && out->clues == NULL) {
+    if (!out->p1 && !out->clues) {
         report(PROGRAM, "needs --p1, --clues or both");
         return false;
     }
-    if (out->features && out->prior_weights != NULL) {
+    if (out->features && out->prior_weights) {
         report(PROGRAM, "--features and --prior-weights don't go together");
         return false;
     }
@@ -135,7 +137,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::unordered_set<std::string> seen;
-    for (char const* path : args.pairs) {
+    for (std::filesystem::path const& path : args.pairs) {
         bool const read = read_rows(PROGRAM, path, "pairs", false,
             [&](DfsPairRow const& row, std::string const&) {
                 if (!seen.insert(pair_key(row.left, row.right)).second)

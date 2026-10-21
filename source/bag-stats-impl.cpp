@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 
 #include "bad-bag-bitmap.h"
 #include "dfs-cli-help.h"
@@ -104,9 +105,8 @@ size_t bag_stats_pair_length(std::string const& pair) {
   }));
 }
 
-std::string bag_stats_header_path(char const* path) {
-  if (path == NULL) return "";
-  if (strcmp(path, "-") == 0) return path;
+std::string bag_stats_header_path(std::filesystem::path const& path) {
+  if (path == "-") return "-";
   return std::filesystem::absolute(path).lexically_normal().string();
 }
 

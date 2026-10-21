@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -153,7 +154,7 @@ static bool parse_count64(std::string_view in, std::string_view what,
 static int const DEFAULT_MIN_WORD_LEN = 4;
 
 struct Args {
-  char const* index_file;
+  std::filesystem::path index_file;
   std::string letters;  // the bag, with any used letters already removed
   int min_word_len;
   int max_words;        // implied by min_word_len; 0 = unlimited
@@ -266,9 +267,9 @@ int main(int argc, char *argv[]) {
   Args args;
   if (!parse_args(argv, &args)) return 2;
 
-  FILE *fp = fopen(args.index_file, "rb");
+  FILE *fp = fopen(args.index_file.c_str(), "rb");
   if (fp == NULL) {
-    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
+    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file.c_str());
     return 1;
   }
 
