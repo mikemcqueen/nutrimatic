@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,7 +34,7 @@ struct Args {
   std::string letters;
   int min_word_length = DEFAULT_MIN_WORD_LENGTH;
   int max_letters = 0;
-  char const* dictionary = NULL;
+  std::optional<std::filesystem::path> dictionary;
   bool bitmap = false;
   int threads = 1;
 };
@@ -381,8 +382,8 @@ int main(int argc, char* argv[]) {
   }
 
   std::filesystem::path dict_path;
-  if (args.dictionary != NULL) {
-    dict_path = args.dictionary;
+  if (args.dictionary) {
+    dict_path = *args.dictionary;
   } else {
     char const* const root = require_workflow_root(PROGRAM);
     if (root == NULL) return 1;

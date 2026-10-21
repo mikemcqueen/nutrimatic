@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -20,7 +21,7 @@ namespace {
 constexpr int OPT_MIN_MAX_WORDS = 256;
 
 struct Args {
-    char const* dictionary_file = NULL;
+    std::optional<std::filesystem::path> dictionary_file;
     PairsOptions options;
 };
 
@@ -142,20 +143,17 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    std::string default_dictionary;
-    if (args.dictionary_file == NULL) {
+    if (!args.dictionary_file) {
         char const* const root = require_workflow_root(PROGRAM);
         if (root == NULL) return 1;
-        default_dictionary =
-            (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
-        args.dictionary_file = default_dictionary.c_str();
+        args.dictionary_file = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
     }
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
 
-    bool const dict_stdin = strcmp(args.dictionary_file, "-") == 0;
-    FILE* wf = dict_stdin ? stdin : fopen(args.dictionary_file, "r");
-    if (!wf) { perror(args.dictionary_file); return 1; }
+    bool const dict_stdin = args.dictionary_file == "-";
+    FILE* wf = dict_stdin ? stdin : fopen(args.dictionary_file->c_str(), "r");
+    if (!wf) { perror(args.dictionary_file->c_str()); return 1; }
 
     char line[4096];
     std::string word;

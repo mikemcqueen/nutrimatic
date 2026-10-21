@@ -8,6 +8,7 @@
 #include "index.h"
 #include "log.h"
 #include "optparse.h"
+#include "row-input.h"
 #include "segment-rows.h"
 
 #include <errno.h>
@@ -18,8 +19,9 @@
 #include <sys/stat.h>
 
 #include <algorithm>
-#include <fstream>
+#include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,8 +36,8 @@ struct Args {
   std::vector<std::string> workflow_reject_files;
   // Empty, or -1 for the segment count, until the first row supplies it.
   std::string letters;
-  char const* index_file = NULL;
-  char const* results_file = NULL;
+  std::optional<std::filesystem::path> index_file;
+  std::filesystem::path results_file = "-";
   int num_segments = -1;
   int sentence = CLASSIFIED_NO_SENTENCE;
   bool show_bonus = false;
@@ -205,7 +207,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
   }
 
-  out->results_file = optparse_arg(&options);
+  char const* const results_file = optparse_arg(&options);
+  if (results_file != NULL) out->results_file = results_file;
   if (optparse_arg(&options) != NULL) {
     report(PROGRAM, "at most one FILE may be specified");
     usage(argv[0], stderr);
@@ -343,34 +346,25 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  std::ifstream results_input;
-  std::istream* input = &std::cin;
-  char const* input_name = "-";
-  if (args.results_file != NULL && strcmp(args.results_file, "-") != 0) {
-    errno = 0;
-    results_input.open(args.results_file, std::ios::binary);
-    if (!results_input.is_open()) {
-      report(PROGRAM, "can't open \"%s\": %s", args.results_file,
-             strerror(errno));
-      return 1;
-    }
-    input = &results_input;
-    input_name = args.results_file;
-  }
-
-  FILE* index = fopen(args.index_file, "rb");
+  FILE* index = fopen(args.index_file->c_str(), "rb");
   if (index == NULL) {
-    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
+    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file->c_str());
     return 1;
   }
 
   int status = 1;
   {
     IndexReader reader(index);
-    status = rerank_stream(input, input_name, &args, &reader) ? 0 : 1;
+    bool const ok = read_input_file(PROGRAM, args.results_file,
+        [&](std::istream& input) {
+          return rerank_stream(&input, args.results_file.native(), &args,
+                               &reader);
+        });
+    status = ok ? 0 : 1;
   }
   if (fclose(index) != 0 && status == 0) {
-    report(PROGRAM, "can't close index \"%s\"", args.index_file);
+    report(PROGRAM, "can't close index \"%s\"",
+           args.index_file->c_str());
     return 1;
   }
   return status;

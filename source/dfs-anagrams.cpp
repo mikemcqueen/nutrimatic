@@ -18,6 +18,8 @@
 #include <string.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,7 +27,7 @@
 static int const DEFAULT_TOP = 10000;
 
 struct Args {
-  char const* index_file;
+  std::optional<std::filesystem::path> index_file;
   std::string letters;
   DfsCommonArgs common;
   DfsRepeatPolicy repeats;
@@ -255,7 +257,7 @@ static struct optparse_long const long_options[] = {
 };
 
 static bool parse_args(char* argv[], Args* out, bool* help) {
-  out->index_file = NULL;
+  out->index_file.reset();
   out->common = DfsCommonArgs();
   out->common.top = DEFAULT_TOP;
   out->common.max_extract_words = 2;
@@ -436,7 +438,7 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
     usage(argv[0], stderr);
     return false;
   }
-  if (out->index_file == NULL) {
+  if (!out->index_file) {
     fputs("error: missing index; use -i INDEX or --wfroot DIR\n", stderr);
     usage(argv[0], stderr);
     return false;
@@ -483,9 +485,9 @@ int main(int argc, char* argv[]) {
       args.exact_letters, args.common.top, preprocess_threads, search_threads,
       args.score_cache_bytes / DFS_MIB, args.common.segment_penalty);
 
-  FILE* fp = fopen(args.index_file, "rb");
+  FILE* fp = fopen(args.index_file->c_str(), "rb");
   if (fp == NULL) {
-    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file);
+    fprintf(stderr, "error: can't open \"%s\"\n", args.index_file->c_str());
     return 1;
   }
 

@@ -3,8 +3,10 @@
 #include <string.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -53,8 +55,8 @@ struct CommonOutput {
 };
 
 struct Args {
-  char const* results_path = NULL;
-  char const* pairs_path = NULL;
+  std::filesystem::path results_path;
+  std::filesystem::path pairs_path;
   OutputMode mode = OUTPUT_SEGMENTS;
   PairFilterOptions filter_options;
 };
@@ -370,7 +372,8 @@ int main(int argc, char* argv[]) {
   CommonOutput output;
   if (!read_input_file(PROGRAM, args.results_path,
           [&](std::istream& input) {
-            return collect_common(&input, args.results_path, filters, pairs,
+            return collect_common(&input, args.results_path.native(), filters,
+                pairs,
                 spellings, args.mode, &output);
           }))
     return 1;

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -52,10 +53,10 @@ struct RankArgs {
     std::vector<BagStatsSortFlag const*> sorts;
     bool by_length = false;
     bool by_pick = false;
-    char const* prior_file = NULL;
-    char const* p1 = NULL;
-    char const* clues = NULL;
-    char const* prior_weights = NULL;
+    std::optional<std::filesystem::path> prior_file;
+    std::optional<std::filesystem::path> p1;
+    std::optional<std::filesystem::path> clues;
+    std::optional<std::string> prior_weights;
     bool top_segments = false;
     // --score, the row's picks as PAIR names them, each as its two words.
     std::vector<std::string> score;
@@ -180,14 +181,15 @@ class PairPickFilter {
 };
 
 // load_pair_bags() of PAIRS into `pair_bags`, less PairPickFilter's, and,
-// unless `prospects_file` is NULL, of it into `prospect_bags`, their priors
+// when `prospects_file` is given, of it into `prospect_bags`, their priors
 // from `args`' --prior or --p1, --clues and --prior-weights, freed before it
 // returns. Unless `final_bags` is null, also every bag of PAIRS into it, with
 // `final_rows` as load_pair_bags() takes `rows`. `pair_bags` may be null to
 // skip it, and with `final_bags` null too PAIRS isn't read. `has_prior`:
 // whether `args` gives one.
 bool load_pick_bags(std::string_view program, RankArgs const& args,
-                    char const* prospects_file, char const* pairs_file,
+                    std::optional<std::filesystem::path> const& prospects_file,
+                    std::filesystem::path const& pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     int min_pair_length, std::vector<PairBag>* prospect_bags,
                     std::vector<PairBag>* pair_bags,

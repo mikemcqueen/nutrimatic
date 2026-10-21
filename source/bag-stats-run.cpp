@@ -56,12 +56,13 @@ RankOption parse_common_option(std::string_view program, int option,
 
 bool check_common_args(std::string_view program, struct optparse* options,
                        BagStatsArgs* out) {
-    char const* letters = optparse_arg(options);
-    out->pairs_file = optparse_arg(options);
-    out->dictionary_file = optparse_arg(options);
-    if (out->dictionary_file == NULL || optparse_arg(options) != NULL)
-        return false;
+    char const* const letters = optparse_arg(options);
+    char const* const pairs = optparse_arg(options);
+    char const* const dictionary = optparse_arg(options);
+    if (dictionary == NULL || optparse_arg(options) != NULL) return false;
     out->letters = letters;
+    out->pairs_file = pairs;
+    out->dictionary_file = dictionary;
     if (!parse_search(program, out->search_text, &out->search)) return false;
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
         report(program, "-s doesn't go with --no-nopairs");
@@ -79,10 +80,10 @@ bool check_common_args(std::string_view program, struct optparse* options,
             {rank.by_pick, "--by-pick"},
             {!rank.score.empty(), "--score"},
             {rank.score_detail, "--score-detail"},
-            {rank.prior_file != NULL, "--prior"},
-            {rank.p1 != NULL, "--p1"},
-            {rank.clues != NULL, "--clues"},
-            {rank.prior_weights != NULL, "--prior-weights"},
+            {rank.prior_file.has_value(), "--prior"},
+            {rank.p1.has_value(), "--p1"},
+            {rank.clues.has_value(), "--clues"},
+            {rank.prior_weights.has_value(), "--prior-weights"},
             {rank.top_segments, "--top-segments"},
             {rank.best_pairs != BestPairs::NONE, "--best-pairs"},
         };
@@ -108,14 +109,13 @@ bool check_common_args(std::string_view program, struct optparse* options,
         return false;
     }
     if (!check_rank_args(program, rank, out->search)) return false;
-    if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
+    if ((out->search.prospects > 0) != out->prospects_file.has_value()) {
         report(program, "--pp goes with a ppb step in --ss");
         return false;
     }
-    int const stdin_inputs = (strcmp(out->pairs_file, "-") == 0) +
-        (strcmp(out->dictionary_file, "-") == 0) +
-        (out->prospects_file != NULL && strcmp(out->prospects_file, "-") == 0) +
-        (rank.prior_file != NULL && strcmp(rank.prior_file, "-") == 0);
+    int const stdin_inputs = (out->pairs_file == "-") +
+        (out->dictionary_file == "-") + (out->prospects_file == "-") +
+        (rank.prior_file == "-");
     if (stdin_inputs > 1) {
         report(program, "only one of PAIRS, DICT, --pp and --prior can "
                "be -");
@@ -401,7 +401,10 @@ void write_walk_header(WalkBase const& walk, std::string const& letters) {
                                     args.min_word_bag_length,
                                     args.min_pair_bag_length,
                                     search_text(args.search),
-                                    bag_stats_header_path(args.prospects_file),
+                                    args.prospects_file
+                                        ? bag_stats_header_path(
+                                              *args.prospects_file)
+                                        : "",
                                     args.sentence,
                                     bag_stats_header_path(args.pairs_file),
                                     bag_stats_header_path(args.dictionary_file)});

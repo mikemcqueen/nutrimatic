@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,8 +39,8 @@ struct Args {
   int length = DEFAULT_LENGTH;
   int sentence = CLASSIFIED_NO_SENTENCE;
   bool reverse = false;
-  char const* dictionary_file = NULL;
-  char const* source = NULL;
+  std::optional<std::filesystem::path> dictionary_file;
+  std::filesystem::path source;
 };
 
 struct SubsetCount {
@@ -132,8 +133,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   if (letters == NULL) return false;
   if (!make_letter_bag(letters, used_letters, &out->bag)) return false;
 
-  out->source = optparse_arg(&options);
-  return out->source != NULL && optparse_arg(&options) == NULL;
+  char const* const source = optparse_arg(&options);
+  if (source == NULL || optparse_arg(&options) != NULL) return false;
+  out->source = source;
+  return true;
 }
 
 int const SLOT_IGNORED = -2;
@@ -215,9 +218,9 @@ int main(int argc, char* argv[]) {
 
   char const* const root = require_workflow_root(PROGRAM);
   if (root == NULL) return 1;
-  std::filesystem::path const dict_path = args.dictionary_file != NULL
-      ? std::filesystem::path(args.dictionary_file)
-      : std::filesystem::path(root) / WORKFLOW_DICT_PATH;
+  std::filesystem::path const dict_path =
+      args.dictionary_file.value_or(std::filesystem::path(root) /
+                                    WORKFLOW_DICT_PATH);
   DfsDictionary dictionary;
   if (!load_dictionary(dict_path, &dictionary)) return 1;
 
@@ -250,7 +253,8 @@ int main(int argc, char* argv[]) {
               return true;
             DfsPairRow row;
             if (!parse_pair_row(
-                    line, "input", args.source, number, true, &row))
+                    line, "input", args.source.native(), number, true,
+                    &row))
               return false;
             if ((args.max_letters != 0 &&
                     row.left.size() + row.right.size() >

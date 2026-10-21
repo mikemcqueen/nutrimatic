@@ -4,7 +4,9 @@
 #include "clue-index.h"
 #include "p1-index.h"
 
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,9 +23,11 @@ struct PairEvidence {
 class PairEvidenceSource {
   public:
     // Opens a make-p1-index file, `p1`, and the clue index beside
-    // `cluedata`; either may be NULL. False, with `*error` set, when one
+    // `cluedata`; either may be absent. False, with `*error` set, when one
     // can't be opened.
-    bool open(char const* p1, char const* cluedata, std::string* error);
+    bool open(std::optional<std::filesystem::path> const& p1,
+              std::optional<std::filesystem::path> const& cluedata,
+              std::string* error);
 
     PairEvidence lookup(std::string_view a, std::string_view b) const;
 
@@ -51,13 +55,15 @@ bool parse_prior_weights(std::string_view spec, PriorWeights* out,
 
 double prior_score(PairEvidence const& evidence, PriorWeights const& weights);
 
-// Parses `spec`, NULL for PRIOR_WEIGHTS_DEFAULT less the terms of an index
+// Parses `spec`, absent for PRIOR_WEIGHTS_DEFAULT less the terms of an index
 // not given, into `weights`, and opens in `source` the indexes among `p1`
 // and `cluedata` that its terms read (both with `all`). False, with
 // `*error` set, on a bad SPEC, a weighted term whose index isn't given, or
 // an index that can't be opened.
-bool open_prior(char const* p1, char const* cluedata, char const* spec,
-                bool all, PriorWeights* weights, PairEvidenceSource* source,
+bool open_prior(std::optional<std::filesystem::path> const& p1,
+                std::optional<std::filesystem::path> const& cluedata,
+                std::optional<std::string> const& spec, bool all,
+                PriorWeights* weights, PairEvidenceSource* source,
                 std::string* error);
 
 // The pair's key, the same for either order: "a,b" with a <= b.

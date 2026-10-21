@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <filesystem>
 #include <iostream>
 #include <regex>
 #include <string>
@@ -23,7 +24,7 @@ static constexpr PairFilterSupport kSupport = {
 
 struct Args {
   PairFilterOptions filter_options;
-  char const* results_path;
+  std::filesystem::path results_path;
   std::regex with_regex;
   bool use_regex;
   bool show_score;
@@ -204,7 +205,7 @@ int main(int argc, char* argv[]) {
   return read_input_file(PROGRAM, args.results_path,
       [&](std::istream& input) {
         return filter_stream(
-            &input, args.results_path, filters, with_regex_filter,
+            &input, args.results_path.native(), filters, with_regex_filter,
             args.show_score, args.have_limit, args.limit);
       })
       ? 0 : 1;

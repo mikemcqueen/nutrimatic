@@ -4,8 +4,10 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <string_view>
 
 #include "dfs-cli-help.h"
@@ -122,16 +124,16 @@ bool check_rank_args(std::string_view program, RankArgs const& args,
                "or more ppb and pb steps");
         return false;
     }
-    bool const evidence = args.p1 != NULL || args.clues != NULL;
-    if ((args.prior_file != NULL || evidence) && !args.by_pick) {
+    bool const evidence = args.p1 || args.clues;
+    if ((args.prior_file || evidence) && !args.by_pick) {
         report(program, "--prior, --p1 and --clues go with --by-pick");
         return false;
     }
-    if (args.prior_file != NULL && evidence) {
+    if (args.prior_file && evidence) {
         report(program, "--prior doesn't go with --p1 or --clues");
         return false;
     }
-    if (args.prior_weights != NULL && !evidence) {
+    if (args.prior_weights && !evidence) {
         report(program, "--prior-weights goes with --p1 or --clues");
         return false;
     }
@@ -294,7 +296,8 @@ bool PairPickFilter::dropped(PairBag const& pair_bag) const {
 }
 
 bool load_pick_bags(std::string_view program, RankArgs const& args,
-                    char const* prospects_file, char const* pairs_file,
+                    std::optional<std::filesystem::path> const& prospects_file,
+                    std::filesystem::path const& pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     int min_pair_length, std::vector<PairBag>* prospect_bags,
                     std::vector<PairBag>* pair_bags,
@@ -305,15 +308,15 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
     PairEvidenceSource evidence;
     PriorWeights weights;
     PairPrior prior;
-    if (args.prior_file != NULL) {
-        if (!load_priors(program, args.prior_file, &priors)) return false;
+    if (args.prior_file) {
+        if (!load_priors(program, *args.prior_file, &priors)) return false;
         prior = [&](DfsPairRow const& row, double* out) {
             auto const found = priors.find(pair_key(row.left, row.right));
             if (found == priors.end()) return false;
             *out = found->second;
             return true;
         };
-    } else if (args.p1 != NULL || args.clues != NULL) {
+    } else if (args.p1 || args.clues) {
         std::string error;
         if (!open_prior(args.p1, args.clues, args.prior_weights, false,
                         &weights, &evidence, &error)) {
@@ -327,8 +330,8 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
     }
     *has_prior = bool(prior);
     std::vector<PairBag>* const loaded = final_bags ? final_bags : pair_bags;
-    if ((prospects_file != NULL &&
-         !load_pair_bags(program, prospects_file, bag, rejected, prior,
+    if ((prospects_file &&
+         !load_pair_bags(program, *prospects_file, bag, rejected, prior,
                          prospect_bags)) ||
         (loaded != nullptr &&
          !load_pair_bags(program, pairs_file, bag, rejected, prior, loaded,

@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include <charconv>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -110,7 +111,7 @@ std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
 bool add_classified_sentence_pairs(
     std::string_view program, int sentence, DfsCommonArgs* args,
     std::vector<std::string>* reject_files) {
-  if (args->pair_file != NULL) {
+  if (args->pair_file) {
     report(program, "--pairs cannot be combined with --sentence");
     return false;
   }

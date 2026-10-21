@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,10 +37,10 @@ struct Args {
     int sentence = CLASSIFIED_NO_SENTENCE;
     RankArgs rank;
     int pair_bag_length = -1;
-    // --ss and --pp, NULL when not given.
-    char const* search = NULL;
-    char const* prospects_file = NULL;
-    char const* input_file = "-";
+    // --ss and --pp, when given.
+    std::optional<std::string> search;
+    std::optional<std::filesystem::path> prospects_file;
+    std::filesystem::path input_file = "-";
 };
 
 void usage(std::string_view program, FILE* out) {
@@ -141,11 +143,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
     char const* const input = optparse_arg(&options);
     if (input != NULL) out->input_file = input;
-    auto const is_stdin = [](char const* file) {
-        return file != NULL && strcmp(file, "-") == 0;
-    };
-    if (is_stdin(out->input_file) + is_stdin(out->rank.prior_file) +
-        is_stdin(out->prospects_file) > 1) {
+    if ((out->input_file == "-") + (out->rank.prior_file == "-") +
+        (out->prospects_file == "-") > 1) {
         report(PROGRAM, "only one of FILE, --prior and --pp can be -");
         return false;
     }
@@ -278,10 +277,10 @@ bool read_rows(FILE* in, std::string const& path, Args const& args,
 
 // Reads the dump from `args`' FILE and rebuilds its pick bags.
 bool load_dump(Args const& args, Dump* dump) {
-    bool const from_stdin = strcmp(args.input_file, "-") == 0;
-    std::string const path = from_stdin ? "<stdin>" : args.input_file;
-    FILE* in = from_stdin ? stdin : fopen(args.input_file, "r");
-    if (!in) { perror(args.input_file); return false; }
+    bool const from_stdin = args.input_file == "-";
+    std::string const path = from_stdin ? "<stdin>" : args.input_file.string();
+    FILE* in = from_stdin ? stdin : fopen(args.input_file.c_str(), "r");
+    if (!in) { perror(args.input_file.c_str()); return false; }
 
     bool const loaded = [&] {
         auto header = read_bag_stats_header(in, path);
@@ -299,9 +298,9 @@ bool load_dump(Args const& args, Dump* dump) {
                    "so no rows to rank");
             return false;
         }
-        if (args.search != NULL) {
+        if (args.search) {
             Search search;
-            if (!parse_search(PROGRAM, args.search, &search)) return false;
+            if (!parse_search(PROGRAM, *args.search, &search)) return false;
             if (search.prospects + search.pairs !=
                     dump->search.prospects + dump->search.pairs ||
                 search.words != dump->search.words ||
@@ -315,16 +314,16 @@ bool load_dump(Args const& args, Dump* dump) {
             }
             dump->search = search;
             h.search = search_text(search);
-            if (search.prospects == 0 && args.prospects_file == NULL)
+            if (search.prospects == 0 && !args.prospects_file)
                 h.prospects.clear();
         }
-        if (args.prospects_file == NULL && h.prospects == "-") {
+        if (!args.prospects_file && h.prospects == "-") {
             report(PROGRAM, "the dump's --pp was standard input; can't "
                    "rebuild its bags");
             return false;
         }
-        if (args.prospects_file != NULL)
-            h.prospects = bag_stats_header_path(args.prospects_file);
+        if (args.prospects_file)
+            h.prospects = bag_stats_header_path(*args.prospects_file);
         if ((dump->search.prospects > 0) != !h.prospects.empty()) {
             report(PROGRAM, "--pp goes with a ppb step in the search");
             return false;
@@ -342,10 +341,11 @@ bool load_dump(Args const& args, Dump* dump) {
         if (root == NULL) return false;
         DfsPairSet rejected;
         PairsCounts const bag = pairs_letter_counts(h.letters);
+        std::optional<std::filesystem::path> prospects;
+        if (!h.prospects.empty()) prospects = h.prospects;
         if (!load_no_pairs(PROGRAM, root, h.sentence, &rejected) ||
             !load_pick_bags(PROGRAM, args.rank,
-                            h.prospects.empty() ? NULL : h.prospects.c_str(),
-                            h.pairs.c_str(), bag, rejected,
+                            prospects, h.pairs, bag, rejected,
                             h.min_pair_bag_length, &dump->prospect_bags,
                             pick_pairs ? &dump->pair_bags : nullptr,
                             nullptr, nullptr,
