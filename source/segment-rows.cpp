@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <string_view>
 
+#include "log.h"
+
 static bool segment_char(char ch) {
   return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
 }
@@ -23,10 +25,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   double const score = strtod(line.c_str(), &score_end);
   if (score_end == line.c_str() || *score_end != ' ' ||
       score_end[1] == '\0' || !isfinite(score) || score < 0.0) {
-    fprintf(stderr,
-        "%.*s: %s:%" PRIu64 ": expected \"score segment[,segment ...]\"\n",
-        int(reader->program.size()), reader->program.data(), reader->name,
-        reader->line_number);
+    report(reader->program, "%s:%" PRIu64
+           ": expected \"score segment[,segment ...]\"", reader->name,
+           reader->line_number);
     return reject_row(reader);
   }
 
@@ -35,10 +36,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   if ((first >= 'A' && first <= 'Z') || first == '-') {
     size_t const space = line.find(' ', out->segments_start);
     if (space == std::string::npos || space + 1 == line.size()) {
-      fprintf(stderr,
-          "%.*s: %s:%" PRIu64 ": expected \"score segment[,segment ...]\"\n",
-          int(reader->program.size()), reader->program.data(), reader->name,
-          reader->line_number);
+      report(reader->program, "%s:%" PRIu64
+             ": expected \"score segment[,segment ...]\"", reader->name,
+             reader->line_number);
       return reject_row(reader);
     }
     out->segments_start = space + 1;
@@ -55,10 +55,8 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     size_t const length =
         end == std::string::npos ? line.size() - start : end - start;
     if (length == 0) {
-      fprintf(stderr,
-          "%.*s: %s:%" PRIu64 ": empty segment\n",
-          int(reader->program.size()), reader->program.data(), reader->name,
-          reader->line_number);
+      report(reader->program, "%s:%" PRIu64 ": empty segment", reader->name,
+             reader->line_number);
       return reject_row(reader);
     }
     out->segments.push_back(line.substr(start, length));
@@ -76,10 +74,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
       char const ch = segment[i];
       if (ch == ' ') {
         if (after_space || i + 1 == segment.size()) {
-          fprintf(stderr,
-              "%.*s: %s:%" PRIu64 ": malformed spacing in segment \"%s\"\n",
-              int(reader->program.size()), reader->program.data(), reader->name,
-              reader->line_number, segment.c_str());
+          report(reader->program, "%s:%" PRIu64
+                 ": malformed spacing in segment \"%s\"", reader->name,
+                 reader->line_number, segment.c_str());
           return reject_row(reader);
         }
         after_space = true;
@@ -87,10 +84,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
         if (check_letters || infer_letters) row_letters.push_back(ch);
         after_space = false;
       } else {
-        fprintf(stderr,
-            "%.*s: %s:%" PRIu64 ": bad character '%c' in segment\n",
-            int(reader->program.size()), reader->program.data(), reader->name,
-            reader->line_number, ch);
+        report(reader->program, "%s:%" PRIu64
+               ": bad character '%c' in segment", reader->name,
+               reader->line_number, ch);
         return reject_row(reader);
       }
     }
@@ -104,16 +100,16 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   } else if (reader->required_segments != 0 &&
              out->segments.size() != size_t(reader->required_segments)) {
     if (reader->infer_segments)
-      fprintf(stderr,
-          "%.*s: %s:%" PRIu64 ": found %zu segments, but the first row has %d;"
-          " pass -g0 to accept mixed counts\n",
-          int(reader->program.size()), reader->program.data(), reader->name,
-          reader->line_number, out->segments.size(), reader->required_segments);
+      report(reader->program, "%s:%" PRIu64
+             ": found %zu segments, but the first row has %d;"
+             " pass -g0 to accept mixed counts", reader->name,
+             reader->line_number, out->segments.size(),
+             reader->required_segments);
     else
-      fprintf(stderr,
-          "%.*s: %s:%" PRIu64 ": expected %d segments, found %zu\n",
-          int(reader->program.size()), reader->program.data(), reader->name,
-          reader->line_number, reader->required_segments, out->segments.size());
+      report(reader->program, "%s:%" PRIu64
+             ": expected %d segments, found %zu", reader->name,
+             reader->line_number, reader->required_segments,
+             out->segments.size());
     return reject_row(reader);
   }
   if (infer_letters) {
@@ -125,10 +121,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   std::sort(bag.begin(), bag.end());
   std::sort(row_letters.begin(), row_letters.end());
   if (row_letters != bag) {
-    fprintf(stderr,
-        "%.*s: %s:%" PRIu64 ": row does not spell target letters \"%s\"\n",
-        int(reader->program.size()), reader->program.data(), reader->name,
-        reader->line_number, reader->required_letters.c_str());
+    report(reader->program, "%s:%" PRIu64
+           ": row does not spell target letters \"%s\"", reader->name,
+           reader->line_number, reader->required_letters.c_str());
     return reject_row(reader);
   }
   return true;
@@ -143,8 +138,7 @@ bool segment_rows_next(SegmentRowReader* reader, SegmentRow* out) {
   }
 
   if (reader->input->bad()) {
-    fprintf(stderr, "%.*s: can't read \"%s\"\n",
-            int(reader->program.size()), reader->program.data(), reader->name);
+    report(reader->program, "can't read \"%s\"", reader->name);
     reader->failed = true;
   }
   return false;

@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "log.h"
+
 double const ENGLISH_PERCENT[26] = {
   8.167, 1.492, 2.782, 4.253, 12.702, 2.228, 2.015, 6.094, 6.966,
   0.153, 0.772, 4.025, 2.406, 6.749, 7.507, 1.929, 0.095, 5.987,
@@ -66,9 +68,8 @@ bool load_letter_bag(std::filesystem::path const& path,
                      std::string_view program, std::string* out) {
   FILE* const file = fopen(path.c_str(), "rb");
   if (file == NULL) {
-    fprintf(stderr, "%.*s: can't open letters \"%s\": %s\n",
-            int(program.size()), program.data(), path.c_str(),
-            strerror(errno));
+    report(program, "can't open letters \"%s\": %s", path.c_str(),
+           strerror(errno));
     return false;
   }
   std::string text;
@@ -79,9 +80,8 @@ bool load_letter_bag(std::filesystem::path const& path,
   int const error = ferror(file) ? errno : 0;
   fclose(file);
   if (error != 0) {
-    fprintf(stderr, "%.*s: can't read letters \"%s\": %s\n",
-            int(program.size()), program.data(), path.c_str(),
-            strerror(error));
+    report(program, "can't read letters \"%s\": %s", path.c_str(),
+           strerror(error));
     return false;
   }
   *out = bag_letters(text);

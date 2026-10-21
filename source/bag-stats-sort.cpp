@@ -7,6 +7,7 @@
 #include "classified.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "optparse.h"
 #include "pairs-impl.h"
 #include "workflow-paths.h"
@@ -135,7 +136,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
 
     if (out->rank.sorts.empty()) {
-        fprintf(stderr, "%s: give a sort option\n", PROGRAM);
+        report(PROGRAM, "give a sort option");
         return false;
     }
     char const* const input = optparse_arg(&options);
@@ -145,8 +146,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     };
     if (is_stdin(out->input_file) + is_stdin(out->rank.prior_file) +
         is_stdin(out->prospects_file) > 1) {
-        fprintf(stderr, "%s: only one of FILE, --prior and --pp can be -\n",
-                PROGRAM);
+        report(PROGRAM, "only one of FILE, --prior and --pp can be -");
         return false;
     }
     return optparse_arg(&options) == NULL;
@@ -267,13 +267,12 @@ bool read_rows(FILE* in, std::string const& path, Args const& args,
         return false;
     }
     if (dropped > 0)
-        fprintf(stderr, "%s: dropped %llu of %zu rows whose picks have no "
-                "pairs left\n", PROGRAM, (unsigned long long)dropped,
-                line_number);
+        report(PROGRAM, "dropped %llu of %zu rows whose picks have no "
+               "pairs left", (unsigned long long)dropped, line_number);
     if (not_the_search > 0)
-        fprintf(stderr, "%s: dropped %llu of %zu rows whose picks aren't "
-                "the search's ppb and pb picks\n", PROGRAM,
-                (unsigned long long)not_the_search, line_number);
+        report(PROGRAM, "dropped %llu of %zu rows whose picks aren't "
+               "the search's ppb and pb picks",
+               (unsigned long long)not_the_search, line_number);
     return true;
 }
 
@@ -296,8 +295,8 @@ bool load_dump(Args const& args, Dump* dump) {
             return false;
         }
         if (dump->search.prospects + dump->search.pairs == 0) {
-            fprintf(stderr, "%s: the dump's search has no ppb or pb step, "
-                    "so no rows to rank\n", PROGRAM);
+            report(PROGRAM, "the dump's search has no ppb or pb step, "
+                   "so no rows to rank");
             return false;
         }
         if (args.search != NULL) {
@@ -307,11 +306,11 @@ bool load_dump(Args const& args, Dump* dump) {
                     dump->search.prospects + dump->search.pairs ||
                 search.words != dump->search.words ||
                 search.pair_filter != dump->search.pair_filter) {
-                fprintf(stderr, "%s: --ss has to have the dump's %d ppb and "
-                        "pb steps, %d wb steps and last step %s\n", PROGRAM,
-                        dump->search.prospects + dump->search.pairs,
-                        dump->search.words,
-                        dump->search.pair_filter ? "pf" : "p");
+                report(PROGRAM, "--ss has to have the dump's %d ppb and "
+                       "pb steps, %d wb steps and last step %s",
+                       dump->search.prospects + dump->search.pairs,
+                       dump->search.words,
+                       dump->search.pair_filter ? "pf" : "p");
                 return false;
             }
             dump->search = search;
@@ -320,22 +319,21 @@ bool load_dump(Args const& args, Dump* dump) {
                 h.prospects.clear();
         }
         if (args.prospects_file == NULL && h.prospects == "-") {
-            fprintf(stderr, "%s: the dump's --pp was standard input; can't "
-                    "rebuild its bags\n", PROGRAM);
+            report(PROGRAM, "the dump's --pp was standard input; can't "
+                   "rebuild its bags");
             return false;
         }
         if (args.prospects_file != NULL)
             h.prospects = bag_stats_header_path(args.prospects_file);
         if ((dump->search.prospects > 0) != !h.prospects.empty()) {
-            fprintf(stderr, "%s: --pp goes with a ppb step in the search\n",
-                    PROGRAM);
+            report(PROGRAM, "--pp goes with a ppb step in the search");
             return false;
         }
         if (!check_rank_args(PROGRAM, args.rank, dump->search)) return false;
         bool const pick_pairs = dump->search.pairs > 0;
         if (pick_pairs && h.pairs == "-") {
-            fprintf(stderr, "%s: the dump's PAIRS was standard input; can't "
-                    "rebuild its bags\n", PROGRAM);
+            report(PROGRAM, "the dump's PAIRS was standard input; can't "
+                   "rebuild its bags");
             return false;
         }
         if (args.sentence != CLASSIFIED_NO_SENTENCE) h.sentence = args.sentence;
@@ -385,7 +383,7 @@ int print_score(Dump const& dump, Args const& args, R const& ranker) {
             return std::equal(row.begin(), row.end(), target_picks.begin());
         });
     if (found == dump.rows.end()) {
-        fprintf(stderr, "%s: no kept row has the --score picks\n", PROGRAM);
+        report(PROGRAM, "no kept row has the --score picks");
         return 1;
     }
 

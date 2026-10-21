@@ -6,8 +6,9 @@
 #include <string_view>
 
 // How a log line is colored and labeled: WARNING in yellow and ALERT in red,
-// both labeled "WARNING: "; INFO in yellow and SUCCESS in green, unlabeled.
-enum class LogLevel { WARNING, ALERT, INFO, SUCCESS };
+// both labeled "WARNING: "; INFO in yellow and SUCCESS in green, unlabeled;
+// PLAIN uncolored and unlabeled.
+enum class LogLevel { WARNING, ALERT, INFO, SUCCESS, PLAIN };
 
 // Prints PREFIX, then `level`'s label and the formatted text, to stderr, the
 // label and text in `level`'s color when stderr is a terminal. The format takes
@@ -22,6 +23,11 @@ void warn(std::string_view program, char const* format, ...)
 
 // As warn(), but in red, for a warning a run should not miss.
 void alert(std::string_view program, char const* format, ...)
+    __attribute__((format(printf, 2, 3)));
+
+// Prints "PROGRAM: TEXT" to stderr, uncolored, for errors and progress. The
+// format takes no trailing newline.
+void report(std::string_view program, char const* format, ...)
     __attribute__((format(printf, 2, 3)));
 
 // Prints "PROGRAM: TEXT" to stderr, in green when stderr is a terminal, for

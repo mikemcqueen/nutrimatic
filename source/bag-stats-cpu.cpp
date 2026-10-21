@@ -2,6 +2,7 @@
 
 #include "bag-stats-cache.h"
 #include "bag-stats-impl.h"
+#include "log.h"
 #include "mix-bits.h"
 #include "sub-bag-index.h"
 
@@ -928,8 +929,7 @@ int with_walk(BagStatsOptions const& options, std::string const& letters,
             threads,
             pair_cache_wanted ? size_t(options.pair_cache_size_mb) : 0);
         if (!table->allocated()) {
-            fprintf(stderr, "%s: can't allocate the pair count table\n",
-                    PROGRAM);
+            report(PROGRAM, "can't allocate the pair count table");
             return 1;
         }
     }
@@ -945,23 +945,23 @@ int with_walk(BagStatsOptions const& options, std::string const& letters,
     if (table && common.progress != 0) {
         PairCountCache const& pair_cache = table->cache();
         if (pair_cache.enabled())
-            fprintf(stderr, "%s: pair cache holds %zu entries (%.1f MB)\n",
-                    PROGRAM, pair_cache.capacity(),
-                    double(pair_cache.bytes()) / (1024 * 1024));
+            report(PROGRAM, "pair cache holds %zu entries (%.1f MB)",
+                   pair_cache.capacity(),
+                   double(pair_cache.bytes()) / (1024 * 1024));
         else if (pair_cache_wanted && needs_groups)
-            fprintf(stderr, "%s: pair cache off: %s\n", PROGRAM,
-                    pair_cache.too_many_sub_bags()
+            report(PROGRAM, "pair cache off: %s",
+                   pair_cache.too_many_sub_bags()
                         ? "the letters have too many sub-bags to key"
                         : "can't allocate it");
     }
     InnerCounters const inner(counter, needs_groups);
     if (common.progress != 0 && needs_groups) {
         if (inner.key_bits() != 0)
-            fprintf(stderr, "%s: pair counts use %d-bit keys, %d bits "
-                    "packed\n", PROGRAM, inner.key_bits(), inner.bits());
+            report(PROGRAM, "pair counts use %d-bit keys, %d bits packed",
+                   inner.key_bits(), inner.bits());
         else
-            fprintf(stderr, "%s: pair counts use unpacked keys, %d bits, "
-                    "past 128\n", PROGRAM, inner.bits());
+            report(PROGRAM, "pair counts use unpacked keys, %d bits, "
+                   "past 128", inner.bits());
     }
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
                      bag, inputs.word_bags, common, threads, passes ? 2 : 1,

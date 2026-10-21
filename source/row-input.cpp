@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 
+#include "log.h"
+
 bool read_input_file(
     std::string_view program, char const* path,
     std::function<bool(std::istream&)> const& read) {
@@ -16,8 +18,7 @@ bool read_input_file(
   errno = 0;
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    fprintf(stderr, "%.*s: can't open \"%s\": %s\n",
-        int(program.size()), program.data(), path, strerror(errno));
+    report(program, "can't open \"%s\": %s", path, strerror(errno));
     return false;
   }
   return read(input);
@@ -32,8 +33,7 @@ bool read_lines(
     while (std::getline(input, line))
       if (!visit(line, ++number)) return false;
     if (!input.eof()) {
-      fprintf(stderr, "%.*s: can't read \"%s\"\n",
-              int(program.size()), program.data(), path);
+      report(program, "can't read \"%s\"", path);
       return false;
     }
     return true;
@@ -41,7 +41,7 @@ bool read_lines(
 }
 
 bool read_rows(
-    std::string_view program, char const* path, char const* what,
+    std::string_view program, char const* path, std::string_view what,
     bool allow_single_words,
     std::function<bool(DfsPairRow const&, std::string const&)> const& visit) {
   return read_lines(program, path,
@@ -54,14 +54,13 @@ bool read_rows(
 }
 
 bool print_kept_rows(
-    std::string_view program, char const* path, char const* what,
+    std::string_view program, char const* path, std::string_view what,
     bool allow_single_words,
     std::function<bool(DfsPairRow const&)> const& keep) {
   return read_rows(program, path, what, allow_single_words,
       [&](DfsPairRow const& row, std::string const& line) {
         if (keep(row) && !(std::cout << line << '\n')) {
-          fprintf(stderr, "%.*s: can't write output\n",
-                  int(program.size()), program.data());
+          report(program, "can't write output");
           return false;
         }
         return true;

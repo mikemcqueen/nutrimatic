@@ -168,17 +168,17 @@ bool check_bag_length(std::string const& bag);
 
 // Parses a non-negative base-10 integer from `in`. Prints an error naming
 // `what` and returns false on any parse failure or out-of-range value.
-bool parse_count(char const* in, char const* what, int* out);
+bool parse_count(char const* in, std::string_view what, int* out);
 
 // Parses a non-negative base-10 64-bit integer from `in`.
-bool parse_count64(char const* in, char const* what, int64_t* out);
+bool parse_count64(char const* in, std::string_view what, int64_t* out);
 
 // Parses a non-negative MiB count into bytes, rejecting overflow.
-bool parse_mib(char const* in, char const* what, size_t* out);
+bool parse_mib(char const* in, std::string_view what, size_t* out);
 
 // Parses a finite floating-point number from `in`. Prints an error naming
 // `what` and returns false on any parse failure or non-finite value.
-bool parse_double(char const* in, char const* what, double* out);
+bool parse_double(char const* in, std::string_view what, double* out);
 
 // Parses a finite segment penalty at least 1. Values below 1 would make
 // appended segments score-improving and invalidate phase-2 pruning.
@@ -211,7 +211,7 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary);
 // Parse one PAIRS line using the same validation and normalization as the
 // shared file loader. Prints a source/line diagnostic on failure.
 bool parse_pair_row(
-    std::string const& line, char const* what, char const* source,
+    std::string const& line, std::string_view what, char const* source,
     size_t line_number, bool allow_single_words, DfsPairRow* out);
 
 // A pair set owns normalized whole-entry keys. The general loader below owns
@@ -232,7 +232,7 @@ bool parse_pair_row(
 // receives every row in written order, for a caller that must repeat the
 // file's own word order rather than a key's.
 bool load_pair_file(
-    char const* path, char const* what, DfsPairSet* pairs, bool quiet,
+    char const* path, std::string_view what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words = false,
     char const* diagnostic_source = NULL,
     std::vector<DfsPairRow>* rows = NULL);
@@ -240,7 +240,7 @@ bool load_pair_file(
 // As load_pair_file(), but accepts standalone entries only to discard them.
 // Adds their number to `ignored_single_words`; pairs are loaded normally.
 bool load_pair_file_ignoring_single_words(
-    char const* path, char const* what, DfsPairSet* pairs,
+    char const* path, std::string_view what, DfsPairSet* pairs,
     size_t* ignored_single_words);
 
 // Loads an ordinary extraction bonus list after -m has been finalized.
@@ -251,7 +251,7 @@ bool load_pair_file_ignoring_single_words(
 // pairs retain the general loader's symmetric representation. Neither output
 // is modified unless the entire input parses and validates successfully.
 bool load_extraction_pair_file(
-    char const* path, char const* what, int min_word_len,
+    char const* path, std::string_view what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
     bool reject_hyphens, std::vector<DfsPairRow>* rows = NULL);
 

@@ -253,8 +253,8 @@ bool build_p1_index(std::string const& dir, std::string const& out,
 
 bool P1Index::open(std::string const& path, std::string* error) {
     if (!file_.open(path, error)) return false;
-    auto const bad = [&](char const* what) {
-        *error = path + ": " + what;
+    auto const bad = [&](std::string_view what) {
+        *error = (path + ": ").append(what);
         return false;
     };
     Header header;

@@ -26,7 +26,7 @@ bool read_lines(
 // parse_pair_row() parses it with `what` naming rows in its diagnostics, and
 // the line.
 bool read_rows(
-    std::string_view program, char const* path, char const* what,
+    std::string_view program, char const* path, std::string_view what,
     bool allow_single_words,
     std::function<bool(DfsPairRow const&, std::string const&)> const& visit);
 
@@ -35,7 +35,7 @@ bool read_rows(
 // them in its diagnostics. Errors are diagnosed already, prefixed by
 // `program`; the caller flushes standard output.
 bool print_kept_rows(
-    std::string_view program, char const* path, char const* what,
+    std::string_view program, char const* path, std::string_view what,
     bool allow_single_words,
     std::function<bool(DfsPairRow const&)> const& keep);
 

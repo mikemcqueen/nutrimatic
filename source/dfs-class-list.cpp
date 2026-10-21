@@ -27,9 +27,10 @@ namespace {
 size_t const CHUNK_BYTES = size_t(64) * 1024 * 1024;
 size_t const INITIAL_TABLE_SLOTS = 1024;
 
-[[noreturn]] void fatal_allocation(char const* what) {
+[[noreturn]] void fatal_allocation(std::string_view what) {
   dfs_diagnostic_to_stream(
-      stderr, "error: phase 1 could not allocate %s\n", what);
+      stderr, "error: phase 1 could not allocate %.*s\n",
+      int(what.size()), what.data());
   abort();
 }
 

@@ -32,8 +32,8 @@ bool parse_classified_sentence(char const* arg, int* sentence) {
 }
 
 bool classified_pair_file(
-    std::string_view program, char const* root, int sentence, char const* kind,
-    std::string* path) {
+    std::string_view program, char const* root, int sentence,
+    std::string_view kind, std::string* path) {
   std::filesystem::path dir =
       std::filesystem::path(root) / WORKFLOW_CLASSIFIED_PATH;
   if (sentence != CLASSIFIED_NO_SENTENCE)
@@ -49,8 +49,7 @@ bool classified_pair_file(
       return true;
     }
   } else if (!std::filesystem::is_regular_file(file, error)) {
-    fprintf(stderr, "%.*s: \"%s\" is not a file\n",
-            int(program.size()), program.data(), file.c_str());
+    report(program, "\"%s\" is not a file", file.c_str());
     return false;
   }
   *path = file.string();
@@ -58,8 +57,8 @@ bool classified_pair_file(
 }
 
 bool load_classified_pairs(
-    std::string_view program, char const* root, int sentence, char const* kind,
-    DfsPairSet* pairs) {
+    std::string_view program, char const* root, int sentence,
+    std::string_view kind, DfsPairSet* pairs) {
   std::string path;
   if (!classified_pair_file(program, root, sentence, kind, &path))
     return false;
@@ -78,7 +77,7 @@ bool load_no_pairs(
 
 std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
     std::string_view program, char const* root, int sentence,
-    char const* kind) {
+    std::string_view kind) {
   std::string path;
   if (!classified_pair_file(program, root, sentence, kind, &path))
     return nullptr;
@@ -90,9 +89,8 @@ std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
   std::uintmax_t const size =
       error ? 0 : std::filesystem::file_size(path, error);
   if (error) {
-    fprintf(stderr, "%.*s: can't stat \"%s\": %s\n",
-            int(program.size()), program.data(), path.c_str(),
-            error.message().c_str());
+    report(program, "can't stat \"%s\": %s", path.c_str(),
+           error.message().c_str());
     return nullptr;
   }
 
@@ -114,8 +112,7 @@ bool add_classified_sentence_pairs(
     std::string_view program, int sentence, DfsCommonArgs* args,
     std::vector<std::string>* reject_files) {
   if (args->pair_file != NULL) {
-    fprintf(stderr, "%.*s: --pairs cannot be combined with --sentence\n",
-            int(program.size()), program.data());
+    report(program, "--pairs cannot be combined with --sentence");
     return false;
   }
   char const* root;
@@ -144,7 +141,7 @@ bool check_classified_sentence_target(
     std::from_chars(
         target.data() + 1, target.data() + target.size(), target_sentence);
   if (target_sentence == sentence) return true;
-  fprintf(stderr, "%.*s: --sentence %d does not match target \"%s\"\n",
-          int(program.size()), program.data(), sentence, target.c_str());
+  report(program, "--sentence %d does not match target \"%s\"", sentence,
+         target.c_str());
   return false;
 }

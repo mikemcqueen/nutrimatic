@@ -26,6 +26,7 @@
 #include "bag-stats-impl.h"
 #include "bag-stats-rank.h"
 #include "classified.h"
+#include "log.h"
 #include "optparse.h"
 #include "pairs-impl.h"
 
@@ -301,10 +302,8 @@ class Progress {
     ~Progress() {
         if (interval_.count() == 0) return;
         double const elapsed = seconds_since_start(Clock::now());
-        fprintf(stderr, "%.*s: pass %d/%d: done in %s%s\n",
-                int(program_.size()), program_.data(), pass_,
-                passes_, format_duration(elapsed).c_str(),
-                hooks_.text().c_str());
+        report(program_, "pass %d/%d: done in %s%s", pass_, passes_,
+               format_duration(elapsed).c_str(), hooks_.text().c_str());
     }
 
     // Counts `units` finished units, and hands `walker` to the hooks.
@@ -321,13 +320,13 @@ class Progress {
                 std::memory_order_relaxed))
             return;
         double const elapsed = seconds_since_start(now);
-        fprintf(stderr, "%.*s: pass %d/%d: %zu/%zu pair bags (%.1f%%), %s, "
-                "~%s left%s\n", int(program_.size()), program_.data(), pass_,
-                passes_, done, units_, 100.0 * double(done) / double(units_),
-                format_duration(elapsed).c_str(),
-                format_duration(elapsed * double(units_ - done) /
+        report(program_, "pass %d/%d: %zu/%zu pair bags (%.1f%%), %s, "
+               "~%s left%s", pass_, passes_, done, units_,
+               100.0 * double(done) / double(units_),
+               format_duration(elapsed).c_str(),
+               format_duration(elapsed * double(units_ - done) /
                                 double(done)).c_str(),
-                hooks_.text().c_str());
+               hooks_.text().c_str());
     }
 
   private:
@@ -605,8 +604,7 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
     size_t length;
     std::vector<uint32_t> target_picks;
     if (!find_row(walk, picks, &target, &length, &target_picks)) {
-        fprintf(stderr, "%.*s: no row has the --score picks\n",
-                int(walk.program.size()), walk.program.data());
+        report(walk.program, "no row has the --score picks");
         return 1;
     }
     if (passes) count_sort_values(walk, ranker);

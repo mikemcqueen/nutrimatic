@@ -1,4 +1,5 @@
 #include "bag-stats-gpu.h"
+#include "log.h"
 
 #include <cuda_runtime.h>
 
@@ -29,8 +30,7 @@ std::string program_name = "bag-stats-cuda";
 
 void check(cudaError_t error) {
     if (error == cudaSuccess) return;
-    fprintf(stderr, "%.*s: %s\n", int(program_name.size()), program_name.data(),
-            cudaGetErrorString(error));
+    report(program_name, "%s", cudaGetErrorString(error));
     exit(1);
 }
 
