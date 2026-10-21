@@ -21,6 +21,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -192,15 +193,15 @@ static double seconds_since(
       std::chrono::steady_clock::now() - start).count();
 }
 
-static void usage(FILE* stream, char const* program) {
+static void usage(FILE* stream, std::string_view program) {
   fprintf(stream,
-      "Usage: %s INDEX INPUT --format dfs|text --order printed|best\n"
+      "Usage: %.*s INDEX INPUT --format dfs|text --order printed|best\n"
       "       [--sort input|coherence]\n"
       "       [--top N] [--pairs]\n",
-      program);
+      int(program.size()), program.data());
 }
 
-static void help(char const* program) {
+static void help(std::string_view program) {
   usage(stdout, program);
   fputs(
       "\n"
@@ -295,12 +296,12 @@ static void help(char const* program) {
       stdout);
 }
 
-static void short_usage(char const* program) {
+static void short_usage(std::string_view program) {
   fprintf(stderr,
-      "usage: %s INDEX INPUT --format dfs|text "
+      "usage: %.*s INDEX INPUT --format dfs|text "
       "--order printed|best "
       "[--sort input|coherence] [--top N] [--pairs]\n",
-      program);
+      int(program.size()), program.data());
 }
 
 static bool parse_double_strict(

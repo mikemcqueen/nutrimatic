@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -57,9 +58,9 @@ struct Stats {
   std::vector<size_t> unique_words_by_length;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %s [-i INDEX] [-a FILE]... [FILE]\n"
+      "usage: %.*s [-i INDEX] [-a FILE]... [FILE]\n"
       "  calculate segment and word statistics for dfs-anagrams output\n"
       "  -a, --allow-pairs FILE  also report how many unique pair segments\n"
       "                          are listed in FILE; pairs match in either\n"
@@ -68,7 +69,7 @@ static void usage(char const* program) {
       "                          and solo segments, as query-index --score;\n"
       "                          defaults to $IDX, omitted without either\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      program);
+      int(program.size()), program.data());
 }
 
 static bool increment(uint64_t* count, char const* description) {

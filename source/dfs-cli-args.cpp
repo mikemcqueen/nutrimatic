@@ -18,6 +18,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -50,7 +51,7 @@ bool is_counted_component(std::string const& value, char prefix) {
 }
 
 bool parse_workflow_target(
-    std::string const& input, char const* program,
+    std::string const& input, std::string_view program,
     std::vector<std::string>* parts) {
   if (input.empty()) return true;
   size_t start = 0;
@@ -58,8 +59,8 @@ bool parse_workflow_target(
     size_t const slash = input.find('/', start);
     size_t const end = slash == std::string::npos ? input.size() : slash;
     if (end == start || parts->size() == 4) {
-      fprintf(stderr, "%s: invalid --target \"%s\"\n",
-              program, input.c_str());
+      fprintf(stderr, "%.*s: invalid --target \"%s\"\n",
+              int(program.size()), program.data(), input.c_str());
       return false;
     }
     parts->push_back(input.substr(start, end - start));
@@ -82,9 +83,9 @@ bool parse_workflow_target(
     valid = valid && is_counted_component((*parts)[3], 'g');
   if (!valid) {
     fprintf(stderr,
-        "%s: invalid --target \"%s\"; expected a prefix of "
+        "%.*s: invalid --target \"%s\"; expected a prefix of "
         "sN/[ou]-letters/mN/gN\n",
-        program, input.c_str());
+        int(program.size()), program.data(), input.c_str());
     return false;
   }
   return true;
@@ -122,11 +123,11 @@ bool seed_name_matches(std::string const& name, std::string const& universe) {
 
 bool resolve_sentence_seed(
     fs::path const& sentence_dir, std::string const& universe,
-    char const* program, std::string* out) {
+    std::string_view program, std::string* out) {
   std::error_code error;
   if (!fs::is_directory(sentence_dir, error)) {
-    fprintf(stderr, "%s: workflow sentence \"%s\" is not a directory\n",
-            program, sentence_dir.c_str());
+    fprintf(stderr, "%.*s: workflow sentence \"%s\" is not a directory\n",
+            int(program.size()), program.data(), sentence_dir.c_str());
     return false;
   }
   std::vector<fs::path> matches;
@@ -139,16 +140,18 @@ bool resolve_sentence_seed(
       matches.push_back(it->path());
   }
   if (error) {
-    fprintf(stderr, "%s: can't inspect workflow sentence \"%s\": %s\n",
-            program, sentence_dir.c_str(), error.message().c_str());
+    fprintf(stderr, "%.*s: can't inspect workflow sentence \"%s\": %s\n",
+            int(program.size()), program.data(), sentence_dir.c_str(),
+            error.message().c_str());
     return false;
   }
   std::sort(matches.begin(), matches.end());
   if (matches.size() != 1) {
     std::string const pattern = universe.empty()
         ? "seed.m<N>[.*].pairs" : "seed." + universe + "[.*].pairs";
-    fprintf(stderr, "%s: expected exactly one %s in \"%s\", found %zu\n",
-            program, pattern.c_str(), sentence_dir.c_str(), matches.size());
+    fprintf(stderr, "%.*s: expected exactly one %s in \"%s\", found %zu\n",
+            int(program.size()), program.data(), pattern.c_str(),
+            sentence_dir.c_str(), matches.size());
     return false;
   }
   *out = matches[0].string();
@@ -156,25 +159,26 @@ bool resolve_sentence_seed(
 }
 
 bool require_regular_file(
-    fs::path const& path, char const* program, char const* what) {
+    fs::path const& path, std::string_view program, char const* what) {
   std::error_code error;
   if (fs::is_regular_file(path, error)) return true;
-  fprintf(stderr, "%s: %s \"%s\" is not a regular file\n",
-          program, what, path.c_str());
+  fprintf(stderr, "%.*s: %s \"%s\" is not a regular file\n",
+          int(program.size()), program.data(), what, path.c_str());
   return false;
 }
 
 // Appends an optional workflow pair file. A path that cannot be inspected,
 // or that is present as something other than a regular file, is an error.
 bool push_optional_pair_file(
-    fs::path const& path, char const* program, char const* what,
+    fs::path const& path, std::string_view program, char const* what,
     std::vector<std::string>* paths) {
   std::error_code error;
   fs::file_status const status = fs::symlink_status(path, error);
   if (status.type() == fs::file_type::not_found) return true;
   if (error) {
-    fprintf(stderr, "%s: can't inspect %s \"%s\": %s\n",
-            program, what, path.c_str(), error.message().c_str());
+    fprintf(stderr, "%.*s: can't inspect %s \"%s\": %s\n",
+            int(program.size()), program.data(), what, path.c_str(),
+            error.message().c_str());
     return false;
   }
   if (!require_regular_file(path, program, what)) return false;
@@ -184,18 +188,20 @@ bool push_optional_pair_file(
 
 bool canonical_target_below(
     fs::path const& best, fs::path const& selected,
-    char const* program) {
+    std::string_view program) {
   std::error_code error;
   fs::path const canonical_best = fs::canonical(best, error);
   if (error) {
-    fprintf(stderr, "%s: can't resolve workflow best directory \"%s\": %s\n",
-            program, best.c_str(), error.message().c_str());
+    fprintf(stderr, "%.*s: can't resolve workflow best directory \"%s\": %s\n",
+            int(program.size()), program.data(), best.c_str(),
+            error.message().c_str());
     return false;
   }
   fs::path const canonical_selected = fs::canonical(selected, error);
   if (error) {
-    fprintf(stderr, "%s: can't resolve workflow target \"%s\": %s\n",
-            program, selected.c_str(), error.message().c_str());
+    fprintf(stderr, "%.*s: can't resolve workflow target \"%s\": %s\n",
+            int(program.size()), program.data(), selected.c_str(),
+            error.message().c_str());
     return false;
   }
   fs::path::const_iterator base = canonical_best.begin();
@@ -206,8 +212,9 @@ bool canonical_target_below(
   if (base == canonical_best.end() && target != canonical_selected.end())
     return true;
   fprintf(stderr,
-      "%s: workflow target \"%s\" resolves outside \"%s\"\n",
-      program, selected.c_str(), canonical_best.c_str());
+      "%.*s: workflow target \"%s\" resolves outside \"%s\"\n",
+      int(program.size()), program.data(), selected.c_str(),
+      canonical_best.c_str());
   return false;
 }
 
@@ -962,7 +969,7 @@ DfsOptionResult dfs_parse_common_option(
 // target whose sentence identifies one sentence seed; a complete target also
 // supplies its optional best.pairs unless --best-pairs replaced it.
 static bool finalize_dfs_workflow_args(
-    DfsCommonArgs* args, char const* program, char const** index_file,
+    DfsCommonArgs* args, std::string_view program, char const** index_file,
     bool allow_targetless_workflow) {
   bool const weighted = !args->seed_pair_files.empty() ||
       !args->yes_pair_files.empty() || !args->best_pair_files.empty();
@@ -979,7 +986,8 @@ static bool finalize_dfs_workflow_args(
     args->workflow_root = root;
   } else if (args->workflow_root.empty()) {
     if (!args->target.empty()) {
-      fprintf(stderr, "%s: --target requires --wf or --wfroot\n", program);
+      fprintf(stderr, "%.*s: --target requires --wf or --wfroot\n",
+              int(program.size()), program.data());
       return false;
     }
     return true;
@@ -998,8 +1006,8 @@ static bool finalize_dfs_workflow_args(
     args->target = join_path(target_parts);
     fs::path const selected = root / WORKFLOW_BEST_PATH / args->target;
     if (!fs::is_directory(selected, error)) {
-      fprintf(stderr, "%s: workflow target \"%s\" is not a directory\n",
-              program, selected.c_str());
+      fprintf(stderr, "%.*s: workflow target \"%s\" is not a directory\n",
+              int(program.size()), program.data(), selected.c_str());
       return false;
     }
     if (!canonical_target_below(
@@ -1028,9 +1036,9 @@ static bool finalize_dfs_workflow_args(
     if (target_parts.empty()) {
       if (!allow_targetless_workflow) {
         fprintf(stderr,
-            "%s: workflow mode requires --target beginning with sN or an "
+            "%.*s: workflow mode requires --target beginning with sN or an "
             "explicit --seed-pairs\n",
-            program);
+            int(program.size()), program.data());
         return false;
       }
     } else {
@@ -1056,12 +1064,12 @@ static bool finalize_dfs_workflow_args(
 }
 
 bool load_dfs_workflow_target_settings(
-    DfsCommonArgs const& args, char const* program,
+    DfsCommonArgs const& args, std::string_view program,
     DfsWorkflowTargetSettings* out) {
   if (args.workflow_root.empty() || !args.target_complete) {
     fprintf(stderr,
-        "%s: requires a fully scoped sN/[ou]-letters/mN/gN target\n",
-        program);
+        "%.*s: requires a fully scoped sN/[ou]-letters/mN/gN target\n",
+        int(program.size()), program.data());
     return false;
   }
 
@@ -1109,7 +1117,7 @@ bool load_dfs_workflow_target_settings(
 // Without a workflow root nothing is appended. Call after
 // finalize_dfs_workflow_args(), which resolves the root and the target.
 static bool collect_workflow_reject_files(
-    DfsCommonArgs const& args, char const* program,
+    DfsCommonArgs const& args, std::string_view program,
     std::vector<std::string>* paths) {
   if (args.workflow_root.empty()) return true;
 
@@ -1126,7 +1134,7 @@ static bool collect_workflow_reject_files(
 }
 
 bool finalize_dfs_common_args(
-    DfsCommonArgs* args, char const* program, char const** index_file,
+    DfsCommonArgs* args, std::string_view program, char const** index_file,
     std::vector<std::string>* workflow_reject_files,
     bool allow_targetless_workflow) {
   if (!finalize_dfs_bonuses(args)) return false;

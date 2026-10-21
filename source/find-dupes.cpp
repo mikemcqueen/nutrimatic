@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -15,15 +16,15 @@ struct FirstOccurrence {
   bool reported = false;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %s PAIRS\n"
+      "usage: %.*s PAIRS\n"
       "  print each pair of PAIRS that also appears in the opposite word\n"
       "  order, once per pair, spelled as its second occurrence wrote it\n"
       "  PAIRS  word,word lines, as in best.pairs\n"
       "  stderr gets N/TOTAL duplicate pairs found, where TOTAL counts\n"
       "  distinct unordered pairs\n",
-      program);
+      int(program.size()), program.data());
 }
 
 int main(int argc, char* argv[]) {

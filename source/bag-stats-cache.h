@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -73,7 +74,7 @@ inline size_t rest_cache_entries(size_t megabytes) {
 // With `report`, says on stderr, prefixed by `program`, when it fills.
 class RestTable {
   public:
-    RestTable(char const* program, PairsCounts const& bag, bool enabled,
+    RestTable(std::string_view program, PairsCounts const& bag, bool enabled,
               size_t megabytes, bool report);
 
     bool enabled() const { return keys_ != nullptr; }
@@ -110,8 +111,9 @@ class RestTable {
             size_t const row = next_.fetch_add(1, std::memory_order_relaxed);
             if (row >= capacity_) return;
             if (row + 1 == capacity_ && report_)
-                fprintf(stderr, "%s: cache full at %zu entries; later "
-                        "remainders go uncached\n", program_, capacity_);
+                fprintf(stderr, "%.*s: cache full at %zu entries; later "
+                        "remainders go uncached\n",
+                        int(program_.size()), program_.data(), capacity_);
             rows_[row] = counts;
             std::atomic_ref<uint32_t>(rows_index_[i])
                 .store(uint32_t(row + 1), std::memory_order_release);
@@ -128,7 +130,7 @@ class RestTable {
         return size_t(__uint128_t(mix_bits(key)) * slots_ >> 64);
     }
 
-    char const* program_;
+    std::string program_;
     RemainderIndex index_;
     bool const report_;
     size_t capacity_ = 0;
@@ -141,6 +143,6 @@ class RestTable {
 
 // Prints "PROGRAM: cache holds N entries (M MB) of R remainders" when
 // `table` is enabled.
-void report_rest_table(char const* program, RestTable const& table);
+void report_rest_table(std::string_view program, RestTable const& table);
 
 #endif

@@ -1,6 +1,7 @@
 #include "bag-stats-cache.h"
 
 #include <algorithm>
+#include <string_view>
 
 RemainderIndex::RemainderIndex(PairsCounts const& bag, size_t bound) {
     for (size_t i = 0; i < 26; ++i) {
@@ -25,7 +26,7 @@ std::string SharedCacheCounts::text(char const* name) const {
     return out;
 }
 
-RestTable::RestTable(char const* program, PairsCounts const& bag,
+RestTable::RestTable(std::string_view program, PairsCounts const& bag,
                      bool enabled, size_t megabytes, bool report)
     : program_(program), index_(bag, UINT64_MAX - 1), report_(report) {
     if (!enabled || index_.total() == 0) return;
@@ -46,10 +47,11 @@ RestTable::RestTable(char const* program, PairsCounts const& bag,
     }
 }
 
-void report_rest_table(char const* program, RestTable const& table) {
+void report_rest_table(std::string_view program, RestTable const& table) {
     if (!table.enabled()) return;
-    fprintf(stderr, "%s: cache holds %zu entries (%.1f MB) of %zu "
-            "remainders\n", program, table.capacity(),
+    fprintf(stderr, "%.*s: cache holds %zu entries (%.1f MB) of %zu "
+            "remainders\n", int(program.size()), program.data(),
+            table.capacity(),
             double(table.capacity() * REST_CACHE_ENTRY_BYTES) /
                 (1024 * 1024),
             table.remainders());

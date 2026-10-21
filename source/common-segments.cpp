@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -55,9 +56,9 @@ struct Args {
   PairFilterOptions filter_options;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %s [-i FILE | --ignore FILE]...\n"
+      "usage: %.*s [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
       "          [-d PATH]\n"
@@ -79,7 +80,7 @@ static void usage(char const* program) {
       "  --pairs             print COUNT PAIR by descending count, one line\n"
       "                      per pair, counting the rows that held it with\n"
       "                      any other pair; honors --ignore and --yes\n",
-      program);
+      int(program.size()), program.data());
   print_reject_option_help(stdout, 22);
   print_allow_pairs_option_help(stdout, 22);
   fprintf(stdout,

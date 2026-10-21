@@ -7,23 +7,24 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 bool read_input_file(
-    char const* program, char const* path,
+    std::string_view program, char const* path,
     std::function<bool(std::istream&)> const& read) {
   if (strcmp(path, "-") == 0) return read(std::cin);
   errno = 0;
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    fprintf(stderr, "%s: can't open \"%s\": %s\n",
-        program, path, strerror(errno));
+    fprintf(stderr, "%.*s: can't open \"%s\": %s\n",
+        int(program.size()), program.data(), path, strerror(errno));
     return false;
   }
   return read(input);
 }
 
 bool read_lines(
-    char const* program, char const* path,
+    std::string_view program, char const* path,
     std::function<bool(std::string const&, size_t)> const& visit) {
   return read_input_file(program, path, [&](std::istream& input) {
     std::string line;
@@ -31,7 +32,8 @@ bool read_lines(
     while (std::getline(input, line))
       if (!visit(line, ++number)) return false;
     if (!input.eof()) {
-      fprintf(stderr, "%s: can't read \"%s\"\n", program, path);
+      fprintf(stderr, "%.*s: can't read \"%s\"\n",
+              int(program.size()), program.data(), path);
       return false;
     }
     return true;
@@ -39,7 +41,7 @@ bool read_lines(
 }
 
 bool read_rows(
-    char const* program, char const* path, char const* what,
+    std::string_view program, char const* path, char const* what,
     bool allow_single_words,
     std::function<bool(DfsPairRow const&, std::string const&)> const& visit) {
   return read_lines(program, path,
@@ -52,13 +54,14 @@ bool read_rows(
 }
 
 bool print_kept_rows(
-    char const* program, char const* path, char const* what,
+    std::string_view program, char const* path, char const* what,
     bool allow_single_words,
     std::function<bool(DfsPairRow const&)> const& keep) {
   return read_rows(program, path, what, allow_single_words,
       [&](DfsPairRow const& row, std::string const& line) {
         if (keep(row) && !(std::cout << line << '\n')) {
-          fprintf(stderr, "%s: can't write output\n", program);
+          fprintf(stderr, "%.*s: can't write output\n",
+                  int(program.size()), program.data());
           return false;
         }
         return true;

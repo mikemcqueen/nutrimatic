@@ -10,11 +10,12 @@
 
 #include <algorithm>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 static bool count_candidate(
     std::string const& candidate, uint64_t row, bool count_occurrence,
-    char const* program, SegmentStatsMap* counts) {
+    std::string_view program, SegmentStatsMap* counts) {
   SegmentStatsMap::iterator entry = counts->find(candidate);
   if (entry == counts->end()) {
     SegmentStats stats;
@@ -23,14 +24,16 @@ static bool count_candidate(
   }
   if (count_occurrence) {
     if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
-      fprintf(stderr, "%s: segment count overflow\n", program);
+      fprintf(stderr, "%.*s: segment count overflow\n",
+              int(program.size()), program.data());
       return false;
     }
     ++entry->second.count;
   }
   if (entry->second.last_seen_row != row) {
     if (entry->second.line_count == std::numeric_limits<uint64_t>::max()) {
-      fprintf(stderr, "%s: segment line count overflow\n", program);
+      fprintf(stderr, "%.*s: segment line count overflow\n",
+              int(program.size()), program.data());
       return false;
     }
     ++entry->second.line_count;
@@ -90,7 +93,8 @@ bool segment_counts_read(
     uint64_t row_number = 0;
     if (options.elimination) {
       if (data->surviving_rows == std::numeric_limits<uint64_t>::max()) {
-        fprintf(stderr, "%s: result line count overflow\n", data->program);
+        fprintf(stderr, "%.*s: result line count overflow\n",
+                int(data->program.size()), data->program.data());
         return false;
       }
       row_number = ++data->surviving_rows;
@@ -115,7 +119,8 @@ bool segment_counts_read(
           entry = data->segments.emplace(segment, stats).first;
         }
         if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
-          fprintf(stderr, "%s: segment count overflow\n", data->program);
+          fprintf(stderr, "%.*s: segment count overflow\n",
+                  int(data->program.size()), data->program.data());
           return false;
         }
         ++entry->second.count;
@@ -150,7 +155,8 @@ void segment_counts_print_filter_summary(
   if (stats.classified_no_lines != 0 || stats.target_no_lines != 0 ||
       stats.explicit_reject_lines != 0 || stats.allow_lines != 0 ||
       stats.dictionary_lines != 0) {
-    fprintf(stderr, "%s: Filtered ", data.program);
+    fprintf(stderr, "%.*s: Filtered ",
+            int(data.program.size()), data.program.data());
     bool first = true;
     if (stats.classified_no_lines != 0) {
       fprintf(stderr, "%" PRIu64 " lines from classified/no/no.pairs",
@@ -185,7 +191,8 @@ void segment_counts_print_filter_summary(
 
   if (stats.classified_yes_instances != 0 ||
       stats.explicit_ignore_instances != 0) {
-    fprintf(stderr, "%s: Ignored ", data.program);
+    fprintf(stderr, "%.*s: Ignored ",
+            int(data.program.size()), data.program.data());
     bool first = true;
     if (stats.classified_yes_instances != 0) {
       fprintf(stderr,
@@ -204,7 +211,7 @@ void segment_counts_print_filter_summary(
 
 static bool split_counts(
     SegmentStatsMap const& counts, SegmentSelection selection,
-    SegmentWeight weight, char const* program, SegmentStatsMap* words) {
+    SegmentWeight weight, std::string_view program, SegmentStatsMap* words) {
   for (SegmentStatsMap::const_iterator entry = counts.begin();
        entry != counts.end(); ++entry) {
     if (!is_selected_segment(selection, entry->first)) continue;
@@ -220,7 +227,8 @@ static bool split_counts(
       }
       if (word->second.count >
           std::numeric_limits<uint64_t>::max() - increment) {
-        fprintf(stderr, "%s: word count overflow\n", program);
+        fprintf(stderr, "%.*s: word count overflow\n",
+                int(program.size()), program.data());
         return false;
       }
       word->second.count += increment;

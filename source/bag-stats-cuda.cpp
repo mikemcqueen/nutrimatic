@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -21,9 +22,9 @@ constexpr char PROGRAM[] = "bag-stats-cuda";
 static_assert(sizeof(PairsCounts) == GPU_LETTERS_BYTES);
 static_assert(sizeof(GpuCounts) == sizeof(BagStatsCounts));
 
-void usage(char const* program, FILE* out) {
+void usage(std::string_view program, FILE* out) {
     fprintf(out,
-            "usage: %s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
+            "usage: %.*s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
             "       [--min-pb-len N]\n"
             "       [--ss STEPS] [--pp FILE] [--threads N] [--cache-size N]\n"
             "       [--progress N]\n"
@@ -34,7 +35,7 @@ void usage(char const* program, FILE* out) {
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]] [--top-segments]\n"
             "       LETTERS PAIRS DICT\n",
-            program);
+            int(program.size()), program.data());
     if (out != stdout) return;
 
     fputs("  bag-stats, counting every row on the GPU\n\n", stdout);

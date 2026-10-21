@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <string_view>
 
 #include "option-value.h"
 
@@ -21,12 +22,12 @@ bool parse_limit(char const* text, uint64_t* limit) {
 
 bool select_segment_output(
     SegmentSelection selection, SegmentProjection projection,
-    char const* program, SegmentOutputOptions* out) {
+    std::string_view program, SegmentOutputOptions* out) {
   if (out->mode_explicit &&
       (out->selection != selection || out->projection != projection)) {
     fprintf(stderr,
-        "%s: segment output options are mutually exclusive\n",
-        program);
+        "%.*s: segment output options are mutually exclusive\n",
+        int(program.size()), program.data());
     return false;
   }
   out->selection = selection;
@@ -36,7 +37,7 @@ bool select_segment_output(
 }
 
 SegmentOutputOptionResult parse_segment_output_option(
-    int argc, char* const argv[], int* index, char const* program,
+    int argc, char* const argv[], int* index, std::string_view program,
     SegmentOutputOptions* out) {
   char const* const option = argv[*index];
   if (strcmp(option, "--pairs") == 0) {
@@ -72,17 +73,19 @@ SegmentOutputOptionResult parse_segment_output_option(
     return SEGMENT_OUTPUT_OPTION_OTHER;
 
   if (value == NULL || !parse_limit(value, &out->limit)) {
-    fprintf(stderr, "%s: -n requires a non-negative integer\n", program);
+    fprintf(stderr, "%.*s: -n requires a non-negative integer\n",
+            int(program.size()), program.data());
     return SEGMENT_OUTPUT_OPTION_ERROR;
   }
   return SEGMENT_OUTPUT_OPTION_HANDLED;
 }
 
 bool check_segment_output_options(
-    SegmentOutputOptions const& options, char const* program) {
+    SegmentOutputOptions const& options, std::string_view program) {
   if (options.weight == SEGMENT_WEIGHT_UNIQUE &&
       !is_pair_word_output(options)) {
-    fprintf(stderr, "%s: --unique requires --pair-words\n", program);
+    fprintf(stderr, "%.*s: --unique requires --pair-words\n",
+            int(program.size()), program.data());
     return false;
   }
   return true;

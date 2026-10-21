@@ -7,13 +7,15 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
 
 namespace {
 
 constexpr int OPT_THREADS = 256;
 
-void usage(char const* program, FILE* out) {
-    fprintf(out, "usage: %s [--threads N] DIR OUT\n", program);
+void usage(std::string_view program, FILE* out) {
+    fprintf(out, "usage: %.*s [--threads N] DIR OUT\n",
+            int(program.size()), program.data());
     if (out != stdout) return;
 
     fputs("  write OUT, an index of the phase 1 verdicts in every *.jsonl\n"

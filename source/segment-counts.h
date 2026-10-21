@@ -6,6 +6,7 @@
 #include <istream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -50,7 +51,7 @@ struct SegmentCountsOptions {
 
 // Everything accumulated across every input. `program` prefixes diagnostics.
 struct SegmentCountsData {
-  char const* program = NULL;
+  std::string_view program;
   SegmentStatsMap segments;
   PairFilterStats filtered;
   uint64_t surviving_rows = 0;

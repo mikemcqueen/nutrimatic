@@ -5,6 +5,7 @@
 
 #include <istream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // One nonempty result row. `line` is reused across calls, so a caller that
@@ -20,7 +21,7 @@ struct SegmentRow {
 struct SegmentRowReader {
   std::istream* input = NULL;
   char const* name = NULL;     // the file name in diagnostics; "-" for stdin
-  char const* program = NULL;  // the diagnostic prefix
+  std::string_view program;  // the diagnostic prefix
 
   // Optional row-shape checks, each independent of the other; only
   // rerank-anagrams knows a target, so only rerank-anagrams sets them. A

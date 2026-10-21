@@ -31,6 +31,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -56,12 +57,13 @@ struct Args {
   char const* near_incompatible_option;
 };
 
-static void usage(char const* program, FILE* out) {
+static void usage(std::string_view program, FILE* out) {
   fprintf(out,
-      "usage: %s [-i INDEX] [options] letters\n"
-      "       %s [-i INDEX] [options] query|- --score\n"
-      "       %s [-i INDEX] input --near WORD [-n N]\n",
-      program, program, program);
+      "usage: %.*s [-i INDEX] [options] letters\n"
+      "       %.*s [-i INDEX] [options] query|- --score\n"
+      "       %.*s [-i INDEX] input --near WORD [-n N]\n",
+      int(program.size()), program.data(), int(program.size()), program.data(),
+      int(program.size()), program.data());
   if (out != stdout) return;
 
   fputs("\nlisting prints each set of words once, in its best-ranked order\n",
@@ -220,7 +222,7 @@ static bool validate_literal_entry(std::string const& entry) {
   return true;
 }
 
-static bool index_from_env(char const* program, char const* missing_hint,
+static bool index_from_env(std::string_view program, char const* missing_hint,
                            char const** index_file) {
   char const* idx = getenv("IDX");
   if (idx == NULL || *idx == '\0') {

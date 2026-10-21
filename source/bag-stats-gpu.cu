@@ -10,6 +10,8 @@
 #include <condition_variable>
 #include <mutex>
 #include <numeric>
+#include <string>
+#include <string_view>
 
 namespace {
 
@@ -23,11 +25,12 @@ constexpr int MAX_HALF = GPU_MAX_LETTERS / 2;
 constexpr size_t SHARED_BYTES_MAX = 101376;
 constexpr int STREAMS = 2;
 
-char const* program_name = "bag-stats-cuda";
+std::string program_name = "bag-stats-cuda";
 
 void check(cudaError_t error) {
     if (error == cudaSuccess) return;
-    fprintf(stderr, "%s: %s\n", program_name, cudaGetErrorString(error));
+    fprintf(stderr, "%.*s: %s\n", int(program_name.size()), program_name.data(),
+            cudaGetErrorString(error));
     exit(1);
 }
 
@@ -588,7 +591,7 @@ struct GpuRowCounter::Impl {
     }
 };
 
-GpuRowCounter::GpuRowCounter(char const* program, GpuInputs const& inputs)
+GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs)
     : impl_(std::make_unique<Impl>()) {
     program_name = program;
     Impl& impl = *impl_;

@@ -13,6 +13,7 @@
 
 #include <queue>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,8 +27,9 @@ static struct optparse_long const long_options[] = {
   { NULL, 0, OPTPARSE_NONE },
 };
 
-static void usage(char const* program, FILE* out) {
-  fprintf(out, "usage: %s [--top-words N [--score]] input.index\n", program);
+static void usage(std::string_view program, FILE* out) {
+  fprintf(out, "usage: %.*s [--top-words N [--score]] input.index\n",
+          int(program.size()), program.data());
 }
 
 struct Frontier {

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <regex>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "option-value.h"
@@ -27,9 +28,9 @@ struct Args {
   uint64_t limit;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %s [-n N] [--with-regex REGEX] [--no-score]\n"
+      "usage: %.*s [-n N] [--with-regex REGEX] [--no-score]\n"
       "          [-r FILE | --reject FILE]...\n"
       "          [-a FILE]...\n"
       "          [-d PATH]\n"
@@ -40,7 +41,7 @@ static void usage(char const* program) {
       "                       anywhere (ECMAScript syntax)\n"
       "  --no-score           omit the leading score from printed lines;\n"
       "                       the output can't be filtered or reranked\n",
-      program);
+      int(program.size()), program.data());
   print_reject_option_help(stdout, 23);
   print_allow_pairs_option_help(stdout, 23);
   fprintf(stdout,

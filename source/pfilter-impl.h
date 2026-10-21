@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "classified.h"
@@ -42,7 +43,7 @@ class Pfilter {
   // Loads what `options` names from the workflow root in $WFROOT, taking its
   // classified pairs from `cache`. Errors are diagnosed, prefixed by
   // `program`.
-  bool load(char const* program, PfilterOptions const& options,
+  bool load(std::string_view program, PfilterOptions const& options,
             ClassifiedPairCache& cache);
 
   // Whether `row` is kept. Only valid after load() succeeds.
