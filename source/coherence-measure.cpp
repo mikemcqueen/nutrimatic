@@ -36,7 +36,7 @@ class MemoryBudget {
  public:
   explicit MemoryBudget(size_t limit): limit_(limit), current_(0), peak_(0) {}
 
-  bool acquire(size_t bytes, char const*) {
+  bool acquire(size_t bytes, std::string_view) {
     if (bytes > limit_ - current_) return false;
     current_ += bytes;
     peak_ = std::max(peak_, current_);
@@ -87,13 +87,15 @@ static bool checked_multiply_u64(
   return true;
 }
 
-static void charge(MemoryBudget* budget, size_t bytes, char const* owner) {
+static void charge(MemoryBudget* budget, size_t bytes,
+                   std::string_view owner) {
   if (!budget->acquire(bytes, owner)) {
     char message[256];
     snprintf(message, sizeof(message),
-             "memory phase %s requested %zu bytes with %zu charged "
+             "memory phase %.*s requested %zu bytes with %zu charged "
              "and limit %zu",
-             owner, bytes, budget->current(), budget->limit());
+             int(owner.size()), owner.data(), bytes, budget->current(),
+             budget->limit());
     throw std::runtime_error(message);
   }
 }
@@ -101,15 +103,15 @@ static void charge(MemoryBudget* budget, size_t bytes, char const* owner) {
 template<typename T>
 static size_t reserve_vector(
     std::vector<T>* values, size_t count,
-    MemoryBudget* budget, char const* owner) {
+    MemoryBudget* budget, std::string_view owner) {
   size_t requested;
   if (!checked_multiply_size(count, sizeof(T), &requested))
-    throw std::runtime_error(std::string("size overflow in ") + owner);
+    throw std::runtime_error(std::string("size overflow in ").append(owner));
   charge(budget, requested, owner);
   values->reserve(count);
   size_t actual;
   if (!checked_multiply_size(values->capacity(), sizeof(T), &actual))
-    throw std::runtime_error(std::string("size overflow in ") + owner);
+    throw std::runtime_error(std::string("size overflow in ").append(owner));
   if (actual > requested)
     charge(budget, actual - requested, owner);
   return actual;
@@ -305,14 +307,14 @@ static void short_usage(std::string_view program) {
 }
 
 static bool parse_double_strict(
-    char const* text, char const* option, double* result) {
+    char const* text, std::string_view option, double* result) {
   errno = 0;
   char* end = NULL;
   double const value = strtod(text, &end);
   if (errno != 0 || end == text || *end != '\0' ||
       !std::isfinite(value)) {
-    fprintf(stderr, "measure-coherence: invalid %s value \"%s\"\n",
-            option, text);
+    fprintf(stderr, "measure-coherence: invalid %.*s value \"%s\"\n",
+            int(option.size()), option.data(), text);
     return false;
   }
   *result = value;
@@ -320,15 +322,15 @@ static bool parse_double_strict(
 }
 
 static bool parse_positive_size(
-    char const* text, char const* option, size_t* result) {
+    char const* text, std::string_view option, size_t* result) {
   errno = 0;
   char* end = NULL;
   unsigned long long const value = strtoull(text, &end, 10);
   if (text[0] == '-' || errno != 0 || end == text || *end != '\0' ||
       value == 0 ||
       value > std::numeric_limits<size_t>::max()) {
-    fprintf(stderr, "measure-coherence: invalid %s value \"%s\"\n",
-            option, text);
+    fprintf(stderr, "measure-coherence: invalid %.*s value \"%s\"\n",
+            int(option.size()), option.data(), text);
     return false;
   }
   *result = size_t(value);
@@ -652,9 +654,9 @@ static bool summarize_input(
   return true;
 }
 
-static size_t checked_size(uint64_t value, char const* owner) {
+static size_t checked_size(uint64_t value, std::string_view owner) {
   if (value > std::numeric_limits<size_t>::max())
-    throw std::runtime_error(std::string("size overflow in ") + owner);
+    throw std::runtime_error(std::string("size overflow in ").append(owner));
   return size_t(value);
 }
 
@@ -1208,11 +1210,12 @@ static void print_repeated(FILE* stream, char value, int count) {
 }
 
 static void print_group_header(
-    FILE* stream, char const* label, char const* compact_label, int width) {
-  int label_width = int(strlen(label));
+    FILE* stream, std::string_view label, std::string_view compact_label,
+    int width) {
+  int label_width = int(label.size());
   if (label_width + 2 > width) {
     label = compact_label;
-    label_width = int(strlen(label));
+    label_width = int(label.size());
   }
   assert(label_width + 2 <= width);
   bool const padded = label_width + 4 <= width;
@@ -1222,7 +1225,7 @@ static void print_group_header(
   fputc('|', stream);
   print_repeated(stream, '-', left_dashes);
   if (padded) fputc(' ', stream);
-  fputs(label, stream);
+  fwrite(label.data(), 1, label.size(), stream);
   if (padded) fputc(' ', stream);
   print_repeated(stream, '-', right_dashes);
   fputc('|', stream);

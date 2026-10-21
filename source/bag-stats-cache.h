@@ -56,7 +56,7 @@ struct SharedCacheCounts {
     }
 
     // ", NAME hits N/M (P%)".
-    std::string text(char const* name) const;
+    std::string text(std::string_view name) const;
 };
 
 // The bytes one rest cache entry takes.

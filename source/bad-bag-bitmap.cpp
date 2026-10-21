@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <cstring>
 
 char const BAD_BAG_BITMAP_MAGIC[] = "bad-bags-bitmap 1";
 
@@ -28,10 +27,10 @@ bool read_line(FILE* in, std::string* line) {
   return !line->empty();
 }
 
-bool read_field(FILE* in, char const* name, std::string* value) {
+bool read_field(FILE* in, std::string_view name, std::string* value) {
   std::string line;
   if (!read_line(in, &line)) return false;
-  size_t const length = strlen(name);
+  size_t const length = name.size();
   if (line.compare(0, length, name) != 0 || line.size() <= length ||
       line[length] != ' ')
     return false;
