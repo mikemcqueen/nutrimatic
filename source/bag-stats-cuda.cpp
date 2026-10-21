@@ -1,6 +1,7 @@
 // bag-stats-cuda.cpp - bag-stats with every row's counts computed on the
 // GPU.
 
+#include "bag-stats-cache.h"
 #include "bag-stats-gpu.h"
 #include "bag-stats-impl.h"
 #include "bag-stats-rank.h"
@@ -24,7 +25,8 @@ void usage(char const* program, FILE* out) {
     fprintf(out,
             "usage: %s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
             "       [--min-pb-len N]\n"
-            "       [--ss STEPS] [--pp FILE] [--threads N] [--progress N]\n"
+            "       [--ss STEPS] [--pp FILE] [--threads N] [--cache-size N]\n"
+            "       [--progress N]\n"
             "       [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... [--score-detail]\n"
             "        [SORT... [--by-length | --by-pick]]]\n"
@@ -111,34 +113,46 @@ GpuInputs gpu_inputs(BagStatsInputs const& inputs, BagStatsArgs const& args) {
     return out;
 }
 
-BagStatsRow gpu_row(GpuCounts const& counts) {
+BagStatsCounts gpu_counts(GpuCounts const& counts) {
+    BagStatsCounts out{};
+    out.word_bags = counts.word_bags;
+    out.with_pairs = counts.with_pairs;
+    out.total_pairs = counts.total_pairs;
+    out.max_pairs = counts.max_pairs;
+    out.solo = counts.solo;
+    out.with_min_pairs = counts.with_min_pairs;
+    return out;
+}
+
+BagStatsRow counts_row(BagStatsCounts const& counts) {
     BagStatsRow row{};
-    row.word_bags = counts.word_bags;
-    row.with_pairs = counts.with_pairs;
-    row.total_pairs = counts.total_pairs;
-    row.max_pairs = counts.max_pairs;
-    row.solo = counts.solo;
-    row.with_min_pairs = counts.with_min_pairs;
+    static_cast<BagStatsCounts&>(row) = counts;
     return row;
 }
 
-// Progress hooks: the GPU walk has no stats to report.
-struct NoHooks {
-    template <typename Walker>
-    void finished(Walker*) {}
-
-    std::string text() const { return {}; }
-};
+// What a walk does with the RestTable: nothing, put every row's counts in
+// it, or look each rest up there first.
+enum class RestMode { off, fill, lookup };
 
 // Walks the rows as PickWalk does, buffering each row's picks and rest, and
 // counts the buffer on the GPU when it holds GPU_BATCH_ROWS rows and at the
-// end of a walk.
+// end of a walk. Uses `rest_table` as `mode` says, counting only the
+// lookup misses.
 class GpuRowWalker : public PickWalk {
   public:
     GpuRowWalker(std::vector<std::vector<PairBag> const*> const& steps,
                  int pair_steps, size_t pair_bags,
-                 GpuRowCounter const& counter)
-        : PickWalk(steps, pair_steps, pair_bags), counter_(counter) {}
+                 GpuRowCounter const& counter, RestTable const& rest_table,
+                 RestMode mode)
+        : PickWalk(steps, pair_steps, pair_bags), counter_(counter),
+          rest_table_(rest_table), mode_(mode) {}
+
+    // The RestTable lookups since the last call.
+    CacheCounts take_rest_counts() {
+        CacheCounts const out = rest_counts_;
+        rest_counts_ = {};
+        return out;
+    }
 
     // Calls visit(unit, row, pair_length) for each row of units [first,
     // last), in order, with the row's counts but not its PAIR or PAIRS.
@@ -152,8 +166,12 @@ class GpuRowWalker : public PickWalk {
                 units_.push_back(unit);
                 picks_.insert(picks_.end(), chosen_.begin(), chosen_.end());
                 lengths_.push_back(size_t(letters - letter_total(rest)));
-                rests_.insert(rests_.end(), rest.values.begin(),
-                              rest.values.end());
+                rows_.emplace_back();
+                if (!lookup(rest, &rows_.back())) {
+                    misses_.push_back(rows_.size() - 1);
+                    rests_.insert(rests_.end(), rest.values.begin(),
+                                  rest.values.end());
+                }
                 if (units_.size() == GPU_BATCH_ROWS) flush(visit);
             });
         }
@@ -161,45 +179,104 @@ class GpuRowWalker : public PickWalk {
     }
 
   private:
+    bool lookup(PairsCounts const& rest, BagStatsCounts* out) {
+        if (mode_ != RestMode::lookup) return false;
+        ++rest_counts_.lookups;
+        if (!rest_table_.get(rest, out)) return false;
+        ++rest_counts_.hits;
+        return true;
+    }
+
     template <typename Visit>
     void flush(Visit const& visit) {
         size_t const rows = units_.size();
         if (rows == 0) return;
-        counts_.resize(rows);
-        counter_.count(rests_.data(), rows, counts_.data());
+        size_t const misses = misses_.size();
+        if (misses != 0) {
+            counts_.resize(misses);
+            counter_.count(rests_.data(), misses, counts_.data());
+            for (size_t m = 0; m < misses; ++m) {
+                BagStatsCounts& row = rows_[misses_[m]];
+                row = gpu_counts(counts_[m]);
+                if (mode_ != RestMode::fill) continue;
+                PairsCounts rest;
+                std::copy_n(rests_.begin() + m * GPU_LETTERS_BYTES,
+                            GPU_LETTERS_BYTES, rest.values.begin());
+                rest_table_.put(rest, row);
+            }
+        }
         saved_ = chosen_;
         size_t const steps = chosen_.size();
         for (size_t r = 0; r < rows; ++r) {
             std::copy_n(picks_.begin() + r * steps, steps, chosen_.begin());
-            BagStatsRow row = gpu_row(counts_[r]);
+            BagStatsRow row = counts_row(rows_[r]);
             visit(units_[r], row, lengths_[r]);
         }
         chosen_ = saved_;
         units_.clear();
         picks_.clear();
         lengths_.clear();
+        rows_.clear();
+        misses_.clear();
         rests_.clear();
     }
 
     GpuRowCounter const& counter_;
-    // The buffered rows: each one's unit, picks, pair letters and rest.
+    RestTable const& rest_table_;
+    RestMode const mode_;
+    CacheCounts rest_counts_;
+    // The buffered rows: each one's unit, picks, pair letters and counts;
+    // the misses' row indices and rests.
     std::vector<size_t> units_;
     std::vector<size_t> picks_;
     std::vector<size_t> lengths_;
+    std::vector<BagStatsCounts> rows_;
+    std::vector<size_t> misses_;
     std::vector<uint8_t> rests_;
     std::vector<GpuCounts> counts_;
     std::vector<size_t> saved_;
 };
 
-struct Walk : WalkBase {
-    GpuRowCounter const& counter;
+// Progress hooks: the cache lookups of each finished block.
+class GpuCacheHooks {
+  public:
+    GpuCacheHooks(RestTable const& rest_table, int passes)
+        : rest_table_(rest_table), passes_(passes) {}
 
-    GpuRowWalker walker() const {
-        return GpuRowWalker(steps, args.search.pairs, pair_bags.size(),
-                            counter);
+    void finished(GpuRowWalker* walker) {
+        cache_.add(walker->take_rest_counts());
     }
 
-    NoHooks progress_hooks() const { return {}; }
+    // ", cache hits N/M (P%)" once there have been lookups, ", cache off"
+    // when the table is off in a two-pass run, else nothing.
+    std::string text() const {
+        if (cache_.lookups.load(std::memory_order_relaxed) != 0)
+            return cache_.text("cache");
+        if (passes_ > 1 && !rest_table_.enabled()) return ", cache off";
+        return {};
+    }
+
+  private:
+    RestTable const& rest_table_;
+    int const passes_;
+    SharedCacheCounts cache_;
+};
+
+struct Walk : WalkBase {
+    GpuRowCounter const& counter;
+    RestTable const& rest_table;
+
+    GpuRowWalker walker(int pass) const {
+        return GpuRowWalker(steps, args.search.pairs, pair_bags.size(),
+                            counter, rest_table,
+                            !rest_table.enabled() ? RestMode::off
+                            : pass < passes       ? RestMode::fill
+                                                  : RestMode::lookup);
+    }
+
+    GpuCacheHooks progress_hooks() const {
+        return GpuCacheHooks(rest_table, passes);
+    }
 
     // Prints the row whose picks are `picks`, counted from what they leave
     // alone.
@@ -207,7 +284,7 @@ struct Walk : WalkBase {
         PairsCounts const rest = picks_rest(*this, picks);
         GpuCounts counts;
         counter.count(rest.values.data(), 1, &counts);
-        BagStatsRow row = gpu_row(counts);
+        BagStatsRow row = counts_row(gpu_counts(counts));
         name_picks(*this, picks, &row);
         write_bag_stats_row(stdout, row);
     }
@@ -248,6 +325,10 @@ int main(int argc, char* argv[]) {
     BagStatsRankers rankers(args, inputs);
     std::vector<std::vector<PairBag> const*> const& steps = inputs.steps;
     bool const one_row = !args.rank.score.empty() && args.rank.sorts.empty();
+    RestTable const rest_table(PROGRAM, inputs.bag, rankers.passes && !one_row,
+                               size_t(args.cache_size_mb),
+                               args.progress != 0);
+    if (args.progress != 0) report_rest_table(PROGRAM, rest_table);
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
                      inputs.bag, inputs.word_bags, args, threads,
                      rankers.passes ? 2 : 1,
@@ -255,6 +336,6 @@ int main(int argc, char* argv[]) {
                              : census_blocks(steps, args.search.pairs,
                                              inputs.bag, threads,
                                              GPU_BATCH_ROWS)},
-                    counter};
+                    counter, rest_table};
     return run_bag_stats(walk, letters, &rankers);
 }

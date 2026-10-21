@@ -261,7 +261,8 @@ bag_stats_lib = static_library('bag-stats', 'bag-stats-impl.cpp',
 
 bag_stats_rank_lib = static_library('bag-stats-rank', 'bag-stats-rank.cpp')
 
-bag_stats_run_lib = static_library('bag-stats-run', 'bag-stats-run.cpp',
+bag_stats_run_lib = static_library('bag-stats-run',
+  ['bag-stats-run.cpp', 'bag-stats-cache.cpp'],
   dependencies: thread_dep)
 
 bag_stats_cpu_lib = static_library('bag-stats-cpu', 'bag-stats-cpu.cpp',

@@ -39,6 +39,9 @@ RankOption parse_common_option(char const* program, int option,
       case OPT_COMMON_THREADS:
         return parse_count(arg, "--threads", &out->threads)
             ? RankOption::PARSED : RankOption::BAD;
+      case OPT_COMMON_CACHE_SIZE:
+        return parse_count(arg, "--cache-size", &out->cache_size_mb)
+            ? RankOption::PARSED : RankOption::BAD;
       case OPT_COMMON_NO_NOPAIRS:
         out->drop_no = false;
         return RankOption::PARSED;
@@ -167,6 +170,9 @@ void help_common_options(bool pair_filter) {
     dfs_help_option("--threads N",
                     "count on N threads, at most the hardware threads, 0 for "
                     "all of them (default: 1)");
+    dfs_help_option("--cache-size N",
+                    "hold at most N MB of cached remainder counts, 0 for "
+                    "none (default: %d)", BAG_STATS_DEFAULT_CACHE_SIZE_MB);
     dfs_help_option("--progress N",
                     "report each pass's progress to stderr every N seconds, "
                     "and its time when it ends; 0 for never "

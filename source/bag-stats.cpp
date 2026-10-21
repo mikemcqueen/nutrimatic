@@ -13,11 +13,10 @@
 namespace {
 
 constexpr char PROGRAM[] = "bag-stats";
-constexpr int OPT_CACHE_SIZE = OPT_COMMON_END;
-constexpr int OPT_PAIR_CACHE_SIZE = OPT_COMMON_END + 1;
-constexpr int OPT_COMPLETIONS = OPT_COMMON_END + 2;
-constexpr int OPT_EXACT = OPT_COMMON_END + 3;
-constexpr int OPT_ALL = OPT_COMMON_END + 4;
+constexpr int OPT_PAIR_CACHE_SIZE = OPT_COMMON_END;
+constexpr int OPT_COMPLETIONS = OPT_COMMON_END + 1;
+constexpr int OPT_EXACT = OPT_COMMON_END + 2;
+constexpr int OPT_ALL = OPT_COMMON_END + 3;
 
 void usage(char const* program, FILE* out) {
     fprintf(out,
@@ -42,9 +41,6 @@ void usage(char const* program, FILE* out) {
     if (out != stdout) return;
 
     help_common_options(true);
-    dfs_help_option("--cache-size N",
-                    "hold at most N MB of cached remainder counts, 0 for "
-                    "none (default: %d)", BAG_STATS_DEFAULT_CACHE_SIZE_MB);
     dfs_help_option("--pair-cache-size N",
                     "hold at most N MB of cached pair counts for leftovers "
                     "too long for the pair count table, 0 for none "
@@ -71,7 +67,6 @@ void usage(char const* program, FILE* out) {
 bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
     static struct optparse_long const long_options[] = {
         BAG_STATS_COMMON_LONG_OPTIONS,
-        { "cache-size", OPT_CACHE_SIZE, OPTPARSE_REQUIRED },
         { "pair-cache-size", OPT_PAIR_CACHE_SIZE, OPTPARSE_REQUIRED },
         { "completions", OPT_COMPLETIONS, OPTPARSE_REQUIRED },
         { "exact", OPT_EXACT, OPTPARSE_NONE },
@@ -90,11 +85,6 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         if (common == RankOption::BAD) return false;
         if (common == RankOption::PARSED) continue;
         switch (option) {
-          case OPT_CACHE_SIZE:
-            if (!parse_count(options.optarg, "--cache-size",
-                             &out->cache_size_mb))
-                return false;
-            break;
           case OPT_PAIR_CACHE_SIZE:
             if (!parse_count(options.optarg, "--pair-cache-size",
                              &out->pair_cache_size_mb))
