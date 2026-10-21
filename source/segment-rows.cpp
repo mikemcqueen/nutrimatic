@@ -25,9 +25,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   double const score = strtod(line.c_str(), &score_end);
   if (score_end == line.c_str() || *score_end != ' ' ||
       score_end[1] == '\0' || !isfinite(score) || score < 0.0) {
-    report(reader->program, "%s:%" PRIu64
-           ": expected \"score segment[,segment ...]\"", reader->name,
-           reader->line_number);
+    report(reader->program, "%.*s:%" PRIu64
+           ": expected \"score segment[,segment ...]\"",
+           int(reader->name.size()), reader->name.data(), reader->line_number);
     return reject_row(reader);
   }
 
@@ -36,8 +36,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   if ((first >= 'A' && first <= 'Z') || first == '-') {
     size_t const space = line.find(' ', out->segments_start);
     if (space == std::string::npos || space + 1 == line.size()) {
-      report(reader->program, "%s:%" PRIu64
-             ": expected \"score segment[,segment ...]\"", reader->name,
+      report(reader->program, "%.*s:%" PRIu64
+             ": expected \"score segment[,segment ...]\"",
+             int(reader->name.size()), reader->name.data(),
              reader->line_number);
       return reject_row(reader);
     }
@@ -55,7 +56,8 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     size_t const length =
         end == std::string::npos ? line.size() - start : end - start;
     if (length == 0) {
-      report(reader->program, "%s:%" PRIu64 ": empty segment", reader->name,
+      report(reader->program, "%.*s:%" PRIu64 ": empty segment",
+             int(reader->name.size()), reader->name.data(),
              reader->line_number);
       return reject_row(reader);
     }
@@ -74,8 +76,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
       char const ch = segment[i];
       if (ch == ' ') {
         if (after_space || i + 1 == segment.size()) {
-          report(reader->program, "%s:%" PRIu64
-                 ": malformed spacing in segment \"%s\"", reader->name,
+          report(reader->program, "%.*s:%" PRIu64
+                 ": malformed spacing in segment \"%s\"",
+                 int(reader->name.size()), reader->name.data(),
                  reader->line_number, segment.c_str());
           return reject_row(reader);
         }
@@ -84,8 +87,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
         if (check_letters || infer_letters) row_letters.push_back(ch);
         after_space = false;
       } else {
-        report(reader->program, "%s:%" PRIu64
-               ": bad character '%c' in segment", reader->name,
+        report(reader->program, "%.*s:%" PRIu64
+               ": bad character '%c' in segment",
+               int(reader->name.size()), reader->name.data(),
                reader->line_number, ch);
         return reject_row(reader);
       }
@@ -100,14 +104,16 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   } else if (reader->required_segments != 0 &&
              out->segments.size() != size_t(reader->required_segments)) {
     if (reader->infer_segments)
-      report(reader->program, "%s:%" PRIu64
+      report(reader->program, "%.*s:%" PRIu64
              ": found %zu segments, but the first row has %d;"
-             " pass -g0 to accept mixed counts", reader->name,
+             " pass -g0 to accept mixed counts",
+             int(reader->name.size()), reader->name.data(),
              reader->line_number, out->segments.size(),
              reader->required_segments);
     else
-      report(reader->program, "%s:%" PRIu64
-             ": expected %d segments, found %zu", reader->name,
+      report(reader->program, "%.*s:%" PRIu64
+             ": expected %d segments, found %zu",
+             int(reader->name.size()), reader->name.data(),
              reader->line_number, reader->required_segments,
              out->segments.size());
     return reject_row(reader);
@@ -121,8 +127,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   std::sort(bag.begin(), bag.end());
   std::sort(row_letters.begin(), row_letters.end());
   if (row_letters != bag) {
-    report(reader->program, "%s:%" PRIu64
-           ": row does not spell target letters \"%s\"", reader->name,
+    report(reader->program, "%.*s:%" PRIu64
+           ": row does not spell target letters \"%s\"",
+           int(reader->name.size()), reader->name.data(),
            reader->line_number, reader->required_letters.c_str());
     return reject_row(reader);
   }
@@ -138,7 +145,8 @@ bool segment_rows_next(SegmentRowReader* reader, SegmentRow* out) {
   }
 
   if (reader->input->bad()) {
-    report(reader->program, "can't read \"%s\"", reader->name);
+    report(reader->program, "can't read \"%.*s\"",
+           int(reader->name.size()), reader->name.data());
     reader->failed = true;
   }
   return false;

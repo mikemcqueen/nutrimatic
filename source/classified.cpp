@@ -32,10 +32,9 @@ bool parse_classified_sentence(char const* arg, int* sentence) {
 }
 
 bool classified_pair_file(
-    std::string_view program, char const* root, int sentence,
-    std::string_view kind, std::string* path) {
-  std::filesystem::path dir =
-      std::filesystem::path(root) / WORKFLOW_CLASSIFIED_PATH;
+    std::string_view program, std::filesystem::path const& root,
+    int sentence, std::string_view kind, std::string* path) {
+  std::filesystem::path dir = root / WORKFLOW_CLASSIFIED_PATH;
   if (sentence != CLASSIFIED_NO_SENTENCE)
     dir /= "s" + std::to_string(sentence);
   std::filesystem::path const file =
@@ -57,18 +56,18 @@ bool classified_pair_file(
 }
 
 bool load_classified_pairs(
-    std::string_view program, char const* root, int sentence,
-    std::string_view kind, DfsPairSet* pairs) {
+    std::string_view program, std::filesystem::path const& root,
+    int sentence, std::string_view kind, DfsPairSet* pairs) {
   std::string path;
   if (!classified_pair_file(program, root, sentence, kind, &path))
     return false;
   return path.empty() ||
-      load_pair_file(path.c_str(), "classified pair list", pairs, true, true);
+      load_pair_file(path, "classified pair list", pairs, true, true);
 }
 
 bool load_no_pairs(
-    std::string_view program, char const* root, int sentence,
-    DfsPairSet* pairs) {
+    std::string_view program, std::filesystem::path const& root,
+    int sentence, DfsPairSet* pairs) {
   return load_classified_pairs(
              program, root, CLASSIFIED_NO_SENTENCE, "no", pairs) &&
       (sentence == CLASSIFIED_NO_SENTENCE ||
@@ -76,8 +75,8 @@ bool load_no_pairs(
 }
 
 std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
-    std::string_view program, char const* root, int sentence,
-    std::string_view kind) {
+    std::string_view program, std::filesystem::path const& root,
+    int sentence, std::string_view kind) {
   std::string path;
   if (!classified_pair_file(program, root, sentence, kind, &path))
     return nullptr;
@@ -98,7 +97,7 @@ std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
   Entry& entry = entries_[path];
   if (entry.pairs == nullptr || entry.mtime != mtime || entry.size != size) {
     auto pairs = std::make_shared<DfsPairSet>();
-    if (!load_pair_file(path.c_str(), "classified pair list", pairs.get(),
+    if (!load_pair_file(path, "classified pair list", pairs.get(),
             true, true)) {
       entries_.erase(path);
       return nullptr;
@@ -115,12 +114,13 @@ bool add_classified_sentence_pairs(
     report(program, "--pairs cannot be combined with --sentence");
     return false;
   }
-  char const* root;
+  std::filesystem::path root;
   if (args->workflow_root.empty()) {
-    root = require_workflow_root(program);
-    if (root == NULL) return false;
+    char const* const env_root = require_workflow_root(program);
+    if (env_root == NULL) return false;
+    root = env_root;
   } else {
-    root = args->workflow_root.c_str();
+    root = args->workflow_root;
     if (!check_workflow_root(program, root)) return false;
   }
   std::string yes;

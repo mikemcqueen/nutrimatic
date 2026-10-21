@@ -210,7 +210,8 @@ void WordBagLoader::add(std::string const& line) {
         words.push_back(line);
 }
 
-bool load_word_bags(std::string_view program, char const* path,
+bool load_word_bags(std::string_view program,
+                    std::filesystem::path const& path,
                     PairsCounts const& bag, int min_length,
                     std::vector<PairsCounts>* out,
                     std::vector<std::vector<std::string>>* spellings) {

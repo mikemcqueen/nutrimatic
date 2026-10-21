@@ -248,7 +248,7 @@ int main(int argc, char* argv[]) {
 
   std::vector<Entry> entries;
   std::set<std::string> seen;
-  if (!read_rows("combine-pairs", args.source.c_str(), "input", true,
+  if (!read_rows("combine-pairs", args.source, "input", true,
           [&](DfsPairRow const& row, std::string const&) {
             std::string const letters_used = row.left + row.right;
             if (!fits_letter_bag(args.bag, letters_used) ||

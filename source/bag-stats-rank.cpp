@@ -217,7 +217,7 @@ void help_rank_sort_options() {
     help_prior_terms();
 }
 
-bool load_priors(std::string_view program, char const* path,
+bool load_priors(std::string_view program, std::filesystem::path const& path,
                  std::unordered_map<std::string, double>* out) {
     return read_lines(program, path,
         [&](std::string const& line, size_t number) {
@@ -227,11 +227,12 @@ bool load_priors(std::string_view program, char const* path,
             if (end == line.c_str() || !std::isfinite(score) ||
                 space >= line.size() || line[space] != ' ') {
                 report(program, "%s:%zu isn't \"SCORE word,word\" with "
-                       "a finite SCORE", path, number);
+                       "a finite SCORE", path.c_str(), number);
                 return false;
             }
             DfsPairRow row;
-            if (!parse_pair_row(line.substr(space + 1), "prior", path, number,
+            if (!parse_pair_row(line.substr(space + 1), "prior", path.native(),
+                                number,
                                 false, &row))
                 return false;
             auto const [entry, inserted] =
@@ -266,7 +267,8 @@ int letter_total(PairsCounts const& counts) {
     return total;
 }
 
-bool load_pair_bags(std::string_view program, char const* path,
+bool load_pair_bags(std::string_view program,
+                    std::filesystem::path const& path,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     PairPrior const& prior, std::vector<PairBag>* out,
                     std::vector<std::vector<std::string>>* rows) {

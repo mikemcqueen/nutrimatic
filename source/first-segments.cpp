@@ -77,7 +77,7 @@ static bool print_segments(std::vector<FoundSegment> const& segments) {
 }
 
 static bool find_segments(
-    std::istream* input, char const* name, PairFilters const& filters,
+    std::istream* input, std::string_view name, PairFilters const& filters,
     SegmentOutputOptions const& output_options) {
   std::unordered_set<std::string> found;
   std::unordered_set<std::string> unique_segments;

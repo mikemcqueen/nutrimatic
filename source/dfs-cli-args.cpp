@@ -399,10 +399,10 @@ size_t resolve_search_threads(int requested) {
   return available == 0 ? 1 : size_t(available);
 }
 
-bool load_dictionary(char const* path, DfsDictionary* dictionary) {
+bool load_dictionary(fs::path const& path, DfsDictionary* dictionary) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    fprintf(stderr, "error: can't open dictionary \"%s\"\n", path);
+    fprintf(stderr, "error: can't open dictionary \"%s\"\n", path.c_str());
     return false;
   }
 
@@ -416,20 +416,22 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
   }
 
   if (!input.eof()) {
-    fprintf(stderr, "error: can't read dictionary \"%s\"\n", path);
+    fprintf(stderr, "error: can't read dictionary \"%s\"\n",
+            path.c_str());
     return false;
   }
   return true;
 }
 
 bool parse_pair_row(
-    std::string const& line, std::string_view what, char const* source,
+    std::string const& line, std::string_view what, std::string_view source,
     size_t line_number, bool allow_single_words, DfsPairRow* out) {
   size_t const comma = line.find(',');
   if (line.find('-') != std::string::npos) {
     fprintf(stderr,
-        "error: %.*s \"%s\" line %zu: '-' would silently skip this entry\n",
-        int(what.size()), what.data(), source, line_number);
+        "error: %.*s \"%.*s\" line %zu: '-' would silently skip this entry\n",
+        int(what.size()), what.data(), int(source.size()), source.data(),
+        line_number);
     return false;
   }
 
@@ -447,8 +449,9 @@ bool parse_pair_row(
   if ((!one_field && !two_fields) || out->left.empty() ||
       (two_fields && out->right.empty())) {
     fprintf(stderr,
-        "error: %.*s \"%s\" line %zu: %s\n",
-        int(what.size()), what.data(), source, line_number,
+        "error: %.*s \"%.*s\" line %zu: %s\n",
+        int(what.size()), what.data(), int(source.size()), source.data(),
+        line_number,
         allow_single_words
             ? "expected one word or two comma-separated words"
             : "expected two comma-separated words");
@@ -461,7 +464,7 @@ bool parse_pair_row(
 namespace {
 
 bool load_pair_rows_stream(
-    std::istream& input, std::string_view what, char const* source,
+    std::istream& input, std::string_view what, std::string_view source,
     bool reject_hyphens, bool allow_single_words, bool ignore_single_words,
     size_t* ignored_single_word_count,
     std::vector<DfsPairRow>* loaded) {
@@ -483,8 +486,8 @@ bool load_pair_rows_stream(
   }
 
   if (!input.eof()) {
-    fprintf(stderr, "error: can't read %.*s \"%s\"\n",
-            int(what.size()), what.data(), source);
+    fprintf(stderr, "error: can't read %.*s \"%.*s\"\n",
+            int(what.size()), what.data(), int(source.size()), source.data());
     return false;
   }
 
@@ -492,18 +495,18 @@ bool load_pair_rows_stream(
 }
 
 bool load_pair_rows(
-    char const* path, std::string_view what, bool reject_hyphens,
+    fs::path const& path, std::string_view what, bool reject_hyphens,
     bool allow_single_words, bool ignore_single_words,
     size_t* ignored_single_word_count,
     std::vector<DfsPairRow>* loaded) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open %.*s \"%s\"\n",
-            int(what.size()), what.data(), path);
+            int(what.size()), what.data(), path.c_str());
     return false;
   }
   return load_pair_rows_stream(
-      input, what, path, reject_hyphens, allow_single_words,
+      input, what, path.native(), reject_hyphens, allow_single_words,
       ignore_single_words, ignored_single_word_count, loaded);
 }
 
@@ -522,7 +525,7 @@ void insert_pair_keys(
 
 bool build_extraction_pairs(
     std::vector<DfsPairRow> const& loaded, std::string_view what,
-    char const* source, int min_word_len, DfsPairSet* pairs,
+    std::string_view source, int min_word_len, DfsPairSet* pairs,
     DfsPairSet* exception_prefixes, bool quiet,
     std::vector<DfsPairRow>* rows) {
   size_t const minimum = size_t(std::max(min_word_len, 0));
@@ -531,10 +534,10 @@ bool build_extraction_pairs(
         loaded[i].left.size() + loaded[i].right.size();
     if (normalized_length < minimum) {
       fprintf(stderr,
-          "error: %.*s \"%s\" line %zu: normalized entry has %zu non-space"
+          "error: %.*s \"%.*s\" line %zu: normalized entry has %zu non-space"
           " characters, fewer than -m %d\n",
-          int(what.size()), what.data(), source, loaded[i].line_number,
-          normalized_length, min_word_len);
+          int(what.size()), what.data(), int(source.size()), source.data(),
+          loaded[i].line_number, normalized_length, min_word_len);
       return false;
     }
   }
@@ -599,9 +602,9 @@ bool load_extraction_pair_value(
 }  // namespace
 
 bool load_pair_file(
-    char const* path, std::string_view what, DfsPairSet* pairs, bool quiet,
+    fs::path const& path, std::string_view what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words,
-    char const* diagnostic_source, std::vector<DfsPairRow>* rows) {
+    std::string_view diagnostic_source, std::vector<DfsPairRow>* rows) {
   std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
           path, what, reject_hyphens, allow_single_words,
@@ -611,20 +614,21 @@ bool load_pair_file(
   insert_pair_keys(loaded, pairs);
   if (rows != NULL) *rows = loaded;
   if (!quiet) {
-    if (diagnostic_source == NULL)
+    if (diagnostic_source.empty())
       dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
                      int(what.size()), what.data(), loaded.size(),
                      pairs->size());
     else
-      dfs_diagnostic("%.*s: %zu pairs, %zu keys from %s\n",
+      dfs_diagnostic("%.*s: %zu pairs, %zu keys from %.*s\n",
                      int(what.size()), what.data(), loaded.size(),
-                     pairs->size(), diagnostic_source);
+                     pairs->size(), int(diagnostic_source.size()),
+                     diagnostic_source.data());
   }
   return true;
 }
 
 bool load_pair_file_ignoring_single_words(
-    char const* path, std::string_view what, DfsPairSet* pairs,
+    fs::path const& path, std::string_view what, DfsPairSet* pairs,
     size_t* ignored_single_words) {
   std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
@@ -642,7 +646,7 @@ bool load_pair_file_ignoring_single_words(
 }
 
 bool load_extraction_pair_file(
-    char const* path, std::string_view what, int min_word_len,
+    fs::path const& path, std::string_view what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
     bool reject_hyphens, std::vector<DfsPairRow>* rows) {
   std::vector<DfsPairRow> loaded;
@@ -651,8 +655,8 @@ bool load_extraction_pair_file(
           /*ignore_single_words=*/false, NULL, &loaded))
     return false;
   return build_extraction_pairs(
-      loaded, what, path, min_word_len, pairs, exception_prefixes, quiet,
-      rows);
+      loaded, what, path.native(), min_word_len, pairs, exception_prefixes,
+      quiet, rows);
 }
 
 bool load_weighted_pair_files(
@@ -678,7 +682,7 @@ bool load_weighted_pair_files(
     for (size_t i = 0; i < sources[source].paths->size(); ++i) {
       DfsPairSet loaded;
       DfsPairSet prefixes;
-      char const* const path = (*sources[source].paths)[i].c_str();
+      std::string const& path = (*sources[source].paths)[i];
       bool const success = score_mode
           ? load_pair_file(path, sources[source].description, &loaded,
                            false, false, true)
@@ -708,8 +712,8 @@ bool load_weighted_pair_files(
   return true;
 }
 
-static std::string reject_diagnostic_source(char const* path) {
-  std::string const source(path);
+static std::string reject_diagnostic_source(fs::path const& path) {
+  std::string const& source = path.native();
   size_t const wf = source.find(".wf/");
   if (wf != std::string::npos &&
       (wf == 0 || source[wf - 1] == '/'))
@@ -718,11 +722,11 @@ static std::string reject_diagnostic_source(char const* path) {
 }
 
 static bool load_reject_list(
-    char const* path, bool allow_single_words, DfsPairSet* pairs) {
+    fs::path const& path, bool allow_single_words, DfsPairSet* pairs) {
   std::vector<DfsPairRow> rows;
   if (!load_pair_file(
           path, "reject list", pairs, /*quiet=*/true, true,
-          allow_single_words, NULL, &rows))
+          allow_single_words, {}, &rows))
     return false;
   size_t solo_words = 0;
   for (size_t i = 0; i < rows.size(); ++i)
@@ -735,13 +739,12 @@ static bool load_reject_list(
 }
 
 static bool load_reject_file(
-    char const* path, bool allow_single_words, DfsPairSet* pairs) {
+    fs::path const& path, bool allow_single_words, DfsPairSet* pairs) {
   struct stat status;
-  if (stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
+  if (stat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
     return load_reject_list(path, allow_single_words, pairs);
 
-  fs::path const root(path);
-  std::string const metadata = (root / WORKFLOW_DIR_PATH).string();
+  std::string const metadata = (path / WORKFLOW_DIR_PATH).string();
   struct stat metadata_status;
   if (stat(metadata.c_str(), &metadata_status) != 0) {
     // Anything but ENOENT means .wf may well be there and simply unreachable,
@@ -758,11 +761,10 @@ static bool load_reject_file(
     fprintf(stderr,
         "error: --reject directory \"%s\" has no workflow metadata"
         " \"%s\"\n",
-        path, metadata.c_str());
+        path.c_str(), metadata.c_str());
     return false;
   }
-  std::string const resolved = (root / WORKFLOW_NO_PAIRS_PATH).string();
-  return load_reject_list(resolved.c_str(), false, pairs);
+  return load_reject_list(path / WORKFLOW_NO_PAIRS_PATH, false, pairs);
 }
 
 bool load_reject_files(
@@ -780,8 +782,7 @@ bool load_reject_files(
   }
 
   for (size_t i = 0; i < paths.size(); ++i) {
-    if (!load_reject_file(
-            paths[i].c_str(), allow_single_words, pairs))
+    if (!load_reject_file(paths[i], allow_single_words, pairs))
       return false;
   }
   return true;
@@ -993,7 +994,7 @@ static bool finalize_dfs_workflow_args(
       return false;
     }
     return true;
-  } else if (!check_workflow_root(program, args->workflow_root.c_str())) {
+  } else if (!check_workflow_root(program, args->workflow_root)) {
     return false;
   }
 

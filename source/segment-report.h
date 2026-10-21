@@ -5,6 +5,7 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 
 // The --segments report: one row per index entry used by the retained results,
 // keyed by the entry text. log_score is the best score of any result using the
@@ -28,7 +29,8 @@ SegmentReport segment_report_weighted(SegmentReport const& report);
 // Reads rows written by segment_report_print(), merging into whatever report
 // already holds: scores combine by maximum, counts by sum. name is used only in
 // error messages.
-bool segment_report_read(FILE* fp, char const* name, SegmentReport* report);
+bool segment_report_read(FILE* fp, std::string_view name,
+                         SegmentReport* report);
 
 // Writes score, count and text by descending score, breaking ties on text.
 // Counts are right aligned to the width of the largest of them.

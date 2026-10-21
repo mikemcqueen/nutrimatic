@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -456,25 +457,26 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
 }
 
 static bool parse_answer_text(
-    std::string const& text, uint64_t line_number, char const* path,
+    std::string const& text, uint64_t line_number, std::string_view path,
     std::vector<std::string>* words) {
   if (text.empty() || text.front() == ' ' || text.back() == ' ') {
-    fprintf(stderr, "measure-coherence: %s:%" PRIu64
+    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
             ": answer has leading/trailing space or is empty\n",
-            path, line_number);
+            int(path.size()), path.data(), line_number);
     return false;
   }
   for (size_t i = 0; i < text.size(); ++i) {
     unsigned char const ch = (unsigned char) text[i];
     if (ch < 0x20 || ch == 0x7f) {
-      fprintf(stderr, "measure-coherence: %s:%" PRIu64
+      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
               ": answer contains an ASCII control byte\n",
-              path, line_number);
+              int(path.size()), path.data(), line_number);
       return false;
     }
     if (ch == ' ' && i + 1 < text.size() && text[i + 1] == ' ') {
-      fprintf(stderr, "measure-coherence: %s:%" PRIu64
-              ": answer has repeated spaces\n", path, line_number);
+      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
+              ": answer has repeated spaces\n", int(path.size()), path.data(),
+              line_number);
       return false;
     }
   }
@@ -488,16 +490,17 @@ static bool parse_answer_text(
     begin = end + 1;
   }
   if (words->size() > COHERENCE_MAX_WORDS) {
-    fprintf(stderr, "measure-coherence: %s:%" PRIu64
+    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
             ": answer has %zu words; limit is %zu\n",
-            path, line_number, words->size(), COHERENCE_MAX_WORDS);
+            int(path.size()), path.data(), line_number, words->size(),
+            COHERENCE_MAX_WORDS);
     return false;
   }
   return true;
 }
 
 static bool read_line(
-    FILE* fp, char const* path, uint64_t line_number,
+    FILE* fp, std::string_view path, uint64_t line_number,
     InputFormat format, ParsedLine* result, bool* eof) {
   char buffer[COHERENCE_MAX_LINE_BYTES + 2];
   off_t const before = ftello(fp);
@@ -506,20 +509,22 @@ static bool read_line(
       *eof = true;
       return true;
     }
-    fprintf(stderr, "measure-coherence: can't read \"%s\"\n", path);
+    fprintf(stderr, "measure-coherence: can't read \"%.*s\"\n",
+            int(path.size()), path.data());
     return false;
   }
   *eof = false;
   off_t const after = ftello(fp);
   if (before < 0 || after < before) {
-    fprintf(stderr, "measure-coherence: can't track input position \"%s\"\n",
-            path);
+    fprintf(stderr, "measure-coherence: can't track input position \"%.*s\"\n",
+            int(path.size()), path.data());
     return false;
   }
   size_t consumed = size_t(after - before);
   if (memchr(buffer, '\0', consumed) != NULL) {
-    fprintf(stderr, "measure-coherence: %s:%" PRIu64
-            ": line contains NUL\n", path, line_number);
+    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
+            ": line contains NUL\n", int(path.size()), path.data(),
+            line_number);
     return false;
   }
 
@@ -534,17 +539,19 @@ static bool read_line(
       --length;
       had_newline = true;
     } else {
-      fprintf(stderr, "measure-coherence: %s:%" PRIu64
+      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
               ": line exceeds %zu bytes\n",
-              path, line_number, COHERENCE_MAX_LINE_BYTES);
+              int(path.size()), path.data(), line_number,
+              COHERENCE_MAX_LINE_BYTES);
       return false;
     }
   }
   if (had_newline && length > 0 && buffer[length - 1] == '\r') --length;
   if (length > COHERENCE_MAX_LINE_BYTES) {
-    fprintf(stderr, "measure-coherence: %s:%" PRIu64
+    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
             ": line exceeds %zu bytes\n",
-            path, line_number, COHERENCE_MAX_LINE_BYTES);
+            int(path.size()), path.data(), line_number,
+            COHERENCE_MAX_LINE_BYTES);
     return false;
   }
 
@@ -556,17 +563,18 @@ static bool read_line(
   if (format == INPUT_DFS) {
     size_t const separator = line.find(' ');
     if (separator == std::string::npos || separator == 0) {
-      fprintf(stderr, "measure-coherence: %s:%" PRIu64
-              ": malformed DFS row\n", path, line_number);
+      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
+              ": malformed DFS row\n", int(path.size()), path.data(),
+              line_number);
       return false;
     }
     std::string const token = line.substr(0, separator);
     if (!parse_double_strict(
             token.c_str(), "DFS score", &result->displayed_legacy_score) ||
         result->displayed_legacy_score <= 0.0) {
-      fprintf(stderr, "measure-coherence: %s:%" PRIu64
+      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
               ": DFS score must be positive and finite\n",
-              path, line_number);
+              int(path.size()), path.data(), line_number);
       return false;
     }
     result->legacy_log_score = std::log(result->displayed_legacy_score);
@@ -591,11 +599,12 @@ static bool summarize_input(
     FILE* fp, Args const& args, CoherenceResourceLimits const& limits,
     InputSummary* summary) {
   *summary = {};
+  std::string_view const path(args.input_path);
   ParsedLine row;
   uint64_t line = 0;
   while (true) {
     bool eof = false;
-    if (!read_line(fp, args.input_path, line + 1, args.format, &row, &eof))
+    if (!read_line(fp, path, line + 1, args.format, &row, &eof))
       return false;
     if (eof) break;
     ++line;
@@ -728,13 +737,14 @@ static bool load_candidates(
     std::vector<WordInfo>* words,
     std::vector<Candidate>* candidates,
     std::vector<WordId>* candidate_words) {
+  std::string_view const path(args.input_path);
   ParsedLine row;
   uint64_t line = 0;
   uint64_t occurrences = 0;
   size_t text_bytes = 0;
   while (true) {
     bool eof = false;
-    if (!read_line(fp, args.input_path, line + 1, args.format, &row, &eof))
+    if (!read_line(fp, path, line + 1, args.format, &row, &eof))
       return false;
     if (eof) break;
     ++line;
@@ -1437,11 +1447,11 @@ static void write_output(
   }
 }
 
-static bool regular_file(char const* path) {
+static bool regular_file(std::filesystem::path const& path) {
   struct stat status;
-  if (stat(path, &status) != 0 || !S_ISREG(status.st_mode)) {
+  if (stat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode)) {
     fprintf(stderr, "measure-coherence: INPUT \"%s\" is not a regular file\n",
-            path);
+            path.c_str());
     return false;
   }
   return true;

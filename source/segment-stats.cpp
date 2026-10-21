@@ -153,7 +153,7 @@ static bool add_segment(
 }
 
 static bool read_stats(
-    std::istream* input, char const* name, DfsPairSet const* allowed,
+    std::istream* input, std::string_view name, DfsPairSet const* allowed,
     IndexReader const* index, Stats* stats) {
   SegmentRowReader reader = {input, name, PROGRAM};
   SegmentRow result_row;
@@ -394,7 +394,7 @@ int main(int argc, char* argv[]) {
 
   DfsPairSet allowed;
   for (size_t i = 0; i < args.allow_paths.size(); ++i) {
-    if (!load_pair_file(args.allow_paths[i].c_str(), "allow list", &allowed,
+    if (!load_pair_file(args.allow_paths[i], "allow list", &allowed,
                         /*quiet=*/true, /*reject_hyphens=*/true,
                         /*allow_single_words=*/true))
       return 1;

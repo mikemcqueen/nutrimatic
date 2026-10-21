@@ -185,7 +185,7 @@ AppState::SeedFile read_seed_file(std::string const& path, unsigned version) {
 bool read_dictionary(AppState::Dictionary* dictionary, unsigned version) {
   dictionary->mtime = modification_time(dictionary->path);
   auto words = std::make_shared<LoadedDictionary>();
-  bool const ok = load_dictionary(dictionary->path.c_str(), &words->words);
+  bool const ok = load_dictionary(dictionary->path, &words->words);
   if (!ok) words->words.clear();
   Lines lines(words->words.begin(), words->words.end());
   std::ranges::sort(lines);

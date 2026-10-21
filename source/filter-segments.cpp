@@ -154,7 +154,7 @@ static bool parse_args(
 }
 
 static bool filter_stream(
-    std::istream* input, char const* name, PairFilters const& filters,
+    std::istream* input, std::string_view name, PairFilters const& filters,
     std::regex const* with_regex,
     bool show_score, bool have_limit, uint64_t limit) {
   SegmentRowReader reader = {input, name, "filter-segments"};

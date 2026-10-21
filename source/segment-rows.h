@@ -20,7 +20,7 @@ struct SegmentRow {
 // Reader state over one input.
 struct SegmentRowReader {
   std::istream* input = NULL;
-  char const* name = NULL;     // the file name in diagnostics; "-" for stdin
+  std::string_view name;     // the file name in diagnostics; "-" for stdin
   std::string_view program;  // the diagnostic prefix
 
   // Optional row-shape checks, each independent of the other; only

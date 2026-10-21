@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,8 +21,9 @@ namespace {
 
 // The two halves of WORKFLOW_TARGET_NO_PAIRS_PATH that are matched rather
 // than displayed: everything above a target, and the file inside one.
-std::string workflow_path(char const* root, char const* relative) {
-  std::string path(root);
+std::string workflow_path(std::filesystem::path const& root,
+                          std::string_view relative) {
+  std::string path = root.string();
   if (!path.empty() && path.back() != '/') path.push_back('/');
   path.append(relative);
   return path;
@@ -117,7 +119,8 @@ bool target_name_below_best(
 // input and a relative root compare, and so a symlinked .wf resolves the
 // same way on each.
 bool workflow_target_dir(
-    std::string const& input, char const* wfroot, std::string* out) {
+    std::string const& input, std::filesystem::path const& wfroot,
+    std::string* out) {
   std::string dir, best;
   if (!resolve(lexical_dirname(input), &dir)) return false;
   if (!resolve(workflow_path(wfroot, WORKFLOW_BEST_PATH), &best)) return false;
@@ -151,7 +154,8 @@ bool is_number(std::string const& name) {
 // equal to the selected target however either side was spelled; one that is
 // not is left as written, to be reported as the disagreement it is.
 bool workflow_target_name(
-    std::string const& input, char const* wfroot, std::string* out) {
+    std::string const& input, std::filesystem::path const& wfroot,
+    std::string* out) {
   std::vector<std::string> const parts =
       split(lexical_basename(input), '.');
   if (parts.size() < 7 || parts[0] != "dfs") return false;
@@ -190,11 +194,12 @@ bool workflow_target_name(
 // so any answer but a target directory is a run that would filter against
 // something other than what was asked for.
 bool resolve_target_name(
-    char const* wfroot, std::string const& name, std::string_view program,
-    std::string* out) {
+    std::filesystem::path const& wfroot, std::string const& name,
+    std::string_view program, std::string* out) {
   std::string best;
   if (!resolve(workflow_path(wfroot, WORKFLOW_BEST_PATH), &best)) {
-    report(program, "no \"%s\" below \"%s\"", WORKFLOW_BEST_PATH, wfroot);
+    report(program, "no \"%s\" below \"%s\"", WORKFLOW_BEST_PATH,
+           wfroot.c_str());
     return false;
   }
 
@@ -228,7 +233,8 @@ bool under_workflow_dir(std::string const& path) {
 // tree that does not resolve is reported as the anomaly it is, instead of
 // falling through to a name that was never going to parse.
 bool workflow_target(
-    std::string const& input, char const* wfroot, std::string* out) {
+    std::string const& input, std::filesystem::path const& wfroot,
+    std::string* out) {
   return under_workflow_dir(input)
       ? workflow_target_dir(input, wfroot, out)
       : workflow_target_name(input, wfroot, out);
@@ -240,7 +246,7 @@ bool workflow_target(
 // the tree can name a target that has no directory -- so it goes through
 // resolve_target_name() like any other.
 std::string default_target_name(
-    PairFilterOptions const& options, char const* wfroot) {
+    PairFilterOptions const& options, std::filesystem::path const& wfroot) {
   std::string named;
   if (!options.input_path.empty() &&
       workflow_target(options.input_path, wfroot, &named))
@@ -256,7 +262,7 @@ std::string default_target_name(
 // target's classification is what this is here to catch. Files that name no
 // target -- a listing, standard input -- say nothing and are not asked to.
 bool target_agrees_with_input(
-    PairFilterOptions const& options, char const* wfroot,
+    PairFilterOptions const& options, std::filesystem::path const& wfroot,
     std::string const& target, std::string_view program) {
   std::string named;
   if (options.input_path.empty() ||
@@ -275,13 +281,13 @@ bool target_agrees_with_input(
 // file that is there but unreadable or malformed is an error like any other
 // reject list.
 bool load_target_pair_file(
-    char const* wfroot, std::string const& target, std::string_view program,
-    DfsPairSet* rejected, DfsPairSet* source) {
+    std::filesystem::path const& wfroot, std::string const& target,
+    std::string_view program, DfsPairSet* rejected, DfsPairSet* source) {
   std::string const path = workflow_path(wfroot, WORKFLOW_BEST_PATH) + "/" +
       target + "/" + WORKFLOW_TARGET_NO_PAIRS_NAME;
   struct stat status;
   if (stat(path.c_str(), &status) == 0) {
-    if (!load_pair_file(path.c_str(), "reject list", source, true, true))
+    if (!load_pair_file(path, "reject list", source, true, true))
       return false;
     rejected->insert(source->begin(), source->end());
     return true;
@@ -300,7 +306,7 @@ bool load_workflow_pair_file(
     std::string_view description, DfsPairSet* pairs, DfsPairSet* source) {
   if (workflow_file_missing(path, program, "classified pair file"))
     return true;
-  if (!load_pair_file(path.c_str(), description, source, true, true))
+  if (!load_pair_file(path, description, source, true, true))
     return false;
   pairs->insert(source->begin(), source->end());
   return true;
@@ -449,17 +455,18 @@ bool load_pair_filters(
   assert(support.sentence || options.sentence == CLASSIFIED_NO_SENTENCE);
   (void) support;
 
-  char const* wfroot = NULL;
+  std::filesystem::path wfroot;
   if (options.workflow) {
-    wfroot = require_workflow_root(program);
-    if (wfroot == NULL) return false;
+    char const* const root = require_workflow_root(program);
+    if (root == NULL) return false;
+    wfroot = root;
   } else if (!options.workflow_root.empty()) {
-    wfroot = options.workflow_root.c_str();
+    wfroot = options.workflow_root;
     if (!check_workflow_root(program, wfroot)) return false;
   }
 
   std::string target;
-  if (wfroot != NULL) {
+  if (!wfroot.empty()) {
     std::string const name = options.target.empty()
         ? default_target_name(options, wfroot) : options.target;
     if (!resolve_target_name(wfroot, name, program, &target)) return false;
@@ -476,7 +483,7 @@ bool load_pair_filters(
     out->allowed.emplace();
     for (size_t i = 0; i < options.allow_paths.size(); ++i) {
       if (!load_pair_file_ignoring_single_words(
-              options.allow_paths[i].c_str(), "allow list",
+              options.allow_paths[i], "allow list",
               &out->allowed.value(), &ignored_non_pairs))
         return false;
     }
@@ -486,17 +493,17 @@ bool load_pair_filters(
   }
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
     if (!load_pair_file(
-            options.ignore_paths[i].c_str(), "ignore list", &out->ignored,
+            options.ignore_paths[i], "ignore list", &out->ignored,
             true, true))
       return false;
   }
   for (size_t i = 0; i < options.reject_paths.size(); ++i) {
     if (!load_pair_file(
-            options.reject_paths[i].c_str(), "reject list", &out->rejected,
+            options.reject_paths[i], "reject list", &out->rejected,
             true, true, true))
       return false;
   }
-  if (wfroot != NULL) {
+  if (!wfroot.empty()) {
     if (!load_no_pairs(program, wfroot, options.sentence,
             &out->sources.classified_no))
       return false;
@@ -514,14 +521,14 @@ bool load_pair_filters(
   }
 
   if (!options.dictionary_path.empty())
-    return load_dictionary(options.dictionary_path.c_str(), &out->dictionary);
-  if (wfroot == NULL) {
+    return load_dictionary(options.dictionary_path, &out->dictionary);
+  if (wfroot.empty()) {
     warn(program, "NO DICTIONARY SUPPLIED");
     return true;
   }
   std::string const dict_path = workflow_path(wfroot, WORKFLOW_DICT_PATH);
   if (workflow_file_missing(dict_path, program, "dictionary")) return true;
-  return load_dictionary(dict_path.c_str(), &out->dictionary);
+  return load_dictionary(dict_path, &out->dictionary);
 }
 
 bool is_rejected_segment(

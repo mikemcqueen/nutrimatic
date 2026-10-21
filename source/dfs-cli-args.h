@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -206,12 +207,13 @@ size_t resolve_search_threads(int requested);
 // Loads a newline-delimited word list, lowercased, skipping lines containing
 // '-' and stripping characters outside a-z/0-9. Prints an error and returns
 // false if the file can't be opened or read.
-bool load_dictionary(char const* path, DfsDictionary* dictionary);
+bool load_dictionary(std::filesystem::path const& path,
+                     DfsDictionary* dictionary);
 
 // Parse one PAIRS line using the same validation and normalization as the
 // shared file loader. Prints a source/line diagnostic on failure.
 bool parse_pair_row(
-    std::string const& line, std::string_view what, char const* source,
+    std::string const& line, std::string_view what, std::string_view source,
     size_t line_number, bool allow_single_words, DfsPairRow* out);
 
 // A pair set owns normalized whole-entry keys. The general loader below owns
@@ -225,23 +227,23 @@ bool parse_pair_row(
 // Lines containing '-' are skipped, or are an error when reject_hyphens: a
 // skipped line costs a bonus list nothing, but silently drops an entry a
 // caller meant to enforce. Unless quiet, reports the number of pairs read and
-// unique ordered keys loaded. When diagnostic_source is non-NULL, appends it
+// unique ordered keys loaded. When diagnostic_source is nonempty, appends it
 // to that summary. Prints an error and returns false if the file can't be
 // opened or read, or if any surviving line does not hold an allowed number of
 // nonempty fields. `what` names the list in every diagnostic. Non-NULL rows
 // receives every row in written order, for a caller that must repeat the
 // file's own word order rather than a key's.
 bool load_pair_file(
-    char const* path, std::string_view what, DfsPairSet* pairs, bool quiet,
-    bool reject_hyphens, bool allow_single_words = false,
-    char const* diagnostic_source = NULL,
+    std::filesystem::path const& path, std::string_view what,
+    DfsPairSet* pairs, bool quiet, bool reject_hyphens,
+    bool allow_single_words = false, std::string_view diagnostic_source = {},
     std::vector<DfsPairRow>* rows = NULL);
 
 // As load_pair_file(), but accepts standalone entries only to discard them.
 // Adds their number to `ignored_single_words`; pairs are loaded normally.
 bool load_pair_file_ignoring_single_words(
-    char const* path, std::string_view what, DfsPairSet* pairs,
-    size_t* ignored_single_words);
+    std::filesystem::path const& path, std::string_view what,
+    DfsPairSet* pairs, size_t* ignored_single_words);
 
 // Loads an ordinary extraction bonus list after -m has been finalized.
 // Standalone words and pairs must contain at least min_word_len normalized
@@ -251,9 +253,9 @@ bool load_pair_file_ignoring_single_words(
 // pairs retain the general loader's symmetric representation. Neither output
 // is modified unless the entire input parses and validates successfully.
 bool load_extraction_pair_file(
-    char const* path, std::string_view what, int min_word_len,
-    DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
-    bool reject_hyphens, std::vector<DfsPairRow>* rows = NULL);
+    std::filesystem::path const& path, std::string_view what,
+    int min_word_len, DfsPairSet* pairs, DfsPairSet* exception_prefixes,
+    bool quiet, bool reject_hyphens, std::vector<DfsPairRow>* rows = NULL);
 
 // Loads the repeatable fixed-tier pair inputs. Duplicate and reversed keys
 // retain the strongest source. `score_mode` uses the symmetric score loader;
