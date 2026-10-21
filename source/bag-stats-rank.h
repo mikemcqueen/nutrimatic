@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <span>
 #include <string>
@@ -126,7 +127,7 @@ struct PairBag {
 };
 
 // The --prior FILE's scores by pair_key().
-bool load_priors(std::string_view program, char const* path,
+bool load_priors(std::string_view program, std::filesystem::path const& path,
                  std::unordered_map<std::string, double>* out);
 
 // `prior` sets a row's prior and returns true, or returns false when it has
@@ -158,7 +159,8 @@ int letter_total(PairsCounts const& counts);
 
 // Appends to `out` the bags of the rows of `path` that fit `bag` and aren't
 // `rejected`, as PairBagLoader collects them, with `rows`.
-bool load_pair_bags(std::string_view program, char const* path,
+bool load_pair_bags(std::string_view program,
+                    std::filesystem::path const& path,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     PairPrior const& prior, std::vector<PairBag>* out,
                     std::vector<std::vector<std::string>>* rows = nullptr);

@@ -387,7 +387,7 @@ int main(int argc, char* argv[]) {
     dict_path = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
   }
   DfsDictionary dictionary;
-  if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
+  if (!load_dictionary(dict_path, &dictionary)) return 1;
 
   SubBagIndex const index(args.letters, size_t(args.max_letters));
   if (!index.fits()) {

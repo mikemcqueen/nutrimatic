@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
   std::vector<DfsPairRow> rows;
   if (!load_pair_file(pairs_path, "pair list", &pairs, /*quiet=*/true,
                       /*reject_hyphens=*/true, /*allow_single_words=*/true,
-                      /*diagnostic_source=*/NULL, &rows))
+                      /*diagnostic_source=*/{}, &rows))
     return 1;
 
   std::unordered_map<std::string, FirstOccurrence> seen;

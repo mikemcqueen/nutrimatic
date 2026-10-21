@@ -213,11 +213,11 @@ int main(int argc, char* argv[]) {
 
   char const* const root = require_workflow_root("bag-subset");
   if (root == NULL) return 1;
-  std::string const dict_path = args.dictionary_file != NULL
-      ? std::string(args.dictionary_file)
-      : (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
+  std::filesystem::path const dict_path = args.dictionary_file != NULL
+      ? std::filesystem::path(args.dictionary_file)
+      : std::filesystem::path(root) / WORKFLOW_DICT_PATH;
   DfsDictionary dictionary;
-  if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
+  if (!load_dictionary(dict_path, &dictionary)) return 1;
 
   DfsPairSet rejected;
   if (!load_no_pairs("bag-subset", root, args.sentence, &rejected)) return 1;

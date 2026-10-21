@@ -44,12 +44,12 @@ inline constexpr char WORKFLOW_RESULTS_NAME[] =
 
 // Whether `root` holds a .wf directory. Diagnoses a failure prefixed by
 // `program`.
-inline bool check_workflow_root(std::string_view program, char const* root) {
+inline bool check_workflow_root(std::string_view program,
+                                std::filesystem::path const& root) {
   std::error_code error;
-  if (std::filesystem::is_directory(
-          std::filesystem::path(root) / WORKFLOW_DIR_PATH, error))
+  if (std::filesystem::is_directory(root / WORKFLOW_DIR_PATH, error))
     return true;
-  report(program, "workflow root \"%s\" has no .wf directory", root);
+  report(program, "workflow root \"%s\" has no .wf directory", root.c_str());
   return false;
 }
 

@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -50,10 +51,10 @@ void usage(FILE* out) {
   dfs_help_option("-h, --help", "show this help");
 }
 
-bool read_text(char const* path, std::string* out) {
+bool read_text(std::filesystem::path const& path, std::string* out) {
   return read_input_file("lc", path, [&](std::istream& input) {
     if (std::getline(input, *out) || input.eof()) return true;
-    fprintf(stderr, "lc: can't read \"%s\"\n", path);
+    fprintf(stderr, "lc: can't read \"%s\"\n", path.c_str());
     return false;
   });
 }

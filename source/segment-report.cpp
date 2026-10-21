@@ -49,7 +49,7 @@ static bool read_line(FILE* fp, std::string* line) {
 }
 
 bool segment_report_read(
-    FILE* fp, char const* name, SegmentReport* report) {
+    FILE* fp, std::string_view name, SegmentReport* report) {
   std::string line;
   size_t line_number = 0;
   while (read_line(fp, &line)) {
@@ -64,8 +64,8 @@ bool segment_report_read(
     unsigned long long const count = strtoull(score_end, &count_end, 10);
     if (score_end == start || count_end == score_end || score < 0.0 ||
         errno != 0 || *count_end != ' ' || count_end[1] == '\0') {
-      fprintf(stderr, "error: %s:%zu: expected \"score count text\"\n",
-              name, line_number);
+      fprintf(stderr, "error: %.*s:%zu: expected \"score count text\"\n",
+              int(name.size()), name.data(), line_number);
       return false;
     }
 
@@ -83,7 +83,8 @@ bool segment_report_read(
   }
 
   if (ferror(fp)) {
-    fprintf(stderr, "error: %s: %s\n", name, strerror(errno));
+    fprintf(stderr, "error: %.*s: %s\n", int(name.size()), name.data(),
+            strerror(errno));
     return false;
   }
   return true;

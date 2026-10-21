@@ -63,7 +63,7 @@ struct SegmentCountsData {
 // Reads one input, adding to *data. `name` is the file name in diagnostics.
 // Call once per input; several inputs accumulate into the same counts.
 bool segment_counts_read(
-    std::istream* input, char const* name, PairFilters const& filters,
+    std::istream* input, std::string_view name, PairFilters const& filters,
     SegmentCountsOptions const& options, SegmentCountsData* data);
 
 // Writes the per-layer filter summary to stderr, or nothing when no layer

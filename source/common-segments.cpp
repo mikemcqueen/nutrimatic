@@ -219,7 +219,7 @@ static std::string written_pair_segment(
 }
 
 static bool collect_common(
-    std::istream* input, char const* name, PairFilters const& filters,
+    std::istream* input, std::string_view name, PairFilters const& filters,
     DfsPairSet const& pairs, PairSpellings const& spellings, OutputMode mode,
     CommonOutput* out) {
   SegmentRowReader reader = {input, name, "common-segments"};
@@ -355,7 +355,7 @@ int main(int argc, char* argv[]) {
   DfsPairSet pairs;
   std::vector<DfsPairRow> pair_rows;
   if (!load_pair_file(args.pairs_path, "pair list", &pairs, true, true, false,
-          NULL, &pair_rows))
+          {}, &pair_rows))
     return 1;
 
   PairSpellings spellings;

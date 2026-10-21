@@ -281,7 +281,8 @@ void score_row(
 // The class list depends on the bag and segment count, which the first row
 // supplies when the target does not, so it is prepared after that row.
 bool rerank_stream(
-    std::istream* input, char const* name, Args* args, IndexReader* index) {
+    std::istream* input, std::string_view name, Args* args,
+    IndexReader* index) {
   SegmentRowReader reader = {input, name, "rerank-anagrams"};
   reader.required_letters = args->letters;
   reader.required_segments = std::max(args->num_segments, 0);

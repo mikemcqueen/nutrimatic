@@ -206,8 +206,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 // Prints the lines of `source` that `filter` keeps, each padded and followed
 // by the remaining_cv_ratio() of its pair against `bag`, lowest ratio first.
 // With `csv`, prints only the lines, unpadded, in the same order.
-bool print_kept_rows_with_cv(char const* source, Pfilter const& filter,
-                             LetterBag const& bag, bool csv) {
+bool print_kept_rows_with_cv(std::filesystem::path const& source,
+                             Pfilter const& filter, LetterBag const& bag,
+                             bool csv) {
   std::vector<std::pair<std::string, double>> kept;
   size_t width = 0;
   if (!read_rows("pfilter", source, "pair list", false,
@@ -255,15 +256,15 @@ int main(int argc, char* argv[]) {
 
   DfsDictionary dictionary;
   if (!args.no_dict) {
-    std::string dict_path;
+    std::filesystem::path dict_path;
     if (args.dictionary_file != NULL) {
       dict_path = args.dictionary_file;
     } else {
       char const* const root = require_workflow_root("pfilter");
       if (root == NULL) return 1;
-      dict_path = (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
+      dict_path = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
     }
-    if (!load_dictionary(dict_path.c_str(), &dictionary)) return 1;
+    if (!load_dictionary(dict_path, &dictionary)) return 1;
     args.options.dictionary = std::cref(dictionary);
   }
 

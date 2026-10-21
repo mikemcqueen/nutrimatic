@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -95,12 +96,14 @@ void usage(FILE* out, std::string_view program) {
       int(program.size()), program.data());
 }
 
-bool valid_pair(std::string_view line, char const* path, size_t number) {
+bool valid_pair(std::string_view line, std::filesystem::path const& path,
+                size_t number) {
   size_t const comma = line.find(',');
   if (comma == 0 || comma == std::string_view::npos ||
       comma + 1 == line.size() ||
       line.find(',', comma + 1) != std::string_view::npos) {
-    fprintf(stderr, "pcomm: %s:%zu: expected word,word: ", path, number);
+    fprintf(stderr, "pcomm: %s:%zu: expected word,word: ",
+            path.c_str(), number);
     fwrite(line.data(), 1, line.size(), stderr);
     fputc('\n', stderr);
     return false;
@@ -108,15 +111,16 @@ bool valid_pair(std::string_view line, char const* path, size_t number) {
   return true;
 }
 
-bool open_input(char const* path, int* fd, struct stat* status) {
-  bool const from_stdin = strcmp(path, "-") == 0;
-  *fd = from_stdin ? STDIN_FILENO : open(path, O_RDONLY);
+bool open_input(std::filesystem::path const& path, int* fd,
+                struct stat* status) {
+  bool const from_stdin = path == "-";
+  *fd = from_stdin ? STDIN_FILENO : open(path.c_str(), O_RDONLY);
   if (*fd < 0) {
-    fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
     return false;
   }
   if (fstat(*fd, status) != 0) {
-    fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
     if (!from_stdin) close(*fd);
     return false;
   }
@@ -152,11 +156,11 @@ bool visit_lines(std::string_view text, Visit visit) {
 
 // Map regular files. For files that cannot be mapped, read one line at a time.
 template <typename Visit>
-bool for_each_line(char const* path, Visit visit) {
+bool for_each_line(std::filesystem::path const& path, Visit visit) {
   int fd;
   struct stat status;
   if (!open_input(path, &fd, &status)) return false;
-  bool const from_stdin = strcmp(path, "-") == 0;
+  bool const from_stdin = path == "-";
 
   if (!from_stdin && S_ISREG(status.st_mode)) {
     Text text;
@@ -168,7 +172,7 @@ bool for_each_line(char const* path, Visit visit) {
 
   FILE* const input = from_stdin ? stdin : fdopen(fd, "rb");
   if (input == NULL) {
-    fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
     close(fd);
     return false;
   }
@@ -187,23 +191,23 @@ bool for_each_line(char const* path, Visit visit) {
     }
   }
   if (ferror(input)) {
-    fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
     ok = false;
   }
   free(buffer);
   if (!from_stdin && fclose(input) != 0) {
-    fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
     ok = false;
   }
   return ok;
 }
 
 // Map regular files. Read anything else into memory whole.
-bool load_text(char const* path, Text* text) {
+bool load_text(std::filesystem::path const& path, Text* text) {
   int fd;
   struct stat status;
   if (!open_input(path, &fd, &status)) return false;
-  bool const from_stdin = strcmp(path, "-") == 0;
+  bool const from_stdin = path == "-";
   bool ok = true;
   if (from_stdin || !S_ISREG(status.st_mode) ||
       !map_text(fd, status, text)) {
@@ -212,7 +216,7 @@ bool load_text(char const* path, Text* text) {
     while ((length = read(fd, chunk, sizeof chunk)) != 0) {
       if (length < 0) {
         if (errno == EINTR) continue;
-        fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
         ok = false;
         break;
       }
@@ -224,7 +228,7 @@ bool load_text(char const* path, Text* text) {
   return ok;
 }
 
-bool load_set(char const* path, Text* text, PairSet* set) {
+bool load_set(std::filesystem::path const& path, Text* text, PairSet* set) {
   if (!load_text(path, text)) return false;
   return visit_lines(text->view, [&](std::string_view line, size_t number) {
     if (!valid_pair(line, path, number)) return false;
@@ -244,8 +248,8 @@ bool print_pair(int column, std::string_view spelling, bool const show[3],
       spelling.size() && putchar('\n') != EOF;
 }
 
-bool compare_streaming_first(char const* stream_path, PairSet* set,
-                             bool const show[3], bool tabs) {
+bool compare_streaming_first(std::filesystem::path const& stream_path,
+                             PairSet* set, bool const show[3], bool tabs) {
   if (!for_each_line(stream_path, [&](std::string_view line, size_t number) {
         if (!valid_pair(line, stream_path, number)) return false;
         auto const found = set->index.find(line);
@@ -263,8 +267,9 @@ bool compare_streaming_first(char const* stream_path, PairSet* set,
 // FILE2-only rows follow FILE1's rows, so when both are shown they are
 // printed by a second pass over FILE2, or kept in memory when FILE2 cannot
 // be read twice. The first pass marks which lines the second pass prints.
-bool compare_streaming_second(char const* stream_path, bool rereadable,
-                              PairSet* set, bool const show[3], bool tabs) {
+bool compare_streaming_second(std::filesystem::path const& stream_path,
+                              bool rereadable, PairSet* set,
+                              bool const show[3], bool tabs) {
   bool const defer = show[1] && (show[0] || show[2]);
   bool const reread = defer && rereadable;
   std::string pending;
@@ -299,7 +304,8 @@ bool compare_streaming_second(char const* stream_path, bool rereadable,
     });
   return for_each_line(stream_path, [&](std::string_view line, size_t number) {
     if (number > exclusive.size()) {
-      fprintf(stderr, "pcomm: %s: changed while reading\n", stream_path);
+      fprintf(stderr, "pcomm: %s: changed while reading\n",
+              stream_path.c_str());
       return false;
     }
     return !exclusive[number - 1] || print_pair(1, line, show, tabs);
@@ -317,9 +323,9 @@ bool compare(char const* const paths[2], bool stream_first, bool rereadable,
   return ok && fflush(stdout) == 0;
 }
 
-bool get_status(char const* path, struct stat* status) {
-  if (stat(path, status) == 0) return true;
-  fprintf(stderr, "pcomm: %s: %s\n", path, strerror(errno));
+bool get_status(std::filesystem::path const& path, struct stat* status) {
+  if (stat(path.c_str(), status) == 0) return true;
+  fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
   return false;
 }
 

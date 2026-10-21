@@ -29,7 +29,7 @@ long long metadata_value(std::string const& text, char const* key) {
     return strtoll(text.c_str() + at + strlen(key) + 3, NULL, 10);
 }
 
-bool open_array(std::filesystem::path const& dir, char const* name,
+bool open_array(std::filesystem::path const& dir, std::string_view name,
                 MappedFile* file, auto* array, std::string* error) {
     std::filesystem::path const path = dir / name;
     if (!file->open(path.string(), error)) return false;
