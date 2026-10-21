@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 // A whole file mapped read-only. Moves, doesn't copy.
 class MappedFile {
@@ -43,7 +44,7 @@ struct NpyArray {
 // Finds the 1-D array in `file`, an .npy file whose dtype is `descr`
 // ("<u4" or "<u8"), of `width`-byte elements. False, with `*error` set, when
 // the header doesn't describe one.
-bool npy_array(MappedFile const& file, char const* descr, size_t width,
+bool npy_array(MappedFile const& file, std::string_view descr, size_t width,
                void const** data, size_t* size, std::string* error);
 
 template <typename T>

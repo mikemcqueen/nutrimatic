@@ -62,7 +62,7 @@ bool MappedFile::open(std::string const& path, std::string* error) {
     return true;
 }
 
-bool npy_array(MappedFile const& file, char const* descr, size_t width,
+bool npy_array(MappedFile const& file, std::string_view descr, size_t width,
                void const** data, size_t* size, std::string* error) {
     std::string_view const text(file.data(), file.size());
     if (text.size() < 10 || text.substr(0, 6) != "\x93NUMPY") {
@@ -89,10 +89,11 @@ bool npy_array(MappedFile const& file, char const* descr, size_t width,
         return false;
     }
     std::string_view const header = text.substr(header_start, header_length);
-    if (header.find(std::string("'descr': '") + descr + "'") ==
+    std::string const dtype(descr);
+    if (header.find("'descr': '" + dtype + "'") ==
             std::string_view::npos ||
         header.find("'fortran_order': False") == std::string_view::npos) {
-        *error = std::string("not a ") + descr + " array";
+        *error = "not a " + dtype + " array";
         return false;
     }
     size_t const shape = header.find("'shape': (");

@@ -48,14 +48,15 @@ bool parse_count(std::string const& text, uint64_t* out) {
 }
 
 // As read_field(), but a line holding only `name` is an empty value.
-bool read_optional_field(FILE* in, char const* name, std::string* value) {
+bool read_optional_field(FILE* in, std::string_view name,
+                         std::string* value) {
   std::string line;
   if (!read_line(in, &line)) return false;
   if (line == name) {
     value->clear();
     return true;
   }
-  size_t const length = strlen(name);
+  size_t const length = name.size();
   if (line.compare(0, length, name) != 0 || line.size() <= length ||
       line[length] != ' ')
     return false;
