@@ -16,10 +16,9 @@ static_assert(sizeof(PairsCounts) == 32);
 
 }  // namespace
 
-PairsCounts pairs_letter_counts(char const* s) {
+PairsCounts pairs_letter_counts(std::string_view s) {
   PairsCounts out{};
-  for (; *s; ++s) {
-    char c = *s;
+  for (char c : s) {
     if (c >= 'A' && c <= 'Z') c += 32;
     if (c >= 'a' && c <= 'z') ++out.values[c - 'a'];
   }
@@ -45,13 +44,13 @@ bool Pairs::load(PairsOptions const& options) {
   if (!subtract_letters(bag_letters(options_.letters),
                         bag_letters(options_.used_letters), &letters))
     return false;
-  bag_ = pairs_letter_counts(letters.c_str());
+  bag_ = pairs_letter_counts(letters);
   return true;
 }
 
 void Pairs::add(std::string const& word) {
   if ((int) word.size() < options_.min_word_length) return;
-  PairsCounts const counts = pairs_letter_counts(word.c_str());
+  PairsCounts const counts = pairs_letter_counts(word);
   if (counts == PairsCounts{}) return;
   PairsCounts remaining;
   if (!pairs_subtract(bag_, counts, &remaining)) return;
@@ -194,7 +193,7 @@ void PairsExactCounter::insert(PairsCounts const& key, uint32_t group) {
 
 void PairsExactCounter::add(std::string const& word) {
   if ((int) word.size() < min_word_length_) return;
-  PairsCounts const counts = pairs_letter_counts(word.c_str());
+  PairsCounts const counts = pairs_letter_counts(word);
   if (counts == PairsCounts{} || !pairs_fits(bag_, counts)) return;
 
   uint32_t group = find(counts);

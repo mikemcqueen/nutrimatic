@@ -13,11 +13,12 @@
 #include "pair-evidence.h"
 #include "row-input.h"
 
-bool parse_search(std::string_view program, char const* text, Search* out) {
+bool parse_search(std::string_view program, std::string_view text,
+                  Search* out) {
     std::vector<std::string> steps(1);
-    for (char const* c = text; *c; ++c) {
-        if (*c == ',') steps.emplace_back();
-        else steps.back() += *c;
+    for (char const c : text) {
+        if (c == ',') steps.emplace_back();
+        else steps.back() += c;
     }
     Search search;
     search.pair_filter = steps.back() == "pf";
@@ -244,7 +245,7 @@ bool load_priors(std::string_view program, std::filesystem::path const& path,
 
 void PairBagLoader::add(DfsPairRow const& row) {
     PairsCounts const counts =
-        pairs_letter_counts((row.left + row.right).c_str());
+        pairs_letter_counts(row.left + row.right);
     if (!pairs_fits(bag_, counts)) return;
     if (!rows_.insert(pair_key(row.left, row.right)).second) return;
     auto const inserted = indices_.emplace(counts, out_->size());
@@ -605,7 +606,7 @@ bool score_picks(std::string_view program,
         size_t const step = i < prospects ? steps.size() - prospects + i
             : i - prospects;
         std::vector<PairBag> const& bags = *steps[step];
-        PairsCounts const counts = pairs_letter_counts(name.c_str());
+        PairsCounts const counts = pairs_letter_counts(name);
         auto const found = std::find_if(bags.begin(), bags.end(),
             [&](PairBag const& bag) { return bag.counts == counts; });
         if (comma == std::string::npos || comma == 0 ||

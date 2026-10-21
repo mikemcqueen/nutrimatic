@@ -11,11 +11,14 @@
 
 #include "dfs-cli-args.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "option-value.h"
 #include "pair-exclusions.h"
 #include "row-input.h"
 #include "segment-counts.h"
 #include "segment-output.h"
+
+constexpr char PROGRAM[] = "top-segments";
 
 static constexpr PairFilterSupport kSupport = {
     .ignore = true, .allow = true, .workflow_yes = true};
@@ -61,7 +64,7 @@ static void usage(std::string_view program) {
       "                      row's letters less LETTERS; may be repeated\n"
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
       "                      repeated\n",
-      int(program.size()), program.data(), DEFAULT_SEGMENT_OUTPUT_LIMIT);
+      SV_ARG(program), DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(stdout, 22);
   print_allow_pairs_option_help(stdout, 22);
   fprintf(stdout,
@@ -113,7 +116,7 @@ static bool parse_args(
       }
 
       PairFilterOptionResult const filter_result = parse_pair_filter_option(
-          argc, argv, &i, "top-segments", kSupport, &filter_options);
+          argc, argv, &i, PROGRAM, kSupport, &filter_options);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return false;
@@ -121,7 +124,7 @@ static bool parse_args(
       if (filter_result == PAIR_FILTER_OPTION_HANDLED) continue;
 
       SegmentOutputOptionResult const result = parse_segment_output_option(
-          argc, argv, &i, "top-segments", &output_options);
+          argc, argv, &i, PROGRAM, &output_options);
       if (result == SEGMENT_OUTPUT_OPTION_ERROR) {
         usage(argv[0]);
         return false;
@@ -132,7 +135,7 @@ static bool parse_args(
       if (match_option_value(
               argc, argv, &i, "-u", "--used-letters", &value)) {
         if (value == NULL) {
-          fputs("top-segments: -u requires LETTERS\n", stderr);
+          report(PROGRAM, "-u requires LETTERS");
           usage(argv[0]);
           return false;
         }
@@ -150,7 +153,7 @@ static bool parse_args(
       *requested_help = true;
       return true;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "top-segments: unknown option \"%s\"\n", argv[i]);
+      report(PROGRAM, "unknown option \"%s\"", argv[i]);
       usage(argv[0]);
       return false;
     } else {
@@ -158,7 +161,7 @@ static bool parse_args(
     }
   }
 
-  if (!check_pair_filter_options(filter_options, "top-segments")) {
+  if (!check_pair_filter_options(filter_options, PROGRAM)) {
     usage(argv[0]);
     return false;
   }
@@ -173,26 +176,23 @@ static bool parse_args(
       output_options.selection == SEGMENT_SELECTION_PAIRS &&
       output_options.projection == SEGMENT_PROJECTION_SEGMENTS;
   if (force_counts && suppress_counts) {
-    fputs("top-segments: --counts and --no-counts are mutually exclusive\n",
-        stderr);
+    report(PROGRAM, "--counts and --no-counts are mutually exclusive");
     usage(argv[0]);
     return false;
   }
   if (elimination && suppress_counts) {
-    fputs("top-segments: --elim and --no-counts are mutually exclusive\n",
-        stderr);
+    report(PROGRAM, "--elim and --no-counts are mutually exclusive");
     usage(argv[0]);
     return false;
   }
   bool const show_counts = force_counts ||
       (!suppress_counts && !pair_segments);
-  if (!check_segment_output_options(output_options, "top-segments")) {
+  if (!check_segment_output_options(output_options, PROGRAM)) {
     usage(argv[0]);
     return false;
   }
   if (elimination && output_options.by_length) {
-    fputs("top-segments: --elim and --by-length are mutually exclusive\n",
-        stderr);
+    report(PROGRAM, "--elim and --by-length are mutually exclusive");
     usage(argv[0]);
     return false;
   }
@@ -224,14 +224,14 @@ int main(int argc, char* argv[]) {
 
   PairFilters filters;
   if (!load_pair_filters(
-          args.filter_options, "top-segments", kSupport, &filters))
+          args.filter_options, PROGRAM, kSupport, &filters))
     return 1;
 
   SegmentCountsData data;
-  data.program = "top-segments";
+  data.program = PROGRAM;
   for (size_t i = 0; i < args.paths.size(); ++i) {
     char const* const path = args.paths[i];
-    if (!read_input_file("top-segments", path, [&](std::istream& input) {
+    if (!read_input_file(PROGRAM, path, [&](std::istream& input) {
           return segment_counts_read(
               &input, path, filters, args.options, &data);
         }))

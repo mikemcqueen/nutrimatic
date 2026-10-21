@@ -23,6 +23,8 @@
 #include "row-input.h"
 #include "workflow-paths.h"
 
+constexpr char PROGRAM[] = "bag-subset";
+
 namespace {
 
 int const DEFAULT_MAX_LETTERS = 15;
@@ -107,7 +109,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         if (!parse_count(options.optarg, "--length", &out->length))
           return false;
         if (out->length == 0) {
-          fputs("bag-subset: --length must be positive\n", stderr);
+          report(PROGRAM, "--length must be positive");
           return false;
         }
         break;
@@ -209,9 +211,9 @@ int main(int argc, char* argv[]) {
   }
 
   if (args.sentence == CLASSIFIED_NO_SENTENCE)
-    alert("bag-subset", "--sentence not supplied");
+    alert(PROGRAM, "--sentence not supplied");
 
-  char const* const root = require_workflow_root("bag-subset");
+  char const* const root = require_workflow_root(PROGRAM);
   if (root == NULL) return 1;
   std::filesystem::path const dict_path = args.dictionary_file != NULL
       ? std::filesystem::path(args.dictionary_file)
@@ -220,7 +222,7 @@ int main(int argc, char* argv[]) {
   if (!load_dictionary(dict_path, &dictionary)) return 1;
 
   DfsPairSet rejected;
-  if (!load_no_pairs("bag-subset", root, args.sentence, &rejected)) return 1;
+  if (!load_no_pairs(PROGRAM, root, args.sentence, &rejected)) return 1;
 
   std::vector<char> letters;
   Counts bag;
@@ -240,7 +242,7 @@ int main(int argc, char* argv[]) {
 
   std::map<Counts, size_t> entries;
   Counts need(letters.size(), 0);
-  if (!read_lines("bag-subset", args.source,
+  if (!read_lines(PROGRAM, args.source,
           [&](std::string const& line, size_t number) {
             if (line.find('-') == std::string::npos &&
                 std::count(line.begin(), line.end(), ',') <= 1 &&
@@ -306,7 +308,7 @@ int main(int argc, char* argv[]) {
               << ' ' << std::right << std::setw(int(count_width))
               << result.count << '\n';
   if (!(std::cout << std::flush)) {
-    fputs("bag-subset: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;

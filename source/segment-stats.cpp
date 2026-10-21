@@ -72,13 +72,12 @@ static void usage(std::string_view program) {
       "                          and solo segments, as query-index --score;\n"
       "                          defaults to $IDX, omitted without either\n"
       "  with no FILE, or when FILE is -, read standard input\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
 }
 
 static bool increment(uint64_t* count, std::string_view description) {
   if (*count == std::numeric_limits<uint64_t>::max()) {
-    report(PROGRAM, "%.*s overflow", int(description.size()),
-           description.data());
+    report(PROGRAM, "%.*s overflow", SV_ARG(description));
     return false;
   }
   ++*count;

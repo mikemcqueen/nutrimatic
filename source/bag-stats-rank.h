@@ -35,7 +35,8 @@ struct Search {
 
 // Parses --ss STEPS into `out`. False, diagnosed prefixed by `program`, when
 // it isn't one.
-bool parse_search(std::string_view program, char const* text, Search* out);
+bool parse_search(std::string_view program, std::string_view text,
+                  Search* out);
 
 // The steps of `search` in canonical order.
 std::string search_text(Search const& search);

@@ -6,6 +6,7 @@
 #include "dfs-output.h"
 #include "dfs-score.h"
 #include "index.h"
+#include "log.h"
 #include "optparse.h"
 #include "segment-rows.h"
 
@@ -22,6 +23,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+constexpr char PROGRAM[] = "rerank-anagrams";
 
 namespace {
 
@@ -48,7 +51,7 @@ void usage(std::string_view program, FILE* out) {
       " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
       " [--sb N] [--yb N] [--bb N]"
       " [--show-bonus] [--no-score] [--no-ptm] [-n N] [FILE]\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
   if (out != stdout) return;
 
   fputs(
@@ -129,12 +132,14 @@ struct optparse_long const long_options[] = {
   { NULL, 0, OPTPARSE_NONE },
 };
 
-bool valid_one_best_pair(char const* value) {
-  char const* const comma = strchr(value, ',');
-  if (comma == NULL || comma == value || comma[1] == '\0') return false;
-  if (strchr(comma + 1, ',') != NULL) return false;
-  for (char const* p = value; *p != '\0'; ++p)
-    if (p != comma && (*p < 'a' || *p > 'z')) return false;
+bool valid_one_best_pair(std::string_view value) {
+  size_t const comma = value.find(',');
+  if (comma == std::string_view::npos || comma == 0 ||
+      comma + 1 == value.size())
+    return false;
+  if (value.find(',', comma + 1) != std::string_view::npos) return false;
+  for (size_t i = 0; i < value.size(); ++i)
+    if (i != comma && (value[i] < 'a' || value[i] > 'z')) return false;
   return true;
 }
 
@@ -202,13 +207,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   out->results_file = optparse_arg(&options);
   if (optparse_arg(&options) != NULL) {
-    fputs("rerank-anagrams: at most one FILE may be specified\n", stderr);
+    report(PROGRAM, "at most one FILE may be specified");
     usage(argv[0], stderr);
     return false;
   }
   if (!out->common.workflow && out->common.workflow_root.empty()) {
-    fputs("rerank-anagrams: requires exactly one of --wf or --wfroot\n",
-          stderr);
+    report(PROGRAM, "requires exactly one of --wf or --wfroot");
     usage(argv[0], stderr);
     return false;
   }
@@ -216,8 +220,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     struct stat status;
     if (stat(out->reject_files[i].c_str(), &status) == 0 &&
         S_ISDIR(status.st_mode)) {
-      fprintf(stderr, "rerank-anagrams: -r takes a file, not directory"
-              " \"%s\"\n", out->reject_files[i].c_str());
+      report(PROGRAM, "-r takes a file, not directory \"%s\"",
+             out->reject_files[i].c_str());
       return false;
     }
   }
@@ -240,13 +244,13 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   if (out->common.min_word_len_given &&
       out->common.min_word_len != target.min_word_len) {
-    fprintf(stderr, "rerank-anagrams: -m %d does not match target \"%s\"\n",
-            out->common.min_word_len, out->common.target.c_str());
+    report(PROGRAM, "-m %d does not match target \"%s\"",
+           out->common.min_word_len, out->common.target.c_str());
     return false;
   }
   if (out->num_segments >= 0 && out->num_segments != target.num_segments) {
-    fprintf(stderr, "rerank-anagrams: -g %d does not match target \"%s\"\n",
-            out->num_segments, out->common.target.c_str());
+    report(PROGRAM, "-g %d does not match target \"%s\"", out->num_segments,
+           out->common.target.c_str());
     return false;
   }
   out->letters = target.letters;
@@ -283,7 +287,7 @@ void score_row(
 bool rerank_stream(
     std::istream* input, std::string_view name, Args* args,
     IndexReader* index) {
-  SegmentRowReader reader = {input, name, "rerank-anagrams"};
+  SegmentRowReader reader = {input, name, PROGRAM};
   reader.required_letters = args->letters;
   reader.required_segments = std::max(args->num_segments, 0);
   reader.infer_letters = args->letters.empty();
@@ -307,8 +311,7 @@ bool rerank_stream(
   DfsMemberIndex members;
   std::string duplicate;
   if (!dfs_index_members(*prepared.classes, &members, &duplicate)) {
-    fprintf(stderr, "rerank-anagrams: duplicate phase-1 spelling \"%s\"\n",
-            duplicate.c_str());
+    report(PROGRAM, "duplicate phase-1 spelling \"%s\"", duplicate.c_str());
     return false;
   }
 
@@ -347,8 +350,8 @@ int main(int argc, char* argv[]) {
     errno = 0;
     results_input.open(args.results_file, std::ios::binary);
     if (!results_input.is_open()) {
-      fprintf(stderr, "rerank-anagrams: can't open \"%s\": %s\n",
-              args.results_file, strerror(errno));
+      report(PROGRAM, "can't open \"%s\": %s", args.results_file,
+             strerror(errno));
       return 1;
     }
     input = &results_input;
@@ -367,8 +370,7 @@ int main(int argc, char* argv[]) {
     status = rerank_stream(input, input_name, &args, &reader) ? 0 : 1;
   }
   if (fclose(index) != 0 && status == 0) {
-    fprintf(stderr, "rerank-anagrams: can't close index \"%s\"\n",
-            args.index_file);
+    report(PROGRAM, "can't close index \"%s\"", args.index_file);
     return 1;
   }
   return status;

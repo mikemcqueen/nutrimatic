@@ -37,7 +37,7 @@ bool workflow_file_missing(
       (errno != ENOENT && errno != ENOTDIR))
     return false;
   warn(program, "%.*s \"%s\" is not present",
-       int(description.size()), description.data(), path.c_str());
+       SV_ARG(description), path.c_str());
   return true;
 }
 

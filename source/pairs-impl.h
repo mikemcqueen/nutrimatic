@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -42,7 +43,7 @@ struct PairsCountsHash {
 
 // The a-z letter counts of `s`, case-insensitive; other characters are
 // ignored.
-PairsCounts pairs_letter_counts(char const* s);
+PairsCounts pairs_letter_counts(std::string_view s);
 
 // Lanes where `word` has more of a letter than `pool`, nonzero when `word`
 // doesn't fit.

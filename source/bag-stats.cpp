@@ -39,8 +39,8 @@ void usage(std::string_view program, FILE* out) {
             "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
             "       [--exact] [--completions N | --all]\n"
             "       LETTERS PAIRS DICT\n",
-            int(program.size()), program.data(),
-            int(program.size()), program.data());
+            SV_ARG(program),
+            SV_ARG(program));
     if (out != stdout) return;
 
     help_common_options(true);

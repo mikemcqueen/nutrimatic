@@ -17,9 +17,12 @@
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "row-input.h"
 #include "workflow-paths.h"
+
+constexpr char PROGRAM[] = "combine-pairs";
 
 namespace {
 
@@ -228,10 +231,10 @@ int main(int argc, char* argv[]) {
   }
 
   if (args.source.empty()) {
-    char const* const root = require_workflow_root("combine-pairs");
+    char const* const root = require_workflow_root(PROGRAM);
     if (root == NULL ||
         !classified_pair_file(
-            "combine-pairs", root, args.sentence, "yes", &args.source))
+            PROGRAM, root, args.sentence, "yes", &args.source))
       return 1;
   }
 
@@ -248,7 +251,7 @@ int main(int argc, char* argv[]) {
 
   std::vector<Entry> entries;
   std::set<std::string> seen;
-  if (!read_rows("combine-pairs", args.source, "input", true,
+  if (!read_rows(PROGRAM, args.source, "input", true,
           [&](DfsPairRow const& row, std::string const&) {
             std::string const letters_used = row.left + row.right;
             if (!fits_letter_bag(args.bag, letters_used) ||
@@ -311,7 +314,7 @@ int main(int argc, char* argv[]) {
                 << '\n';
   }
   if (!(std::cout << std::flush)) {
-    fputs("combine-pairs: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;

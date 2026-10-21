@@ -9,10 +9,13 @@
 #include <unordered_set>
 #include <vector>
 
+#include "log.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
 #include "row-input.h"
 #include "segment-rows.h"
+
+constexpr char PROGRAM[] = "first-segments";
 
 static constexpr PairFilterSupport kSupport = {
     .ignore = true, .workflow_yes = true};
@@ -48,7 +51,7 @@ static void usage(std::string_view program) {
       "                       to %" PRIu64 "\n"
       "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
       "                       repeated\n",
-      int(program.size()), program.data(), DEFAULT_SEGMENT_OUTPUT_LIMIT);
+      SV_ARG(program), DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(stdout, 23);
   fprintf(stdout,
       "  -d, --dict PATH      discard rows with any word not in PATH; with\n"
@@ -82,7 +85,7 @@ static bool find_segments(
   std::unordered_set<std::string> found;
   std::unordered_set<std::string> unique_segments;
   std::vector<FoundSegment> result;
-  SegmentRowReader reader = {input, name, "first-segments"};
+  SegmentRowReader reader = {input, name, PROGRAM};
   SegmentRow row;
   while (result.size() < output_options.limit &&
          segment_rows_next(&reader, &row)) {
@@ -138,7 +141,7 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const result = parse_pair_filter_option(
-          argc, argv, &i, "first-segments", kSupport, &filter_options);
+          argc, argv, &i, PROGRAM, kSupport, &filter_options);
       if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return 2;
@@ -147,7 +150,7 @@ int main(int argc, char* argv[]) {
 
       SegmentOutputOptionResult const output_result =
           parse_segment_output_option(
-              argc, argv, &i, "first-segments", &output_options);
+              argc, argv, &i, PROGRAM, &output_options);
       if (output_result == SEGMENT_OUTPUT_OPTION_ERROR) {
         usage(argv[0]);
         return 2;
@@ -163,11 +166,11 @@ int main(int argc, char* argv[]) {
       usage(argv[0]);
       return 0;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "first-segments: unknown option \"%s\"\n", argv[i]);
+      report(PROGRAM, "unknown option \"%s\"", argv[i]);
       usage(argv[0]);
       return 2;
     } else if (results_path != NULL) {
-      fputs("first-segments: at most one RESULTS file may be given\n", stderr);
+      report(PROGRAM, "at most one RESULTS file may be given");
       usage(argv[0]);
       return 2;
     } else {
@@ -175,11 +178,11 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (!check_pair_filter_options(filter_options, "first-segments")) {
+  if (!check_pair_filter_options(filter_options, PROGRAM)) {
     usage(argv[0]);
     return 2;
   }
-  if (!check_segment_output_options(output_options, "first-segments")) {
+  if (!check_segment_output_options(output_options, PROGRAM)) {
     usage(argv[0]);
     return 2;
   }
@@ -189,11 +192,11 @@ int main(int argc, char* argv[]) {
 
   PairFilters filters;
   if (!load_pair_filters(
-          filter_options, "first-segments", kSupport, &filters))
+          filter_options, PROGRAM, kSupport, &filters))
     return 1;
 
   if (results_path == NULL) results_path = "-";
-  return read_input_file("first-segments", results_path,
+  return read_input_file(PROGRAM, results_path,
       [&](std::istream& input) {
         return find_segments(&input, results_path, filters, output_options);
       })

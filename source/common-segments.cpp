@@ -13,10 +13,13 @@
 #include <vector>
 
 #include "dfs-cli-args.h"
+#include "log.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
 #include "row-input.h"
 #include "segment-rows.h"
+
+constexpr char PROGRAM[] = "common-segments";
 
 static constexpr PairFilterSupport kSupport = {
     .ignore = true, .allow = true, .workflow_yes = true};
@@ -80,7 +83,7 @@ static void usage(std::string_view program) {
       "  --pairs             print COUNT PAIR by descending count, one line\n"
       "                      per pair, counting the rows that held it with\n"
       "                      any other pair; honors --ignore and --yes\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
   print_reject_option_help(stdout, 22);
   print_allow_pairs_option_help(stdout, 22);
   fprintf(stdout,
@@ -123,7 +126,7 @@ static bool parse_args(
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const filter_result = parse_pair_filter_option(
-          argc, argv, &i, "common-segments", kSupport, &filter_options);
+          argc, argv, &i, PROGRAM, kSupport, &filter_options);
       if (filter_result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return false;
@@ -141,8 +144,8 @@ static bool parse_args(
           : strcmp(argv[i], "--combos") == 0                     ? OUTPUT_COMBOS
                                                                  : OUTPUT_PAIRS;
       if (mode_chosen && mode != chosen) {
-        fprintf(stderr, "common-segments: %s and %s are mutually exclusive\n",
-            mode_flag(mode), argv[i]);
+        report(PROGRAM, "%s and %s are mutually exclusive", mode_flag(mode),
+               argv[i]);
         usage(argv[0]);
         return false;
       }
@@ -154,7 +157,7 @@ static bool parse_args(
       *requested_help = true;
       return true;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "common-segments: unknown option \"%s\"\n", argv[i]);
+      report(PROGRAM, "unknown option \"%s\"", argv[i]);
       usage(argv[0]);
       return false;
     } else {
@@ -162,12 +165,12 @@ static bool parse_args(
     }
   }
 
-  if (!check_pair_filter_options(filter_options, "common-segments")) {
+  if (!check_pair_filter_options(filter_options, PROGRAM)) {
     usage(argv[0]);
     return false;
   }
   if (paths.size() != 2) {
-    fputs("common-segments: RESULTS and PAIRS are both required\n", stderr);
+    report(PROGRAM, "RESULTS and PAIRS are both required");
     usage(argv[0]);
     return false;
   }
@@ -222,7 +225,7 @@ static bool collect_common(
     std::istream* input, std::string_view name, PairFilters const& filters,
     DfsPairSet const& pairs, PairSpellings const& spellings, OutputMode mode,
     CommonOutput* out) {
-  SegmentRowReader reader = {input, name, "common-segments"};
+  SegmentRowReader reader = {input, name, PROGRAM};
   SegmentRow row;
   std::set<std::string> held;
   while (segment_rows_next(&reader, &row)) {
@@ -349,7 +352,7 @@ int main(int argc, char* argv[]) {
 
   PairFilters filters;
   if (!load_pair_filters(
-          args.filter_options, "common-segments", kSupport, &filters))
+          args.filter_options, PROGRAM, kSupport, &filters))
     return 1;
 
   DfsPairSet pairs;
@@ -365,7 +368,7 @@ int main(int argc, char* argv[]) {
   }
 
   CommonOutput output;
-  if (!read_input_file("common-segments", args.results_path,
+  if (!read_input_file(PROGRAM, args.results_path,
           [&](std::istream& input) {
             return collect_common(&input, args.results_path, filters, pairs,
                 spellings, args.mode, &output);
@@ -373,7 +376,7 @@ int main(int argc, char* argv[]) {
     return 1;
 
   if (output.holding_rows == 0) {
-    fputs("common-segments: no result row holds two or more pairs\n", stderr);
+    report(PROGRAM, "no result row holds two or more pairs");
     return 0;
   }
 

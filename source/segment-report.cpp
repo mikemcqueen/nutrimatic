@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "log.h"
+
 void segment_report_add(
     SegmentReport* report, std::string const& text, double log_score) {
   SegmentReport::iterator found = report->find(text);
@@ -65,7 +67,7 @@ bool segment_report_read(
     if (score_end == start || count_end == score_end || score < 0.0 ||
         errno != 0 || *count_end != ' ' || count_end[1] == '\0') {
       fprintf(stderr, "error: %.*s:%zu: expected \"score count text\"\n",
-              int(name.size()), name.data(), line_number);
+              SV_ARG(name), line_number);
       return false;
     }
 
@@ -83,7 +85,7 @@ bool segment_report_read(
   }
 
   if (ferror(fp)) {
-    fprintf(stderr, "error: %.*s: %s\n", int(name.size()), name.data(),
+    fprintf(stderr, "error: %.*s: %s\n", SV_ARG(name),
             strerror(errno));
     return false;
   }

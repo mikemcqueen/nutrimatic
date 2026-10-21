@@ -8,6 +8,7 @@
 #include "dfs-search.h"
 #include "index.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "segment-report.h"
 #include "workflow-paths.h"
@@ -66,7 +67,7 @@ static void report_segments(std::vector<DfsSpelling> const& results,
 
 static void usage(std::string_view program, FILE* out) {
   fprintf(out, "usage: %.*s [-i INDEX] [options] letters\n",
-          int(program.size()), program.data());
+          SV_ARG(program));
   if (out != stdout) return;
 
   fputs("\noptions:\n", stdout);
@@ -205,11 +206,11 @@ static int const OPT_MAX_UNLISTED_PAIRS = 265;
 
 // Normalizes a --no-repeat value the way the dictionary loader normalizes a
 // line, keeping the word boundaries load_dictionary() has no use for.
-static std::string normalize_repeat_value(char const* value) {
+static std::string normalize_repeat_value(std::string_view value) {
   std::string out;
   bool separated = false;
-  for (char const* p = value; *p != '\0'; ++p) {
-    unsigned char const ch = (unsigned char) *p;
+  for (char const c : value) {
+    unsigned char const ch = (unsigned char) c;
     char kept;
     if (ch >= 'A' && ch <= 'Z') {
       kept = char(ch - 'A' + 'a');

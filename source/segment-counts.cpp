@@ -153,7 +153,7 @@ void segment_counts_print_filter_summary(
       stats.explicit_reject_lines != 0 || stats.allow_lines != 0 ||
       stats.dictionary_lines != 0) {
     fprintf(stderr, "%.*s: Filtered ",
-            int(data.program.size()), data.program.data());
+            SV_ARG(data.program));
     bool first = true;
     if (stats.classified_no_lines != 0) {
       fprintf(stderr, "%" PRIu64 " lines from classified/no/no.pairs",
@@ -189,7 +189,7 @@ void segment_counts_print_filter_summary(
   if (stats.classified_yes_instances != 0 ||
       stats.explicit_ignore_instances != 0) {
     fprintf(stderr, "%.*s: Ignored ",
-            int(data.program.size()), data.program.data());
+            SV_ARG(data.program));
     bool first = true;
     if (stats.classified_yes_instances != 0) {
       fprintf(stderr,

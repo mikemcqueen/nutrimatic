@@ -43,7 +43,7 @@ enum SegmentOutputOptionResult {
 // Reads a -n N value: a non-negative integer, with 0 meaning no limit for
 // the tools that spell it that way. Shared so every -n takes the same
 // spellings. Nothing is diagnosed here; the caller names its own option.
-bool parse_limit(char const* text, uint64_t* limit);
+bool parse_limit(std::string_view text, uint64_t* limit);
 
 // Selects one combination of segment input and output projection. Repeating
 // the same combination is allowed; selecting a different one is an error.

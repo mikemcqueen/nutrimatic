@@ -9,11 +9,14 @@
 #include <string_view>
 #include <utility>
 
+#include "log.h"
 #include "option-value.h"
 #include "pair-exclusions.h"
 #include "segment-output.h"
 #include "row-input.h"
 #include "segment-rows.h"
+
+constexpr char PROGRAM[] = "filter-segments";
 
 static constexpr PairFilterSupport kSupport = {
     .allow = true, .sentence = true};
@@ -41,7 +44,7 @@ static void usage(std::string_view program) {
       "                       anywhere (ECMAScript syntax)\n"
       "  --no-score           omit the leading score from printed lines;\n"
       "                       the output can't be filtered or reranked\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
   print_reject_option_help(stdout, 23);
   print_allow_pairs_option_help(stdout, 23);
   fprintf(stdout,
@@ -76,7 +79,7 @@ static bool parse_args(
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
       PairFilterOptionResult const result = parse_pair_filter_option(
-          argc, argv, &i, "filter-segments", kSupport, &filter_options);
+          argc, argv, &i, PROGRAM, kSupport, &filter_options);
       if (result == PAIR_FILTER_OPTION_ERROR) {
         usage(argv[0]);
         return false;
@@ -94,8 +97,7 @@ static bool parse_args(
     } else if (parse_options &&
                match_option_value(argc, argv, &i, "-n", NULL, &value)) {
       if (value == NULL || !parse_limit(value, &limit)) {
-        fputs("filter-segments: -n requires a non-negative integer\n",
-            stderr);
+        report(PROGRAM, "-n requires a non-negative integer");
         usage(argv[0]);
         return false;
       }
@@ -104,8 +106,8 @@ static bool parse_args(
                match_option_value(
                    argc, argv, &i, NULL, "--with-regex", &value)) {
       if (value == NULL || with_regex_pattern != NULL) {
-        fputs("filter-segments: --with-regex requires one REGEX and may be"
-            " given once\n", stderr);
+        report(PROGRAM, "--with-regex requires one REGEX and may be"
+               " given once");
         usage(argv[0]);
         return false;
       }
@@ -113,11 +115,11 @@ static bool parse_args(
     } else if (parse_options && strcmp(argv[i], "--no-score") == 0) {
       show_score = false;
     } else if (parse_options && argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "filter-segments: unknown option \"%s\"\n", argv[i]);
+      report(PROGRAM, "unknown option \"%s\"", argv[i]);
       usage(argv[0]);
       return false;
     } else if (results_path != NULL) {
-      fputs("filter-segments: at most one FILE may be specified\n", stderr);
+      report(PROGRAM, "at most one FILE may be specified");
       usage(argv[0]);
       return false;
     } else {
@@ -125,7 +127,7 @@ static bool parse_args(
     }
   }
 
-  if (!check_pair_filter_options(filter_options, "filter-segments")) {
+  if (!check_pair_filter_options(filter_options, PROGRAM)) {
     usage(argv[0]);
     return false;
   }
@@ -134,8 +136,8 @@ static bool parse_args(
     try {
       out->with_regex.assign(with_regex_pattern);
     } catch (std::regex_error const& error) {
-      fprintf(stderr, "filter-segments: bad --with-regex \"%s\": %s\n",
-          with_regex_pattern, error.what());
+      report(PROGRAM, "bad --with-regex \"%s\": %s", with_regex_pattern,
+             error.what());
       return false;
     }
   }
@@ -157,7 +159,7 @@ static bool filter_stream(
     std::istream* input, std::string_view name, PairFilters const& filters,
     std::regex const* with_regex,
     bool show_score, bool have_limit, uint64_t limit) {
-  SegmentRowReader reader = {input, name, "filter-segments"};
+  SegmentRowReader reader = {input, name, PROGRAM};
   SegmentRow row;
   uint64_t output_count = 0;
   while ((!have_limit || output_count < limit) &&
@@ -194,12 +196,12 @@ int main(int argc, char* argv[]) {
 
   PairFilters filters;
   if (!load_pair_filters(
-          args.filter_options, "filter-segments", kSupport, &filters))
+          args.filter_options, PROGRAM, kSupport, &filters))
     return 1;
 
   std::regex const* const with_regex_filter =
       args.use_regex ? &args.with_regex : NULL;
-  return read_input_file("filter-segments", args.results_path,
+  return read_input_file(PROGRAM, args.results_path,
       [&](std::istream& input) {
         return filter_stream(
             &input, args.results_path, filters, with_regex_filter,

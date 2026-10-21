@@ -167,29 +167,29 @@ void dfs_diagnostic_letter_bag(std::string const& letters);
 // depend on what phase 1 extracts, and subtraction only shrinks.
 bool check_bag_length(std::string const& bag);
 
-// Parses a non-negative base-10 integer from `in`. Prints an error naming
+// Parses a non-negative base-10 integer, all of `in`. Prints an error naming
 // `what` and returns false on any parse failure or out-of-range value.
-bool parse_count(char const* in, std::string_view what, int* out);
+bool parse_count(std::string_view in, std::string_view what, int* out);
 
 // Parses a non-negative base-10 64-bit integer from `in`.
-bool parse_count64(char const* in, std::string_view what, int64_t* out);
+bool parse_count64(std::string_view in, std::string_view what, int64_t* out);
 
 // Parses a non-negative MiB count into bytes, rejecting overflow.
-bool parse_mib(char const* in, std::string_view what, size_t* out);
+bool parse_mib(std::string_view in, std::string_view what, size_t* out);
 
-// Parses a finite floating-point number from `in`. Prints an error naming
+// Parses a finite floating-point number, all of `in`. Prints an error naming
 // `what` and returns false on any parse failure or non-finite value.
-bool parse_double(char const* in, std::string_view what, double* out);
+bool parse_double(std::string_view in, std::string_view what, double* out);
 
 // Parses a finite segment penalty at least 1. Values below 1 would make
 // appended segments score-improving and invalidate phase-2 pruning.
-bool parse_segment_penalty(char const* in, double* out);
+bool parse_segment_penalty(std::string_view in, double* out);
 
 // Appends a comma-separated direct CLI value. Fields are intentionally strict:
 // nonempty lowercase a-z/0-9 only, unique across repeated occurrences, with a
 // shared maximum of 16 external partners.
 bool parse_solo_words(
-    char const* in, std::vector<std::string>* solo_words);
+    std::string_view in, std::vector<std::string>* solo_words);
 
 // Applies dfs-anagrams' short-input default adjustment and validates that the
 // resulting minimum can fit in the remaining bag.

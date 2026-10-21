@@ -33,7 +33,7 @@ struct Args {
 void usage(std::string_view program, FILE* out) {
     fprintf(out, "usage: %.*s [--p1 INDEX] [--clues CLUEDATA]\n"
             "       [--prior-weights SPEC | --features] PAIRS...\n",
-            int(program.size()), program.data());
+            SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  print \"SCORE word,word\" for each distinct pair of PAIRS, in\n"

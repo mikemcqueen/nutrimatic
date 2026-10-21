@@ -2,6 +2,7 @@
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "optparse.h"
 #include "p1-index.h"
 
@@ -9,13 +10,15 @@
 #include <string>
 #include <string_view>
 
+constexpr char PROGRAM[] = "make-p1-index";
+
 namespace {
 
 constexpr int OPT_THREADS = 256;
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out, "usage: %.*s [--threads N] DIR OUT\n",
-            int(program.size()), program.data());
+            SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  write OUT, an index of the phase 1 verdicts in every *.jsonl\n"
@@ -66,7 +69,7 @@ int main(int argc, char* argv[]) {
     }
     std::string error;
     if (!build_p1_index(dir, out, resolve_search_threads(threads), &error)) {
-        fprintf(stderr, "make-p1-index: %s\n", error.c_str());
+        report(PROGRAM, "%s", error.c_str());
         return 1;
     }
     return 0;

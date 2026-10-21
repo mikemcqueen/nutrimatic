@@ -16,9 +16,12 @@
 #include "dfs-cli-help.h"
 #include "dfs-class-list.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "sub-bag-index.h"
 #include "workflow-paths.h"
+
+constexpr char PROGRAM[] = "bad-bags";
 
 namespace {
 
@@ -97,7 +100,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                 options.optarg, "--min-word-length", &out->min_word_length))
           return false;
         if (out->min_word_length == 0) {
-          fputs("bad-bags: --min-word-length must be positive\n", stderr);
+          report(PROGRAM, "--min-word-length must be positive");
           return false;
         }
         break;
@@ -105,7 +108,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         if (!parse_count(options.optarg, "--max-letters", &out->max_letters))
           return false;
         if (out->max_letters == 0) {
-          fputs("bad-bags: --max-letters must be positive\n", stderr);
+          report(PROGRAM, "--max-letters must be positive");
           return false;
         }
         break;
@@ -134,13 +137,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   std::sort(out->letters.begin(), out->letters.end());
 
   if (out->letters.size() < size_t(out->min_word_length)) {
-    fputs("bad-bags: LETTERS is shorter than --min-word-length\n", stderr);
+    report(PROGRAM, "LETTERS is shorter than --min-word-length");
     return false;
   }
   if (out->max_letters == 0) out->max_letters = int(out->letters.size());
   if (out->max_letters < out->min_word_length) {
-    fputs("bad-bags: --max-letters must be at least --min-word-length\n",
-        stderr);
+    report(PROGRAM, "--max-letters must be at least --min-word-length");
     return false;
   }
   return true;
@@ -382,7 +384,7 @@ int main(int argc, char* argv[]) {
   if (args.dictionary != NULL) {
     dict_path = args.dictionary;
   } else {
-    char const* const root = require_workflow_root("bad-bags");
+    char const* const root = require_workflow_root(PROGRAM);
     if (root == NULL) return 1;
     dict_path = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
   }
@@ -391,10 +393,9 @@ int main(int argc, char* argv[]) {
 
   SubBagIndex const index(args.letters, size_t(args.max_letters));
   if (!index.fits()) {
-    fprintf(stderr,
-        "bad-bags: \"%s\" has %.0Lf sub-bags of at most %d letters, over "
-        "the limit of %zu\n", args.letters.c_str(), index.sub_bag_count(),
-        args.max_letters, SubBagIndex::MAX_SUB_BAGS);
+    report(PROGRAM, "\"%s\" has %.0Lf sub-bags of at most %d letters, over "
+           "the limit of %zu", args.letters.c_str(), index.sub_bag_count(),
+           args.max_letters, SubBagIndex::MAX_SUB_BAGS);
     return 1;
   }
   BadBags bags(index, size_t(args.min_word_length), !args.bitmap);
@@ -408,7 +409,7 @@ int main(int argc, char* argv[]) {
                          index, bags.good_bits());
   fprintf(stderr, "Checked %zu combinations\n", bags.checked());
   if (fflush(stdout) != 0 || ferror(stdout)) {
-    fputs("bad-bags: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;

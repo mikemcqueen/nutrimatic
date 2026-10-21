@@ -27,7 +27,7 @@ void program_log_v(
     std::string_view program, LogLevel level, char const* format,
     va_list args) {
   flockfile(stderr);
-  fprintf(stderr, "%.*s: ", int(program.size()), program.data());
+  fprintf(stderr, "%.*s: ", SV_ARG(program));
   log_line_v("", level, format, args);
   funlockfile(stderr);
 }

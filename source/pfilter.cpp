@@ -17,6 +17,8 @@
 #include "row-input.h"
 #include "workflow-paths.h"
 
+constexpr char PROGRAM[] = "pfilter";
+
 namespace {
 
 int const OPT_NO_DICT = 256;
@@ -108,7 +110,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     switch (option) {
       case 'l':
         if (letters != NULL) {
-          fputs("pfilter: --letters may be given only once\n", stderr);
+          report(PROGRAM, "--letters may be given only once");
           return false;
         }
         letters = options.optarg;
@@ -169,33 +171,33 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     if (!make_letter_bag(letters, used_letters, &bag)) return false;
     out->options.bag = bag;
   } else if (have_used_letters) {
-    fputs("pfilter: --used-letters requires --letters\n", stderr);
+    report(PROGRAM, "--used-letters requires --letters");
     return false;
   }
 
   if (!out->options.drop_no && !out->options.drop_yes &&
       out->options.sentence != CLASSIFIED_NO_SENTENCE) {
-    fputs("pfilter: -s goes with -y when given --no-nopairs\n", stderr);
+    report(PROGRAM, "-s goes with -y when given --no-nopairs");
     return false;
   }
 
   if (out->options.exact && letters == NULL) {
-    fputs("pfilter: --exact requires --letters\n", stderr);
+    report(PROGRAM, "--exact requires --letters");
     return false;
   }
 
   if (out->cv && letters == NULL) {
-    fputs("pfilter: --cv requires --letters\n", stderr);
+    report(PROGRAM, "--cv requires --letters");
     return false;
   }
 
   if (out->csv && !out->cv) {
-    fputs("pfilter: --csv requires --cv\n", stderr);
+    report(PROGRAM, "--csv requires --cv");
     return false;
   }
 
   if (out->no_dict && out->dictionary_file != NULL) {
-    fputs("pfilter: --dict and --no-dict can't be combined\n", stderr);
+    report(PROGRAM, "--dict and --no-dict can't be combined");
     return false;
   }
 
@@ -211,7 +213,7 @@ bool print_kept_rows_with_cv(std::filesystem::path const& source,
                              bool csv) {
   std::vector<std::pair<std::string, double>> kept;
   size_t width = 0;
-  if (!read_rows("pfilter", source, "pair list", false,
+  if (!read_rows(PROGRAM, source, "pair list", false,
           [&](DfsPairRow const& row, std::string const& line) {
             if (!filter.keep(row)) return true;
             kept.emplace_back(line,
@@ -229,7 +231,7 @@ bool print_kept_rows_with_cv(std::filesystem::path const& source,
       printf("%-*s  %.2f\n", int(width), line.c_str(), cv);
   }
   if (fflush(stdout) != 0) {
-    fputs("pfilter: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return false;
   }
   return true;
@@ -252,7 +254,7 @@ int main(int argc, char* argv[]) {
 
   if (args.options.sentence == CLASSIFIED_NO_SENTENCE &&
       (args.options.drop_no || args.options.drop_yes))
-    alert("pfilter", "--sentence not supplied");
+    alert(PROGRAM, "--sentence not supplied");
 
   DfsDictionary dictionary;
   if (!args.no_dict) {
@@ -260,7 +262,7 @@ int main(int argc, char* argv[]) {
     if (args.dictionary_file != NULL) {
       dict_path = args.dictionary_file;
     } else {
-      char const* const root = require_workflow_root("pfilter");
+      char const* const root = require_workflow_root(PROGRAM);
       if (root == NULL) return 1;
       dict_path = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
     }
@@ -270,15 +272,15 @@ int main(int argc, char* argv[]) {
 
   ClassifiedPairCache cache;
   Pfilter filter;
-  if (!filter.load("pfilter", args.options, cache)) return 1;
+  if (!filter.load(PROGRAM, args.options, cache)) return 1;
   if (args.cv)
     return print_kept_rows_with_cv(args.source, filter, *args.options.bag,
                args.csv) ? 0 : 1;
-  if (!print_kept_rows("pfilter", args.source, "pair list", false,
+  if (!print_kept_rows(PROGRAM, args.source, "pair list", false,
           [&](DfsPairRow const& row) { return filter.keep(row); }))
     return 1;
   if (!(std::cout << std::flush)) {
-    fputs("pfilter: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;
