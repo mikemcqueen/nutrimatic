@@ -11,8 +11,11 @@
 #include "dfs-cli-help.h"
 #include "lc-impl.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "row-input.h"
+
+constexpr char PROGRAM[] = "lc";
 
 namespace {
 
@@ -52,9 +55,9 @@ void usage(FILE* out) {
 }
 
 bool read_text(std::filesystem::path const& path, std::string* out) {
-  return read_input_file("lc", path, [&](std::istream& input) {
+  return read_input_file(PROGRAM, path, [&](std::istream& input) {
     if (std::getline(input, *out) || input.eof()) return true;
-    fprintf(stderr, "lc: can't read \"%s\"\n", path.c_str());
+    report(PROGRAM, "can't read \"%s\"", path.c_str());
     return false;
   });
 }
@@ -129,7 +132,7 @@ int main(int argc, char* argv[]) {
   }
   for (std::string const& line : lines) printf("%s\n", line.c_str());
   if (fflush(stdout) != 0) {
-    fputs("lc: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;

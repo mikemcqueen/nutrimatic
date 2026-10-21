@@ -35,7 +35,7 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
   std::string letters;
   if (!remaining_letters(args, &letters)) return false;
 
-  PairsCounts const bag = pairs_letter_counts(letters.c_str());
+  PairsCounts const bag = pairs_letter_counts(letters);
   BagStatsInputs loaded(bag);
   PairBagLoader pair_loader(bag, PairPrior{}, &loaded.final_bags,
                             &loaded.final_rows);

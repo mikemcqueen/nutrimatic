@@ -5,6 +5,9 @@
 
 #include <string_view>
 
+// The arguments a "%.*s" conversion takes to print the string_view `sv`.
+#define SV_ARG(sv) int((sv).size()), (sv).data()
+
 // How a log line is colored and labeled: WARNING in yellow and ALERT in red,
 // both labeled "WARNING: "; INFO in yellow and SUCCESS in green, unlabeled;
 // PLAIN uncolored and unlabeled.

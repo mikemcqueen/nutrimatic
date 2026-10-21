@@ -15,6 +15,10 @@
 #include <utility>
 #include <vector>
 
+#include "log.h"
+
+constexpr char PROGRAM[] = "pcomm";
+
 namespace {
 
 std::pair<std::string_view, std::string_view> split_pair(
@@ -93,7 +97,7 @@ void usage(FILE* out, std::string_view program) {
       "  other lines are printed as given, repeats included\n"
       "  use - for standard input in either position, but not both\n"
       "  each input line must have exactly two nonempty comma-separated words\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
 }
 
 bool valid_pair(std::string_view line, std::filesystem::path const& path,
@@ -102,7 +106,7 @@ bool valid_pair(std::string_view line, std::filesystem::path const& path,
   if (comma == 0 || comma == std::string_view::npos ||
       comma + 1 == line.size() ||
       line.find(',', comma + 1) != std::string_view::npos) {
-    fprintf(stderr, "pcomm: %s:%zu: expected word,word: ",
+    fprintf(stderr, "%s: %s:%zu: expected word,word: ", PROGRAM,
             path.c_str(), number);
     fwrite(line.data(), 1, line.size(), stderr);
     fputc('\n', stderr);
@@ -116,11 +120,11 @@ bool open_input(std::filesystem::path const& path, int* fd,
   bool const from_stdin = path == "-";
   *fd = from_stdin ? STDIN_FILENO : open(path.c_str(), O_RDONLY);
   if (*fd < 0) {
-    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+    report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
     return false;
   }
   if (fstat(*fd, status) != 0) {
-    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+    report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
     if (!from_stdin) close(*fd);
     return false;
   }
@@ -172,7 +176,7 @@ bool for_each_line(std::filesystem::path const& path, Visit visit) {
 
   FILE* const input = from_stdin ? stdin : fdopen(fd, "rb");
   if (input == NULL) {
-    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+    report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
     close(fd);
     return false;
   }
@@ -191,12 +195,12 @@ bool for_each_line(std::filesystem::path const& path, Visit visit) {
     }
   }
   if (ferror(input)) {
-    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+    report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
     ok = false;
   }
   free(buffer);
   if (!from_stdin && fclose(input) != 0) {
-    fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+    report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
     ok = false;
   }
   return ok;
@@ -216,7 +220,7 @@ bool load_text(std::filesystem::path const& path, Text* text) {
     while ((length = read(fd, chunk, sizeof chunk)) != 0) {
       if (length < 0) {
         if (errno == EINTR) continue;
-        fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+        report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
         ok = false;
         break;
       }
@@ -304,8 +308,7 @@ bool compare_streaming_second(std::filesystem::path const& stream_path,
     });
   return for_each_line(stream_path, [&](std::string_view line, size_t number) {
     if (number > exclusive.size()) {
-      fprintf(stderr, "pcomm: %s: changed while reading\n",
-              stream_path.c_str());
+      report(PROGRAM, "%s: changed while reading", stream_path.c_str());
       return false;
     }
     return !exclusive[number - 1] || print_pair(1, line, show, tabs);
@@ -325,7 +328,7 @@ bool compare(char const* const paths[2], bool stream_first, bool rereadable,
 
 bool get_status(std::filesystem::path const& path, struct stat* status) {
   if (stat(path.c_str(), status) == 0) return true;
-  fprintf(stderr, "pcomm: %s: %s\n", path.c_str(), strerror(errno));
+  report(PROGRAM, "%s: %s", path.c_str(), strerror(errno));
   return false;
 }
 
@@ -360,7 +363,7 @@ int main(int argc, char* argv[]) {
     if (!options_done && arg.size() > 1 && arg[0] == '-') {
       for (size_t j = 1; j < arg.size(); ++j) {
         if (arg[j] < '1' || arg[j] > '3') {
-          fprintf(stderr, "pcomm: unknown option %s\n", argv[i]);
+          report(PROGRAM, "unknown option %s", argv[i]);
           usage(stderr, argv[0]);
           return 2;
         }
@@ -369,21 +372,21 @@ int main(int argc, char* argv[]) {
       continue;
     }
     if (count == 2) {
-      fprintf(stderr, "pcomm: expected two PAIRS files\n");
+      report(PROGRAM, "expected two PAIRS files");
       usage(stderr, argv[0]);
       return 2;
     }
     paths[count++] = argv[i];
   }
   if (count != 2) {
-    fprintf(stderr, "pcomm: expected two PAIRS files\n");
+    report(PROGRAM, "expected two PAIRS files");
     usage(stderr, argv[0]);
     return 2;
   }
   bool const stdin_first = strcmp(paths[0], "-") == 0;
   bool const stdin_second = strcmp(paths[1], "-") == 0;
   if (stdin_first && stdin_second) {
-    fputs("pcomm: standard input cannot be used for both files\n", stderr);
+    report(PROGRAM, "standard input cannot be used for both files");
     usage(stderr, argv[0]);
     return 2;
   }

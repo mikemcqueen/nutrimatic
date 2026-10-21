@@ -1,8 +1,6 @@
 #include "segment-output.h"
 
-#include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -10,15 +8,10 @@
 
 #include "log.h"
 #include "option-value.h"
+#include "parse-number.h"
 
-bool parse_limit(char const* text, uint64_t* limit) {
-  if (text[0] == '\0' || text[0] == '-') return false;
-  errno = 0;
-  char* end;
-  unsigned long long const parsed = strtoull(text, &end, 10);
-  if (errno == ERANGE || *end != '\0') return false;
-  *limit = parsed;
-  return true;
+bool parse_limit(std::string_view text, uint64_t* limit) {
+  return parse_number(text, limit);
 }
 
 bool select_segment_output(

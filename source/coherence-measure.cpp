@@ -2,10 +2,11 @@
 
 #include "coherence-score.h"
 #include "index.h"
+#include "log.h"
 #include "optparse.h"
+#include "parse-number.h"
 
 #include <assert.h>
-#include <errno.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
@@ -26,6 +27,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+constexpr char PROGRAM[] = "measure-coherence";
 
 using WordId = uint32_t;
 using PairKey = uint64_t;
@@ -95,7 +98,7 @@ static void charge(MemoryBudget* budget, size_t bytes,
     snprintf(message, sizeof(message),
              "memory phase %.*s requested %zu bytes with %zu charged "
              "and limit %zu",
-             int(owner.size()), owner.data(), bytes, budget->current(),
+             SV_ARG(owner), bytes, budget->current(),
              budget->limit());
     throw std::runtime_error(message);
   }
@@ -201,7 +204,7 @@ static void usage(FILE* stream, std::string_view program) {
       "Usage: %.*s INDEX INPUT --format dfs|text --order printed|best\n"
       "       [--sort input|coherence]\n"
       "       [--top N] [--pairs]\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
 }
 
 static void help(std::string_view program) {
@@ -304,37 +307,29 @@ static void short_usage(std::string_view program) {
       "usage: %.*s INDEX INPUT --format dfs|text "
       "--order printed|best "
       "[--sort input|coherence] [--top N] [--pairs]\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
+}
+
+static bool invalid_value(std::string_view text, std::string_view option) {
+  report(PROGRAM, "invalid %.*s value \"%.*s\"", SV_ARG(option), SV_ARG(text));
+  return false;
 }
 
 static bool parse_double_strict(
-    char const* text, std::string_view option, double* result) {
-  errno = 0;
-  char* end = NULL;
-  double const value = strtod(text, &end);
-  if (errno != 0 || end == text || *end != '\0' ||
-      !std::isfinite(value)) {
-    fprintf(stderr, "measure-coherence: invalid %.*s value \"%s\"\n",
-            int(option.size()), option.data(), text);
-    return false;
-  }
+    std::string_view text, std::string_view option, double* result) {
+  double value;
+  if (!parse_number(text, &value) || !std::isfinite(value))
+    return invalid_value(text, option);
   *result = value;
   return true;
 }
 
 static bool parse_positive_size(
-    char const* text, std::string_view option, size_t* result) {
-  errno = 0;
-  char* end = NULL;
-  unsigned long long const value = strtoull(text, &end, 10);
-  if (text[0] == '-' || errno != 0 || end == text || *end != '\0' ||
-      value == 0 ||
-      value > std::numeric_limits<size_t>::max()) {
-    fprintf(stderr, "measure-coherence: invalid %.*s value \"%s\"\n",
-            int(option.size()), option.data(), text);
-    return false;
-  }
-  *result = size_t(value);
+    std::string_view text, std::string_view option, size_t* result) {
+  size_t value;
+  if (!parse_number(text, &value) || value == 0)
+    return invalid_value(text, option);
+  *result = value;
   return true;
 }
 
@@ -381,7 +376,7 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
         return true;
       case '?':
         if (options.errmsg[0] != '\0') {
-          fprintf(stderr, "measure-coherence: %s\n", options.errmsg);
+          report(PROGRAM, "%s", options.errmsg);
           return false;
         }
         *requested_help = true;
@@ -392,11 +387,11 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
       case OPT_TOP: singleton = &seen_top; break;
       case OPT_PAIRS: singleton = &seen_pairs; break;
       default:
-        fprintf(stderr, "measure-coherence: %s\n", options.errmsg);
+        report(PROGRAM, "%s", options.errmsg);
         return false;
     }
     if (*singleton) {
-      fputs("measure-coherence: repeated option\n", stderr);
+      report(PROGRAM, "repeated option");
       return false;
     }
     *singleton = true;
@@ -407,7 +402,7 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
         else if (strcmp(options.optarg, "text") == 0)
           out->format = INPUT_TEXT;
         else {
-          fputs("measure-coherence: --format must be dfs or text\n", stderr);
+          report(PROGRAM, "--format must be dfs or text");
           return false;
         }
         break;
@@ -417,8 +412,7 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
         else if (strcmp(options.optarg, "best") == 0)
           out->order = ORDER_BEST;
         else {
-          fputs("measure-coherence: --order must be printed or best\n",
-                stderr);
+          report(PROGRAM, "--order must be printed or best");
           return false;
         }
         break;
@@ -427,8 +421,7 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
         else if (strcmp(options.optarg, "coherence") == 0)
           out->sort = SORT_COHERENCE;
         else {
-          fputs("measure-coherence: --sort must be input or coherence\n",
-                stderr);
+          report(PROGRAM, "--sort must be input or coherence");
           return false;
         }
         break;
@@ -449,8 +442,7 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
     return false;
   }
   if (strcmp(out->input_path, "-") == 0) {
-    fputs("measure-coherence: INPUT must be a regular file, not stdin\n",
-          stderr);
+    report(PROGRAM, "INPUT must be a regular file, not stdin");
     return false;
   }
   return true;
@@ -460,23 +452,22 @@ static bool parse_answer_text(
     std::string const& text, uint64_t line_number, std::string_view path,
     std::vector<std::string>* words) {
   if (text.empty() || text.front() == ' ' || text.back() == ' ') {
-    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-            ": answer has leading/trailing space or is empty\n",
-            int(path.size()), path.data(), line_number);
+    report(PROGRAM, "%.*s:%" PRIu64
+           ": answer has leading/trailing space or is empty", SV_ARG(path),
+           line_number);
     return false;
   }
   for (size_t i = 0; i < text.size(); ++i) {
     unsigned char const ch = (unsigned char) text[i];
     if (ch < 0x20 || ch == 0x7f) {
-      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-              ": answer contains an ASCII control byte\n",
-              int(path.size()), path.data(), line_number);
+      report(PROGRAM, "%.*s:%" PRIu64
+             ": answer contains an ASCII control byte", SV_ARG(path),
+             line_number);
       return false;
     }
     if (ch == ' ' && i + 1 < text.size() && text[i + 1] == ' ') {
-      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-              ": answer has repeated spaces\n", int(path.size()), path.data(),
-              line_number);
+      report(PROGRAM, "%.*s:%" PRIu64 ": answer has repeated spaces",
+             SV_ARG(path), line_number);
       return false;
     }
   }
@@ -490,10 +481,8 @@ static bool parse_answer_text(
     begin = end + 1;
   }
   if (words->size() > COHERENCE_MAX_WORDS) {
-    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-            ": answer has %zu words; limit is %zu\n",
-            int(path.size()), path.data(), line_number, words->size(),
-            COHERENCE_MAX_WORDS);
+    report(PROGRAM, "%.*s:%" PRIu64 ": answer has %zu words; limit is %zu",
+           SV_ARG(path), line_number, words->size(), COHERENCE_MAX_WORDS);
     return false;
   }
   return true;
@@ -509,22 +498,19 @@ static bool read_line(
       *eof = true;
       return true;
     }
-    fprintf(stderr, "measure-coherence: can't read \"%.*s\"\n",
-            int(path.size()), path.data());
+    report(PROGRAM, "can't read \"%.*s\"", SV_ARG(path));
     return false;
   }
   *eof = false;
   off_t const after = ftello(fp);
   if (before < 0 || after < before) {
-    fprintf(stderr, "measure-coherence: can't track input position \"%.*s\"\n",
-            int(path.size()), path.data());
+    report(PROGRAM, "can't track input position \"%.*s\"", SV_ARG(path));
     return false;
   }
   size_t consumed = size_t(after - before);
   if (memchr(buffer, '\0', consumed) != NULL) {
-    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-            ": line contains NUL\n", int(path.size()), path.data(),
-            line_number);
+    report(PROGRAM, "%.*s:%" PRIu64 ": line contains NUL", SV_ARG(path),
+           line_number);
     return false;
   }
 
@@ -539,19 +525,15 @@ static bool read_line(
       --length;
       had_newline = true;
     } else {
-      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-              ": line exceeds %zu bytes\n",
-              int(path.size()), path.data(), line_number,
-              COHERENCE_MAX_LINE_BYTES);
+      report(PROGRAM, "%.*s:%" PRIu64 ": line exceeds %zu bytes", SV_ARG(path),
+             line_number, COHERENCE_MAX_LINE_BYTES);
       return false;
     }
   }
   if (had_newline && length > 0 && buffer[length - 1] == '\r') --length;
   if (length > COHERENCE_MAX_LINE_BYTES) {
-    fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-            ": line exceeds %zu bytes\n",
-            int(path.size()), path.data(), line_number,
-            COHERENCE_MAX_LINE_BYTES);
+    report(PROGRAM, "%.*s:%" PRIu64 ": line exceeds %zu bytes", SV_ARG(path),
+           line_number, COHERENCE_MAX_LINE_BYTES);
     return false;
   }
 
@@ -563,18 +545,16 @@ static bool read_line(
   if (format == INPUT_DFS) {
     size_t const separator = line.find(' ');
     if (separator == std::string::npos || separator == 0) {
-      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-              ": malformed DFS row\n", int(path.size()), path.data(),
-              line_number);
+      report(PROGRAM, "%.*s:%" PRIu64 ": malformed DFS row", SV_ARG(path),
+             line_number);
       return false;
     }
-    std::string const token = line.substr(0, separator);
-    if (!parse_double_strict(
-            token.c_str(), "DFS score", &result->displayed_legacy_score) ||
+    if (!parse_double_strict(std::string_view(line).substr(0, separator),
+                             "DFS score", &result->displayed_legacy_score) ||
         result->displayed_legacy_score <= 0.0) {
-      fprintf(stderr, "measure-coherence: %.*s:%" PRIu64
-              ": DFS score must be positive and finite\n",
-              int(path.size()), path.data(), line_number);
+      report(PROGRAM, "%.*s:%" PRIu64
+             ": DFS score must be positive and finite", SV_ARG(path),
+             line_number);
       return false;
     }
     result->legacy_log_score = std::log(result->displayed_legacy_score);
@@ -642,17 +622,16 @@ static bool summarize_input(
           !checked_add_u64(summary->order_relaxation_count,
                            relaxations, &total) ||
           total > limits.order_relaxations) {
-        fprintf(stderr, "measure-coherence: ordering phase estimated more "
-                "than %" PRIu64 " relaxations at %s:%" PRIu64 "\n",
-                limits.order_relaxations, args.input_path, line);
+        report(PROGRAM, "ordering phase estimated more than %" PRIu64
+               " relaxations at %s:%" PRIu64, limits.order_relaxations,
+               args.input_path, line);
         return false;
       }
       summary->order_relaxation_count = total;
     }
   }
   if (summary->answer_count == 0) {
-    fprintf(stderr, "measure-coherence: %s: input is empty\n",
-            args.input_path);
+    report(PROGRAM, "%s: input is empty", args.input_path);
     return false;
   }
   if (summary->word_occurrence_count > UINT32_MAX ||
@@ -784,8 +763,7 @@ static bool load_candidates(
   if (line != summary.answer_count ||
       occurrences != summary.word_occurrence_count ||
       text_bytes != summary.total_word_text_bytes) {
-    fputs("measure-coherence: input changed between parsing passes\n",
-          stderr);
+    report(PROGRAM, "input changed between parsing passes");
     return false;
   }
   for (std::unordered_map<std::string, WordId>::const_iterator it =
@@ -868,9 +846,9 @@ static bool resolve_index_data(
   for (size_t i = 0; i < words->size(); ++i) {
     WordInfo& word = (*words)[i];
     if (!reader.aggregate_entry_position(*word.text, &word.position)) {
-      fprintf(stderr, "measure-coherence: word \"%s\" from input row %" PRIu64
-              " is absent from the standalone-word index\n",
-              word.text->c_str(), word.first_input_rank);
+      report(PROGRAM, "word \"%s\" from input row %" PRIu64
+             " is absent from the standalone-word index", word.text->c_str(),
+             word.first_input_rank);
       return false;
     }
     word.aggregate_count = word.position.aggregate_count;
@@ -1450,8 +1428,7 @@ static void write_output(
 static bool regular_file(std::filesystem::path const& path) {
   struct stat status;
   if (stat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode)) {
-    fprintf(stderr, "measure-coherence: INPUT \"%s\" is not a regular file\n",
-            path.c_str());
+    report(PROGRAM, "INPUT \"%s\" is not a regular file", path.c_str());
     return false;
   }
   return true;
@@ -1469,21 +1446,19 @@ int run_measure_coherence(int argc, char* argv[],
   }
   if (!regular_file(args.input_path)) return 1;
   if (limits.memory_bytes == 0 || limits.order_relaxations == 0) {
-    fputs("measure-coherence: resource limits must be positive\n", stderr);
+    report(PROGRAM, "resource limits must be positive");
     return 1;
   }
 
   FILE* input = fopen(args.input_path, "rb");
   if (input == NULL) {
-    fprintf(stderr, "measure-coherence: can't open INPUT \"%s\"\n",
-            args.input_path);
+    report(PROGRAM, "can't open INPUT \"%s\"", args.input_path);
     return 1;
   }
   struct stat opened_status;
   if (fstat(fileno(input), &opened_status) != 0 ||
       !S_ISREG(opened_status.st_mode)) {
-    fprintf(stderr, "measure-coherence: INPUT \"%s\" is not a regular file\n",
-            args.input_path);
+    report(PROGRAM, "INPUT \"%s\" is not a regular file", args.input_path);
     fclose(input);
     return 1;
   }
@@ -1539,8 +1514,7 @@ int run_measure_coherence(int argc, char* argv[],
 
     index = fopen(args.index_path, "rb");
     if (index == NULL) {
-      fprintf(stderr, "measure-coherence: can't open INDEX \"%s\"\n",
-              args.index_path);
+      report(PROGRAM, "can't open INDEX \"%s\"", args.index_path);
       return 1;
     }
     double word_lookup_seconds = 0.0;
@@ -1580,30 +1554,22 @@ int run_measure_coherence(int argc, char* argv[],
           selected_orders, &output_order);
       scoring_seconds = seconds_since(started);
 
-      fprintf(stderr,
-              "measure-coherence: input: %zu answers, %zu word "
-              "occurrences, %zu unique words\n",
-              candidates.size(), candidate_words.size(), words.size());
-      fprintf(stderr,
-              "measure-coherence: pairs: %" PRIu64
-              " opportunities, %zu unique directed pairs\n",
-              summary.required_pair_occurrence_count, pairs.size());
-      fprintf(stderr,
-              "measure-coherence: ordering: %" PRIu64
-              " estimated relaxations, %zu maximum words\n",
-              summary.order_relaxation_count, summary.maximum_word_count);
-      fprintf(stderr,
-              "measure-coherence: memory: %zu charged peak bytes of %zu\n",
-              budget.peak(), limits.memory_bytes);
-      fprintf(stderr,
-              "measure-coherence: timing: parse1 %.3f, parse2 %.3f, "
-              "pair-build %.3f\n",
-              parse1_seconds, parse2_seconds, pair_build_seconds);
-      fprintf(stderr,
-              "measure-coherence: timing: word-lookup %.3f, "
-              "pair-lookup %.3f, scoring %.3f\n",
-              word_lookup_seconds, pair_lookup_seconds,
-              scoring_seconds);
+      report(PROGRAM, "input: %zu answers, %zu word "
+             "occurrences, %zu unique words", candidates.size(),
+             candidate_words.size(), words.size());
+      report(PROGRAM, "pairs: %" PRIu64
+             " opportunities, %zu unique directed pairs",
+             summary.required_pair_occurrence_count, pairs.size());
+      report(PROGRAM, "ordering: %" PRIu64
+             " estimated relaxations, %zu maximum words",
+             summary.order_relaxation_count, summary.maximum_word_count);
+      report(PROGRAM, "memory: %zu charged peak bytes of %zu", budget.peak(),
+             limits.memory_bytes);
+      report(PROGRAM, "timing: parse1 %.3f, parse2 %.3f, pair-build %.3f",
+             parse1_seconds, parse2_seconds, pair_build_seconds);
+      report(PROGRAM, "timing: word-lookup %.3f, "
+             "pair-lookup %.3f, scoring %.3f", word_lookup_seconds,
+             pair_lookup_seconds, scoring_seconds);
       write_output(
           args, measured, output_order, candidates, candidate_words,
           words, pairs, selected_orders);
@@ -1616,12 +1582,12 @@ int run_measure_coherence(int argc, char* argv[],
   } catch (std::bad_alloc const&) {
     if (input != NULL) fclose(input);
     if (index != NULL) fclose(index);
-    fputs("measure-coherence: allocation failure\n", stderr);
+    report(PROGRAM, "allocation failure");
     return 1;
   } catch (std::exception const& error) {
     if (input != NULL) fclose(input);
     if (index != NULL) fclose(index);
-    fprintf(stderr, "measure-coherence: %s\n", error.what());
+    report(PROGRAM, "%s", error.what());
     return 1;
   }
 }

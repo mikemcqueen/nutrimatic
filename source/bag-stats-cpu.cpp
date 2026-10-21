@@ -1014,7 +1014,7 @@ bool list_bag_stats(BagStatsOptions const& options,
 
 int bag_stats(BagStatsOptions const& options, std::string const& letters) {
     BagStatsArgs const& common = options.common;
-    BagStatsInputs inputs(pairs_letter_counts(letters.c_str()));
+    BagStatsInputs inputs(pairs_letter_counts(letters));
     std::vector<std::vector<std::string>> spellings;
     bool const listed = options.completions > 0 || options.all;
     if (!load_bag_stats_inputs(PROGRAM, common, &inputs,

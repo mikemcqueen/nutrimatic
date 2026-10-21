@@ -10,8 +10,11 @@
 #include "dfs-cli-help.h"
 #include "freqsort-impl.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "row-input.h"
+
+constexpr char PROGRAM[] = "freqsort";
 
 namespace {
 
@@ -158,7 +161,7 @@ bool load(std::istream& input, char const* dict, Freqsort* freqsort) {
   std::string line;
   while (std::getline(input, line)) freqsort->add(std::move(line));
   if (!input.eof()) {
-    fprintf(stderr, "freqsort: can't read \"%s\"\n", dict);
+    report(PROGRAM, "can't read \"%s\"", dict);
     return false;
   }
   return true;
@@ -184,7 +187,7 @@ int main(int argc, char* argv[]) {
   if (!options.used_letters.empty())
     fprintf(stderr, "ignoring: %s\n", options.used_letters.c_str());
 
-  if (!read_input_file("freqsort", dict, [&](std::istream& input) {
+  if (!read_input_file(PROGRAM, dict, [&](std::istream& input) {
         return load(input, dict, &freqsort);
       }))
     return 1;
@@ -196,7 +199,7 @@ int main(int argc, char* argv[]) {
   for (std::string const& line : freqsort.lines())
     printf("%s\n", line.c_str());
   if (fflush(stdout) != 0) {
-    fputs("freqsort: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;

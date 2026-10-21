@@ -2,6 +2,7 @@
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "optparse.h"
 #include "pairs-impl.h"
 #include "workflow-paths.h"
@@ -11,6 +12,8 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+
+constexpr char PROGRAM[] = "pairs";
 
 namespace {
 
@@ -24,7 +27,7 @@ struct Args {
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
             "usage: %.*s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] [-c] "
-            "LETTERS\n", int(program.size()), program.data());
+            "LETTERS\n", SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  print word,word pairs of distinct dictionary words that fit\n"
@@ -47,22 +50,20 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("-h, --help", "show this help");
 }
 
-bool parse_min_max_words(char const* in, PairsOptions* out) {
-    std::string const arg = in;
-    size_t const comma = arg.find(',');
+bool parse_min_max_words(std::string_view in, PairsOptions* out) {
+    size_t const comma = in.find(',');
     int min_words;
     int max_words = out->max_words;
-    if (!parse_count(arg.substr(0, comma).c_str(), "--min-max-words M",
-                     &min_words) ||
-        (comma != std::string::npos &&
-         !parse_count(arg.substr(comma + 1).c_str(), "--min-max-words X",
+    if (!parse_count(in.substr(0, comma), "--min-max-words M", &min_words) ||
+        (comma != std::string_view::npos &&
+         !parse_count(in.substr(comma + 1), "--min-max-words X",
                       &max_words)))
         return false;
     if (min_words < 1 || min_words > max_words ||
         max_words > PAIRS_MAX_WORDS) {
-        fprintf(stderr,
-                "pairs: --min-max-words needs 1 <= M <= X <= %d, not \"%s\"\n",
-                PAIRS_MAX_WORDS, in);
+        report(PROGRAM,
+               "--min-max-words needs 1 <= M <= X <= %d, not \"%.*s\"",
+               PAIRS_MAX_WORDS, SV_ARG(in));
         return false;
     }
     out->min_words = min_words;
@@ -143,7 +144,7 @@ int main(int argc, char* argv[]) {
 
     std::string default_dictionary;
     if (args.dictionary_file == NULL) {
-        char const* const root = require_workflow_root("pairs");
+        char const* const root = require_workflow_root(PROGRAM);
         if (root == NULL) return 1;
         default_dictionary =
             (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();

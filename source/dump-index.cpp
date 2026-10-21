@@ -4,9 +4,10 @@
 // their counts only under --score.
 
 #include "index.h"
+#include "log.h"
 #include "optparse.h"
+#include "parse-number.h"
 
-#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,7 +30,7 @@ static struct optparse_long const long_options[] = {
 
 static void usage(std::string_view program, FILE* out) {
   fprintf(out, "usage: %.*s [--top-words N [--score]] input.index\n",
-          int(program.size()), program.data());
+          SV_ARG(program));
 }
 
 struct Frontier {
@@ -102,15 +103,10 @@ int main(int argc, char *argv[]) {
   while ((opt = optparse_long(&options, long_options, NULL)) != -1) {
     switch (opt) {
       case OPT_TOP_WORDS: {
-        char* end;
-        errno = 0;
-        long long const value = strtoll(options.optarg, &end, 10);
-        if (errno != 0 || end == options.optarg || *end != '\0' ||
-            value <= 0) {
+        if (!parse_number(options.optarg, &top_words) || top_words <= 0) {
           fprintf(stderr, "error: --top-words must be a positive integer\n");
           return 2;
         }
-        top_words = value;
         break;
       }
       case OPT_SCORE:

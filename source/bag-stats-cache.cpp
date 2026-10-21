@@ -22,7 +22,7 @@ std::string SharedCacheCounts::text(std::string_view name) const {
     uint64_t const l = lookups.load(std::memory_order_relaxed);
     char out[96];
     snprintf(out, sizeof out, ", %.*s hits %llu/%llu (%.1f%%)",
-             int(name.size()), name.data(),
+             SV_ARG(name),
              static_cast<unsigned long long>(h),
              static_cast<unsigned long long>(l),
              l == 0 ? 0.0 : 100.0 * double(h) / double(l));

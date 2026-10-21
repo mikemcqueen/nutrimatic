@@ -4,6 +4,7 @@
 #include "dfs-score.h"
 #include "dfs-solo-words.h"
 #include "index.h"
+#include "log.h"
 #include "mix-bits.h"
 
 #include <assert.h>
@@ -30,7 +31,7 @@ size_t const INITIAL_TABLE_SLOTS = 1024;
 [[noreturn]] void fatal_allocation(std::string_view what) {
   dfs_diagnostic_to_stream(
       stderr, "error: phase 1 could not allocate %.*s\n",
-      int(what.size()), what.data());
+      SV_ARG(what));
   abort();
 }
 

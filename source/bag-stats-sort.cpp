@@ -50,7 +50,7 @@ void usage(std::string_view program, FILE* out) {
             "        [--prior-weights SPEC]]\n"
             "       [--top-segments] [--pb-len N] [--ss STEPS] [--pp FILE]\n"
             "       [FILE|-]\n",
-            int(program.size()), program.data());
+            SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  rank the rows of the bag-stats dump FILE, standard input when it\n"
@@ -185,7 +185,7 @@ Refresh refresh_row(Dump const& dump,
                     std::vector<uint32_t>* picks) {
     std::vector<uint32_t> chosen[2];
     for (std::string const& name : names) {
-        PairsCounts const counts = pairs_letter_counts(name.c_str());
+        PairsCounts const counts = pairs_letter_counts(name);
         bool found = false;
         for (size_t list : {1, 0}) {
             auto const index = indices[list].find(counts);
@@ -288,7 +288,7 @@ bool load_dump(Args const& args, Dump* dump) {
         if (!header) return false;
         dump->header = std::move(*header);
         BagStatsHeader& h = dump->header;
-        if (!parse_search(PROGRAM, h.search.c_str(), &dump->search))
+        if (!parse_search(PROGRAM, h.search, &dump->search))
             return false;
         if ((dump->search.prospects > 0) != !h.prospects.empty()) {
             fprintf(stderr, "%s: malformed bag-stats header\n", path.c_str());
@@ -341,7 +341,7 @@ bool load_dump(Args const& args, Dump* dump) {
         char const* const root = require_workflow_root(PROGRAM);
         if (root == NULL) return false;
         DfsPairSet rejected;
-        PairsCounts const bag = pairs_letter_counts(h.letters.c_str());
+        PairsCounts const bag = pairs_letter_counts(h.letters);
         if (!load_no_pairs(PROGRAM, root, h.sentence, &rejected) ||
             !load_pick_bags(PROGRAM, args.rank,
                             h.prospects.empty() ? NULL : h.prospects.c_str(),
@@ -366,7 +366,7 @@ template <typename R>
 int print_score(Dump const& dump, Args const& args, R const& ranker) {
     std::vector<size_t> picks;
     if (!score_picks(PROGRAM, args.rank.score, dump.search, dump.steps,
-                     pairs_letter_counts(dump.header.letters.c_str()),
+                     pairs_letter_counts(dump.header.letters),
                      &picks))
         return 1;
     std::vector<PairBag const*> bags;

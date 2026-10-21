@@ -62,8 +62,8 @@ static void usage(std::string_view program, FILE* out) {
       "usage: %.*s [-i INDEX] [options] letters\n"
       "       %.*s [-i INDEX] [options] query|- --score\n"
       "       %.*s [-i INDEX] input --near WORD [-n N]\n",
-      int(program.size()), program.data(), int(program.size()), program.data(),
-      int(program.size()), program.data());
+      SV_ARG(program), SV_ARG(program),
+      SV_ARG(program));
   if (out != stdout) return;
 
   fputs("\nlisting prints each set of words once, in its best-ranked order\n",
@@ -164,9 +164,8 @@ static void usage(std::string_view program, FILE* out) {
   dfs_help_option("-h, --help", "show this help");
 }
 
-static void put_csv(char const* text, size_t length) {
-  for (size_t i = 0; i < length; ++i)
-    putchar(text[i] == ' ' ? ',' : text[i]);
+static void put_csv(std::string_view text) {
+  for (char const c : text) putchar(c == ' ' ? ',' : c);
   putchar('\n');
 }
 
@@ -228,7 +227,7 @@ static bool index_from_env(std::string_view program,
   char const* idx = getenv("IDX");
   if (idx == NULL || *idx == '\0') {
     fprintf(stderr, "error: missing index; use %.*s or set IDX\n",
-            int(missing_hint.size()), missing_hint.data());
+            SV_ARG(missing_hint));
     usage(program, stderr);
     return false;
   }
@@ -718,7 +717,7 @@ static int run_near_query(IndexReader const& reader, Args const& args) {
     if (args.common.show_score)
       printf("%lld %s\n", (long long) rows[i].count, rows[i].phrase.c_str());
     else
-      put_csv(rows[i].phrase.data(), rows[i].phrase.size());
+      put_csv(rows[i].phrase);
   }
   return 0;
 }
@@ -1166,7 +1165,7 @@ int main(int argc, char* argv[]) {
 
   auto const print_row = [&](DfsPackedMember const& row) {
     if (!args.common.show_score) {
-      put_csv(row.text, row.text_length);
+      put_csv(std::string_view(row.text, row.text_length));
       return;
     }
     char const* partner = NULL;

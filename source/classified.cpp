@@ -27,7 +27,7 @@ void classified_help_sentence_pairs() {
       WORKFLOW_CLASSIFIED_PATH);
 }
 
-bool parse_classified_sentence(char const* arg, int* sentence) {
+bool parse_classified_sentence(std::string_view arg, int* sentence) {
   return parse_count(arg, "--sentence", sentence);
 }
 

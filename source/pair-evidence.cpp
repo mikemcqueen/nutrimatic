@@ -1,10 +1,10 @@
 #include "pair-evidence.h"
 
 #include "dfs-cli-help.h"
+#include "parse-number.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 bool PairEvidenceSource::open(char const* p1, char const* cluedata,
                               std::string* error) {
@@ -84,7 +84,7 @@ constexpr size_t PRIOR_TERM_COUNT =
 
 }  // namespace
 
-bool parse_prior_weights(char const* spec, PriorWeights* out,
+bool parse_prior_weights(std::string_view spec, PriorWeights* out,
                          std::string* error) {
     out->weights.assign(PRIOR_TERM_COUNT, 0);
     std::vector<char> named(PRIOR_TERM_COUNT, 0);
@@ -106,10 +106,9 @@ bool parse_prior_weights(char const* spec, PriorWeights* out,
             *error = name + " is named twice";
             return false;
         }
-        char* end;
-        char const* const weight = item.c_str() + equals + 1;
-        double const value = strtod(weight, &end);
-        if (end == weight || *end != '\0' || !std::isfinite(value)) {
+        double value;
+        if (!parse_number(std::string_view(item).substr(equals + 1), &value) ||
+            !std::isfinite(value)) {
             *error = name + "'s weight isn't a finite number";
             return false;
         }

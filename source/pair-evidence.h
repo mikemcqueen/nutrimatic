@@ -46,7 +46,7 @@ struct PriorWeights {
 // Parses SPEC, comma-separated NAME=WEIGHT, into `out`; terms SPEC doesn't
 // name weigh 0. False, with `*error` set, on an unknown or repeated name or
 // a weight that isn't a finite number.
-bool parse_prior_weights(char const* spec, PriorWeights* out,
+bool parse_prior_weights(std::string_view spec, PriorWeights* out,
                          std::string* error);
 
 double prior_score(PairEvidence const& evidence, PriorWeights const& weights);

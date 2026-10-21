@@ -197,7 +197,7 @@ bool remaining_letters(BagStatsArgs const& args, std::string* out) {
 }
 
 void WordBagLoader::add(std::string const& line) {
-    PairsCounts const counts = pairs_letter_counts(line.c_str());
+    PairsCounts const counts = pairs_letter_counts(line);
     if (letter_total(counts) < min_length_ || counts == PairsCounts{} ||
         !pairs_fits(bag_, counts))
         return;

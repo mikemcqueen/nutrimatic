@@ -36,7 +36,7 @@ void usage(std::string_view program, FILE* out) {
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]] [--top-segments]\n"
             "       LETTERS PAIRS DICT\n",
-            int(program.size()), program.data());
+            SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  bag-stats, counting every row on the GPU\n\n", stdout);
@@ -308,7 +308,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    BagStatsInputs inputs(pairs_letter_counts(letters.c_str()));
+    BagStatsInputs inputs(pairs_letter_counts(letters));
     if (letter_total(inputs.bag) > GPU_MAX_LETTERS) {
         report(PROGRAM, "LETTERS has more than %d letters", GPU_MAX_LETTERS);
         return 1;

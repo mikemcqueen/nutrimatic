@@ -4,6 +4,7 @@
 #include <limits>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "letter-bag.h"
@@ -39,7 +40,7 @@ struct FreqsortOptions {
 
 // Sets out's mode and value from a -v argument: log, glog, g, cv, NUMBER, or
 // +NUMBER. Returns false, with the error diagnosed, when it can't be parsed.
-bool freqsort_parse_value(char const* in, FreqsortOptions* out);
+bool freqsort_parse_value(std::string_view in, FreqsortOptions* out);
 
 // Entries ranked under FreqsortOptions.
 class Freqsort {

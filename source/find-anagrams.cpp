@@ -1,10 +1,11 @@
 #include "index.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
+#include "parse-number.h"
 #include "search.h"
 
 #include <assert.h>
-#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,13 +26,13 @@
 // space is exactly what it was before -m existed.
 class AnagramFilter: public SearchFilter {
  public:
-  AnagramFilter(char const* letters, int min_word_len) {
+  AnagramFilter(std::string_view letters, int min_word_len) {
     // Requiring words of at least one letter is no constraint at all, since
     // empty words can't occur; normalizing it away keeps the state space small.
     min_len = (min_word_len > 1) ? min_word_len : 0;
 
     for (size_t i = 0; i < sizeof(count) / sizeof(State); ++i) count[i] = 0;
-    while (*letters) ++count[(unsigned char) *letters++];
+    for (char const c : letters) ++count[(unsigned char) c];
 
     product = 1;
     for (size_t i = 0; i < sizeof(count) / sizeof(State); ++i) {
@@ -122,29 +123,26 @@ class AnagramFilter: public SearchFilter {
 };
 
 // Parses a non-negative decimal count, e.g. the argument to -m or -p.
-static bool parse_count(char const* in, std::string_view what, int* out) {
-  char* end;
-
-  long value = strtol(in, &end, 10);
-  if (*in == '\0' || *end != '\0' || value < 0 || value > INT_MAX) {
-    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
-            int(what.size()), what.data(), in);
+static bool parse_count(std::string_view in, std::string_view what, int* out) {
+  int value;
+  if (!parse_number(in, &value) || value < 0) {
+    fprintf(stderr, "error: %.*s needs a count, not \"%.*s\"\n",
+            SV_ARG(what), SV_ARG(in));
     return false;
   }
-  *out = (int) value;
+  *out = value;
   return true;
 }
 
-static bool parse_count64(char const* in, std::string_view what, int64_t* out) {
-  errno = 0;
-  char* end;
-  long long const value = strtoll(in, &end, 10);
-  if (*in == '\0' || *end != '\0' || errno == ERANGE || value < 0) {
-    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
-            int(what.size()), what.data(), in);
+static bool parse_count64(std::string_view in, std::string_view what,
+                          int64_t* out) {
+  int64_t value;
+  if (!parse_number(in, &value) || value < 0) {
+    fprintf(stderr, "error: %.*s needs a count, not \"%.*s\"\n",
+            SV_ARG(what), SV_ARG(in));
     return false;
   }
-  *out = int64_t(value);
+  *out = value;
   return true;
 }
 
@@ -169,7 +167,7 @@ static void usage(std::string_view program) {
       " [-u used-letters] [-m min-word-length] [-p progress-factor]"
       " [-c]\n"
       "  -m defaults to %d; 0 for no minimum\n",
-      int(program.size()), program.data(), DEFAULT_MIN_WORD_LEN);
+      SV_ARG(program), DEFAULT_MIN_WORD_LEN);
 }
 
 static struct optparse_long const long_options[] = {
@@ -287,7 +285,7 @@ int main(int argc, char *argv[]) {
   }
 
   IndexReader reader(fp);
-  AnagramFilter filter(args.letters.c_str(), args.min_word_len);
+  AnagramFilter filter(args.letters, args.min_word_len);
   SearchDriver driver(&reader, &filter, 0, 1e-6, args.canonical_order);
   driver.report_collections(stderr);
   PrintAll(&driver, stderr, args.progress_factor);

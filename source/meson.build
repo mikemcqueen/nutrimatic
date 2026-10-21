@@ -77,8 +77,11 @@ coherence_score_lib = static_library(
   install: false,
 )
 
+log_lib = static_library('log', 'log.cpp', install: false)
+
 coherence_measure_lib = static_library(
   'coherence-measure', 'coherence-measure.cpp',
+  link_with: log_lib,
   install: false,
 )
 
@@ -104,13 +107,12 @@ dfs_class_list_lib = library(
     'dfs-search-projected.cpp',
     'dfs-output.cpp',
     'classified.cpp',
-    'log.cpp',
     'letter-bag.cpp',
     'row-input.cpp',
     'sub-bag-index.cpp',
     'bad-bag-bitmap.cpp',
   ],
-  link_with: index_lib,
+  link_with: [index_lib, log_lib],
   dependencies: thread_dep,
 )
 
@@ -166,8 +168,8 @@ dump_index = executable('dump-index', 'dump-index.cpp',
   link_with: [optparse_lib, index_lib], install: true)
 
 find_anagrams = executable('find-anagrams', 'find-anagrams.cpp',
-  'letter-bag.cpp', 'log.cpp',
-  link_with: [optparse_lib, search_lib, index_lib], install: true)
+  'letter-bag.cpp',
+  link_with: [optparse_lib, search_lib, index_lib, log_lib], install: true)
 
 dfs_anagrams = executable('dfs-anagrams', 'dfs-anagrams.cpp',
   link_with: [optparse_lib, dfs_class_list_lib, index_lib,
@@ -197,7 +199,7 @@ find_dupes = executable('find-dupes', 'find-dupes.cpp',
   dependencies: [segment_output_dep, thread_dep],
   install: true)
 
-pcomm = executable('pcomm', 'pcomm.cpp', install: true)
+pcomm = executable('pcomm', 'pcomm.cpp', link_with: log_lib, install: true)
 
 pfilter_lib = static_library('pfilter', 'pfilter-impl.cpp',
   link_with: dfs_class_list_lib)
@@ -335,8 +337,8 @@ query_index = executable('query-index', 'query-index.cpp',
   install: true)
 
 # Measurement only, not part of the tool.  See findings/phrase-recovery-cost.md.
-executable('measure-f', 'measure-f.cpp', 'letter-bag.cpp', 'log.cpp',
-  link_with: [optparse_lib, index_lib], install: false)
+executable('measure-f', 'measure-f.cpp', 'letter-bag.cpp',
+  link_with: [optparse_lib, index_lib, log_lib], install: false)
 
 measure_coherence = executable(
   'measure-coherence', 'measure-coherence.cpp',

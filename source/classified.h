@@ -29,7 +29,7 @@ void classified_help_sentence_no();
 void classified_help_sentence_pairs();
 
 // Parses the --sentence argument into `sentence`. Errors are diagnosed.
-bool parse_classified_sentence(char const* arg, int* sentence);
+bool parse_classified_sentence(std::string_view arg, int* sentence);
 
 // Sets `path` to KIND/KIND.pairs, KIND being "no" or "yes", in $WFROOT's
 // classified directory: .wf/classified/sN for `sentence`, or .wf/classified

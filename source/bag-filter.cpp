@@ -8,8 +8,11 @@
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "optparse.h"
 #include "row-input.h"
+
+constexpr char PROGRAM[] = "bag-filter";
 
 namespace {
 
@@ -103,12 +106,12 @@ int main(int argc, char* argv[]) {
   }
 
   for (char** file = args.files; *file != NULL; ++file) {
-    if (!print_kept_rows("bag-filter", *file, "input", true,
+    if (!print_kept_rows(PROGRAM, *file, "input", true,
             [&](DfsPairRow const& row) { return fits(args, row); }))
       return 1;
   }
   if (!(std::cout << std::flush)) {
-    fputs("bag-filter: can't write output\n", stderr);
+    report(PROGRAM, "can't write output");
     return 1;
   }
   return 0;

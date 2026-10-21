@@ -3,11 +3,11 @@
 #include "dfs-diagnostic.h"
 #include "letter-bag.h"
 #include "log.h"
+#include "parse-number.h"
 #include "workflow-paths.h"
 
 #include <assert.h>
 #include <errno.h>
-#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,7 +159,7 @@ bool require_regular_file(
   std::error_code error;
   if (fs::is_regular_file(path, error)) return true;
   report(program, "%.*s \"%s\" is not a regular file",
-         int(what.size()), what.data(), path.c_str());
+         SV_ARG(what), path.c_str());
   return false;
 }
 
@@ -173,7 +173,7 @@ bool push_optional_pair_file(
   if (status.type() == fs::file_type::not_found) return true;
   if (error) {
     report(program, "can't inspect %.*s \"%s\": %s",
-           int(what.size()), what.data(), path.c_str(),
+           SV_ARG(what), path.c_str(),
            error.message().c_str());
     return false;
   }
@@ -235,74 +235,57 @@ bool check_bag_length(std::string const& bag) {
   return false;
 }
 
-bool parse_count(char const* in, std::string_view what, int* out) {
-  char* end;
-  long const value = strtol(in, &end, 10);
-  if (*in == '\0' || *end != '\0' || value < 0 || value > INT_MAX) {
-    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
-            int(what.size()), what.data(), in);
-    return false;
-  }
-  *out = int(value);
+static bool bad_count(std::string_view in, std::string_view what) {
+  fprintf(stderr, "error: %.*s needs a count, not \"%.*s\"\n",
+          SV_ARG(what), SV_ARG(in));
+  return false;
+}
+
+bool parse_count(std::string_view in, std::string_view what, int* out) {
+  int value;
+  if (!parse_number(in, &value) || value < 0) return bad_count(in, what);
+  *out = value;
   return true;
 }
 
-bool parse_count64(char const* in, std::string_view what, int64_t* out) {
-  errno = 0;
-  char* end;
-  long long const value = strtoll(in, &end, 10);
-  if (*in == '\0' || *end != '\0' || errno == ERANGE || value < 0) {
-    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
-            int(what.size()), what.data(), in);
-    return false;
-  }
-  *out = int64_t(value);
+bool parse_count64(std::string_view in, std::string_view what, int64_t* out) {
+  int64_t value;
+  if (!parse_number(in, &value) || value < 0) return bad_count(in, what);
+  *out = value;
   return true;
 }
 
-bool parse_mib(char const* in, std::string_view what, size_t* out) {
-  if (*in == '\0' || *in == '-') {
-    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
-            int(what.size()), what.data(), in);
-    return false;
-  }
-  errno = 0;
-  char* end;
-  unsigned long long const value = strtoull(in, &end, 10);
-  if (*end != '\0' || errno == ERANGE ||
-      value > static_cast<unsigned long long>(SIZE_MAX / DFS_MIB)) {
-    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
-            int(what.size()), what.data(), in);
-    return false;
-  }
-  *out = size_t(value) * DFS_MIB;
+bool parse_mib(std::string_view in, std::string_view what, size_t* out) {
+  size_t value;
+  if (!parse_number(in, &value) || value > SIZE_MAX / DFS_MIB)
+    return bad_count(in, what);
+  *out = value * DFS_MIB;
   return true;
 }
 
-bool parse_double(char const* in, std::string_view what, double* out) {
-  char* end;
-  double const value = strtod(in, &end);
-  if (*in == '\0' || *end != '\0' || !isfinite(value)) {
-    fprintf(stderr, "error: %.*s needs a number, not \"%s\"\n",
-            int(what.size()), what.data(), in);
+bool parse_double(std::string_view in, std::string_view what, double* out) {
+  double value;
+  if (!parse_number(in, &value) || !isfinite(value)) {
+    fprintf(stderr, "error: %.*s needs a number, not \"%.*s\"\n",
+            SV_ARG(what), SV_ARG(in));
     return false;
   }
   *out = value;
   return true;
 }
 
-static bool parse_tier_bonus(char const* in, std::string_view what,
+static bool parse_tier_bonus(std::string_view in, std::string_view what,
                              double* out) {
   if (!parse_double(in, what, out)) return false;
   if (*out < 0.0) {
     fprintf(stderr, "error: %.*s must be at least 0\n",
-            int(what.size()), what.data());
+            SV_ARG(what));
     return false;
   }
   return true;
 }
 
-bool parse_segment_penalty(char const* in, double* out) {
+bool parse_segment_penalty(std::string_view in, double* out) {
   if (!parse_double(in, "--segment-penalty", out)) return false;
   if (*out < 1.0) {
     fputs("error: --segment-penalty must be at least 1\n", stderr);
@@ -312,7 +295,7 @@ bool parse_segment_penalty(char const* in, double* out) {
 }
 
 bool parse_solo_words(
-    char const* in, std::vector<std::string>* solo_words) {
+    std::string_view in, std::vector<std::string>* solo_words) {
   std::string const value(in);
   size_t start = 0;
   for (;;) {
@@ -430,7 +413,7 @@ bool parse_pair_row(
   if (line.find('-') != std::string::npos) {
     fprintf(stderr,
         "error: %.*s \"%.*s\" line %zu: '-' would silently skip this entry\n",
-        int(what.size()), what.data(), int(source.size()), source.data(),
+        SV_ARG(what), SV_ARG(source),
         line_number);
     return false;
   }
@@ -450,7 +433,7 @@ bool parse_pair_row(
       (two_fields && out->right.empty())) {
     fprintf(stderr,
         "error: %.*s \"%.*s\" line %zu: %s\n",
-        int(what.size()), what.data(), int(source.size()), source.data(),
+        SV_ARG(what), SV_ARG(source),
         line_number,
         allow_single_words
             ? "expected one word or two comma-separated words"
@@ -487,7 +470,7 @@ bool load_pair_rows_stream(
 
   if (!input.eof()) {
     fprintf(stderr, "error: can't read %.*s \"%.*s\"\n",
-            int(what.size()), what.data(), int(source.size()), source.data());
+            SV_ARG(what), SV_ARG(source));
     return false;
   }
 
@@ -502,7 +485,7 @@ bool load_pair_rows(
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     fprintf(stderr, "error: can't open %.*s \"%s\"\n",
-            int(what.size()), what.data(), path.c_str());
+            SV_ARG(what), path.c_str());
     return false;
   }
   return load_pair_rows_stream(
@@ -536,7 +519,7 @@ bool build_extraction_pairs(
       fprintf(stderr,
           "error: %.*s \"%.*s\" line %zu: normalized entry has %zu non-space"
           " characters, fewer than -m %d\n",
-          int(what.size()), what.data(), int(source.size()), source.data(),
+          SV_ARG(what), SV_ARG(source),
           loaded[i].line_number, normalized_length, min_word_len);
       return false;
     }
@@ -563,7 +546,7 @@ bool build_extraction_pairs(
   if (rows != NULL) rows->insert(rows->end(), loaded.begin(), loaded.end());
   if (!quiet)
     dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
-                   int(what.size()), what.data(), loaded.size(), pairs->size());
+                   SV_ARG(what), loaded.size(), pairs->size());
   return true;
 }
 
@@ -580,7 +563,7 @@ bool load_pair_value(
   insert_pair_keys(loaded, pairs);
   if (!quiet)
     dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
-                   int(what.size()), what.data(), loaded.size(), pairs->size());
+                   SV_ARG(what), loaded.size(), pairs->size());
   return true;
 }
 
@@ -616,13 +599,12 @@ bool load_pair_file(
   if (!quiet) {
     if (diagnostic_source.empty())
       dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
-                     int(what.size()), what.data(), loaded.size(),
+                     SV_ARG(what), loaded.size(),
                      pairs->size());
     else
       dfs_diagnostic("%.*s: %zu pairs, %zu keys from %.*s\n",
-                     int(what.size()), what.data(), loaded.size(),
-                     pairs->size(), int(diagnostic_source.size()),
-                     diagnostic_source.data());
+                     SV_ARG(what), loaded.size(),
+                     pairs->size(), SV_ARG(diagnostic_source));
   }
   return true;
 }

@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <string_view>
 
 #include "letter-bag.h"
+#include "log.h"
 
 namespace {
 
@@ -48,19 +50,19 @@ std::string row(std::array<std::string, COLUMNS> const& fields) {
   return out;
 }
 
-std::string repeat(char const* text, int count) {
+std::string repeat(std::string_view text, int count) {
   std::string out;
   for (int i = 0; i < count; ++i) out += text;
   return out;
 }
 
-std::string group_header(char const* label) {
+std::string group_header(std::string_view label) {
   int indent = 0;
   for (int i = 0; i < FREQUENCY_FIRST_COLUMN; ++i) indent += WIDTHS[i] + 1;
   int span = int(std::string(HEADERS[COLUMNS - 1]).size());
   for (int i = FREQUENCY_FIRST_COLUMN; i < COLUMNS - 1; ++i)
     span += WIDTHS[i] + 1;
-  std::string const text = format(" %s ", label);
+  std::string const text = format(" %.*s ", SV_ARG(label));
   int const dashes = std::max(0, span - int(text.size()) - 2);
   int const left = dashes / 2;
   return std::string(size_t(indent), ' ') + "┌" + repeat("─", left) + text +

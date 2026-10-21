@@ -7,7 +7,10 @@
 #include <vector>
 
 #include "dfs-cli-args.h"
+#include "log.h"
 #include "segment-output.h"
+
+constexpr char PROGRAM[] = "find-dupes";
 
 // The first spelling seen of one canonical pair, and whether a later line has
 // already been reported for it, so a pair repeated many times prints once.
@@ -24,7 +27,7 @@ static void usage(std::string_view program) {
       "  PAIRS  word,word lines, as in best.pairs\n"
       "  stderr gets N/TOTAL duplicate pairs found, where TOTAL counts\n"
       "  distinct unordered pairs\n",
-      int(program.size()), program.data());
+      SV_ARG(program));
 }
 
 int main(int argc, char* argv[]) {
@@ -35,12 +38,12 @@ int main(int argc, char* argv[]) {
       return 0;
     }
     if (argv[i][0] == '-' && argv[i][1] != '\0') {
-      fprintf(stderr, "find-dupes: unknown option \"%s\"\n", argv[i]);
+      report(PROGRAM, "unknown option \"%s\"", argv[i]);
       usage(argv[0]);
       return 2;
     }
     if (pairs_path != NULL) {
-      fprintf(stderr, "find-dupes: too many arguments\n");
+      report(PROGRAM, "too many arguments");
       usage(argv[0]);
       return 2;
     }
@@ -48,7 +51,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (pairs_path == NULL) {
-    fprintf(stderr, "find-dupes: no PAIRS file\n");
+    report(PROGRAM, "no PAIRS file");
     usage(argv[0]);
     return 2;
   }
