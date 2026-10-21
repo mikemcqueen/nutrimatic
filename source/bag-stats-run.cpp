@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <string_view>
 #include <unordered_map>
 
 #include "dfs-cli-args.h"
@@ -12,7 +13,7 @@
 #include "row-input.h"
 #include "workflow-paths.h"
 
-RankOption parse_common_option(char const* program, int option,
+RankOption parse_common_option(std::string_view program, int option,
                                char const* arg, BagStatsArgs* out) {
     RankOption const rank = parse_rank_option(program, option, arg,
                                               &out->rank);
@@ -53,7 +54,7 @@ RankOption parse_common_option(char const* program, int option,
     }
 }
 
-bool check_common_args(char const* program, struct optparse* options,
+bool check_common_args(std::string_view program, struct optparse* options,
                        BagStatsArgs* out) {
     char const* letters = optparse_arg(options);
     out->pairs_file = optparse_arg(options);
@@ -63,7 +64,8 @@ bool check_common_args(char const* program, struct optparse* options,
     out->letters = letters;
     if (!parse_search(program, out->search_text, &out->search)) return false;
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
-        fprintf(stderr, "%s: -s doesn't go with --no-nopairs\n", program);
+        fprintf(stderr, "%.*s: -s doesn't go with --no-nopairs\n",
+                int(program.size()), program.data());
         return false;
     }
     RankArgs const& rank = out->rank;
@@ -87,29 +89,31 @@ bool check_common_args(char const* program, struct optparse* options,
         };
         for (auto const& [given, option] : rank_options) {
             if (!given) continue;
-            fprintf(stderr, "%s: --ss without a ppb or pb step can't take "
-                    "%s\n", program, option);
+            fprintf(stderr, "%.*s: --ss without a ppb or pb step can't take "
+                    "%s\n", int(program.size()), program.data(), option);
             return false;
         }
     }
     bool const ranked = rank.top > 0 || !rank.score.empty();
     if (rank.top > 0 && rank.sorts.empty()) {
-        fprintf(stderr, "%s: -n needs a SORT option, such as --tp\n",
-                program);
+        fprintf(stderr, "%.*s: -n needs a SORT option, such as --tp\n",
+                int(program.size()), program.data());
         return false;
     }
     if (!rank.sorts.empty() && !ranked) {
-        fprintf(stderr, "%s: SORT options need -n or --score\n", program);
+        fprintf(stderr, "%.*s: SORT options need -n or --score\n",
+                int(program.size()), program.data());
         return false;
     }
     if ((rank.by_length || rank.by_pick) && rank.sorts.empty()) {
-        fprintf(stderr, "%s: --by-length and --by-pick need a SORT option, "
-                "with -n or --score\n", program);
+        fprintf(stderr, "%.*s: --by-length and --by-pick need a SORT option, "
+                "with -n or --score\n", int(program.size()), program.data());
         return false;
     }
     if (!check_rank_args(program, rank, out->search)) return false;
     if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
-        fprintf(stderr, "%s: --pp goes with a ppb step in --ss\n", program);
+        fprintf(stderr, "%.*s: --pp goes with a ppb step in --ss\n",
+                int(program.size()), program.data());
         return false;
     }
     int const stdin_inputs = (strcmp(out->pairs_file, "-") == 0) +
@@ -117,8 +121,8 @@ bool check_common_args(char const* program, struct optparse* options,
         (out->prospects_file != NULL && strcmp(out->prospects_file, "-") == 0) +
         (rank.prior_file != NULL && strcmp(rank.prior_file, "-") == 0);
     if (stdin_inputs > 1) {
-        fprintf(stderr, "%s: only one of PAIRS, DICT, --pp and --prior can "
-                "be -\n", program);
+        fprintf(stderr, "%.*s: only one of PAIRS, DICT, --pp and --prior can "
+                "be -\n", int(program.size()), program.data());
         return false;
     }
     return true;
@@ -210,7 +214,7 @@ void WordBagLoader::add(std::string const& line) {
         words.push_back(line);
 }
 
-bool load_word_bags(char const* program, char const* path,
+bool load_word_bags(std::string_view program, char const* path,
                     PairsCounts const& bag, int min_length,
                     std::vector<PairsCounts>* out,
                     std::vector<std::vector<std::string>>* spellings) {
@@ -222,7 +226,7 @@ bool load_word_bags(char const* program, char const* path,
         });
 }
 
-bool load_inner_dictionary(char const* program, PairsExactCounter* out) {
+bool load_inner_dictionary(std::string_view program, PairsExactCounter* out) {
     char const* const root = require_workflow_root(program);
     if (root == NULL) return false;
     std::string const path =
@@ -251,7 +255,7 @@ void filter_word_bags(std::vector<PairsCounts> const& from,
         if (pairs_fits(rest, word_bag)) out->push_back(word_bag);
 }
 
-bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
+bool load_rejected_pairs(std::string_view program, BagStatsArgs const& args,
                          DfsPairSet* out) {
     if (!args.drop_no) return true;
     if (args.sentence == CLASSIFIED_NO_SENTENCE)
@@ -260,7 +264,7 @@ bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
     return root != NULL && load_no_pairs(program, root, args.sentence, out);
 }
 
-bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
+bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
                            BagStatsInputs* out,
                            std::vector<std::vector<std::string>>* spellings) {
     bool const pair_filter = args.search.pair_filter;

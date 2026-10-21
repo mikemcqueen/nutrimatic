@@ -5,6 +5,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -25,9 +26,9 @@ struct Args {
   SegmentCountsOptions options;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %s [--pairs | --solo-words | --all-words |\n"
+      "usage: %.*s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
       "          [-c | --no-counts] [-l | --elim] [-n N]\n"
       "          [-u LETTERS | --used-letters LETTERS]...\n"
@@ -60,7 +61,7 @@ static void usage(char const* program) {
       "                      row's letters less LETTERS; may be repeated\n"
       "  -i, --ignore FILE   do not count pairs listed in FILE; may be\n"
       "                      repeated\n",
-      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
+      int(program.size()), program.data(), DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(stdout, 22);
   print_allow_pairs_option_help(stdout, 22);
   fprintf(stdout,

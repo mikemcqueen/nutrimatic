@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <string>
+#include <string_view>
 
 // Accepts any arrangement of a bag of letters, optionally requiring every word
 // to be at least min_word_len long.
@@ -160,13 +161,13 @@ struct Args {
   bool canonical_order;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stderr,
-      "usage: %s input.index letters"
+      "usage: %.*s input.index letters"
       " [-u used-letters] [-m min-word-length] [-p progress-factor]"
       " [-c]\n"
       "  -m defaults to %d; 0 for no minimum\n",
-      program, DEFAULT_MIN_WORD_LEN);
+      int(program.size()), program.data(), DEFAULT_MIN_WORD_LEN);
 }
 
 static struct optparse_long const long_options[] = {

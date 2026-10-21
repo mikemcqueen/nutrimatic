@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -18,9 +19,9 @@ constexpr int OPT_COMPLETIONS = OPT_COMMON_END + 1;
 constexpr int OPT_EXACT = OPT_COMMON_END + 2;
 constexpr int OPT_ALL = OPT_COMMON_END + 3;
 
-void usage(char const* program, FILE* out) {
+void usage(std::string_view program, FILE* out) {
     fprintf(out,
-            "usage: %s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
+            "usage: %.*s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
             "       [--min-pb-len N]\n"
             "       [--ss STEPS] [--pp FILE] [--threads N] [--cache-size N]\n"
             "       [--pair-cache-size N]\n"
@@ -33,11 +34,12 @@ void usage(char const* program, FILE* out) {
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]] [--top-segments] [--exact]\n"
             "       LETTERS PAIRS DICT\n"
-            "       %s --ss [wb,...]p|pf [-u LETTERS]\n"
+            "       %.*s --ss [wb,...]p|pf [-u LETTERS]\n"
             "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
             "       [--exact] [--completions N | --all]\n"
             "       LETTERS PAIRS DICT\n",
-            program, program);
+            int(program.size()), program.data(),
+            int(program.size()), program.data());
     if (out != stdout) return;
 
     help_common_options(true);

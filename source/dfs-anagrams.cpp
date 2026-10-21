@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 static int const DEFAULT_TOP = 10000;
@@ -63,8 +64,9 @@ static void report_segments(std::vector<DfsSpelling> const& results,
       stdout, weighted ? segment_report_weighted(report) : report);
 }
 
-static void usage(char const* program, FILE* out) {
-  fprintf(out, "usage: %s [-i INDEX] [options] letters\n", program);
+static void usage(std::string_view program, FILE* out) {
+  fprintf(out, "usage: %.*s [-i INDEX] [options] letters\n",
+          int(program.size()), program.data());
   if (out != stdout) return;
 
   fputs("\noptions:\n", stdout);

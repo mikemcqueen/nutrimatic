@@ -77,9 +77,9 @@ struct Text {
   std::string_view view;
 };
 
-void usage(FILE* out, char const* program) {
+void usage(FILE* out, std::string_view program) {
   fprintf(out,
-      "usage: %s [--tabs] [-123] FILE1 FILE2\n"
+      "usage: %.*s [--tabs] [-123] FILE1 FILE2\n"
       "  compare word,word lines with either word order considered equal\n"
       "  --tabs  prefix columns with tabs as in comm\n"
       "  -1  suppress pairs only in FILE1\n"
@@ -92,7 +92,7 @@ void usage(FILE* out, char const* program) {
       "  other lines are printed as given, repeats included\n"
       "  use - for standard input in either position, but not both\n"
       "  each input line must have exactly two nonempty comma-separated words\n",
-      program);
+      int(program.size()), program.data());
 }
 
 bool valid_pair(std::string_view line, char const* path, size_t number) {

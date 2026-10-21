@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 static uint64_t const DEFAULT_SEGMENT_OUTPUT_LIMIT = 1000;
@@ -48,19 +49,19 @@ bool parse_limit(char const* text, uint64_t* limit);
 // the same combination is allowed; selecting a different one is an error.
 bool select_segment_output(
     SegmentSelection selection, SegmentProjection projection,
-    char const* program, SegmentOutputOptions* out);
+    std::string_view program, SegmentOutputOptions* out);
 
 // Parses --pairs, --solo-words, --all-words, --pair-words, --unique,
 // -l/--by-length and -n N. `index` points to the current argument and advances
 // over a consumed N. The four output modes are mutually exclusive, though
 // repeating one is allowed. Errors are diagnosed already.
 SegmentOutputOptionResult parse_segment_output_option(
-    int argc, char* const argv[], int* index, char const* program,
+    int argc, char* const argv[], int* index, std::string_view program,
     SegmentOutputOptions* out);
 
 // Validates option relationships that may be specified in either order.
 bool check_segment_output_options(
-    SegmentOutputOptions const& options, char const* program);
+    SegmentOutputOptions const& options, std::string_view program);
 
 bool is_selected_segment(
     SegmentSelection selection, std::string const& segment);

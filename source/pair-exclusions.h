@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -97,14 +98,14 @@ void print_allow_pairs_option_help(FILE* fp, int description_column);
 // returned as OTHER when `support` does not list them. `index` points to the current argument and advances
 // over a consumed FILE, DIR or TARGET. Errors are diagnosed already.
 PairFilterOptionResult parse_pair_filter_option(
-    int argc, char* const argv[], int* index, char const* program,
+    int argc, char* const argv[], int* index, std::string_view program,
     PairFilterSupport support, PairFilterOptions* out);
 
 // Diagnoses the options that need a workflow root without one: -y/--yes,
 // -t/--target, and -s/--sentence. Tools call this once their arguments are parsed, before
 // load_pair_filters().
 bool check_pair_filter_options(
-    PairFilterOptions const& options, char const* program);
+    PairFilterOptions const& options, std::string_view program);
 
 // Loads explicit allow/ignore/reject files. Allow files load pairs while
 // ignoring and counting standalone entries; ignore files are pair-only;
@@ -132,7 +133,7 @@ bool check_pair_filter_options(
 // outside the -s/--sentence N sentence. A target with no
 // no.pairs is silent, because having none is the ordinary case.
 bool load_pair_filters(
-    PairFilterOptions const& options, char const* program,
+    PairFilterOptions const& options, std::string_view program,
     PairFilterSupport support, PairFilters* out);
 
 // Returns true when `segment` is an exact rejected pair or contains a

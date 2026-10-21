@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <string_view>
 
 #include "workflow-paths.h"
 
@@ -16,7 +17,7 @@ bool in_index(IndexReader const& reader, DfsPairRow const& row) {
 
 }  // namespace
 
-bool Pfilter::load(char const* program, PfilterOptions const& options,
+bool Pfilter::load(std::string_view program, PfilterOptions const& options,
                    ClassifiedPairCache& cache) {
   options_ = options;
   rejected_.clear();
@@ -43,7 +44,8 @@ bool Pfilter::load(char const* program, PfilterOptions const& options,
   if (!options_.index_file.empty()) {
     FILE* fp = fopen(options_.index_file.c_str(), "rb");
     if (fp == NULL) {
-      fprintf(stderr, "%s: can't open \"%s\"\n", program,
+      fprintf(stderr, "%.*s: can't open \"%s\"\n",
+              int(program.size()), program.data(),
           options_.index_file.c_str());
       return false;
     }

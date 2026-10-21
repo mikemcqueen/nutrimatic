@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -21,9 +22,9 @@ struct FoundSegment {
   size_t length;
 };
 
-static void usage(char const* program) {
+static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %s [--pairs | --solo-words | --all-words |\n"
+      "usage: %.*s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
       "          [-l]\n"
       "          [-n N]\n"
@@ -47,7 +48,7 @@ static void usage(char const* program) {
       "                       to %" PRIu64 "\n"
       "  -i, --ignore FILE    do not select pairs listed in FILE; may be\n"
       "                       repeated\n",
-      program, DEFAULT_SEGMENT_OUTPUT_LIMIT);
+      int(program.size()), program.data(), DEFAULT_SEGMENT_OUTPUT_LIMIT);
   print_reject_option_help(stdout, 23);
   fprintf(stdout,
       "  -d, --dict PATH      discard rows with any word not in PATH; with\n"

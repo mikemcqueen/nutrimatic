@@ -16,6 +16,7 @@
 #include <cstring>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -39,16 +40,16 @@ struct Args {
     char const* input_file = "-";
 };
 
-void usage(char const* program, FILE* out) {
+void usage(std::string_view program, FILE* out) {
     fprintf(out,
-            "usage: %s [-s N] [-n N] SORT... [--by-length | --by-pick]\n"
+            "usage: %.*s [-s N] [-n N] SORT... [--by-length | --by-pick]\n"
             "       [--score W1,W2... [--score-detail]]\n"
             "       [--best-pairs appear|lead]\n"
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]]\n"
             "       [--top-segments] [--pb-len N] [--ss STEPS] [--pp FILE]\n"
             "       [FILE|-]\n",
-            program);
+            int(program.size()), program.data());
     if (out != stdout) return;
 
     fputs("  rank the rows of the bag-stats dump FILE, standard input when it\n"

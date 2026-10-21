@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Letter counts take 32 bytes: the a-z counts, then zeros, as PairsCounts
@@ -59,7 +60,7 @@ struct GpuCounts {
 // prints the program name and CUDA's error on stderr and exits 1.
 class GpuRowCounter {
   public:
-    GpuRowCounter(char const* program, GpuInputs const& inputs);
+    GpuRowCounter(std::string_view program, GpuInputs const& inputs);
     ~GpuRowCounter();
 
     // The device's name.

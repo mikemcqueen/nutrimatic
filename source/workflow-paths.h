@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include <filesystem>
+#include <string_view>
 #include <system_error>
 
 // Return the configured workflow root, or NULL when it is unset or empty.
@@ -41,22 +42,23 @@ inline constexpr char WORKFLOW_RESULTS_NAME[] =
 
 // Whether `root` holds a .wf directory. Diagnoses a failure prefixed by
 // `program`.
-inline bool check_workflow_root(char const* program, char const* root) {
+inline bool check_workflow_root(std::string_view program, char const* root) {
   std::error_code error;
   if (std::filesystem::is_directory(
           std::filesystem::path(root) / WORKFLOW_DIR_PATH, error))
     return true;
-  fprintf(stderr, "%s: workflow root \"%s\" has no .wf directory\n",
-      program, root);
+  fprintf(stderr, "%.*s: workflow root \"%s\" has no .wf directory\n",
+      int(program.size()), program.data(), root);
   return false;
 }
 
 // As workflow_root_from_env(), but also requires check_workflow_root(), and
 // diagnoses either failure prefixed by `program`.
-inline char const* require_workflow_root(char const* program) {
+inline char const* require_workflow_root(std::string_view program) {
   char const* const root = workflow_root_from_env();
   if (root == NULL) {
-    fprintf(stderr, "%s: WFROOT must be set and nonempty\n", program);
+    fprintf(stderr, "%.*s: WFROOT must be set and nonempty\n",
+            int(program.size()), program.data());
     return NULL;
   }
   return check_workflow_root(program, root) ? root : NULL;

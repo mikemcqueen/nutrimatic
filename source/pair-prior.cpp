@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -28,9 +29,10 @@ struct Args {
     std::vector<char const*> pairs;
 };
 
-void usage(char const* program, FILE* out) {
-    fprintf(out, "usage: %s [--p1 INDEX] [--clues CLUEDATA]\n"
-            "       [--prior-weights SPEC | --features] PAIRS...\n", program);
+void usage(std::string_view program, FILE* out) {
+    fprintf(out, "usage: %.*s [--p1 INDEX] [--clues CLUEDATA]\n"
+            "       [--prior-weights SPEC | --features] PAIRS...\n",
+            int(program.size()), program.data());
     if (out != stdout) return;
 
     fputs("  print \"SCORE word,word\" for each distinct pair of PAIRS, in\n"

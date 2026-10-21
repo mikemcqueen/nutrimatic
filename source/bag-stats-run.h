@@ -16,6 +16,7 @@
 #include <iterator>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -89,13 +90,13 @@ enum {
 // Applies `option`, with `arg`, to `out` when it is one of
 // BAG_STATS_COMMON_LONG_OPTIONS. A bad argument is diagnosed, prefixed by
 // `program`.
-RankOption parse_common_option(char const* program, int option,
+RankOption parse_common_option(std::string_view program, int option,
                                char const* arg, BagStatsArgs* out);
 
 // Reads LETTERS PAIRS DICT from `options` once the options are parsed, then
 // checks `out`. False, diagnosed prefixed by `program` unless the operands
 // are wrong, when a check fails.
-bool check_common_args(char const* program, struct optparse* options,
+bool check_common_args(std::string_view program, struct optparse* options,
                        BagStatsArgs* out);
 
 // Prints what both tools do and the --help lines of their options through
@@ -107,7 +108,7 @@ void help_common_tail();
 
 // The no.pairs `args` drops from PAIRS and --pp: the global ones and -s's,
 // or none with --no-nopairs.
-bool load_rejected_pairs(char const* program, BagStatsArgs const& args,
+bool load_rejected_pairs(std::string_view program, BagStatsArgs const& args,
                          DfsPairSet* out);
 
 // LETTERS less -u's letters.
@@ -135,13 +136,13 @@ class WordBagLoader {
 };
 
 // The word bags of DICT's lines, as WordBagLoader collects them.
-bool load_word_bags(char const* program, char const* path,
+bool load_word_bags(std::string_view program, char const* path,
                     PairsCounts const& bag, int min_length,
                     std::vector<PairsCounts>* out,
                     std::vector<std::vector<std::string>>* spellings);
 
 // Adds the workflow dictionary's words to `out` and finishes it.
-bool load_inner_dictionary(char const* program, PairsExactCounter* out);
+bool load_inner_dictionary(std::string_view program, PairsExactCounter* out);
 
 // Writes the bags of `from` that fit `rest` to `out`.
 void filter_word_bags(std::vector<PairsCounts> const& from,
@@ -169,7 +170,7 @@ struct BagStatsInputs {
 // Loads `out` for `args`, DICT only with wb steps and PAIRS only with pb
 // steps or a last pf, with `spellings` as load_word_bags() takes it; with
 // `spellings` and a last pf, the final bags' rows too.
-bool load_bag_stats_inputs(char const* program, BagStatsArgs const& args,
+bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
                            BagStatsInputs* out,
                            std::vector<std::vector<std::string>>* spellings);
 
@@ -300,7 +301,8 @@ class Progress {
     ~Progress() {
         if (interval_.count() == 0) return;
         double const elapsed = seconds_since_start(Clock::now());
-        fprintf(stderr, "%s: pass %d/%d: done in %s%s\n", program_, pass_,
+        fprintf(stderr, "%.*s: pass %d/%d: done in %s%s\n",
+                int(program_.size()), program_.data(), pass_,
                 passes_, format_duration(elapsed).c_str(),
                 hooks_.text().c_str());
     }
@@ -319,9 +321,9 @@ class Progress {
                 std::memory_order_relaxed))
             return;
         double const elapsed = seconds_since_start(now);
-        fprintf(stderr, "%s: pass %d/%d: %zu/%zu pair bags (%.1f%%), %s, "
-                "~%s left%s\n", program_, pass_, passes_, done, units_,
-                100.0 * double(done) / double(units_),
+        fprintf(stderr, "%.*s: pass %d/%d: %zu/%zu pair bags (%.1f%%), %s, "
+                "~%s left%s\n", int(program_.size()), program_.data(), pass_,
+                passes_, done, units_, 100.0 * double(done) / double(units_),
                 format_duration(elapsed).c_str(),
                 format_duration(elapsed * double(units_ - done) /
                                 double(done)).c_str(),
@@ -333,7 +335,7 @@ class Progress {
         return std::chrono::duration<double>(now - start_).count();
     }
 
-    char const* program_;
+    std::string program_;
     Clock::duration const interval_;
     int const pass_;
     int const passes_;
@@ -346,7 +348,7 @@ class Progress {
 
 // What every pass shares.
 struct WalkBase {
-    char const* program;
+    std::string program;
     std::vector<std::vector<PairBag> const*> const& steps;
     // The PAIRS bags pb picks from and the --pp bags ppb picks from.
     std::vector<PairBag> const& pair_bags;
@@ -603,7 +605,8 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
     size_t length;
     std::vector<uint32_t> target_picks;
     if (!find_row(walk, picks, &target, &length, &target_picks)) {
-        fprintf(stderr, "%s: no row has the --score picks\n", walk.program);
+        fprintf(stderr, "%.*s: no row has the --score picks\n",
+                int(walk.program.size()), walk.program.data());
         return 1;
     }
     if (passes) count_sort_values(walk, ranker);

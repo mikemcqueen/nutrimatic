@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -37,19 +38,20 @@ bool parse_classified_sentence(char const* arg, int* sentence);
 // warned about and leaves `path` empty. Errors are diagnosed, prefixed by
 // `program`.
 bool classified_pair_file(
-    char const* program, char const* root, int sentence, char const* kind,
+    std::string_view program, char const* root, int sentence, char const* kind,
     std::string* path);
 
 // Loads the classified_pair_file() for `sentence` and `kind` into `pairs`,
 // both word orders; an absent global file loads nothing.
 bool load_classified_pairs(
-    char const* program, char const* root, int sentence, char const* kind,
+    std::string_view program, char const* root, int sentence, char const* kind,
     DfsPairSet* pairs);
 
 // load_classified_pairs() of the global NO pairs, and of `sentence`'s NO
 // pairs unless it is CLASSIFIED_NO_SENTENCE.
 bool load_no_pairs(
-    char const* program, char const* root, int sentence, DfsPairSet* pairs);
+    std::string_view program, char const* root, int sentence,
+    DfsPairSet* pairs);
 
 // Classified pair files by path, each kept after it is loaded and loaded
 // again only when its modification time or size differs from when it was
@@ -59,7 +61,8 @@ class ClassifiedPairCache {
   // The pairs load_classified_pairs() would load for `sentence` and `kind`,
   // or null on an error, which is diagnosed, prefixed by `program`.
   std::shared_ptr<DfsPairSet const> get(
-      char const* program, char const* root, int sentence, char const* kind);
+      std::string_view program, char const* root, int sentence,
+      char const* kind);
 
  private:
   struct Entry {
@@ -78,12 +81,12 @@ class ClassifiedPairCache {
 // needed. Both files must exist, and --pairs cannot be combined with it;
 // errors are diagnosed, prefixed by `program`.
 bool add_classified_sentence_pairs(
-    char const* program, int sentence, DfsCommonArgs* args,
+    std::string_view program, int sentence, DfsCommonArgs* args,
     std::vector<std::string>* reject_files);
 
 // Diagnoses a workflow `target`, sN/..., whose sentence is not `sentence`.
 // CLASSIFIED_NO_SENTENCE and an empty target always agree.
 bool check_classified_sentence_target(
-    char const* program, int sentence, std::string const& target);
+    std::string_view program, int sentence, std::string const& target);
 
 #endif

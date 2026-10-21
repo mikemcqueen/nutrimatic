@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -20,10 +21,10 @@ struct Args {
     PairsOptions options;
 };
 
-void usage(char const* program, FILE* out) {
+void usage(std::string_view program, FILE* out) {
     fprintf(out,
-            "usage: %s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] [-c] "
-            "LETTERS\n", program);
+            "usage: %.*s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] [-c] "
+            "LETTERS\n", int(program.size()), program.data());
     if (out != stdout) return;
 
     fputs("  print word,word pairs of distinct dictionary words that fit\n"

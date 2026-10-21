@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "dfs-class-list.h"
@@ -135,7 +136,7 @@ DfsOptionResult dfs_parse_common_option(
 // workflow without a target or seed, and skips its classified YES source
 // when no target is selected.
 bool finalize_dfs_common_args(
-    DfsCommonArgs* args, char const* program, char const** index_file,
+    DfsCommonArgs* args, std::string_view program, char const** index_file,
     std::vector<std::string>* workflow_reject_files,
     bool allow_targetless_workflow = false);
 
@@ -150,7 +151,7 @@ struct DfsWorkflowTargetSettings {
 // the target label's letters and u- subtracts them. Call after
 // finalize_dfs_common_args().
 bool load_dfs_workflow_target_settings(
-    DfsCommonArgs const& args, char const* program,
+    DfsCommonArgs const& args, std::string_view program,
     DfsWorkflowTargetSettings* out);
 
 inline constexpr size_t DFS_DEFAULT_SCORE_CACHE_MIB = 64;

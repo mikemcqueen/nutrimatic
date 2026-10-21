@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include <string>
+#include <string_view>
 
 namespace {
 
@@ -23,9 +23,10 @@ LogStyle log_style(LogLevel level) {
 }
 
 void program_log_v(
-    char const* program, LogLevel level, char const* format, va_list args) {
-  std::string const prefix = std::string(program) + ": ";
-  log_line_v(prefix.c_str(), level, format, args);
+    std::string_view program, LogLevel level, char const* format,
+    va_list args) {
+  fprintf(stderr, "%.*s: ", int(program.size()), program.data());
+  log_line_v("", level, format, args);
 }
 
 }  // namespace
@@ -39,21 +40,21 @@ void log_line_v(
   fprintf(stderr, "%s\n", tty ? "\033[0m" : "");
 }
 
-void warn(char const* program, char const* format, ...) {
+void warn(std::string_view program, char const* format, ...) {
   va_list args;
   va_start(args, format);
   program_log_v(program, LogLevel::WARNING, format, args);
   va_end(args);
 }
 
-void alert(char const* program, char const* format, ...) {
+void alert(std::string_view program, char const* format, ...) {
   va_list args;
   va_start(args, format);
   program_log_v(program, LogLevel::ALERT, format, args);
   va_end(args);
 }
 
-void success(char const* program, char const* format, ...) {
+void success(std::string_view program, char const* format, ...) {
   va_list args;
   va_start(args, format);
   program_log_v(program, LogLevel::SUCCESS, format, args);

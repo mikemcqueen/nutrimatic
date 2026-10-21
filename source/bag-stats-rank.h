@@ -10,6 +10,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -33,7 +34,7 @@ struct Search {
 
 // Parses --ss STEPS into `out`. False, diagnosed prefixed by `program`, when
 // it isn't one.
-bool parse_search(char const* program, char const* text, Search* out);
+bool parse_search(std::string_view program, char const* text, Search* out);
 
 // The steps of `search` in canonical order.
 std::string search_text(Search const& search);
@@ -99,12 +100,12 @@ enum class RankOption { NOT_ONE, PARSED, BAD };
 // Applies `option`, with `arg`, to `out` when it is one of
 // BAG_STATS_RANK_LONG_OPTIONS. A bad argument is diagnosed, prefixed by
 // `program`.
-RankOption parse_rank_option(char const* program, int option, char const* arg,
-                             RankArgs* out);
+RankOption parse_rank_option(std::string_view program, int option,
+                             char const* arg, RankArgs* out);
 
 // The checks of `args` both programs make, given the search sequence they
 // rank rows of. False, diagnosed prefixed by `program`, when one fails.
-bool check_rank_args(char const* program, RankArgs const& args,
+bool check_rank_args(std::string_view program, RankArgs const& args,
                      Search const& search);
 
 // Prints the --help lines of --top-segments, --score, --score-detail and
@@ -125,7 +126,7 @@ struct PairBag {
 };
 
 // The --prior FILE's scores by pair_key().
-bool load_priors(char const* program, char const* path,
+bool load_priors(std::string_view program, char const* path,
                  std::unordered_map<std::string, double>* out);
 
 // `prior` sets a row's prior and returns true, or returns false when it has
@@ -157,7 +158,7 @@ int letter_total(PairsCounts const& counts);
 
 // Appends to `out` the bags of the rows of `path` that fit `bag` and aren't
 // `rejected`, as PairBagLoader collects them, with `rows`.
-bool load_pair_bags(char const* program, char const* path,
+bool load_pair_bags(std::string_view program, char const* path,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     PairPrior const& prior, std::vector<PairBag>* out,
                     std::vector<std::vector<std::string>>* rows = nullptr);
@@ -182,7 +183,7 @@ class PairPickFilter {
 // `final_rows` as load_pair_bags() takes `rows`. `pair_bags` may be null to
 // skip it, and with `final_bags` null too PAIRS isn't read. `has_prior`:
 // whether `args` gives one.
-bool load_pick_bags(char const* program, RankArgs const& args,
+bool load_pick_bags(std::string_view program, RankArgs const& args,
                     char const* prospects_file, char const* pairs_file,
                     PairsCounts const& bag, DfsPairSet const& rejected,
                     int min_pair_length, std::vector<PairBag>* prospect_bags,
@@ -395,8 +396,8 @@ inline void add_score_rank(RankedRow const& ranked, RankedRow const& target,
 // picks, then ppb picks, each kind in increasing order; `steps` is each
 // step's list. False, diagnosed prefixed by `program`, when a pick isn't a
 // bag of its list or the picks' bags don't fit `letters` together.
-bool score_picks(char const* program, std::vector<std::string> const& score,
-                 Search const& search,
+bool score_picks(std::string_view program,
+                 std::vector<std::string> const& score, Search const& search,
                  std::vector<std::vector<PairBag> const*> const& steps,
                  PairsCounts const& letters, std::vector<size_t>* out);
 

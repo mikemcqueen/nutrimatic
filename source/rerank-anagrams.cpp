@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -38,16 +39,16 @@ struct Args {
   bool ptm = true;
 };
 
-void usage(char const* program, FILE* out) {
+void usage(std::string_view program, FILE* out) {
   fprintf(out,
-      "usage: %s (--wf | --wfroot DIR) [-t TARGET] [--seed-pairs FILE]..."
+      "usage: %.*s (--wf | --wfroot DIR) [-t TARGET] [--seed-pairs FILE]..."
       " [-m N] [-g N] [-s N]"
       " [-r FILE]... [--best-pairs FILE | --one-best-pair PAIR]"
       " [--more-best-pairs FILE]..."
       " [--solo-words WORD[,WORD...]] [--hide-solo-words]"
       " [--sb N] [--yb N] [--bb N]"
       " [--show-bonus] [--no-score] [--no-ptm] [-n N] [FILE]\n",
-      program);
+      int(program.size()), program.data());
   if (out != stdout) return;
 
   fputs(
