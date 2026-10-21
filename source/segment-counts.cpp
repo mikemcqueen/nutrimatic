@@ -1,6 +1,7 @@
 #include "segment-counts.h"
 #include "dfs-cli-args.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "segment-rows.h"
 
 #include <inttypes.h>
@@ -24,16 +25,14 @@ static bool count_candidate(
   }
   if (count_occurrence) {
     if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
-      fprintf(stderr, "%.*s: segment count overflow\n",
-              int(program.size()), program.data());
+      report(program, "segment count overflow");
       return false;
     }
     ++entry->second.count;
   }
   if (entry->second.last_seen_row != row) {
     if (entry->second.line_count == std::numeric_limits<uint64_t>::max()) {
-      fprintf(stderr, "%.*s: segment line count overflow\n",
-              int(program.size()), program.data());
+      report(program, "segment line count overflow");
       return false;
     }
     ++entry->second.line_count;
@@ -93,8 +92,7 @@ bool segment_counts_read(
     uint64_t row_number = 0;
     if (options.elimination) {
       if (data->surviving_rows == std::numeric_limits<uint64_t>::max()) {
-        fprintf(stderr, "%.*s: result line count overflow\n",
-                int(data->program.size()), data->program.data());
+        report(data->program, "result line count overflow");
         return false;
       }
       row_number = ++data->surviving_rows;
@@ -119,8 +117,7 @@ bool segment_counts_read(
           entry = data->segments.emplace(segment, stats).first;
         }
         if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
-          fprintf(stderr, "%.*s: segment count overflow\n",
-                  int(data->program.size()), data->program.data());
+          report(data->program, "segment count overflow");
           return false;
         }
         ++entry->second.count;
@@ -227,8 +224,7 @@ static bool split_counts(
       }
       if (word->second.count >
           std::numeric_limits<uint64_t>::max() - increment) {
-        fprintf(stderr, "%.*s: word count overflow\n",
-                int(program.size()), program.data());
+        report(program, "word count overflow");
         return false;
       }
       word->second.count += increment;

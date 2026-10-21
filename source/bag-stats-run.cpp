@@ -64,8 +64,7 @@ bool check_common_args(std::string_view program, struct optparse* options,
     out->letters = letters;
     if (!parse_search(program, out->search_text, &out->search)) return false;
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
-        fprintf(stderr, "%.*s: -s doesn't go with --no-nopairs\n",
-                int(program.size()), program.data());
+        report(program, "-s doesn't go with --no-nopairs");
         return false;
     }
     RankArgs const& rank = out->rank;
@@ -89,31 +88,28 @@ bool check_common_args(std::string_view program, struct optparse* options,
         };
         for (auto const& [given, option] : rank_options) {
             if (!given) continue;
-            fprintf(stderr, "%.*s: --ss without a ppb or pb step can't take "
-                    "%s\n", int(program.size()), program.data(), option);
+            report(program, "--ss without a ppb or pb step can't take %s",
+                   option);
             return false;
         }
     }
     bool const ranked = rank.top > 0 || !rank.score.empty();
     if (rank.top > 0 && rank.sorts.empty()) {
-        fprintf(stderr, "%.*s: -n needs a SORT option, such as --tp\n",
-                int(program.size()), program.data());
+        report(program, "-n needs a SORT option, such as --tp");
         return false;
     }
     if (!rank.sorts.empty() && !ranked) {
-        fprintf(stderr, "%.*s: SORT options need -n or --score\n",
-                int(program.size()), program.data());
+        report(program, "SORT options need -n or --score");
         return false;
     }
     if ((rank.by_length || rank.by_pick) && rank.sorts.empty()) {
-        fprintf(stderr, "%.*s: --by-length and --by-pick need a SORT option, "
-                "with -n or --score\n", int(program.size()), program.data());
+        report(program, "--by-length and --by-pick need a SORT option, "
+               "with -n or --score");
         return false;
     }
     if (!check_rank_args(program, rank, out->search)) return false;
     if ((out->search.prospects > 0) != (out->prospects_file != NULL)) {
-        fprintf(stderr, "%.*s: --pp goes with a ppb step in --ss\n",
-                int(program.size()), program.data());
+        report(program, "--pp goes with a ppb step in --ss");
         return false;
     }
     int const stdin_inputs = (strcmp(out->pairs_file, "-") == 0) +
@@ -121,8 +117,8 @@ bool check_common_args(std::string_view program, struct optparse* options,
         (out->prospects_file != NULL && strcmp(out->prospects_file, "-") == 0) +
         (rank.prior_file != NULL && strcmp(rank.prior_file, "-") == 0);
     if (stdin_inputs > 1) {
-        fprintf(stderr, "%.*s: only one of PAIRS, DICT, --pp and --prior can "
-                "be -\n", int(program.size()), program.data());
+        report(program, "only one of PAIRS, DICT, --pp and --prior can "
+               "be -");
         return false;
     }
     return true;

@@ -3,6 +3,7 @@
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "optparse.h"
 #include "pair-evidence.h"
 #include "row-input.h"
@@ -100,12 +101,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         out->pairs.push_back(arg);
     if (out->pairs.empty()) return false;
     if (out->p1 == NULL && out->clues == NULL) {
-        fprintf(stderr, "%s: needs --p1, --clues or both\n", PROGRAM);
+        report(PROGRAM, "needs --p1, --clues or both");
         return false;
     }
     if (out->features && out->prior_weights != NULL) {
-        fprintf(stderr, "%s: --features and --prior-weights don't go "
-                "together\n", PROGRAM);
+        report(PROGRAM, "--features and --prior-weights don't go together");
         return false;
     }
     return true;
@@ -131,7 +131,7 @@ int main(int argc, char* argv[]) {
     std::string error;
     if (!open_prior(args.p1, args.clues, args.prior_weights, args.features,
                     &weights, &source, &error)) {
-        fprintf(stderr, "%s: %s\n", PROGRAM, error.c_str());
+        report(PROGRAM, "%s", error.c_str());
         return 1;
     }
     std::unordered_set<std::string> seen;

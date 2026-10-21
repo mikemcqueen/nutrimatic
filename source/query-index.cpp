@@ -222,11 +222,13 @@ static bool validate_literal_entry(std::string const& entry) {
   return true;
 }
 
-static bool index_from_env(std::string_view program, char const* missing_hint,
+static bool index_from_env(std::string_view program,
+                           std::string_view missing_hint,
                            char const** index_file) {
   char const* idx = getenv("IDX");
   if (idx == NULL || *idx == '\0') {
-    fprintf(stderr, "error: missing index; use %s or set IDX\n", missing_hint);
+    fprintf(stderr, "error: missing index; use %.*s or set IDX\n",
+            int(missing_hint.size()), missing_hint.data());
     usage(program, stderr);
     return false;
   }

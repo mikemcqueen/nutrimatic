@@ -16,9 +16,12 @@
 
 #include "dfs-cli-args.h"
 #include "index.h"
+#include "log.h"
 #include "optparse.h"
 #include "segment-output.h"
 #include "segment-rows.h"
+
+constexpr char PROGRAM[] = "segment-stats";
 
 struct Args {
   char const* input_path = NULL;
@@ -72,9 +75,10 @@ static void usage(std::string_view program) {
       int(program.size()), program.data());
 }
 
-static bool increment(uint64_t* count, char const* description) {
+static bool increment(uint64_t* count, std::string_view description) {
   if (*count == std::numeric_limits<uint64_t>::max()) {
-    fprintf(stderr, "segment-stats: %s overflow\n", description);
+    report(PROGRAM, "%.*s overflow", int(description.size()),
+           description.data());
     return false;
   }
   ++*count;
@@ -151,7 +155,7 @@ static bool add_segment(
 static bool read_stats(
     std::istream* input, char const* name, DfsPairSet const* allowed,
     IndexReader const* index, Stats* stats) {
-  SegmentRowReader reader = {input, name, "segment-stats"};
+  SegmentRowReader reader = {input, name, PROGRAM};
   SegmentRow result_row;
   while (segment_rows_next(&reader, &result_row)) {
     if (!increment(&stats->total_rows, "row count")) return false;
@@ -341,14 +345,14 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
     switch (option) {
       case 'a':
         if (options.optarg[0] == '\0') {
-          fputs("segment-stats: -a/--allow-pairs requires a file\n", stderr);
+          report(PROGRAM, "-a/--allow-pairs requires a file");
           return false;
         }
         out->allow_paths.push_back(options.optarg);
         break;
       case 'i':
         if (options.optarg[0] == '\0') {
-          fputs("segment-stats: -i/--idx requires a file\n", stderr);
+          report(PROGRAM, "-i/--idx requires a file");
           return false;
         }
         out->index_path = options.optarg;
@@ -358,14 +362,14 @@ static bool parse_args(char* argv[], Args* out, bool* requested_help) {
         *requested_help = true;
         return true;
       default:
-        fprintf(stderr, "segment-stats: %s\n", options.errmsg);
+        report(PROGRAM, "%s", options.errmsg);
         return false;
     }
   }
 
   out->input_path = optparse_arg(&options);
   if (out->input_path != NULL && optparse_arg(&options) != NULL) {
-    fputs("segment-stats: at most one FILE may be given\n", stderr);
+    report(PROGRAM, "at most one FILE may be given");
     return false;
   }
   if (out->index_path == NULL) {
@@ -402,8 +406,8 @@ int main(int argc, char* argv[]) {
   if (args.index_path != NULL) {
     index_file = fopen(args.index_path, "rb");
     if (index_file == NULL) {
-      fprintf(stderr, "segment-stats: can't open \"%s\": %s\n",
-          args.index_path, strerror(errno));
+      report(PROGRAM, "can't open \"%s\": %s", args.index_path,
+             strerror(errno));
       return 1;
     }
   }
@@ -419,8 +423,8 @@ int main(int argc, char* argv[]) {
       errno = 0;
       std::ifstream input(args.input_path);
       if (!input.is_open()) {
-        fprintf(stderr, "segment-stats: can't open \"%s\": %s\n",
-            args.input_path, strerror(errno));
+        report(PROGRAM, "can't open \"%s\": %s", args.input_path,
+               strerror(errno));
         ok = false;
       } else {
         ok = read_stats(
@@ -429,8 +433,7 @@ int main(int argc, char* argv[]) {
     }
   }
   if (index_file != NULL && fclose(index_file) != 0 && ok) {
-    fprintf(stderr, "segment-stats: can't close index \"%s\"\n",
-        args.index_path);
+    report(PROGRAM, "can't close index \"%s\"", args.index_path);
     ok = false;
   }
   if (!ok) return 1;

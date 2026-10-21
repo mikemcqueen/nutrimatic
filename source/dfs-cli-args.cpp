@@ -2,6 +2,7 @@
 
 #include "dfs-diagnostic.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "workflow-paths.h"
 
 #include <assert.h>
@@ -59,8 +60,7 @@ bool parse_workflow_target(
     size_t const slash = input.find('/', start);
     size_t const end = slash == std::string::npos ? input.size() : slash;
     if (end == start || parts->size() == 4) {
-      fprintf(stderr, "%.*s: invalid --target \"%s\"\n",
-              int(program.size()), program.data(), input.c_str());
+      report(program, "invalid --target \"%s\"", input.c_str());
       return false;
     }
     parts->push_back(input.substr(start, end - start));
@@ -82,10 +82,8 @@ bool parse_workflow_target(
   if (parts->size() >= 4)
     valid = valid && is_counted_component((*parts)[3], 'g');
   if (!valid) {
-    fprintf(stderr,
-        "%.*s: invalid --target \"%s\"; expected a prefix of "
-        "sN/[ou]-letters/mN/gN\n",
-        int(program.size()), program.data(), input.c_str());
+    report(program, "invalid --target \"%s\"; expected a prefix of "
+           "sN/[ou]-letters/mN/gN", input.c_str());
     return false;
   }
   return true;
@@ -126,8 +124,8 @@ bool resolve_sentence_seed(
     std::string_view program, std::string* out) {
   std::error_code error;
   if (!fs::is_directory(sentence_dir, error)) {
-    fprintf(stderr, "%.*s: workflow sentence \"%s\" is not a directory\n",
-            int(program.size()), program.data(), sentence_dir.c_str());
+    report(program, "workflow sentence \"%s\" is not a directory",
+           sentence_dir.c_str());
     return false;
   }
   std::vector<fs::path> matches;
@@ -140,18 +138,16 @@ bool resolve_sentence_seed(
       matches.push_back(it->path());
   }
   if (error) {
-    fprintf(stderr, "%.*s: can't inspect workflow sentence \"%s\": %s\n",
-            int(program.size()), program.data(), sentence_dir.c_str(),
-            error.message().c_str());
+    report(program, "can't inspect workflow sentence \"%s\": %s",
+           sentence_dir.c_str(), error.message().c_str());
     return false;
   }
   std::sort(matches.begin(), matches.end());
   if (matches.size() != 1) {
     std::string const pattern = universe.empty()
         ? "seed.m<N>[.*].pairs" : "seed." + universe + "[.*].pairs";
-    fprintf(stderr, "%.*s: expected exactly one %s in \"%s\", found %zu\n",
-            int(program.size()), program.data(), pattern.c_str(),
-            sentence_dir.c_str(), matches.size());
+    report(program, "expected exactly one %s in \"%s\", found %zu",
+           pattern.c_str(), sentence_dir.c_str(), matches.size());
     return false;
   }
   *out = matches[0].string();
@@ -159,26 +155,26 @@ bool resolve_sentence_seed(
 }
 
 bool require_regular_file(
-    fs::path const& path, std::string_view program, char const* what) {
+    fs::path const& path, std::string_view program, std::string_view what) {
   std::error_code error;
   if (fs::is_regular_file(path, error)) return true;
-  fprintf(stderr, "%.*s: %s \"%s\" is not a regular file\n",
-          int(program.size()), program.data(), what, path.c_str());
+  report(program, "%.*s \"%s\" is not a regular file",
+         int(what.size()), what.data(), path.c_str());
   return false;
 }
 
 // Appends an optional workflow pair file. A path that cannot be inspected,
 // or that is present as something other than a regular file, is an error.
 bool push_optional_pair_file(
-    fs::path const& path, std::string_view program, char const* what,
+    fs::path const& path, std::string_view program, std::string_view what,
     std::vector<std::string>* paths) {
   std::error_code error;
   fs::file_status const status = fs::symlink_status(path, error);
   if (status.type() == fs::file_type::not_found) return true;
   if (error) {
-    fprintf(stderr, "%.*s: can't inspect %s \"%s\": %s\n",
-            int(program.size()), program.data(), what, path.c_str(),
-            error.message().c_str());
+    report(program, "can't inspect %.*s \"%s\": %s",
+           int(what.size()), what.data(), path.c_str(),
+           error.message().c_str());
     return false;
   }
   if (!require_regular_file(path, program, what)) return false;
@@ -192,16 +188,14 @@ bool canonical_target_below(
   std::error_code error;
   fs::path const canonical_best = fs::canonical(best, error);
   if (error) {
-    fprintf(stderr, "%.*s: can't resolve workflow best directory \"%s\": %s\n",
-            int(program.size()), program.data(), best.c_str(),
-            error.message().c_str());
+    report(program, "can't resolve workflow best directory \"%s\": %s",
+           best.c_str(), error.message().c_str());
     return false;
   }
   fs::path const canonical_selected = fs::canonical(selected, error);
   if (error) {
-    fprintf(stderr, "%.*s: can't resolve workflow target \"%s\": %s\n",
-            int(program.size()), program.data(), selected.c_str(),
-            error.message().c_str());
+    report(program, "can't resolve workflow target \"%s\": %s",
+           selected.c_str(), error.message().c_str());
     return false;
   }
   fs::path::const_iterator base = canonical_best.begin();
@@ -211,10 +205,8 @@ bool canonical_target_below(
     if (*base != *target) break;
   if (base == canonical_best.end() && target != canonical_selected.end())
     return true;
-  fprintf(stderr,
-      "%.*s: workflow target \"%s\" resolves outside \"%s\"\n",
-      int(program.size()), program.data(), selected.c_str(),
-      canonical_best.c_str());
+  report(program, "workflow target \"%s\" resolves outside \"%s\"",
+         selected.c_str(), canonical_best.c_str());
   return false;
 }
 
@@ -243,32 +235,35 @@ bool check_bag_length(std::string const& bag) {
   return false;
 }
 
-bool parse_count(char const* in, char const* what, int* out) {
+bool parse_count(char const* in, std::string_view what, int* out) {
   char* end;
   long const value = strtol(in, &end, 10);
   if (*in == '\0' || *end != '\0' || value < 0 || value > INT_MAX) {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   *out = int(value);
   return true;
 }
 
-bool parse_count64(char const* in, char const* what, int64_t* out) {
+bool parse_count64(char const* in, std::string_view what, int64_t* out) {
   errno = 0;
   char* end;
   long long const value = strtoll(in, &end, 10);
   if (*in == '\0' || *end != '\0' || errno == ERANGE || value < 0) {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   *out = int64_t(value);
   return true;
 }
 
-bool parse_mib(char const* in, char const* what, size_t* out) {
+bool parse_mib(char const* in, std::string_view what, size_t* out) {
   if (*in == '\0' || *in == '-') {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   errno = 0;
@@ -276,28 +271,32 @@ bool parse_mib(char const* in, char const* what, size_t* out) {
   unsigned long long const value = strtoull(in, &end, 10);
   if (*end != '\0' || errno == ERANGE ||
       value > static_cast<unsigned long long>(SIZE_MAX / DFS_MIB)) {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   *out = size_t(value) * DFS_MIB;
   return true;
 }
 
-bool parse_double(char const* in, char const* what, double* out) {
+bool parse_double(char const* in, std::string_view what, double* out) {
   char* end;
   double const value = strtod(in, &end);
   if (*in == '\0' || *end != '\0' || !isfinite(value)) {
-    fprintf(stderr, "error: %s needs a number, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a number, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   *out = value;
   return true;
 }
 
-static bool parse_tier_bonus(char const* in, char const* what, double* out) {
+static bool parse_tier_bonus(char const* in, std::string_view what,
+                             double* out) {
   if (!parse_double(in, what, out)) return false;
   if (*out < 0.0) {
-    fprintf(stderr, "error: %s must be at least 0\n", what);
+    fprintf(stderr, "error: %.*s must be at least 0\n",
+            int(what.size()), what.data());
     return false;
   }
   return true;
@@ -424,13 +423,13 @@ bool load_dictionary(char const* path, DfsDictionary* dictionary) {
 }
 
 bool parse_pair_row(
-    std::string const& line, char const* what, char const* source,
+    std::string const& line, std::string_view what, char const* source,
     size_t line_number, bool allow_single_words, DfsPairRow* out) {
   size_t const comma = line.find(',');
   if (line.find('-') != std::string::npos) {
     fprintf(stderr,
-        "error: %s \"%s\" line %zu: '-' would silently skip this entry\n",
-        what, source, line_number);
+        "error: %.*s \"%s\" line %zu: '-' would silently skip this entry\n",
+        int(what.size()), what.data(), source, line_number);
     return false;
   }
 
@@ -448,8 +447,8 @@ bool parse_pair_row(
   if ((!one_field && !two_fields) || out->left.empty() ||
       (two_fields && out->right.empty())) {
     fprintf(stderr,
-        "error: %s \"%s\" line %zu: %s\n",
-        what, source, line_number,
+        "error: %.*s \"%s\" line %zu: %s\n",
+        int(what.size()), what.data(), source, line_number,
         allow_single_words
             ? "expected one word or two comma-separated words"
             : "expected two comma-separated words");
@@ -462,7 +461,7 @@ bool parse_pair_row(
 namespace {
 
 bool load_pair_rows_stream(
-    std::istream& input, char const* what, char const* source,
+    std::istream& input, std::string_view what, char const* source,
     bool reject_hyphens, bool allow_single_words, bool ignore_single_words,
     size_t* ignored_single_word_count,
     std::vector<DfsPairRow>* loaded) {
@@ -484,7 +483,8 @@ bool load_pair_rows_stream(
   }
 
   if (!input.eof()) {
-    fprintf(stderr, "error: can't read %s \"%s\"\n", what, source);
+    fprintf(stderr, "error: can't read %.*s \"%s\"\n",
+            int(what.size()), what.data(), source);
     return false;
   }
 
@@ -492,13 +492,14 @@ bool load_pair_rows_stream(
 }
 
 bool load_pair_rows(
-    char const* path, char const* what, bool reject_hyphens,
+    char const* path, std::string_view what, bool reject_hyphens,
     bool allow_single_words, bool ignore_single_words,
     size_t* ignored_single_word_count,
     std::vector<DfsPairRow>* loaded) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
-    fprintf(stderr, "error: can't open %s \"%s\"\n", what, path);
+    fprintf(stderr, "error: can't open %.*s \"%s\"\n",
+            int(what.size()), what.data(), path);
     return false;
   }
   return load_pair_rows_stream(
@@ -520,7 +521,7 @@ void insert_pair_keys(
 }
 
 bool build_extraction_pairs(
-    std::vector<DfsPairRow> const& loaded, char const* what,
+    std::vector<DfsPairRow> const& loaded, std::string_view what,
     char const* source, int min_word_len, DfsPairSet* pairs,
     DfsPairSet* exception_prefixes, bool quiet,
     std::vector<DfsPairRow>* rows) {
@@ -530,10 +531,10 @@ bool build_extraction_pairs(
         loaded[i].left.size() + loaded[i].right.size();
     if (normalized_length < minimum) {
       fprintf(stderr,
-          "error: %s \"%s\" line %zu: normalized entry has %zu non-space"
+          "error: %.*s \"%s\" line %zu: normalized entry has %zu non-space"
           " characters, fewer than -m %d\n",
-          what, source, loaded[i].line_number, normalized_length,
-          min_word_len);
+          int(what.size()), what.data(), source, loaded[i].line_number,
+          normalized_length, min_word_len);
       return false;
     }
   }
@@ -558,13 +559,13 @@ bool build_extraction_pairs(
   }
   if (rows != NULL) rows->insert(rows->end(), loaded.begin(), loaded.end());
   if (!quiet)
-    dfs_diagnostic("%s: %zu pairs, %zu keys\n",
-                   what, loaded.size(), pairs->size());
+    dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
+                   int(what.size()), what.data(), loaded.size(), pairs->size());
   return true;
 }
 
 bool load_pair_value(
-    char const* value, char const* what, DfsPairSet* pairs, bool quiet,
+    char const* value, std::string_view what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words) {
   std::istringstream input{std::string(value)};
   std::vector<DfsPairRow> loaded;
@@ -575,13 +576,13 @@ bool load_pair_value(
 
   insert_pair_keys(loaded, pairs);
   if (!quiet)
-    dfs_diagnostic("%s: %zu pairs, %zu keys\n",
-                   what, loaded.size(), pairs->size());
+    dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
+                   int(what.size()), what.data(), loaded.size(), pairs->size());
   return true;
 }
 
 bool load_extraction_pair_value(
-    char const* value, char const* what, int min_word_len,
+    char const* value, std::string_view what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
     bool reject_hyphens, std::vector<DfsPairRow>* rows) {
   std::istringstream input{std::string(value)};
@@ -598,7 +599,7 @@ bool load_extraction_pair_value(
 }  // namespace
 
 bool load_pair_file(
-    char const* path, char const* what, DfsPairSet* pairs, bool quiet,
+    char const* path, std::string_view what, DfsPairSet* pairs, bool quiet,
     bool reject_hyphens, bool allow_single_words,
     char const* diagnostic_source, std::vector<DfsPairRow>* rows) {
   std::vector<DfsPairRow> loaded;
@@ -611,17 +612,19 @@ bool load_pair_file(
   if (rows != NULL) *rows = loaded;
   if (!quiet) {
     if (diagnostic_source == NULL)
-      dfs_diagnostic("%s: %zu pairs, %zu keys\n",
-                     what, loaded.size(), pairs->size());
+      dfs_diagnostic("%.*s: %zu pairs, %zu keys\n",
+                     int(what.size()), what.data(), loaded.size(),
+                     pairs->size());
     else
-      dfs_diagnostic("%s: %zu pairs, %zu keys from %s\n",
-                     what, loaded.size(), pairs->size(), diagnostic_source);
+      dfs_diagnostic("%.*s: %zu pairs, %zu keys from %s\n",
+                     int(what.size()), what.data(), loaded.size(),
+                     pairs->size(), diagnostic_source);
   }
   return true;
 }
 
 bool load_pair_file_ignoring_single_words(
-    char const* path, char const* what, DfsPairSet* pairs,
+    char const* path, std::string_view what, DfsPairSet* pairs,
     size_t* ignored_single_words) {
   std::vector<DfsPairRow> loaded;
   if (!load_pair_rows(
@@ -639,7 +642,7 @@ bool load_pair_file_ignoring_single_words(
 }
 
 bool load_extraction_pair_file(
-    char const* path, char const* what, int min_word_len,
+    char const* path, std::string_view what, int min_word_len,
     DfsPairSet* pairs, DfsPairSet* exception_prefixes, bool quiet,
     bool reject_hyphens, std::vector<DfsPairRow>* rows) {
   std::vector<DfsPairRow> loaded;
@@ -659,7 +662,7 @@ bool load_weighted_pair_files(
     std::vector<DfsPairRow>* seed_rows) {
   struct Source {
     std::vector<std::string> const* paths;
-    char const* description;
+    std::string_view description;
     DfsPairBonusKind kind;
     std::vector<DfsPairRow>* rows;
   };
@@ -986,8 +989,7 @@ static bool finalize_dfs_workflow_args(
     args->workflow_root = root;
   } else if (args->workflow_root.empty()) {
     if (!args->target.empty()) {
-      fprintf(stderr, "%.*s: --target requires --wf or --wfroot\n",
-              int(program.size()), program.data());
+      report(program, "--target requires --wf or --wfroot");
       return false;
     }
     return true;
@@ -1006,8 +1008,8 @@ static bool finalize_dfs_workflow_args(
     args->target = join_path(target_parts);
     fs::path const selected = root / WORKFLOW_BEST_PATH / args->target;
     if (!fs::is_directory(selected, error)) {
-      fprintf(stderr, "%.*s: workflow target \"%s\" is not a directory\n",
-              int(program.size()), program.data(), selected.c_str());
+      report(program, "workflow target \"%s\" is not a directory",
+             selected.c_str());
       return false;
     }
     if (!canonical_target_below(
@@ -1035,10 +1037,9 @@ static bool finalize_dfs_workflow_args(
   if (args->seed_pair_files.empty()) {
     if (target_parts.empty()) {
       if (!allow_targetless_workflow) {
-        fprintf(stderr,
-            "%.*s: workflow mode requires --target beginning with sN or an "
-            "explicit --seed-pairs\n",
-            int(program.size()), program.data());
+        report(program,
+               "workflow mode requires --target beginning with sN or an "
+               "explicit --seed-pairs");
         return false;
       }
     } else {
@@ -1067,9 +1068,7 @@ bool load_dfs_workflow_target_settings(
     DfsCommonArgs const& args, std::string_view program,
     DfsWorkflowTargetSettings* out) {
   if (args.workflow_root.empty() || !args.target_complete) {
-    fprintf(stderr,
-        "%.*s: requires a fully scoped sN/[ou]-letters/mN/gN target\n",
-        int(program.size()), program.data());
+    report(program, "requires a fully scoped sN/[ou]-letters/mN/gN target");
     return false;
   }
 

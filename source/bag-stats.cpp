@@ -5,6 +5,7 @@
 #include "bag-stats-run.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "optparse.h"
 
 #include <cstdio>
@@ -116,20 +117,18 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
     Search const& search = out->common.search;
     if (search.pair_filter && search.words + search.pairs > 0 &&
         !out->exact) {
-        fprintf(stderr, "%s: --ss %s needs --exact\n", PROGRAM,
-                search_text(search).c_str());
+        report(PROGRAM, "--ss %s needs --exact", search_text(search).c_str());
         return false;
     }
     if (out->all && out->completions > 0) {
-        fprintf(stderr, "%s: --all doesn't go with --completions\n",
-                PROGRAM);
+        report(PROGRAM, "--all doesn't go with --completions");
         return false;
     }
     if ((out->completions > 0 || out->all) &&
         out->common.rank.score.empty() &&
         search.prospects + search.pairs > 0) {
-        fprintf(stderr, "%s: --completions and --all go with --score or "
-                "without ppb and pb steps\n", PROGRAM);
+        report(PROGRAM, "--completions and --all go with --score or "
+               "without ppb and pb steps");
         return false;
     }
     return true;

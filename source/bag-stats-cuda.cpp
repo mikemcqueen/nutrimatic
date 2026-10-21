@@ -6,6 +6,7 @@
 #include "bag-stats-impl.h"
 #include "bag-stats-rank.h"
 #include "bag-stats-run.h"
+#include "log.h"
 #include "optparse.h"
 #include "pairs-impl.h"
 
@@ -71,18 +72,16 @@ bool parse_args(char* argv[], BagStatsArgs* out, bool* help) {
 
     if (!check_common_args(PROGRAM, &options, out)) return false;
     if (out->search.pair_filter) {
-        fprintf(stderr, "%s: a last pf is bag-stats only\n", PROGRAM);
+        report(PROGRAM, "a last pf is bag-stats only");
         return false;
     }
     if (out->search.prospects + out->search.pairs == 0 ||
         out->search.words == 0) {
-        fprintf(stderr, "%s: --ss needs a ppb or pb step and a wb step\n",
-                PROGRAM);
+        report(PROGRAM, "--ss needs a ppb or pb step and a wb step");
         return false;
     }
     if (out->search.words > GPU_MAX_WORDS) {
-        fprintf(stderr, "%s: --ss takes at most %d wb steps\n", PROGRAM,
-                GPU_MAX_WORDS);
+        report(PROGRAM, "--ss takes at most %d wb steps", GPU_MAX_WORDS);
         return false;
     }
     return true;
@@ -311,16 +310,15 @@ int main(int argc, char* argv[]) {
 
     BagStatsInputs inputs(pairs_letter_counts(letters.c_str()));
     if (letter_total(inputs.bag) > GPU_MAX_LETTERS) {
-        fprintf(stderr, "%s: LETTERS has more than %d letters\n", PROGRAM,
-                GPU_MAX_LETTERS);
+        report(PROGRAM, "LETTERS has more than %d letters", GPU_MAX_LETTERS);
         return 1;
     }
     if (!load_bag_stats_inputs(PROGRAM, args, &inputs, nullptr)) return 1;
     GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args));
     if (args.progress != 0)
-        fprintf(stderr, "%s: %s, %d-bit bag keys, %.1f MB of GPU memory\n",
-                PROGRAM, counter.device().c_str(), counter.key_bits(),
-                double(counter.bytes()) / (1024 * 1024));
+        report(PROGRAM, "%s, %d-bit bag keys, %.1f MB of GPU memory",
+               counter.device().c_str(), counter.key_bits(),
+               double(counter.bytes()) / (1024 * 1024));
 
     size_t const threads = bag_stats_threads(args);
     BagStatsRankers rankers(args, inputs);

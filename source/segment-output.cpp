@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <string_view>
 
+#include "log.h"
 #include "option-value.h"
 
 bool parse_limit(char const* text, uint64_t* limit) {
@@ -25,9 +26,7 @@ bool select_segment_output(
     std::string_view program, SegmentOutputOptions* out) {
   if (out->mode_explicit &&
       (out->selection != selection || out->projection != projection)) {
-    fprintf(stderr,
-        "%.*s: segment output options are mutually exclusive\n",
-        int(program.size()), program.data());
+    report(program, "segment output options are mutually exclusive");
     return false;
   }
   out->selection = selection;
@@ -73,8 +72,7 @@ SegmentOutputOptionResult parse_segment_output_option(
     return SEGMENT_OUTPUT_OPTION_OTHER;
 
   if (value == NULL || !parse_limit(value, &out->limit)) {
-    fprintf(stderr, "%.*s: -n requires a non-negative integer\n",
-            int(program.size()), program.data());
+    report(program, "-n requires a non-negative integer");
     return SEGMENT_OUTPUT_OPTION_ERROR;
   }
   return SEGMENT_OUTPUT_OPTION_HANDLED;
@@ -84,8 +82,7 @@ bool check_segment_output_options(
     SegmentOutputOptions const& options, std::string_view program) {
   if (options.weight == SEGMENT_WEIGHT_UNIQUE &&
       !is_pair_word_output(options)) {
-    fprintf(stderr, "%.*s: --unique requires --pair-words\n",
-            int(program.size()), program.data());
+    report(program, "--unique requires --pair-words");
     return false;
   }
   return true;

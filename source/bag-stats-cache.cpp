@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <string_view>
 
+#include "log.h"
+
 RemainderIndex::RemainderIndex(PairsCounts const& bag, size_t bound) {
     for (size_t i = 0; i < 26; ++i) {
         if (bag.values[i] == 0) continue;
@@ -49,10 +51,9 @@ RestTable::RestTable(std::string_view program, PairsCounts const& bag,
 
 void report_rest_table(std::string_view program, RestTable const& table) {
     if (!table.enabled()) return;
-    fprintf(stderr, "%.*s: cache holds %zu entries (%.1f MB) of %zu "
-            "remainders\n", int(program.size()), program.data(),
-            table.capacity(),
-            double(table.capacity() * REST_CACHE_ENTRY_BYTES) /
+    report(program, "cache holds %zu entries (%.1f MB) of %zu remainders",
+           table.capacity(),
+           double(table.capacity() * REST_CACHE_ENTRY_BYTES) /
                 (1024 * 1024),
-            table.remainders());
+           table.remainders());
 }

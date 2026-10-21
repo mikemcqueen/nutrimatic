@@ -122,24 +122,26 @@ class AnagramFilter: public SearchFilter {
 };
 
 // Parses a non-negative decimal count, e.g. the argument to -m or -p.
-static bool parse_count(char const* in, char const* what, int* out) {
+static bool parse_count(char const* in, std::string_view what, int* out) {
   char* end;
 
   long value = strtol(in, &end, 10);
   if (*in == '\0' || *end != '\0' || value < 0 || value > INT_MAX) {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   *out = (int) value;
   return true;
 }
 
-static bool parse_count64(char const* in, char const* what, int64_t* out) {
+static bool parse_count64(char const* in, std::string_view what, int64_t* out) {
   errno = 0;
   char* end;
   long long const value = strtoll(in, &end, 10);
   if (*in == '\0' || *end != '\0' || errno == ERANGE || value < 0) {
-    fprintf(stderr, "error: %s needs a count, not \"%s\"\n", what, in);
+    fprintf(stderr, "error: %.*s needs a count, not \"%s\"\n",
+            int(what.size()), what.data(), in);
     return false;
   }
   *out = int64_t(value);

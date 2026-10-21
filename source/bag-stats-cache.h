@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "bag-stats-impl.h"
+#include "log.h"
 #include "mix-bits.h"
 #include "pairs-impl.h"
 
@@ -111,9 +112,8 @@ class RestTable {
             size_t const row = next_.fetch_add(1, std::memory_order_relaxed);
             if (row >= capacity_) return;
             if (row + 1 == capacity_ && report_)
-                fprintf(stderr, "%.*s: cache full at %zu entries; later "
-                        "remainders go uncached\n",
-                        int(program_.size()), program_.data(), capacity_);
+                report(program_, "cache full at %zu entries; later "
+                       "remainders go uncached", capacity_);
             rows_[row] = counts;
             std::atomic_ref<uint32_t>(rows_index_[i])
                 .store(uint32_t(row + 1), std::memory_order_release);

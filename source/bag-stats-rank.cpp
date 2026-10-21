@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "pair-evidence.h"
 #include "row-input.h"
 
@@ -21,8 +22,7 @@ bool parse_search(std::string_view program, char const* text, Search* out) {
     Search search;
     search.pair_filter = steps.back() == "pf";
     if (steps.back() != "p" && !search.pair_filter) {
-        fprintf(stderr, "%.*s: --ss has to end with p or pf\n",
-                int(program.size()), program.data());
+        report(program, "--ss has to end with p or pf");
         return false;
     }
     steps.pop_back();
@@ -32,8 +32,8 @@ bool parse_search(std::string_view program, char const* text, Search* out) {
         else if (step == "pb") ++search.pairs;
         else if (step == "wb") ++search.words;
         else {
-            fprintf(stderr, "%.*s: --ss step \"%s\" isn't ppb, pb or wb\n",
-                    int(program.size()), program.data(), step.c_str());
+            report(program, "--ss step \"%s\" isn't ppb, pb or wb",
+                   step.c_str());
             return false;
         }
     }
@@ -62,8 +62,7 @@ RankOption parse_rank_option(std::string_view program, int option,
       case 'n':
         if (!parse_count(arg, "-n", &out->top)) return RankOption::BAD;
         if (out->top == 0) {
-            fprintf(stderr, "%.*s: -n needs N of at least 1\n",
-                    int(program.size()), program.data());
+            report(program, "-n needs N of at least 1");
             return RankOption::BAD;
         }
         break;
@@ -91,8 +90,7 @@ RankOption parse_rank_option(std::string_view program, int option,
         } else if (strcmp(arg, "lead") == 0) {
             out->best_pairs = BestPairs::LEAD;
         } else {
-            fprintf(stderr, "%.*s: --best-pairs is appear or lead\n",
-                    int(program.size()), program.data());
+            report(program, "--best-pairs is appear or lead");
             return RankOption::BAD;
         }
         break;
@@ -114,53 +112,44 @@ RankOption parse_rank_option(std::string_view program, int option,
 bool check_rank_args(std::string_view program, RankArgs const& args,
                      Search const& search) {
     if (args.top > 0 && !args.score.empty()) {
-        fprintf(stderr, "%.*s: -n and --score don't go together\n",
-                int(program.size()), program.data());
+        report(program, "-n and --score don't go together");
         return false;
     }
     if (args.by_pick &&
         (args.by_length || search.prospects + search.pairs < 2)) {
-        fprintf(stderr, "%.*s: --by-pick goes without --by-length and with two "
-                "or more ppb and pb steps\n",
-                int(program.size()), program.data());
+        report(program, "--by-pick goes without --by-length and with two "
+               "or more ppb and pb steps");
         return false;
     }
     bool const evidence = args.p1 != NULL || args.clues != NULL;
     if ((args.prior_file != NULL || evidence) && !args.by_pick) {
-        fprintf(stderr, "%.*s: --prior, --p1 and --clues go with --by-pick\n",
-                int(program.size()), program.data());
+        report(program, "--prior, --p1 and --clues go with --by-pick");
         return false;
     }
     if (args.prior_file != NULL && evidence) {
-        fprintf(stderr, "%.*s: --prior doesn't go with --p1 or --clues\n",
-                int(program.size()), program.data());
+        report(program, "--prior doesn't go with --p1 or --clues");
         return false;
     }
     if (args.prior_weights != NULL && !evidence) {
-        fprintf(stderr, "%.*s: --prior-weights goes with --p1 or --clues\n",
-                int(program.size()), program.data());
+        report(program, "--prior-weights goes with --p1 or --clues");
         return false;
     }
     if (!args.score.empty() &&
         (args.top_segments ||
          int(args.score.size()) != search.prospects + search.pairs)) {
-        fprintf(stderr, "%.*s: --score names one pick per ppb and pb step, "
-                "without --top-segments\n",
-                int(program.size()), program.data());
+        report(program, "--score names one pick per ppb and pb step, "
+               "without --top-segments");
         return false;
     }
     if (args.score_detail && (args.score.empty() || !args.by_pick)) {
-        fprintf(stderr,
-                "%.*s: --score-detail goes with --score and --by-pick\n",
-                int(program.size()), program.data());
+        report(program, "--score-detail goes with --score and --by-pick");
         return false;
     }
     if (args.best_pairs != BestPairs::NONE &&
         (args.top == 0 || args.top_segments ||
          (args.best_pairs == BestPairs::LEAD && !args.by_pick))) {
-        fprintf(stderr, "%.*s: --best-pairs goes with -n, without "
-                "--top-segments, and lead with --by-pick\n",
-                int(program.size()), program.data());
+        report(program, "--best-pairs goes with -n, without "
+               "--top-segments, and lead with --by-pick");
         return false;
     }
     return true;
@@ -237,9 +226,8 @@ bool load_priors(std::string_view program, char const* path,
             size_t const space = size_t(end - line.c_str());
             if (end == line.c_str() || !std::isfinite(score) ||
                 space >= line.size() || line[space] != ' ') {
-                fprintf(stderr, "%.*s: %s:%zu isn't \"SCORE word,word\" with "
-                        "a finite SCORE\n", int(program.size()), program.data(),
-                        path, number);
+                report(program, "%s:%zu isn't \"SCORE word,word\" with "
+                       "a finite SCORE", path, number);
                 return false;
             }
             DfsPairRow row;
@@ -326,8 +314,7 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
         std::string error;
         if (!open_prior(args.p1, args.clues, args.prior_weights, false,
                         &weights, &evidence, &error)) {
-            fprintf(stderr, "%.*s: %s\n", int(program.size()), program.data(),
-                    error.c_str());
+            report(program, "%s", error.c_str());
             return false;
         }
         prior = [&](DfsPairRow const& row, double* out) {
@@ -623,10 +610,9 @@ bool score_picks(std::string_view program,
             comma + 1 == name.size() ||
             name.find(',', comma + 1) != std::string::npos ||
             found == bags.end()) {
-            fprintf(stderr, "%.*s: --score %s isn't two words whose bag is "
-                    "in %s and fits the letters\n",
-                    int(program.size()), program.data(), name.c_str(),
-                    i < prospects
+            report(program, "--score %s isn't two words whose bag is "
+                   "in %s and fits the letters", name.c_str(),
+                   i < prospects
                         ? "--pp" : "PAIRS, of at least --min-pb-len letters,");
             return false;
         }
@@ -639,8 +625,8 @@ bool score_picks(std::string_view program,
         for (size_t i = 0; i < j; ++i)
             repeats = repeats || (*steps[i])[picks[i]].counts == counts;
         if (repeats || !pairs_subtract(rest, counts, &rest)) {
-            fprintf(stderr, "%.*s: the --score picks don't fit the letters "
-                    "together\n", int(program.size()), program.data());
+            report(program, "the --score picks don't fit the letters "
+                   "together");
             return false;
         }
     }

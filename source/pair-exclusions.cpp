@@ -29,12 +29,13 @@ std::string workflow_path(char const* root, char const* relative) {
 
 bool workflow_file_missing(
     std::string const& path, std::string_view program,
-    char const* description) {
+    std::string_view description) {
   struct stat status;
   if (stat(path.c_str(), &status) == 0 ||
       (errno != ENOENT && errno != ENOTDIR))
     return false;
-  warn(program, "%s \"%s\" is not present", description, path.c_str());
+  warn(program, "%.*s \"%s\" is not present",
+       int(description.size()), description.data(), path.c_str());
   return true;
 }
 
@@ -193,21 +194,19 @@ bool resolve_target_name(
     std::string* out) {
   std::string best;
   if (!resolve(workflow_path(wfroot, WORKFLOW_BEST_PATH), &best)) {
-    fprintf(stderr, "%.*s: no \"%s\" below \"%s\"\n",
-        int(program.size()), program.data(), WORKFLOW_BEST_PATH, wfroot);
+    report(program, "no \"%s\" below \"%s\"", WORKFLOW_BEST_PATH, wfroot);
     return false;
   }
 
   std::string dir;
   if (!resolve(best + "/" + name, &dir) || !is_directory(dir)) {
-    fprintf(stderr, "%.*s: target \"%s\" is not a directory in \"%s\"\n",
-        int(program.size()), program.data(), name.c_str(), best.c_str());
+    report(program, "target \"%s\" is not a directory in \"%s\"", name.c_str(),
+           best.c_str());
     return false;
   }
   if (!target_name_below_best(dir, best, out)) {
-    fprintf(stderr, "%.*s: target \"%s\" leads to \"%s\", which is not "
-        "ROOT/%s\n", int(program.size()), program.data(), name.c_str(),
-        dir.c_str(), WORKFLOW_TARGET_PATH);
+    report(program, "target \"%s\" leads to \"%s\", which is not ROOT/%s",
+           name.c_str(), dir.c_str(), WORKFLOW_TARGET_PATH);
     return false;
   }
   return true;
@@ -264,10 +263,8 @@ bool target_agrees_with_input(
       !workflow_target(options.input_path, wfroot, &named) ||
       named == target)
     return true;
-  fprintf(stderr,
-      "%.*s: \"%s\" belongs to target \"%s\", not the selected \"%s\"\n",
-      int(program.size()), program.data(), options.input_path.c_str(),
-      named.c_str(), target.c_str());
+  report(program, "\"%s\" belongs to target \"%s\", not the selected \"%s\"",
+         options.input_path.c_str(), named.c_str(), target.c_str());
   return false;
 }
 
@@ -299,8 +296,8 @@ bool load_target_pair_file(
 }
 
 bool load_workflow_pair_file(
-    std::string const& path, std::string_view program, char const* description,
-    DfsPairSet* pairs, DfsPairSet* source) {
+    std::string const& path, std::string_view program,
+    std::string_view description, DfsPairSet* pairs, DfsPairSet* source) {
   if (workflow_file_missing(path, program, "classified pair file"))
     return true;
   if (!load_pair_file(path.c_str(), description, source, true, true))
@@ -354,8 +351,7 @@ PairFilterOptionResult parse_pair_filter_option(
   char const* const option = argv[*index];
   if (strcmp(option, "--wf") == 0) {
     if (!out->workflow_root.empty()) {
-      fprintf(stderr, "%.*s: --wf and --wfroot are mutually exclusive\n",
-          int(program.size()), program.data());
+      report(program, "--wf and --wfroot are mutually exclusive");
       return PAIR_FILTER_OPTION_ERROR;
     }
     out->workflow = true;
@@ -364,13 +360,11 @@ PairFilterOptionResult parse_pair_filter_option(
   char const* value;
   if (match_option_value(argc, argv, index, NULL, "--wfroot", &value)) {
     if (out->workflow) {
-      fprintf(stderr, "%.*s: --wf and --wfroot are mutually exclusive\n",
-          int(program.size()), program.data());
+      report(program, "--wf and --wfroot are mutually exclusive");
       return PAIR_FILTER_OPTION_ERROR;
     }
     if (value == NULL || value[0] == '\0') {
-      fprintf(stderr, "%.*s: --wfroot requires a nonempty directory\n",
-          int(program.size()), program.data());
+      report(program, "--wfroot requires a nonempty directory");
       return PAIR_FILTER_OPTION_ERROR;
     }
     out->workflow_root = value;
@@ -378,8 +372,7 @@ PairFilterOptionResult parse_pair_filter_option(
   }
   if (match_option_value(argc, argv, index, "-d", "--dict", &value)) {
     if (value == NULL || value[0] == '\0') {
-      fprintf(stderr, "%.*s: %s requires a nonempty path\n",
-              int(program.size()), program.data(), option);
+      report(program, "%s requires a nonempty path", option);
       return PAIR_FILTER_OPTION_ERROR;
     }
     out->dictionary_path = value;
@@ -387,8 +380,7 @@ PairFilterOptionResult parse_pair_filter_option(
   }
   if (match_option_value(argc, argv, index, "-t", "--target", &value)) {
     if (value == NULL || value[0] == '\0') {
-      fprintf(stderr, "%.*s: %s requires a nonempty target\n",
-              int(program.size()), program.data(), option);
+      report(program, "%s requires a nonempty target", option);
       return PAIR_FILTER_OPTION_ERROR;
     }
     out->target = value;
@@ -402,8 +394,7 @@ PairFilterOptionResult parse_pair_filter_option(
   if (support.sentence &&
       match_option_value(argc, argv, index, "-s", "--sentence", &value)) {
     if (value == NULL) {
-      fprintf(stderr, "%.*s: %s requires N\n",
-              int(program.size()), program.data(), option);
+      report(program, "%s requires N", option);
       return PAIR_FILTER_OPTION_ERROR;
     }
     return parse_classified_sentence(value, &out->sentence)
@@ -424,8 +415,7 @@ PairFilterOptionResult parse_pair_filter_option(
   }
 
   if (value == NULL) {
-    fprintf(stderr, "%.*s: %s requires a file\n",
-            int(program.size()), program.data(), option);
+    report(program, "%s requires a file", option);
     return PAIR_FILTER_OPTION_ERROR;
   }
   paths->push_back(value);
@@ -436,18 +426,15 @@ bool check_pair_filter_options(
     PairFilterOptions const& options, std::string_view program) {
   if (options.workflow || !options.workflow_root.empty()) return true;
   if (options.workflow_yes) {
-    fprintf(stderr, "%.*s: --yes requires --wf or --wfroot\n",
-            int(program.size()), program.data());
+    report(program, "--yes requires --wf or --wfroot");
     return false;
   }
   if (!options.target.empty()) {
-    fprintf(stderr, "%.*s: --target requires --wf or --wfroot\n",
-            int(program.size()), program.data());
+    report(program, "--target requires --wf or --wfroot");
     return false;
   }
   if (options.sentence != CLASSIFIED_NO_SENTENCE) {
-    fprintf(stderr, "%.*s: --sentence requires --wf or --wfroot\n",
-            int(program.size()), program.data());
+    report(program, "--sentence requires --wf or --wfroot");
     return false;
   }
   return true;
@@ -494,9 +481,8 @@ bool load_pair_filters(
         return false;
     }
     if (ignored_non_pairs != 0)
-      fprintf(stderr,
-          "%.*s: ignored %zu non-pairs in --allow-pairs file(s)\n",
-          int(program.size()), program.data(), ignored_non_pairs);
+      report(program, "ignored %zu non-pairs in --allow-pairs file(s)",
+             ignored_non_pairs);
   }
   for (size_t i = 0; i < options.ignore_paths.size(); ++i) {
     if (!load_pair_file(

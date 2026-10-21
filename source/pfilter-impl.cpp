@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <string_view>
 
+#include "log.h"
 #include "workflow-paths.h"
 
 namespace {
@@ -23,7 +24,7 @@ bool Pfilter::load(std::string_view program, PfilterOptions const& options,
   rejected_.clear();
   index_.reset();
 
-  auto const add = [&](int sentence, char const* kind) {
+  auto const add = [&](int sentence, std::string_view kind) {
     char const* const root = require_workflow_root(program);
     if (root == NULL) return false;
     std::shared_ptr<DfsPairSet const> pairs =
@@ -44,9 +45,7 @@ bool Pfilter::load(std::string_view program, PfilterOptions const& options,
   if (!options_.index_file.empty()) {
     FILE* fp = fopen(options_.index_file.c_str(), "rb");
     if (fp == NULL) {
-      fprintf(stderr, "%.*s: can't open \"%s\"\n",
-              int(program.size()), program.data(),
-          options_.index_file.c_str());
+      report(program, "can't open \"%s\"", options_.index_file.c_str());
       return false;
     }
     index_.reset(new IndexReader(fp));
