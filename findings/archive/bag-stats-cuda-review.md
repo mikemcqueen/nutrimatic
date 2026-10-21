@@ -21,8 +21,8 @@ Decisions are recorded under each finding as they're made.
 |---|---------|--------|
 | 1 | Race on `s.counts` between rows | fixed |
 | 2 | `print_rows` window counts blocks | fixed: window counts rows |
-| 3 | `--threads 1` leaves the second stream unused | open: async `count()` with one orchestrating thread under consideration |
-| 4 | Repeated rests counted again on the GPU | decided: fill `RestTable` in pass 1, serve pass 2 from it on the CPU; not yet built |
+| 3 | `--threads 1` leaves the second stream unused | dropped: `--threads 2` measured no faster |
+| 4 | Repeated rests counted again on the GPU | fixed: fill `RestTable` in pass 1, serve pass 2 from it on the CPU |
 | 5 | `Packing` duplicates `PairsPacking` | dropped: GPU keys never meet CPU keys |
 | 6 | `GpuRowCounter` never frees memory | fixed |
 | 7 | Required `dependency('cuda')` | fixed |
@@ -123,11 +123,10 @@ two-stream design only helps with `--threads >= 2`.
 from `bag-stats-gpu.h`) when `--threads` isn't given, capped by hardware
 threads as now.
 
-**Decision:** pending. One thread could drive both streams if `count()` were
-split into a non-blocking submit and a later wait, and `GpuRowWalker`
-double-buffered its batches. Each launch already fills every SM, so the
-second stream only overlaps copies and host-side sorting, not a second
-kernel.
+**Decision: dropped.** A run at `--threads 2` showed no gain over
+`--threads 1`: the GPU is the bottleneck, and each launch already fills
+every SM, so a second stream only overlaps copies and host-side sorting.
+The default stays 1, and `count()` stays synchronous.
 
 ## 4. Repeated rests within a batch are counted again on the GPU
 

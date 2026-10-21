@@ -1,5 +1,6 @@
 #include "bag-stats-cpu.h"
 
+#include "bag-stats-cache.h"
 #include "bag-stats-impl.h"
 #include "mix-bits.h"
 #include "sub-bag-index.h"
@@ -25,42 +26,6 @@ namespace {
 constexpr char PROGRAM[] = "bag-stats";
 // The most sub-bags PairCountTable numbers, 4 bytes each.
 constexpr size_t PAIR_COUNT_TABLE_MAX = size_t(1) << 28;
-
-// A full mixed-radix index makes a remainder's number cheap to compute.
-// Unlike SubBagIndex it does not restrict the length of the sub-bag.
-// total() is 0 when `bag` has more than `bound` sub-bags.
-class RemainderIndex {
-  public:
-    RemainderIndex(PairsCounts const& bag, size_t bound) {
-        for (size_t i = 0; i < 26; ++i) {
-            if (bag.values[i] == 0) continue;
-            if (total_ > bound / (bag.values[i] + 1)) {
-                total_ = 0;
-                break;
-            }
-            digits_.push_back({i, total_});
-            total_ *= bag.values[i] + 1;
-        }
-    }
-
-    size_t total() const { return total_; }
-    size_t number(PairsCounts const& bag) const {
-        size_t out = 0;
-        for (auto const& [letter, stride] : digits_)
-            out += bag.values[letter] * stride;
-        return out;
-    }
-
-  private:
-    size_t total_ = 1;
-    std::vector<std::pair<size_t, size_t>> digits_;
-};
-
-// Lookups of a cache and how many of them hit.
-struct CacheCounts {
-    uint64_t hits = 0;
-    uint64_t lookups = 0;
-};
 
 // Pair counts of sub-bags of `bag`, shared by every thread, in at most
 // `megabytes` MB, or two slots per sub-bag when that's less. Lossy: a
@@ -291,105 +256,6 @@ size_t longest_leftover(
         shortest = std::min(shortest, letter_total(word_bag));
     return size_t(std::max(0, left - words * shortest));
 }
-
-// The bytes one rest cache entry takes.
-constexpr size_t REST_CACHE_ENTRY_BYTES =
-    sizeof(BagStatsCounts) + 2 * (sizeof(uint64_t) + sizeof(uint32_t));
-
-// The entries a rest cache of `megabytes` MB holds.
-size_t rest_cache_entries(size_t megabytes) {
-    return megabytes * 1024 * 1024 / REST_CACHE_ENTRY_BYTES;
-}
-
-// Statistics depend only on the remainder, not on which pair picks made
-// it. Keep immutable records shared across workers and ranking passes, in
-// at most `megabytes` MB: open addressing over remainder numbers + 1, 0
-// while empty, each with its row index + 1, 0 until the row is written.
-// With `report`, says on stderr when it fills.
-class RestTable {
-  public:
-    RestTable(PairsCounts const& bag, bool enabled, size_t megabytes,
-              bool report)
-        : index_(bag, UINT64_MAX - 1), report_(report) {
-        if (!enabled || index_.total() == 0) return;
-        capacity_ = std::min({rest_cache_entries(megabytes), index_.total(),
-                              size_t(UINT32_MAX)});
-        if (capacity_ == 0) return;
-        slots_ = 2 * capacity_;
-        keys_.reset(static_cast<uint64_t*>(
-            std::calloc(slots_, sizeof(uint64_t))));
-        rows_index_.reset(static_cast<uint32_t*>(
-            std::calloc(slots_, sizeof(uint32_t))));
-        rows_.reset(static_cast<BagStatsCounts*>(
-            std::calloc(capacity_, sizeof(BagStatsCounts))));
-        if (!keys_ || !rows_index_ || !rows_) {
-            keys_.reset();
-            rows_index_.reset();
-            rows_.reset();
-        }
-    }
-
-    bool enabled() const { return keys_ != nullptr; }
-    size_t capacity() const { return capacity_; }
-    size_t remainders() const { return index_.total(); }
-
-    bool get(PairsCounts const& rest, BagStatsCounts* out) const {
-        if (!keys_) return false;
-        uint64_t const key = index_.number(rest) + 1;
-        for (size_t i = home(key);; i = i + 1 == slots_ ? 0 : i + 1) {
-            uint64_t const found = std::atomic_ref<uint64_t>(keys_[i])
-                .load(std::memory_order_relaxed);
-            if (found == 0) return false;
-            if (found != key) continue;
-            uint32_t const row = std::atomic_ref<uint32_t>(rows_index_[i])
-                .load(std::memory_order_acquire);
-            if (row == 0) return false;
-            *out = rows_[row - 1];
-            return true;
-        }
-    }
-
-    void put(PairsCounts const& rest, BagStatsCounts const& counts) const {
-        if (!keys_ || next_.load(std::memory_order_relaxed) >= capacity_)
-            return;
-        uint64_t const key = index_.number(rest) + 1;
-        for (size_t i = home(key);; i = i + 1 == slots_ ? 0 : i + 1) {
-            uint64_t found = 0;
-            if (!std::atomic_ref<uint64_t>(keys_[i]).compare_exchange_strong(
-                    found, key, std::memory_order_relaxed)) {
-                if (found == key) return;
-                continue;
-            }
-            size_t const row = next_.fetch_add(1, std::memory_order_relaxed);
-            if (row >= capacity_) return;
-            if (row + 1 == capacity_ && report_)
-                fprintf(stderr, "%s: cache full at %zu entries; later "
-                        "remainders go uncached\n", PROGRAM, capacity_);
-            rows_[row] = counts;
-            std::atomic_ref<uint32_t>(rows_index_[i])
-                .store(uint32_t(row + 1), std::memory_order_release);
-            return;
-        }
-    }
-
-  private:
-    struct Free {
-        template <typename T> void operator()(T* p) const { std::free(p); }
-    };
-
-    size_t home(uint64_t key) const {
-        return size_t(__uint128_t(mix_bits(key)) * slots_ >> 64);
-    }
-
-    RemainderIndex index_;
-    bool const report_;
-    size_t capacity_ = 0;
-    size_t slots_ = 0;
-    std::unique_ptr<uint64_t[], Free> keys_;
-    std::unique_ptr<uint32_t[], Free> rows_index_;
-    std::unique_ptr<BagStatsCounts[], Free> rows_;
-    mutable std::atomic<size_t> next_{0};
-};
 
 // The inner dictionary groups that fit what is left after each pick step,
 // and exact pair counts over one step's.
@@ -781,29 +647,6 @@ class CacheHooks {
     }
 
   private:
-    // CacheCounts summed across workers.
-    struct SharedCacheCounts {
-        std::atomic<uint64_t> hits{0};
-        std::atomic<uint64_t> lookups{0};
-
-        void add(CacheCounts const& counts) {
-            hits.fetch_add(counts.hits, std::memory_order_relaxed);
-            lookups.fetch_add(counts.lookups, std::memory_order_relaxed);
-        }
-
-        // ", NAME hits N/M (P%)".
-        std::string text(char const* name) const {
-            uint64_t const h = hits.load(std::memory_order_relaxed);
-            uint64_t const l = lookups.load(std::memory_order_relaxed);
-            char out[96];
-            snprintf(out, sizeof out, ", %s hits %llu/%llu (%.1f%%)", name,
-                     static_cast<unsigned long long>(h),
-                     static_cast<unsigned long long>(l),
-                     l == 0 ? 0.0 : 100.0 * double(h) / double(l));
-            return out;
-        }
-    };
-
     RestTable const& rest_table_;
     PairCountCache const* pair_cache_;
     SharedCacheCounts cache_;
@@ -824,7 +667,8 @@ struct Walk : WalkBase {
     int completions;
     bool all;
 
-    RowWalker walker() const {
+    // `pass` doesn't matter: the walk looks up and puts in every pass.
+    RowWalker walker(int) const {
         return RowWalker(steps, args.search.pairs, pair_bags.size(),
                          word_bags,
                          RestCounter(args.search.words, table, final_bags,
@@ -1092,16 +936,11 @@ int with_walk(BagStatsOptions const& options, std::string const& letters,
 
     BagStatsRankers rankers(common, inputs);
     bool const passes = rankers.passes;
-    RestTable const rest_table(bag,
+    RestTable const rest_table(PROGRAM, bag,
                                (steps.size() > 1 || passes) && !one_row,
-                               size_t(options.cache_size_mb),
+                               size_t(common.cache_size_mb),
                                common.progress != 0);
-    if (common.progress != 0 && rest_table.enabled())
-        fprintf(stderr, "%s: cache holds %zu entries (%.1f MB) of %zu "
-                "remainders\n", PROGRAM, rest_table.capacity(),
-                double(rest_table.capacity() * REST_CACHE_ENTRY_BYTES) /
-                    (1024 * 1024),
-                rest_table.remainders());
+    if (common.progress != 0) report_rest_table(PROGRAM, rest_table);
     bool const needs_groups = table && table->needs_groups();
     if (table && common.progress != 0) {
         PairCountCache const& pair_cache = table->cache();
@@ -1151,7 +990,7 @@ bool list_bag_stats(BagStatsOptions const& options,
         std::atomic<size_t> next{0};
         std::vector<std::vector<BagStatsCompletion>> parts(walk.threads);
         run_threads(walk.threads, [&](size_t thread) {
-            RowWalker walker = walk.walker();
+            RowWalker walker = walk.walker(1);
             for (size_t unit; !stop.stop_requested() &&
                               (unit = next.fetch_add(1)) < walk.units();) {
                 uint64_t seq = uint64_t(unit) << 32;

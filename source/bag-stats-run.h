@@ -3,7 +3,7 @@
 
 // The command line, input loading, row walk and passes bag-stats and
 // bag-stats-cuda share. Each tool supplies a Walk deriving from WalkBase
-// that adds walker(), progress_hooks(), print_score_row() and
+// that adds walker(pass), progress_hooks(), print_score_row() and
 // after_score().
 
 #include <stdint.h>
@@ -33,6 +33,7 @@ inline constexpr int DEFAULT_MIN_WB_LENGTH = 5;
 inline constexpr int DEFAULT_MIN_PB_LENGTH = 9;
 inline constexpr char DEFAULT_SEARCH[] = "pb,wb,p";
 inline constexpr int DEFAULT_PROGRESS_SECONDS = 60;
+inline constexpr int BAG_STATS_DEFAULT_CACHE_SIZE_MB = 128;
 // How many counted rows may wait to be printed, per thread, before workers
 // stop starting blocks.
 inline constexpr size_t PRINT_WINDOW_ROWS_PER_THREAD = 1 << 16;
@@ -50,6 +51,8 @@ struct BagStatsArgs {
     Search search;
     char const* prospects_file = NULL;
     int threads = 1;
+    // At most this many MB of cached remainder counts, 0 for none.
+    int cache_size_mb = BAG_STATS_DEFAULT_CACHE_SIZE_MB;
     int progress = DEFAULT_PROGRESS_SECONDS;
     RankArgs rank;
     char const* pairs_file = NULL;
@@ -62,6 +65,7 @@ enum {
     OPT_COMMON_SEARCH,
     OPT_COMMON_PROSPECTS,
     OPT_COMMON_THREADS,
+    OPT_COMMON_CACHE_SIZE,
     OPT_COMMON_PROGRESS,
     OPT_COMMON_NO_NOPAIRS,
     // The first option id free for a tool's own options.
@@ -77,6 +81,7 @@ enum {
     { "ss", OPT_COMMON_SEARCH, OPTPARSE_REQUIRED }, \
     { "pp", OPT_COMMON_PROSPECTS, OPTPARSE_REQUIRED }, \
     { "threads", OPT_COMMON_THREADS, OPTPARSE_REQUIRED }, \
+    { "cache-size", OPT_COMMON_CACHE_SIZE, OPTPARSE_REQUIRED }, \
     { "progress", OPT_COMMON_PROGRESS, OPTPARSE_REQUIRED }, \
     { "no-nopairs", OPT_COMMON_NO_NOPAIRS, OPTPARSE_NONE }, \
     BAG_STATS_RANK_LONG_OPTIONS
@@ -387,7 +392,7 @@ void print_rows(Walk const& walk) {
     Progress progress(walk, 1);
 
     auto const work = [&](size_t) {
-        auto walker = walk.walker();
+        auto walker = walk.walker(1);
         std::string buffer;
         while (true) {
             size_t block;
@@ -446,7 +451,7 @@ void count_sort_values(Walk const& walk, R* ranker) {
     {
         Progress progress(walk, 1);
         run_threads(walk.threads, [&](size_t t) {
-            auto walker = walk.walker();
+            auto walker = walk.walker(1);
             std::vector<uint32_t> picks;
             for (size_t block;
                  (block = next.fetch_add(1)) < walk.block_count();) {
@@ -472,7 +477,7 @@ std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
     std::vector<std::vector<RankedRow>> heaps(walk.threads);
     Progress progress(walk, walk.passes);
     run_threads(walk.threads, [&](size_t t) {
-        auto walker = walk.walker();
+        auto walker = walk.walker(walk.passes);
         std::vector<RankedRow>& heap = heaps[t];
         std::vector<uint32_t> picks;
         for (size_t block;
@@ -524,7 +529,7 @@ template <typename Walk>
 bool find_row(Walk const& walk, std::vector<size_t> const& picks,
               RankedRow* out, size_t* out_length,
               std::vector<uint32_t>* out_picks) {
-    auto walker = walk.walker();
+    auto walker = walk.walker(1);
     uint64_t seq = 0;
     bool found = false;
     walker.walk(picks[0], picks[0] + 1, walk.bag,
@@ -550,7 +555,7 @@ ScoreRank score_rank(Walk const& walk, R const& ranker,
     std::vector<ScoreRank> parts(walk.threads);
     Progress progress(walk, walk.passes);
     run_threads(walk.threads, [&](size_t t) {
-        auto walker = walk.walker();
+        auto walker = walk.walker(walk.passes);
         ScoreRank& part = parts[t];
         std::vector<uint32_t> picks;
         for (size_t block;
