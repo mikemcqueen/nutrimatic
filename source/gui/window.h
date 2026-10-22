@@ -10,16 +10,17 @@
 #include "review.h"
 
 // The top-level pane filling the viewport: a line of seed, letters (l), and
-// used-letters (u) fields splitting its width evenly, followed by a BAD
-// checkbox that toggles app_state()'s judged_bad_filter and sentence buttons
-// S1-S9 (s), then the columns side by side. The seed field starts
-// from app_state()'s seed_name, and Enter in it loads the seed from the
-// name typed, with its bad bags (see AppState::load_seed_and_bad_bags()),
-// points each column whose source is a seed key no longer in app_state()'s
-// seed_map at its seed_key, then keeps and refreshes only the seed files the
-// columns' seed keys and the seed name name (see
-// AppState::refresh_seed_files()), and reloads the loaded dictionaries whose
-// files are newer (see AppState::refresh_dictionaries()).
+// used-letters (u) fields splitting its width evenly, the seed field followed
+// by a per-word max length (x) field, then a BAD checkbox that
+// toggles app_state()'s judged_bad_filter and sentence buttons S1-S9 (s),
+// then the columns side by side. The seed field starts from app_state()'s
+// seed_name, and Enter in it loads the pair file from the name typed, with
+// its bad bags (see AppState::load_seed_and_bad_bags()), keeps only the seed
+// views the columns' seed sources name and reads the pair file again when
+// it's newer (see AppState::refresh_seed_files()), and reloads the loaded
+// dictionaries whose files are newer (see AppState::refresh_dictionaries()).
+// The x: field starts from app_state()'s seed_max_length, and Enter in it
+// stores it there.
 // The letters fields start from app_state(), and Enter in either stores both
 // there and validates them (see AppState::validate_letters()); the l: field
 // is framed red while app_state()'s letters_valid is false. The buttons
@@ -84,6 +85,7 @@ class Window {
 
   std::vector<Column> columns_;
   char seed_[256] = {};
+  int seed_max_length_;
   char letters_[256] = {};
   char used_letters_[256] = {};
   int sentence_;

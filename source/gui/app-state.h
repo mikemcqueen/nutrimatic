@@ -1,11 +1,14 @@
 #ifndef NUTRIMATIC_GUI_APP_STATE_H
 #define NUTRIMATIC_GUI_APP_STATE_H
 
+#include <array>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -15,6 +18,8 @@
 #include "dfs-class-list.h"
 #include "input-source.h"
 #include "letter-bag.h"
+#include "p1-index.h"
+#include "seed-view.h"
 
 // A word list's words, as a set and as sorted lines.
 struct LoadedDictionary {
@@ -23,18 +28,25 @@ struct LoadedDictionary {
 };
 using SharedDictionary = std::shared_ptr<LoadedDictionary const>;
 
-// Seed file names in AppState::seed_directory, by key: "seed50", "seed85",
-// or "all", then "m3" or "m4", or the loaded seed's AppState::seed_key.
-using SeedMap = std::unordered_map<std::string, std::string>;
+// A seed view's band: its source key, the phase 1 YES its pairs need, none
+// keeping every pair, and its per-word min length.
+struct SeedBand {
+  char const* key;
+  std::optional<float> min_yes;
+  int min_length;
+};
+
+// A seed view's band key, one of AppState::seed_bands, and dictionary key,
+// "sml_dict" or "big_dict".
+using SeedViewKey = std::pair<std::string, std::string>;
 
 // pgui's global state, loaded once at startup by load_app_state(), and the
 // options every command runs with. visual_letters is the letters as typed and
 // actual_letters what commands use; set_letters() sets both. sentence is 1
 // through 9, or CLASSIFIED_NO_SENTENCE for none. generation goes up whenever
-// letters, used_letters, or sentence change. seed_name is a word or
-// word,word pair file in seed_directory. seed_map holds seed_name under
-// seed_key, plus the other seed files in seed_directory named like it (see
-// load_seed()).
+// letters, used_letters, or sentence change. seed_name is a word,word pair
+// file in seed_directory, pairs.sN, whose seeds are views of it (see
+// seed_view()).
 struct AppState {
   // Sets visual_letters to `letters`, and actual_letters to `letters` itself
   // unless one of its space-separated pieces is $NAME. Then it is the value of
@@ -56,14 +68,8 @@ struct AppState {
   // do.
   void validate_letters();
 
-  // Sets seed_name to `name`; sets seed_key to name's key, "seed", its
-  // cutoff, and its M for seed.S.M.all.CUTOFF[...].pairs, "all" and its M
-  // for all.S.M, or "seed" otherwise; sets seed_m to name's M; and sets seed_map to seed_name under
-  // seed_key plus, for each M of m3 and m4, whichever of seed.S.M.U.50.pairs
-  // (seed50M), seed.S.M.U.85.15.pairs (seed85M), and all.S.M (allM) exist in
-  // seed_directory under keys not already taken, S being name's and U its
-  // universe (all unless name is seed.S.M.U.CUTOFF[...].pairs). Reads no
-  // seed files; see refresh_seed_files() and seed_file().
+  // Sets seed_name to `name`, dropping the pair file read for another name.
+  // Reads no pair file; see seed_pairs() and refresh_seed_files().
   void load_seed(std::string name);
 
   // load_seed()s `name`, diagnosing a name whose sN component,
@@ -76,25 +82,45 @@ struct AppState {
   // judged_bad_version. A missing file is diagnosed and adds nothing.
   void load_seed_and_bad_bags(std::string name);
 
-  // A seed file's lines, none when it can't be read, which is diagnosed,
-  // with its modification time when read, the earliest time when it can't
-  // be stat'ed, and a version unique to this load.
-  struct SeedFile {
+  // The pair file's pairs, each with its phase 1 YES from p1, none when it
+  // can't be read, which is diagnosed, with its modification time when read,
+  // the earliest time when it can't be stat'ed, and a version unique to this
+  // load.
+  struct SeedPairs {
     std::filesystem::file_time_type mtime;
-    SharedLines lines;
+    std::shared_ptr<std::vector<SeedPair> const> pairs;
     bool readable = false;
     unsigned version = 0;
   };
 
-  // Drops from seed_files all but seed_name's file and those `keys` name in
-  // seed_map, and reloads those left that are older than the files in
-  // seed_directory.
-  void refresh_seed_files(std::vector<std::string> const& keys);
+  // The lines of the pairs passing a view's filter, with a version unique
+  // to this build, and the pair file, dictionary and max length versions it
+  // was built from.
+  struct SeedView {
+    SharedLines lines;
+    unsigned version = 0;
+    unsigned pairs_version = 0;
+    unsigned dictionary_version = 0;
+    unsigned max_length_version = 0;
+  };
 
-  // The seed file under `key` in seed_map, read into seed_files the first
-  // time it's asked for, or, when `key` isn't in seed_map, no lines and
-  // version 0.
-  SeedFile const& seed_file(std::string const& key);
+  // Drops from seed_views those none of `keys` name, reopens p1 when p1_path
+  // is newer than when it was opened, keeping it as it was when it can't be
+  // reopened, which is diagnosed, and reads the pair file again when it's
+  // newer than when it was read or p1 was reopened.
+  void refresh_seed_files(std::vector<SeedViewKey> const& keys);
+
+  // seed_name's pairs, read the first time they're asked for.
+  SeedPairs const& seed_pairs();
+
+  // The view under `band` and `dictionary`: seed_pairs() passing a
+  // SeedFilter of the band's min length, seed_max_length, the band's YES,
+  // and the dictionary under `dictionary` in dictionaries. Built the first
+  // time it's asked for, and again, under a new seed_file_version, when the
+  // pair file, that dictionary or seed_max_length have changed since. No
+  // lines and version 0 when no band in seed_bands has the key `band`.
+  SeedView const& seed_view(std::string const& band,
+                            std::string const& dictionary);
 
   // A word list file, and, once loaded, its words, its modification time
   // when read, the earliest time when it can't be stat'ed, and a version
@@ -144,16 +170,36 @@ struct AppState {
   bool letters_valid = true;
   std::string seed_directory;
   std::string seed_name;
-  std::string seed_key;
-  // The mN component of seed_name, <prefix>.sN.mN.<suffix>; empty when it
-  // has none.
-  std::string seed_m;
-  SeedMap seed_map;
-  // seed_map's keys, sorted.
-  std::vector<std::string> seed_keys;
-  // The seed files read by seed_file(), by file name.
-  std::unordered_map<std::string, SeedFile> seed_files;
-  // The last SeedFile version given out.
+  // The bands of seed_view(), in source dropdown order.
+  static constexpr std::array<SeedBand, 5> seed_bands = {{
+      {"all", std::nullopt, SeedFilter{}.min_len},
+      {"seed50m3", 0.5f, 3},
+      {"seed50m4", 0.5f, 4},
+      {"seed85m3", 0.85f, 3},
+      {"seed85m4", 0.85f, 4},
+  }};
+  // The band in seed_bands with the key `key`; null when there is none.
+  static SeedBand const* seed_band(std::string_view key);
+  // The first column's source, and what a seed column falls back to.
+  static constexpr char const* seed_key = "seed85m4";
+  // seed_directory's p1.idx, opened from p1_path by load_app_state() and
+  // reopened by refresh_seed_files(), with its modification time when
+  // opened, the earliest time before; every pair has no verdict while it
+  // hasn't been.
+  std::filesystem::path p1_path;
+  P1Index p1;
+  std::filesystem::file_time_type p1_mtime =
+      std::filesystem::file_time_type::min();
+  bool p1_open = false;
+  // Each view's per-word max length, inclusive, and a version that goes up
+  // when it changes.
+  int seed_max_length = SeedFilter{}.max_len;
+  unsigned seed_max_length_version = 0;
+  // seed_name's pairs, once read by seed_pairs().
+  std::optional<SeedPairs> seed_pairs_file;
+  // The views built by seed_view().
+  std::map<SeedViewKey, SeedView> seed_views;
+  // The last SeedPairs or SeedView version given out.
   unsigned seed_file_version = 0;
   unsigned generation = 0;
   // Remaining letters judged bad, each lowercase a-z and sorted, whatever
@@ -182,28 +228,31 @@ struct AppState {
 
 // What a command runs with, taken when it starts so it runs unaffected by
 // later changes: app_state()'s actual letters and sentence, its Column's used
-// letters, and the dictionary its Column's D: dropdown names, null when that
-// is a column, and that dictionary's lines or that column's output; the
-// "big_dict" dictionary, whatever D: names; and the token a command may
-// check to quit early, its output then discarded.
+// letters, the dictionary its Column's D: dropdown names and that
+// dictionary's lines, and the lines of the dictionary or the output of the
+// column its wb: dropdown names, empty when it has none; the "big_dict"
+// dictionary, whatever D: names; and the token a command may check to quit
+// early, its output then discarded.
 struct LetterToolsParams {
   std::string letters;
   std::string used_letters;
   int sentence = CLASSIFIED_NO_SENTENCE;
   SharedDictionary dictionary;
   SharedLines dictionary_lines;
+  SharedLines word_bag_lines;
   SharedDictionary big_dictionary;
   std::stop_token stop;
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
 // "sml_dict", not loaded yet, with letters "$S1", empty used letters,
-// sentence 1's letters (see AppState::load_sentence_letters()), the seed at
-// `seed_path`, and judged_bad and bad_bags_bitmap from the
-// judged-bad and bad.sN files beside it (see
+// sentence 1's letters (see AppState::load_sentence_letters()), the pair
+// file at `seed_path`, the p1.idx beside it, and judged_bad and
+// bad_bags_bitmap from the judged-bad and bad.sN files beside it (see
 // AppState::load_seed_and_bad_bags()). Returns false, with the error
-// diagnosed, when the dictionary can't be read; a seed that can't be read is
-// left empty.
+// diagnosed, when the dictionary can't be read; a pair file that can't be
+// read is left empty, and a p1.idx that can't be opened, which is
+// diagnosed, leaves every pair without a verdict.
 bool load_app_state(std::string const& seed_path);
 
 AppState& app_state();

@@ -64,7 +64,7 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
   WordBagLoader word_loader(bag, min_word_bag_length, &loaded.word_bags,
                             &spellings);
   if (args.search.words > 0) {
-    for (std::string const& line : *params.dictionary_lines) {
+    for (std::string const& line : *params.word_bag_lines) {
       if (params.stop.stop_requested()) return false;
       word_loader.add(line);
     }

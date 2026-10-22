@@ -7,8 +7,8 @@
 #include "bag-stats-run.h"
 #include "input-source.h"
 
-// A bag-stats call on all threads, its input as PAIRS and its D: dictionary
-// as DICT, taking its letters and used letters from the LetterToolsParams and
+// A bag-stats call on all threads, its input as PAIRS and its wb: words as
+// DICT, taking its letters and used letters from the LetterToolsParams and
 // keeping the classified no.pairs (--no-nopairs), counting a last p's pairs
 // in the shared "big_dict" dictionary. It runs --ss with search, at most one
 // pb step and one wb step, ending in p or pf, failing for pf after a step
@@ -23,11 +23,10 @@
 // field, starting at "wb,p", setting search. Its fields set their options
 // when apply_fields() is called; an "ss:" that isn't one leaves search as it
 // is. It starts exact. Choosing it sets its Column's source to the seed50m3
-// seed and its D: dropdown to the column before it.
+// seed and its wb: dropdown to the column before it.
 struct BagStats {
   static constexpr bool reads_pairs = true;
-  static constexpr bool has_columns_in_dictionaries = true;
-  static constexpr bool uses_dictionary = true;
+  static constexpr bool has_word_bag_source = true;
   static constexpr bool uses_big_dictionary = true;
   static constexpr bool cancellable = true;
   static constexpr char const* default_seed = "seed50m3";

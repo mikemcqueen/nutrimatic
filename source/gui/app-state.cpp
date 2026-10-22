@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -31,79 +32,6 @@ std::vector<std::string_view> split(std::string_view text, char separator) {
     pieces.push_back(text.substr(0, end));
     if (end == std::string_view::npos) return pieces;
     text.remove_prefix(end + 1);
-  }
-}
-
-// The mN component of the seed file `name`, <prefix>.sN.mN.<suffix>; empty
-// when `name` has no mN.
-std::string_view get_seed_m(std::string_view name) {
-  std::vector<std::string_view> const pieces = split(name, '.');
-  return pieces.size() > 2 ? pieces[2] : std::string_view();
-}
-
-// The seed map key for the seed file `name`: "seed", its cutoff, and its mN
-// for seed.S.M.all.CUTOFF[...].pairs ("seed85m3" for
-// seed.s9.m3.all.85.15.pairs), "all" and its mN for all.S.M, or "seed"
-// otherwise.
-std::string get_seed_key(std::string const& name) {
-  std::vector<std::string_view> const pieces = split(name, '.');
-  if (pieces[0] == "seed" && pieces.size() > 4)
-    return "seed" + std::string(pieces[4]) + std::string(pieces[2]);
-  if (pieces[0] == "all" && pieces.size() > 2)
-    return "all" + std::string(pieces[2]);
-  return "seed";
-}
-
-// The universe component of the seed file `name`: U for seed.S.M.U.CUTOFF[...]
-// .pairs, "all" otherwise.
-std::string_view get_seed_universe(std::string_view name) {
-  std::vector<std::string_view> const pieces = split(name, '.');
-  return pieces[0] == "seed" && pieces.size() > 4 ? pieces[3] : "all";
-}
-
-// The name of the `type` seed file with the sN and universe of the seed file
-// `name` and the mN `m`: seed.S.M.U.CUTOFF.pairs for "seed", all.S.M for
-// "all", or none when `name` has no sN, or `type` is "seed" with no
-// `cutoff`, or is neither.
-std::optional<std::string> build_seed_name(std::string const& name,
-                                           std::string_view type,
-                                           std::string_view m,
-                                           std::string_view cutoff = {}) {
-  std::vector<std::string_view> const pieces = split(name, '.');
-  if (pieces.size() < 2) return std::nullopt;
-  std::string const sm = std::string(pieces[1]) + "." + std::string(m);
-  if (type == "seed") {
-    if (cutoff.empty()) return std::nullopt;
-    return "seed." + sm + "." + std::string(get_seed_universe(name)) + "." +
-           std::string(cutoff) + ".pairs";
-  }
-  if (type == "all") return "all." + sm;
-  return std::nullopt;
-}
-
-// Adds `name` to `map` under `key`, unless `key` is already there, or `name`
-// is none or names no file in `directory`.
-void add_seed_if_exists(SeedMap& map, std::string const& directory,
-                        std::string const& key,
-                        std::optional<std::string> const& name) {
-  if (!name || map.contains(key)) return;
-  if (!std::filesystem::exists(std::filesystem::path(directory) / *name))
-    return;
-  map.emplace(key, *name);
-}
-
-// Adds to `map` the seed50, seed85, and all seed files in `directory` with
-// the sN (and, for seed50 and seed85, the universe) of the seed file `name`, for each of m3 and m4, under keys suffixed
-// with m3 or m4.
-void add_other_seed_files(SeedMap& map, std::string const& directory,
-                          std::string const& name) {
-  for (std::string const m : {"m3", "m4"}) {
-    add_seed_if_exists(map, directory, "seed50" + m,
-                       build_seed_name(name, "seed", m, "50"));
-    add_seed_if_exists(map, directory, "seed85" + m,
-                       build_seed_name(name, "seed", m, "85.15"));
-    add_seed_if_exists(map, directory, "all" + m,
-                       build_seed_name(name, "all", m));
   }
 }
 
@@ -154,11 +82,6 @@ void load_bags(std::string const& path, std::unordered_set<std::string>& bags,
     std::fprintf(stderr, "pgui: can't read %s\n", path.c_str());
 }
 
-// The path of the seed file `name` in `directory`.
-std::string seed_path(std::string const& directory, std::string const& name) {
-  return (std::filesystem::path(directory) / name).string();
-}
-
 // The modification time of the file at `path`, or the earliest time when it
 // can't be stat'ed.
 std::filesystem::file_time_type modification_time(
@@ -169,16 +92,39 @@ std::filesystem::file_time_type modification_time(
   return error ? std::filesystem::file_time_type::min() : mtime;
 }
 
-// The seed file at `path`, read now, with version `version`.
-AppState::SeedFile read_seed_file(std::string const& path, unsigned version) {
-  AppState::SeedFile file;
+// The pair file at `path`, read now, looking each pair up in `p1`, with
+// version `version`.
+AppState::SeedPairs read_seed_pairs_file(std::filesystem::path const& path,
+                                         P1Index const* p1,
+                                         unsigned version) {
+  AppState::SeedPairs file;
   file.mtime = modification_time(path);
-  auto lines = std::make_shared<Lines>();
-  file.readable = read_file_lines(path, lines.get());
-  if (!file.readable) lines->clear();
-  file.lines = std::move(lines);
+  auto pairs = std::make_shared<std::vector<SeedPair>>();
+  std::string error;
+  file.readable =
+      read_seed_pairs(path, p1, std::thread::hardware_concurrency(),
+                      pairs.get(), &error);
+  if (!file.readable) std::fprintf(stderr, "pgui: %s\n", error.c_str());
+  file.pairs = std::move(pairs);
   file.version = version;
   return file;
+}
+
+// Opens the p1 index at `path` into `*index`, setting `*mtime` to its
+// modification time, and returns true; leaves both as they were when it
+// can't be opened, which is diagnosed, and returns false.
+bool open_p1_index(std::filesystem::path const& path, P1Index* index,
+                   std::filesystem::file_time_type* mtime) {
+  std::filesystem::file_time_type const modified = modification_time(path);
+  P1Index opened;
+  std::string error;
+  if (!opened.open(path, &error)) {
+    std::fprintf(stderr, "pgui: %s\n", error.c_str());
+    return false;
+  }
+  *index = std::move(opened);
+  *mtime = modified;
+  return true;
 }
 
 // Loads `dictionary`'s words from its path, empty when it can't be read,
@@ -194,15 +140,6 @@ bool read_dictionary(AppState::Dictionary* dictionary, unsigned version) {
   dictionary->words = std::move(words);
   dictionary->version = version;
   return ok;
-}
-
-// The keys of `map`, sorted.
-template <typename Map>
-std::vector<std::string> sorted_keys(Map const& map) {
-  std::vector<std::string> keys;
-  for (auto const& [key, value] : map) keys.push_back(key);
-  std::ranges::sort(keys);
-  return keys;
 }
 
 }  // namespace
@@ -221,34 +158,31 @@ bool load_app_state(std::string const& seed_path) {
   if (!read_dictionary(&big, ++state.dictionary_version)) return false;
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
+  state.p1_path = seed.parent_path() / "p1.idx";
+  state.p1_open = open_p1_index(state.p1_path, &state.p1, &state.p1_mtime);
   state.bad_bags_sentence.reset();
   state.load_seed_and_bad_bags(seed.filename().string());
   return true;
 }
 
 void AppState::load_seed(std::string name) {
+  if (name != seed_name) seed_pairs_file.reset();
   seed_name = std::move(name);
-  seed_map.clear();
-  seed_key = get_seed_key(seed_name);
-  seed_m = get_seed_m(seed_name);
-  seed_map.emplace(seed_key, seed_name);
-  add_other_seed_files(seed_map, seed_directory, seed_name);
-  seed_keys = sorted_keys(seed_map);
 }
 
-void AppState::refresh_seed_files(std::vector<std::string> const& keys) {
-  std::unordered_set<std::string> used = {seed_name};
-  for (std::string const& key : keys) {
-    if (auto const file = seed_map.find(key); file != seed_map.end())
-      used.insert(file->second);
-  }
-  std::erase_if(seed_files,
-                [&](auto const& loaded) { return !used.contains(loaded.first); });
-  for (auto& [file_name, file] : seed_files) {
-    std::string const path = seed_path(seed_directory, file_name);
-    if (modification_time(path) > file.mtime)
-      file = read_seed_file(path, ++seed_file_version);
-  }
+void AppState::refresh_seed_files(std::vector<SeedViewKey> const& keys) {
+  std::erase_if(seed_views, [&](auto const& view) {
+    return std::ranges::find(keys, view.first) == keys.end();
+  });
+  std::filesystem::path const path =
+      std::filesystem::path(seed_directory) / seed_name;
+  bool const p1_reopened = modification_time(p1_path) > p1_mtime &&
+                           open_p1_index(p1_path, &p1, &p1_mtime);
+  if (p1_reopened) p1_open = true;
+  if (seed_pairs_file &&
+      (p1_reopened || modification_time(path) > seed_pairs_file->mtime))
+    seed_pairs_file = read_seed_pairs_file(path, p1_open ? &p1 : nullptr,
+                                           ++seed_file_version);
 }
 
 void AppState::load_seed_and_bad_bags(std::string name) {
@@ -275,18 +209,40 @@ void AppState::load_seed_and_bad_bags(std::string name) {
   ++judged_bad_version;
 }
 
-AppState::SeedFile const& AppState::seed_file(std::string const& key) {
-  static SeedFile const none = {{}, std::make_shared<Lines const>(), false, 0};
-  auto const file = seed_map.find(key);
-  if (file == seed_map.end()) return none;
-  if (auto const found = seed_files.find(file->second);
-      found != seed_files.end())
-    return found->second;
-  return seed_files
-      .emplace(file->second,
-               read_seed_file(seed_path(seed_directory, file->second),
-                              ++seed_file_version))
-      .first->second;
+AppState::SeedPairs const& AppState::seed_pairs() {
+  if (!seed_pairs_file) {
+    seed_pairs_file = read_seed_pairs_file(
+        std::filesystem::path(seed_directory) / seed_name,
+        p1_open ? &p1 : nullptr, ++seed_file_version);
+  }
+  return *seed_pairs_file;
+}
+
+AppState::SeedView const& AppState::seed_view(std::string const& band,
+                                              std::string const& dictionary) {
+  static SeedView const none = {std::make_shared<Lines const>()};
+  SeedBand const* const found = seed_band(band);
+  if (!found) return none;
+  SeedPairs const& pairs = seed_pairs();
+  Dictionary const& words = this->dictionary(dictionary);
+  SeedView& view = seed_views[{band, dictionary}];
+  if (view.lines && view.pairs_version == pairs.version &&
+      view.dictionary_version == words.version &&
+      view.max_length_version == seed_max_length_version)
+    return view;
+  SeedFilter const filter = {found->min_length, seed_max_length,
+                             found->min_yes, &words.words->words};
+  auto lines = std::make_shared<Lines>();
+  for (SeedPair const& pair : *pairs.pairs)
+    if (seed_pair_passes(pair, filter)) lines->push_back(pair.line);
+  view = {std::move(lines), ++seed_file_version, pairs.version, words.version,
+          seed_max_length_version};
+  return view;
+}
+
+SeedBand const* AppState::seed_band(std::string_view key) {
+  auto const found = std::ranges::find(seed_bands, key, &SeedBand::key);
+  return found == seed_bands.end() ? nullptr : &*found;
 }
 
 AppState::Dictionary const& AppState::dictionary(std::string const& key) {

@@ -10,8 +10,8 @@
 // Index of a Column in pgui's Window.
 using ColumnIdentifier = int;
 
-// The lines of the seed file under `key` in app_state()'s seed_map as a
-// Column's input source.
+// The lines of app_state()'s seed view under the band `key` and its Column's
+// D: dictionary as a Column's input source (see AppState::seed_view()).
 struct Seed {
   std::string key;
   bool operator==(Seed const&) const = default;
@@ -23,7 +23,7 @@ struct Dict {
   bool operator==(Dict const&) const = default;
 };
 
-// Where a Column's items come from: nothing, one of app_state()'s seed files,
+// Where a Column's items come from: nothing, one of app_state()'s seed views,
 // the Column's dictionary, or another Column's items.
 using InputSource =
     std::variant<std::monostate, Seed, Dict, ColumnIdentifier>;
