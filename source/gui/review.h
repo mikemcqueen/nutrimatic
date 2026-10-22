@@ -10,27 +10,38 @@
 #include <vector>
 
 #include "input-source.h"
+#include "review-kind.h"
 
-// A modal review of the pairs a Column shows, each with a checkbox: checked
-// records it YES, unchecked NO, for one sentence. Pairs already classified
-// YES, for the sentence or globally, are shown checked and locked, and are
-// left out of what is recorded. Space or Enter toggles the focused pair. A
-// last row holds SUBMIT and CANCEL, each asking for confirmation, NO first;
-// Esc asks to cancel, or cancels outright when nothing is checked, and Esc
-// in a confirmation answers NO. A request to close pgui asks the same as
-// CANCEL when anything is checked. A confirmed SUBMIT runs `$WF -d "$WFROOT"
-// classify pairs` on a worker thread, during which the review is locked. When
-// it fails, its output is shown and the checks are kept.
+// A modal review of the pairs or dictionary words a Column shows, each with a
+// checkbox, for one sentence. For pairs, checked records it YES, unchecked
+// NO; pairs already classified YES, for the sentence or globally, are shown
+// checked and locked, and are left out of what is recorded. For words, each
+// row's first field, checked keeps it, unchecked removes it from the
+// dictionary, and either way records it reviewed; words already reviewed
+// are shown checked and locked, and are left out of what is recorded. Space
+// or Enter toggles the focused row. A last row holds SUBMIT and CANCEL, each
+// asking for confirmation, NO first; Esc asks to cancel, or cancels outright
+// when nothing is checked, and Esc in a confirmation answers NO. SUBMIT with
+// every row locked cancels outright. A request to close pgui
+// asks the same as CANCEL when anything is checked. A confirmed SUBMIT runs
+// `$WF -d "$WFROOT" classify pairs`, or `$WF -d "$WFROOT" remove words` on
+// pgui.sN.words with `--reviewed`, on a worker thread, during which the
+// review is locked. When it fails, its output is shown and the checks are
+// kept.
 class Review {
  public:
   enum class Result { open, cancelled, submitted, closed };
 
-  // A review of `rows` of `items`, the values beside them taken from
-  // `values`, either empty or one per item, for `sentence`. Null, with the
-  // error diagnosed, when $WFROOT is unset, the classified YES pairs can't be
-  // loaded, or an item isn't a pair.
-  static std::unique_ptr<Review> open(SharedLines items, SharedLines values,
+  // A review of `kind`, pairs or words, of `rows` of `items`, the values
+  // beside them taken from `values`, either empty or one per item, for
+  // `sentence`. Null, with the error diagnosed, when $WF or $WFROOT is
+  // unset, the classified YES pairs or the reviewed words can't be loaded,
+  // or an item isn't a pair or a word.
+  static std::unique_ptr<Review> open(ReviewKind kind, SharedLines items,
+                                      SharedLines values,
                                       std::vector<int> rows, int sentence);
+
+  ReviewKind kind() const { return kind_; }
 
   // Draws the review with its list over the screen rect from `min` to `max`
   // and its status line just above, in the colors of a focused ListBox.
@@ -45,7 +56,8 @@ class Review {
   bool running() const;
 
  private:
-  // A `wf classify pairs` run; done is set once ok and output are.
+  // A `wf classify pairs` or `wf remove words` run; done is set once ok and
+  // output are.
   struct Job {
     std::atomic<bool> done = false;
     bool ok = false;
@@ -60,9 +72,12 @@ class Review {
   // The YES/NO confirmation popup `id`; returns true when YES is chosen.
   bool render_confirm(char const* id, std::string const& question);
 
+  ReviewKind kind_ = ReviewKind::none;
   SharedLines items_;
   SharedLines values_;
   std::vector<int> rows_;
+  // For words, each row's word, parsed by open().
+  std::vector<std::string> words_;
   int sentence_ = 0;
   std::string root_;
   std::string wf_;

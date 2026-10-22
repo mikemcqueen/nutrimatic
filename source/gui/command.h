@@ -11,6 +11,7 @@
 
 #include "app-state.h"
 #include "input-source.h"
+#include "review-kind.h"
 
 // A tool call: any value with
 //   bool run(std::vector<SharedLines> const& inputs,
@@ -51,9 +52,10 @@
 // true when its output depends on the classified pairs, so it reruns when
 // they're recorded (see AppState::classified_version); commands without it
 // don't. And it may have
-//   static constexpr bool reviewable
-// true when its Column's shown pairs can be reviewed (see Review); commands
-// without it can't. And it may have
+//   ReviewKind review_kind(InputSource const& source) const
+// what a Review of its Column's shown items reviews when its Column reads
+// `source` (see Review), none when they can't be reviewed; commands without
+// it can't be reviewed. And it may have
 //   static constexpr bool has_columns_in_dictionaries
 // true when its Column's D: dropdown also offers the columns before it, and
 // choosing it sets D: to the column just before; commands without it don't.
@@ -114,7 +116,9 @@ class Command {
 
   bool reads_classified() const { return self_->reads_classified(); }
 
-  bool reviewable() const { return self_->reviewable(); }
+  ReviewKind review_kind(InputSource const& source) const {
+    return self_->review_kind(source);
+  }
 
   bool cancellable() const { return self_->cancellable(); }
 
@@ -144,7 +148,7 @@ class Command {
     virtual bool has_dictionary_in_src() const = 0;
     virtual bool reads_pairs() const = 0;
     virtual bool reads_classified() const = 0;
-    virtual bool reviewable() const = 0;
+    virtual ReviewKind review_kind(InputSource const& source) const = 0;
     virtual bool cancellable() const = 0;
     virtual bool has_columns_in_dictionaries() const = 0;
     virtual bool uses_dictionary() const = 0;
@@ -216,11 +220,11 @@ class Command {
       else
         return false;
     }
-    bool reviewable() const override {
-      if constexpr (requires { T::reviewable; })
-        return T::reviewable;
+    ReviewKind review_kind(InputSource const& source) const override {
+      if constexpr (requires { data.review_kind(source); })
+        return data.review_kind(source);
       else
-        return false;
+        return ReviewKind::none;
     }
     bool cancellable() const override {
       if constexpr (requires { T::cancellable; })

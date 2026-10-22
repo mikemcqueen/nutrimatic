@@ -29,13 +29,15 @@
 // a column's ListBox has keyboard focus, move it to the ListBox of the
 // nearest column that shows one on that side (see ListBox::focus()).
 // Shift+R, while a column's ListBox has keyboard focus, opens a Review of the
-// items it shows, when its command is reviewable (see Command::reviewable()),
-// its output is up to date, and a sentence is selected, and otherwise says
-// why on stderr; once the Review records verdicts, app_state()'s
-// classified_version goes up. Keyboard focus returns to the column's ListBox
-// when the Review closes. Tapping Alt doesn't move keyboard focus, so the
-// Alt release that follows Alt-Tab back into the window leaves it in place.
-// A request to close pgui goes through the open Review, if any (see
+// items it shows, when its command can review them from its source (see
+// Command::review_kind()), its output is up to date, and a sentence is
+// selected, and otherwise says why on stderr; once a Review of pairs records
+// verdicts, app_state()'s classified_version goes up, and once a Review of
+// words records them, the loaded dictionaries are refreshed (see
+// AppState::refresh_dictionaries()). Keyboard focus returns to the column's
+// ListBox when the Review closes. Tapping Alt doesn't move keyboard focus, so
+// the Alt release that follows Alt-Tab back into the window leaves it in
+// place. A request to close pgui goes through the open Review, if any (see
 // Review::request_close()).
 class Window {
  public:
