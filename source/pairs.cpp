@@ -143,11 +143,9 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (!args.dictionary_file) {
-        char const* const root = require_workflow_root(PROGRAM);
-        if (root == NULL) return 1;
-        args.dictionary_file = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
-    }
+    if (!default_workflow_path(PROGRAM, &args.dictionary_file,
+                               WORKFLOW_DICT_PATH))
+        return 1;
 
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
 

@@ -5,16 +5,11 @@
 #include <stdlib.h>
 
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <system_error>
 
 #include "log.h"
-
-// Return the configured workflow root, or NULL when it is unset or empty.
-inline char const* workflow_root_from_env() {
-  char const* const root = getenv("WFROOT");
-  return root != NULL && root[0] != '\0' ? root : NULL;
-}
 
 // Workflow-root-relative paths and target-local artifact names shared by the
 // DFS/query and segment-selection tools. Keep these aligned with the workflow
@@ -32,6 +27,7 @@ inline constexpr char WORKFLOW_DICT_PATH[] = ".wf/dict/words.filtered";
 inline constexpr char WORKFLOW_SMALL_DICT_PATH[] = ".wf/dict/dict.filtered";
 inline constexpr char WORKFLOW_REVIEWED_WORDS_PATH[] =
     ".wf/dict/done/reviewed.words";
+inline constexpr char WORKFLOW_P1_OUT_PATH[] = ".wf/p1/done/out";
 
 inline constexpr char WORKFLOW_TARGET_NO_PAIRS_NAME[] = "no.pairs";
 inline constexpr char WORKFLOW_TARGET_BEST_PAIRS_NAME[] = "best.pairs";
@@ -55,15 +51,27 @@ inline bool check_workflow_root(std::string_view program,
   return false;
 }
 
-// As workflow_root_from_env(), but also requires check_workflow_root(), and
-// diagnoses either failure prefixed by `program`.
-inline char const* require_workflow_root(std::string_view program) {
-  char const* const root = workflow_root_from_env();
-  if (root == NULL) {
+// The nonempty WFROOT, checked by check_workflow_root(); empty, diagnosed
+// prefixed by `program`, when it is unset, empty or fails the check.
+inline std::filesystem::path require_workflow_root(std::string_view program) {
+  char const* const root = getenv("WFROOT");
+  if (root == NULL || root[0] == '\0') {
     report(program, "WFROOT must be set and nonempty");
-    return NULL;
+    return {};
   }
-  return check_workflow_root(program, root) ? root : NULL;
+  return check_workflow_root(program, root) ? root : std::filesystem::path();
+}
+
+// Sets an unset `*path` to `relative` under require_workflow_root(). False
+// when the root is needed and unusable, diagnosed prefixed by `program`.
+inline bool default_workflow_path(std::string_view program,
+                                  std::optional<std::filesystem::path>* path,
+                                  std::string_view relative) {
+  if (*path) return true;
+  std::filesystem::path const root = require_workflow_root(program);
+  if (root.empty()) return false;
+  *path = root / relative;
+  return true;
 }
 
 #endif

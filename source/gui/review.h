@@ -4,6 +4,7 @@
 #include <imgui.h>
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -79,7 +80,7 @@ class Review {
   // For words, each row's word, parsed by open().
   std::vector<std::string> words_;
   int sentence_ = 0;
-  std::string root_;
+  std::filesystem::path root_;
   std::string wf_;
   std::vector<char> checked_;
   std::vector<char> locked_;

@@ -161,7 +161,8 @@ std::string seed_path(std::string const& directory, std::string const& name) {
 
 // The modification time of the file at `path`, or the earliest time when it
 // can't be stat'ed.
-std::filesystem::file_time_type modification_time(std::string const& path) {
+std::filesystem::file_time_type modification_time(
+    std::filesystem::path const& path) {
   std::error_code error;
   std::filesystem::file_time_type const mtime =
       std::filesystem::last_write_time(path, error);
@@ -207,20 +208,16 @@ std::vector<std::string> sorted_keys(Map const& map) {
 }  // namespace
 
 bool load_app_state(std::string const& seed_path) {
-  char const* const root = require_workflow_root("pgui");
-  if (root == NULL) return false;
-  std::string const path =
-      (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
-  std::string const small_path =
-      (std::filesystem::path(root) / WORKFLOW_SMALL_DICT_PATH).string();
+  std::filesystem::path const root = require_workflow_root("pgui");
+  if (root.empty()) return false;
   AppState& state = app_state();
   state.set_letters("$S1");
   state.used_letters.clear();
   state.load_sentence_letters();
   state.dictionaries.clear();
-  state.dictionaries["sml_dict"].path = small_path;
+  state.dictionaries["sml_dict"].path = root / WORKFLOW_SMALL_DICT_PATH;
   AppState::Dictionary& big = state.dictionaries["big_dict"];
-  big.path = path;
+  big.path = root / WORKFLOW_DICT_PATH;
   if (!read_dictionary(&big, ++state.dictionary_version)) return false;
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
@@ -371,10 +368,10 @@ void AppState::set_letters(std::string letters) {
 
 void AppState::load_sentence_letters() {
   sentence_letters.reset();
-  char const* const root = require_workflow_root("pgui");
-  if (sentence != CLASSIFIED_NO_SENTENCE && root) {
+  std::filesystem::path const root = require_workflow_root("pgui");
+  if (sentence != CLASSIFIED_NO_SENTENCE && !root.empty()) {
     std::filesystem::path const path =
-        std::filesystem::path(root) / WORKFLOW_BEST_PATH /
+        root / WORKFLOW_BEST_PATH /
         ("s" + std::to_string(sentence)) / "letters";
     std::string letters;
     if (load_letter_bag(path, "pgui", &letters))

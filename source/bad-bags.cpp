@@ -381,16 +381,10 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
-  std::filesystem::path dict_path;
-  if (args.dictionary) {
-    dict_path = *args.dictionary;
-  } else {
-    char const* const root = require_workflow_root(PROGRAM);
-    if (root == NULL) return 1;
-    dict_path = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
-  }
+  if (!default_workflow_path(PROGRAM, &args.dictionary, WORKFLOW_DICT_PATH))
+    return 1;
   DfsDictionary dictionary;
-  if (!load_dictionary(dict_path, &dictionary)) return 1;
+  if (!load_dictionary(*args.dictionary, &dictionary)) return 1;
 
   SubBagIndex const index(args.letters, size_t(args.max_letters));
   if (!index.fits()) {

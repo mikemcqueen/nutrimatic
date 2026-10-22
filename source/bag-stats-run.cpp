@@ -224,10 +224,9 @@ bool load_word_bags(std::string_view program,
 }
 
 bool load_inner_dictionary(std::string_view program, PairsExactCounter* out) {
-    char const* const root = require_workflow_root(program);
-    if (root == NULL) return false;
-    std::string const path =
-        (std::filesystem::path(root) / WORKFLOW_DICT_PATH).string();
+    std::filesystem::path const root = require_workflow_root(program);
+    if (root.empty()) return false;
+    std::filesystem::path const path = root / WORKFLOW_DICT_PATH;
     FILE* wf = fopen(path.c_str(), "r");
     if (!wf) { perror(path.c_str()); return false; }
 
@@ -257,8 +256,8 @@ bool load_rejected_pairs(std::string_view program, BagStatsArgs const& args,
     if (!args.drop_no) return true;
     if (args.sentence == CLASSIFIED_NO_SENTENCE)
         alert(program, "--sentence not supplied");
-    char const* const root = require_workflow_root(program);
-    return root != NULL && load_no_pairs(program, root, args.sentence, out);
+    std::filesystem::path const root = require_workflow_root(program);
+    return !root.empty() && load_no_pairs(program, root, args.sentence, out);
 }
 
 bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,

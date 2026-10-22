@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,7 +20,7 @@ struct PairFilterOptions {
   std::vector<std::string> reject_paths;
   std::string dictionary_path;
   bool workflow = false;
-  std::string workflow_root;
+  std::filesystem::path workflow_root;
   bool workflow_yes = false;
   int sentence = CLASSIFIED_NO_SENTENCE;
   // The -t/--target value, or empty to take the target from `input_path`.

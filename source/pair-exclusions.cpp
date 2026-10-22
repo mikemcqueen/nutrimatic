@@ -457,9 +457,8 @@ bool load_pair_filters(
 
   std::filesystem::path wfroot;
   if (options.workflow) {
-    char const* const root = require_workflow_root(program);
-    if (root == NULL) return false;
-    wfroot = root;
+    wfroot = require_workflow_root(program);
+    if (wfroot.empty()) return false;
   } else if (!options.workflow_root.empty()) {
     wfroot = options.workflow_root;
     if (!check_workflow_root(program, wfroot)) return false;

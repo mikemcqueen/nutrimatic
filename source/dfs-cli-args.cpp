@@ -969,8 +969,8 @@ static bool finalize_dfs_workflow_args(
   }
 
   if (args->workflow) {
-    char const* const root = require_workflow_root(program);
-    if (root == NULL) return false;
+    std::filesystem::path const root = require_workflow_root(program);
+    if (root.empty()) return false;
     args->workflow_root = root;
   } else if (args->workflow_root.empty()) {
     if (!args->target.empty()) {
@@ -982,7 +982,7 @@ static bool finalize_dfs_workflow_args(
     return false;
   }
 
-  fs::path const root(args->workflow_root);
+  fs::path const& root = args->workflow_root;
   std::error_code error;
 
   std::vector<std::string> target_parts;
@@ -1063,7 +1063,7 @@ bool load_dfs_workflow_target_settings(
   assert(parts.size() == 4);
 
   fs::path const letters_path =
-      fs::path(args.workflow_root) / WORKFLOW_BEST_PATH / parts[0] / "letters";
+      args.workflow_root / WORKFLOW_BEST_PATH / parts[0] / "letters";
   if (!require_regular_file(
           letters_path, program, "workflow sentence letters file"))
     return false;
@@ -1098,7 +1098,7 @@ static bool collect_workflow_reject_files(
     std::vector<std::string>* paths) {
   if (args.workflow_root.empty()) return true;
 
-  fs::path const root(args.workflow_root);
+  fs::path const& root = args.workflow_root;
   if (!push_optional_pair_file(
           root / WORKFLOW_NO_PAIRS_PATH, program,
           "classified NO pair file", paths))

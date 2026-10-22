@@ -38,7 +38,7 @@ cat > "$test_dir/p1/a.jsonl" <<'JSON'
 {"pair": "pound,writer", "seq": 0, "logprobs": {"fwd": [{"YES": 0.9}, {"NO": 0.1}], "rvs": [{"NO": 0.3}, {"YES": 0.7}]}}
 {"pair": "author,abelard", "seq": 1, "logprobs": {"fwd": [{"NO": 0.5}, {"YES": 0.5}], "rvs": [{"YES": 0.6}, {"NO": 0.4}]}}
 JSON
-"$make_p1_index" --threads 1 "$test_dir/p1" "$test_dir/p1.idx" ||
+"$make_p1_index" --threads 1 -d "$test_dir/p1" -o "$test_dir/p1.idx" ||
   fail "make-p1-index failed"
 
 # Two answers, POUND and ABELARD; clue "American writer" -> POUND, and

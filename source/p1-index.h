@@ -4,6 +4,7 @@
 #include "mapped-file.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -22,8 +23,9 @@ struct P1Yes {
 // pair) at `out`, reading files on up to `threads` threads. A pair on more
 // than one line keeps each order's largest YES; a line without one counts
 // as 0. False, with `*error` set, on a read or write failure.
-bool build_p1_index(std::string const& dir, std::string const& out,
-                    size_t threads, std::string* error);
+bool build_p1_index(std::filesystem::path const& dir,
+                    std::filesystem::path const& out, size_t threads,
+                    std::string* error);
 
 // A make-p1-index file, mapped.
 class P1Index {
@@ -31,7 +33,7 @@ class P1Index {
     // Opens `path`. False, with `*error` set, when it isn't a version
     // P1_INDEX_VERSION index or a source file it names is missing or has
     // changed since.
-    bool open(std::string const& path, std::string* error);
+    bool open(std::filesystem::path const& path, std::string* error);
 
     // The pair's YES probabilities; false when it has no verdict.
     bool yes(std::string_view a, std::string_view b, P1Yes* out) const;

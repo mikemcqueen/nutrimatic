@@ -122,15 +122,16 @@ bool write_all(FILE* out, void const* data, size_t size) {
 
 }  // namespace
 
-bool build_p1_index(std::string const& dir, std::string const& out,
-                    size_t threads, std::string* error) {
+bool build_p1_index(std::filesystem::path const& dir,
+                    std::filesystem::path const& out, size_t threads,
+                    std::string* error) {
     std::error_code code;
     std::filesystem::path const root = std::filesystem::absolute(dir, code);
     std::vector<std::filesystem::path> files;
     for (auto const& entry : std::filesystem::directory_iterator(root, code))
         if (entry.path().extension() == ".jsonl") files.push_back(entry.path());
     if (code) {
-        *error = dir + ": " + code.message();
+        *error = dir.string() + ": " + code.message();
         return false;
     }
     std::sort(files.begin(), files.end());
@@ -230,7 +231,7 @@ bool build_p1_index(std::string const& dir, std::string const& out,
     header.word_text = text.size();
     header.pairs = keys.size();
 
-    std::string const temporary = out + ".tmp";
+    std::string const temporary = out.string() + ".tmp";
     FILE* file = fopen(temporary.c_str(), "wb");
     if (file == NULL) {
         *error = temporary + ": can't write";
@@ -245,16 +246,16 @@ bool build_p1_index(std::string const& dir, std::string const& out,
     if (fclose(file) != 0 || !written ||
         rename(temporary.c_str(), out.c_str()) != 0) {
         remove(temporary.c_str());
-        *error = out + ": can't write";
+        *error = out.string() + ": can't write";
         return false;
     }
     return true;
 }
 
-bool P1Index::open(std::string const& path, std::string* error) {
+bool P1Index::open(std::filesystem::path const& path, std::string* error) {
     if (!file_.open(path, error)) return false;
     auto const bad = [&](std::string_view what) {
-        *error = (path + ": ").append(what);
+        *error = (path.string() + ": ").append(what);
         return false;
     };
     Header header;
@@ -306,7 +307,7 @@ bool P1Index::open(std::string const& path, std::string* error) {
             std::to_string((long long)info.st_size) !=
                 line.substr(tab + 1, tab2 - tab - 1) ||
             std::to_string(mtime_ns(info)) != line.substr(tab2 + 1)) {
-            *error = path + ": " + source.string() +
+            *error = path.string() + ": " + source.string() +
                 " is missing or has changed; rebuild it with make-p1-index";
             return false;
         }
@@ -317,7 +318,7 @@ bool P1Index::open(std::string const& path, std::string* error) {
     for (auto const& entry : std::filesystem::directory_iterator(root, code))
         present += entry.path().extension() == ".jsonl";
     if (code || present != listed) {
-        *error = path + ": " + root.string() +
+        *error = path.string() + ": " + root.string() +
             " has new .jsonl files; rebuild it with make-p1-index";
         return false;
     }

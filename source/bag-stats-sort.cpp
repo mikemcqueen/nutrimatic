@@ -337,8 +337,9 @@ bool load_dump(Args const& args, Dump* dump) {
         }
         if (args.sentence != CLASSIFIED_NO_SENTENCE) h.sentence = args.sentence;
 
-        char const* const root = require_workflow_root(PROGRAM);
-        if (root == NULL) return false;
+        std::filesystem::path const root =
+            require_workflow_root(PROGRAM);
+        if (root.empty()) return false;
         DfsPairSet rejected;
         PairsCounts const bag = pairs_letter_counts(h.letters);
         std::optional<std::filesystem::path> prospects;

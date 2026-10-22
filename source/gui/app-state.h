@@ -100,7 +100,7 @@ struct AppState {
   // when read, the earliest time when it can't be stat'ed, and a version
   // unique to that load.
   struct Dictionary {
-    std::string path;
+    std::filesystem::path path;
     SharedDictionary words;
     std::filesystem::file_time_type mtime;
     unsigned version = 0;

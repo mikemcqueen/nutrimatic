@@ -4,6 +4,7 @@
 #include "mapped-file.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -47,7 +48,7 @@ class ClueIndex {
     // Opens the index beside `cluedata`. False, with `*error` set, when it
     // can't be read, isn't CLUE_INDEX_VERSION, or was built from a different
     // cluedata.
-    bool open(std::string const& cluedata, std::string* error);
+    bool open(std::filesystem::path const& cluedata, std::string* error);
 
     CluePairCounts pair(std::string_view a, std::string_view b) const;
 
