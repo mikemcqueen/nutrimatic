@@ -305,6 +305,16 @@ make_p1_index = executable('make-p1-index', 'make-p1-index.cpp',
   dependencies: thread_dep,
   install: true)
 
+seed_view_lib = static_library('seed-view', 'seed-view.cpp',
+  link_with: [pair_evidence_lib, dfs_class_list_lib],
+  dependencies: thread_dep)
+
+seed_pairs = executable('seed-pairs', 'seed-pairs.cpp',
+  link_with: [seed_view_lib, pair_evidence_lib, dfs_class_list_lib,
+              optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
 segment_stats = executable('segment-stats', 'segment-stats.cpp',
   link_with: [dfs_class_list_lib, optparse_lib, index_lib],
   dependencies: [segment_output_dep, segment_rows_dep, thread_dep],
@@ -497,6 +507,11 @@ test(
   'pair-prior',
   bash,
   args: [files('test-pair-prior.sh'), pair_prior, make_p1_index],
+)
+test(
+  'seed-pairs',
+  bash,
+  args: [files('test-seed-pairs.sh'), seed_pairs, make_p1_index],
 )
 if have_cuda
   test(

@@ -28,11 +28,18 @@ struct Header {
     uint64_t words;
     uint64_t word_text;
     uint64_t pairs;
-    uint64_t padding[2];
+    uint64_t word_slots;
+    uint64_t padding;
 };
 static_assert(sizeof(Header) == 64);
 
 size_t padded(size_t size) { return (size + 7) & ~size_t(7); }
+
+uint64_t word_hash(std::string_view word) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (char c : word) hash = (hash ^ uint8_t(c)) * 1099511628211ULL;
+    return hash;
+}
 
 long long mtime_ns(struct stat const& info) {
     return (long long)info.st_mtim.tv_sec * 1000000000LL +
@@ -217,10 +224,23 @@ bool build_p1_index(std::filesystem::path const& dir,
     std::vector<uint16_t> values;
     keys.reserve(entries.size());
     values.reserve(2 * entries.size());
+    std::vector<uint32_t> pair_starts(words.size() + 1, 0);
     for (Entry const& entry : entries) {
         keys.push_back(entry.key);
         values.push_back(entry.low_high);
         values.push_back(entry.high_low);
+        ++pair_starts[(entry.key >> 32) + 1];
+    }
+    for (size_t i = 1; i < pair_starts.size(); ++i)
+        pair_starts[i] += pair_starts[i - 1];
+
+    size_t slots = 1;
+    while (slots < 2 * words.size()) slots *= 2;
+    std::vector<uint32_t> word_slots(slots, 0);
+    for (size_t id = 0; id < words.size(); ++id) {
+        size_t slot = word_hash(words[id]) & (slots - 1);
+        while (word_slots[slot] != 0) slot = (slot + 1) & (slots - 1);
+        word_slots[slot] = uint32_t(id + 1);
     }
 
     Header header{};
@@ -230,6 +250,7 @@ bool build_p1_index(std::filesystem::path const& dir,
     header.words = words.size();
     header.word_text = text.size();
     header.pairs = keys.size();
+    header.word_slots = word_slots.size();
 
     std::string const temporary = out.string() + ".tmp";
     FILE* file = fopen(temporary.c_str(), "wb");
@@ -242,7 +263,9 @@ bool build_p1_index(std::filesystem::path const& dir,
         write_all(file, offsets.data(), offsets.size() * 4) &&
         write_all(file, text.data(), text.size()) &&
         write_all(file, keys.data(), keys.size() * 8) &&
-        write_all(file, values.data(), values.size() * 2);
+        write_all(file, values.data(), values.size() * 2) &&
+        write_all(file, pair_starts.data(), pair_starts.size() * 4) &&
+        write_all(file, word_slots.data(), word_slots.size() * 4);
     if (fclose(file) != 0 || !written ||
         rename(temporary.c_str(), out.c_str()) != 0) {
         remove(temporary.c_str());
@@ -270,7 +293,8 @@ bool P1Index::open(std::filesystem::path const& path, std::string* error) {
     size_t offset = sizeof(header);
     size_t const sizes[] = {header.source_text, (header.words + 1) * 4,
                             header.word_text, header.pairs * 8,
-                            header.pairs * 4};
+                            header.pairs * 4, (header.words + 1) * 4,
+                            header.word_slots * 4};
     size_t total = offset;
     for (size_t size : sizes) total += padded(size);
     if (total != file_.size()) return bad("truncated");
@@ -287,11 +311,30 @@ bool P1Index::open(std::filesystem::path const& path, std::string* error) {
              header.pairs};
     offset += padded(sizes[3]);
     values_ = reinterpret_cast<uint16_t const*>(file_.data() + offset);
+    offset += padded(sizes[4]);
+    pair_starts_ = reinterpret_cast<uint32_t const*>(file_.data() + offset);
+    offset += padded(sizes[5]);
+    word_slots_ = {reinterpret_cast<uint32_t const*>(file_.data() + offset),
+                   header.word_slots};
     if (word_offsets_[0] != 0 || word_offsets_[words_] != header.word_text)
         return bad("word offsets don't agree; rebuild it");
     for (size_t i = 0; i < words_; ++i)
         if (word_offsets_[i] > word_offsets_[i + 1])
             return bad("word offsets don't agree; rebuild it");
+    if (pair_starts_[0] != 0 || pair_starts_[words_] != header.pairs)
+        return bad("pair starts don't agree; rebuild it");
+    for (size_t i = 0; i < words_; ++i)
+        if (pair_starts_[i] > pair_starts_[i + 1])
+            return bad("pair starts don't agree; rebuild it");
+    if (word_slots_.size <= words_ ||
+        (word_slots_.size & (word_slots_.size - 1)) != 0)
+        return bad("word slots don't agree; rebuild it");
+    bool empty_slot = false;
+    for (uint32_t slot : word_slots_) {
+        if (slot > words_) return bad("word slots don't agree; rebuild it");
+        empty_slot |= slot == 0;
+    }
+    if (!empty_slot) return bad("word slots don't agree; rebuild it");
 
     size_t const first = sources.find('\n');
     std::filesystem::path const root(std::string(sources.substr(0, first)));
@@ -325,37 +368,34 @@ bool P1Index::open(std::filesystem::path const& path, std::string* error) {
     return true;
 }
 
-int64_t P1Index::word(std::string_view text) const {
-    size_t low = 0;
-    size_t high = words_;
-    while (low < high) {
-        size_t const mid = (low + high) / 2;
-        std::string_view const word(word_text_ + word_offsets_[mid],
-                                    word_offsets_[mid + 1] -
-                                        word_offsets_[mid]);
-        if (word < text) low = mid + 1;
-        else high = mid;
-    }
-    if (low == words_ ||
-        std::string_view(word_text_ + word_offsets_[low],
-                         word_offsets_[low + 1] - word_offsets_[low]) != text)
-        return -1;
-    return int64_t(low);
-}
-
 bool P1Index::yes(std::string_view a, std::string_view b, P1Yes* out) const {
     int64_t const id_a = word(a);
     int64_t const id_b = word(b);
     if (id_a < 0 || id_b < 0) return false;
     bool const swapped = id_b < id_a;
-    uint64_t const key = swapped ? uint64_t(id_b) << 32 | uint64_t(id_a)
-                                 : uint64_t(id_a) << 32 | uint64_t(id_b);
-    uint64_t const* found = std::lower_bound(keys_.begin(), keys_.end(), key);
-    if (found == keys_.end() || *found != key) return false;
+    uint64_t const low = uint64_t(swapped ? id_b : id_a);
+    uint64_t const key = low << 32 | uint64_t(swapped ? id_a : id_b);
+    uint64_t const* const first = keys_.begin() + pair_starts_[low];
+    uint64_t const* const last = keys_.begin() + pair_starts_[low + 1];
+    uint64_t const* found = std::lower_bound(first, last, key);
+    if (found == last || *found != key) return false;
     size_t const i = size_t(found - keys_.begin());
     double const low_high = values_[2 * i] / 65535.0;
     double const high_low = values_[2 * i + 1] / 65535.0;
     out->ab = swapped ? high_low : low_high;
     out->ba = swapped ? low_high : high_low;
     return true;
+}
+
+int64_t P1Index::word(std::string_view text) const {
+    size_t const mask = word_slots_.size - 1;
+    for (size_t slot = word_hash(text) & mask; word_slots_[slot] != 0;
+         slot = (slot + 1) & mask) {
+        size_t const id = word_slots_[slot] - 1;
+        std::string_view const word(word_text_ + word_offsets_[id],
+                                    word_offsets_[id + 1] -
+                                        word_offsets_[id]);
+        if (word == text) return int64_t(id);
+    }
+    return -1;
 }

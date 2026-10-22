@@ -9,7 +9,7 @@
 #include <string_view>
 
 // The file format version make-p1-index writes and P1Index reads.
-inline constexpr uint32_t P1_INDEX_VERSION = 1;
+inline constexpr uint32_t P1_INDEX_VERSION = 2;
 
 // A pair's phase 1 YES probabilities, one per word order.
 struct P1Yes {
@@ -48,6 +48,10 @@ class P1Index {
     size_t words_ = 0;
     NpyArray<uint64_t> keys_;
     uint16_t const* values_ = nullptr;
+    // Indexed by the lower word id: where its keys start in keys_.
+    uint32_t const* pair_starts_ = nullptr;
+    // Open-addressed by word_hash(), word id + 1 per slot, 0 when empty.
+    NpyArray<uint32_t> word_slots_;
 };
 
 #endif
