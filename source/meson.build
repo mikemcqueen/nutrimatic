@@ -586,6 +586,7 @@ if sdl2_dep.found()
     include_directories: pgui_inc,
     link_with: [pfilter_lib, freqsort_lib, bag_stats_cpu_lib,
       bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib, pairs_lib,
-      pair_evidence_lib, lc_lib, dfs_class_list_lib, optparse_lib],
+      seed_view_lib, pair_evidence_lib, lc_lib, dfs_class_list_lib,
+      optparse_lib],
     dependencies: [imgui_backends_dep, thread_dep], install: true)
 endif

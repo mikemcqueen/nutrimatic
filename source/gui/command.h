@@ -56,9 +56,10 @@
 // what a Review of its Column's shown items reviews when its Column reads
 // `source` (see Review), none when they can't be reviewed; commands without
 // it can't be reviewed. And it may have
-//   static constexpr bool has_columns_in_dictionaries
-// true when its Column's D: dropdown also offers the columns before it, and
-// choosing it sets D: to the column just before; commands without it don't.
+//   static constexpr bool has_word_bag_source
+// true when its Column shows a wb: dropdown of the dictionaries and the
+// columns before it, naming its params' word_bag_lines, and choosing it sets
+// wb: to the column just before; commands without it don't.
 // And it may have
 //   static constexpr bool uses_dictionary
 // true when run() reads its params' dictionary or dictionary_lines whatever
@@ -71,8 +72,8 @@
 // true when run() checks its params' stop token, so its Column offers an x
 // button that cancels it; commands without it aren't. And it may have
 //   static constexpr char const* default_seed
-// the seed key choosing it sets its Column's source to, when app_state()'s
-// seed_map has it; commands without it have none.
+// the seed key choosing it sets its Column's source to, when it is one of
+// AppState::seed_bands; commands without it have none.
 // Holds its value by copy.
 class Command {
  public:
@@ -122,9 +123,7 @@ class Command {
 
   bool cancellable() const { return self_->cancellable(); }
 
-  bool has_columns_in_dictionaries() const {
-    return self_->has_columns_in_dictionaries();
-  }
+  bool has_word_bag_source() const { return self_->has_word_bag_source(); }
 
   bool uses_dictionary() const { return self_->uses_dictionary(); }
 
@@ -150,7 +149,7 @@ class Command {
     virtual bool reads_classified() const = 0;
     virtual ReviewKind review_kind(InputSource const& source) const = 0;
     virtual bool cancellable() const = 0;
-    virtual bool has_columns_in_dictionaries() const = 0;
+    virtual bool has_word_bag_source() const = 0;
     virtual bool uses_dictionary() const = 0;
     virtual bool uses_big_dictionary() const = 0;
     virtual std::string default_seed() const = 0;
@@ -232,9 +231,9 @@ class Command {
       else
         return false;
     }
-    bool has_columns_in_dictionaries() const override {
-      if constexpr (requires { T::has_columns_in_dictionaries; })
-        return T::has_columns_in_dictionaries;
+    bool has_word_bag_source() const override {
+      if constexpr (requires { T::has_word_bag_source; })
+        return T::has_word_bag_source;
       else
         return false;
     }

@@ -65,8 +65,8 @@ float combo_width(std::span<char const* const> labels) {
          ImGui::GetFrameHeight();
 }
 
-// The D: dropdown's choices: each label and its key in app_state()'s
-// dictionaries.
+// The D: and wb: dropdowns' dictionary choices: each label and its key in
+// app_state()'s dictionaries.
 constexpr std::pair<char const*, char const*> dictionary_choices[] = {
     {"DICT", "sml_dict"}, {"BIG", "big_dict"}};
 
@@ -169,17 +169,16 @@ void Column::render() {
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("f:");
   ImGui::SameLine(0, 0);
-  std::vector<std::string> const dictionary_labels = this->dictionary_labels();
   std::vector<char const*> dictionary_widest;
-  for (std::string const& label : dictionary_labels)
-    dictionary_widest.push_back(label.c_str());
+  for (auto const& [label, key] : dictionary_choices)
+    dictionary_widest.push_back(label);
   float const dictionary_width = combo_width(dictionary_widest);
   bool entered = clearable_input("filter", filter_, sizeof filter_,
                                  ImGui::GetStyle().ItemSpacing.x +
                                      ImGui::CalcTextSize("D:").x +
                                      dictionary_width);
   ImGui::SameLine();
-  render_dictionary(dictionary_labels, dictionary_width);
+  render_dictionary(dictionary_width);
 
   if (ImGui::BeginTable("##command", 2)) {
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed,
@@ -196,24 +195,22 @@ void Column::render() {
             choice_ == i)
           continue;
         choice_ = i;
-        if (commands_[choice_] &&
-            commands_[choice_]->has_columns_in_dictionaries() && id_ > 0)
-          dictionary_column_ = id_ - 1;
+        if (has_word_bag_source() && id_ > 0) word_bag_column_ = id_ - 1;
         if (commands_[choice_] &&
             commands_[choice_]->has_dictionary_in_src() &&
             !std::holds_alternative<Dict>(source_))
           source_ = Dict{};
         std::string const seed =
             commands_[choice_] ? commands_[choice_]->default_seed() : "";
-        if (!seed.empty() && app_state().seed_map.contains(seed)) {
+        if (!seed.empty() &&
+            AppState::seed_band(seed)) {
           source_ = Seed{seed};
         } else if (commands_[choice_] && commands_[choice_]->reads_pairs() &&
                    std::holds_alternative<Dict>(source_)) {
           if (id_ > 0)
             source_ = id_ - 1;
-          else if (std::string const key = "seed85" + app_state().seed_m;
-                   app_state().seed_map.contains(key))
-            source_ = Seed{key};
+          else
+            source_ = Seed{AppState::seed_key};
         }
       }
       ImGui::EndCombo();
@@ -229,6 +226,10 @@ void Column::render() {
   if (commands_[choice_] &&
       commands_[choice_]->render_display_options(&entered))
     ++options_version_;
+  if (has_word_bag_source()) {
+    ImGui::SameLine();
+    render_word_bag();
+  }
   ImGui::EndGroup();
   if (entered) {
     if (applied_filter_ != filter_) {
@@ -242,14 +243,14 @@ void Column::render() {
   if (job_ && job_->done.load(std::memory_order_acquire)) finish();
   Column const* source = source_column();
   Column const* letters = letters_column();
-  Column const* dictionary = dictionary_column();
+  Column const* word_bag = word_bag_column();
   std::optional<ColumnIdentifier> waiting_for;
   if (source && source->pending())
     waiting_for = std::get<ColumnIdentifier>(source_);
   else if (letters && letters->pending())
     waiting_for = letter_source_;
-  else if (dictionary && dictionary->pending())
-    waiting_for = dictionary_column_;
+  else if (word_bag && word_bag->pending())
+    waiting_for = word_bag_column_;
   bool const waiting = waiting_for.has_value();
   Key const want = wanted_key();
   if (job_ && job_->cancellable && job_->key != want) worker_.request_stop();
@@ -355,21 +356,21 @@ void Column::render_letter_count(float x, float y) const {
 }
 
 void Column::render_sources() {
-  std::vector<std::string> const& keys = app_state().seed_keys;
   bool const has_dictionary_in_src =
       commands_[choice_] && commands_[choice_]->has_dictionary_in_src();
   std::string const label = source_label(source_);
   std::vector<char const*> widest = {label.c_str()};
-  for (std::string const& key : keys) widest.push_back(key.c_str());
+  for (SeedBand const& band : AppState::seed_bands)
+    widest.push_back(band.key);
   if (has_dictionary_in_src) widest.push_back("dict");
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("src:");
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(combo_width(widest));
   if (ImGui::BeginCombo("##source", label.c_str())) {
-    for (std::string const& key : keys) {
-      InputSource const choice = Seed{key};
-      if (ImGui::Selectable(key.c_str(), source_ == choice)) source_ = choice;
+    for (SeedBand const& band : AppState::seed_bands) {
+      InputSource const choice = Seed{band.key};
+      if (ImGui::Selectable(band.key, source_ == choice)) source_ = choice;
     }
     if (has_dictionary_in_src) {
       InputSource const choice = Dict{};
@@ -401,36 +402,50 @@ void Column::render_sources() {
   }
 }
 
-std::vector<std::string> Column::dictionary_labels() const {
-  std::vector<std::string> labels;
-  for (auto const& [label, key] : dictionary_choices) labels.push_back(label);
-  if (commands_[choice_] &&
-      commands_[choice_]->has_columns_in_dictionaries()) {
-    for (ColumnIdentifier id = 0; id < id_; ++id)
-      labels.push_back(std::to_string(id + 1));
-  }
-  return labels;
-}
-
-void Column::render_dictionary(std::vector<std::string> const& labels,
-                               float width) {
-  int const choices = static_cast<int>(std::size(dictionary_choices));
-  int const chosen =
-      dictionary_column() ? choices + *dictionary_column_ : dictionary_;
+void Column::render_dictionary(float width) {
   ImGui::TextUnformatted("D:");
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(width);
-  if (!ImGui::BeginCombo("##dictionary", labels[chosen].c_str())) return;
+  if (!ImGui::BeginCombo("##dictionary", dictionary_choices[dictionary_].first))
+    return;
+  for (int i = 0; i < static_cast<int>(std::size(dictionary_choices)); ++i) {
+    if (ImGui::Selectable(dictionary_choices[i].first, dictionary_ == i))
+      dictionary_ = i;
+  }
+  ImGui::EndCombo();
+}
+
+void Column::render_word_bag() {
+  std::vector<std::string> labels;
+  for (auto const& [label, key] : dictionary_choices) labels.push_back(label);
+  for (ColumnIdentifier id = 0; id < id_; ++id)
+    labels.push_back(std::to_string(id + 1));
+  std::vector<char const*> widest;
+  for (std::string const& label : labels) widest.push_back(label.c_str());
+  int const choices = static_cast<int>(std::size(dictionary_choices));
+  int const chosen =
+      word_bag_column() ? choices + *word_bag_column_ : word_bag_;
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("wb:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(combo_width(widest));
+  if (!ImGui::BeginCombo("##word_bag", labels[chosen].c_str())) return;
   for (int i = 0; i < static_cast<int>(labels.size()); ++i) {
     if (!ImGui::Selectable(labels[i].c_str(), chosen == i)) continue;
     if (i < choices) {
-      dictionary_ = i;
-      dictionary_column_.reset();
+      word_bag_ = i;
+      word_bag_column_.reset();
     } else {
-      dictionary_column_ = i - choices;
+      word_bag_column_ = i - choices;
     }
   }
   ImGui::EndCombo();
+}
+
+std::optional<SeedViewKey> Column::seed_view_key() const {
+  auto const* seed = std::get_if<Seed>(&source_);
+  if (!seed) return std::nullopt;
+  return SeedViewKey{seed->key, dictionary_choices[dictionary_].second};
 }
 
 bool Column::pending() const {
@@ -467,20 +482,24 @@ Column const* Column::letters_column() const {
   return &window.get_column(*letter_source_);
 }
 
-Column const* Column::dictionary_column() const {
+bool Column::has_word_bag_source() const {
+  return commands_[choice_] && commands_[choice_]->has_word_bag_source();
+}
+
+Column const* Column::word_bag_column() const {
   Window& window = main_window();
-  if (!dictionary_column_ || !commands_[choice_] ||
-      !commands_[choice_]->has_columns_in_dictionaries() ||
-      *dictionary_column_ < 0 || *dictionary_column_ >= window.column_count())
+  if (!word_bag_column_ || !has_word_bag_source() || *word_bag_column_ < 0 ||
+      *word_bag_column_ >= window.column_count())
     return nullptr;
-  return &window.get_column(*dictionary_column_);
+  return &window.get_column(*word_bag_column_);
 }
 
 Column::Key Column::wanted_key() const {
   Column const* source = source_column();
   Column const* letters = letters_column();
-  Column const* dictionary = dictionary_column();
-  auto const* seed = std::get_if<Seed>(&source_);
+  Column const* word_bag = word_bag_column();
+  std::optional<SeedViewKey> const seed = seed_view_key();
+  bool const has_word_bag = has_word_bag_source();
   return {choice_,
           options_version_,
           app_state().generation,
@@ -489,18 +508,25 @@ Column::Key Column::wanted_key() const {
               : 0,
           source ? source->version() : 0,
           source_,
-          seed && commands_[choice_] ? app_state().seed_file(seed->key).version
-                                     : 0,
+          seed && commands_[choice_]
+              ? app_state().seed_view(seed->first, seed->second).version
+              : 0,
           letters ? letters->version() : 0,
           letter_source_,
           dictionary_,
-          dictionary ? dictionary_column_ : std::nullopt,
-          dictionary ? dictionary->version() : 0,
-          !dictionary && commands_[choice_] &&
+          commands_[choice_] &&
                   (std::holds_alternative<Dict>(source_) ||
                    commands_[choice_]->uses_dictionary())
               ? app_state()
                     .dictionary(dictionary_choices[dictionary_].second)
+                    .version
+              : 0,
+          has_word_bag ? word_bag_ : 0,
+          word_bag ? word_bag_column_ : std::nullopt,
+          word_bag ? word_bag->version()
+          : has_word_bag
+              ? app_state()
+                    .dictionary(dictionary_choices[word_bag_].second)
                     .version
               : 0,
           commands_[choice_] && commands_[choice_]->uses_big_dictionary()
@@ -595,15 +621,15 @@ void Column::start(Key key) {
     publish(key, false, empty_lines(), empty_lines());
     return;
   }
-  SharedDictionary dictionary;
-  SharedLines dictionary_lines;
-  if (Column const* words = dictionary_column()) {
-    dictionary_lines = words->output();
-  } else {
-    dictionary =
-        state.dictionary(dictionary_choices[key.dictionary].second).words;
-    dictionary_lines = dictionary->lines;
-  }
+  SharedDictionary dictionary =
+      state.dictionary(dictionary_choices[key.dictionary].second).words;
+  SharedLines dictionary_lines = dictionary->lines;
+  SharedLines word_bag_lines = empty_lines();
+  if (Column const* words = word_bag_column())
+    word_bag_lines = words->output();
+  else if (has_word_bag_source())
+    word_bag_lines =
+        state.dictionary(dictionary_choices[key.word_bag].second).words->lines;
   SharedLines input;
   if (auto const* id = std::get_if<ColumnIdentifier>(&source_)) {
     Column const* source = source_column();
@@ -613,8 +639,8 @@ void Column::start(Key key) {
       return;
     }
     input = source->output();
-  } else if (auto const* seed = std::get_if<Seed>(&source_)) {
-    input = state.seed_file(seed->key).lines;
+  } else if (std::optional<SeedViewKey> const seed = seed_view_key()) {
+    input = state.seed_view(seed->first, seed->second).lines;
   } else if (std::holds_alternative<Dict>(source_)) {
     input = dictionary_lines;
   } else {
@@ -624,6 +650,7 @@ void Column::start(Key key) {
   LetterToolsParams params = {state.actual_letters, used_letters(),
                               state.sentence, std::move(dictionary),
                               std::move(dictionary_lines),
+                              std::move(word_bag_lines),
                               state.dictionary("big_dict").words, {}};
   auto job = std::make_shared<Job>();
   job->key = key;

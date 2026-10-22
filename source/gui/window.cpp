@@ -4,7 +4,9 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,7 +27,9 @@ Uint32 end_judge_flash(Uint32, void*) {
 
 }  // namespace
 
-Window::Window() : sentence_(app_state().sentence) {
+Window::Window()
+    : seed_max_length_(app_state().seed_max_length),
+      sentence_(app_state().sentence) {
   AppState const& state = app_state();
   std::snprintf(seed_, sizeof seed_, "%s", state.seed_name.c_str());
   std::snprintf(letters_, sizeof letters_, "%s", state.visual_letters.c_str());
@@ -56,9 +60,19 @@ void Window::render() {
     bool const seed_entered = ImGui::InputText(
         "##seed", seed_, sizeof seed_, ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::TableNextColumn();
+    float const length_width = ImGui::CalcTextSize("00").x +
+                               2 * ImGui::GetStyle().FramePadding.x;
     ImGui::AlignTextToFramePadding();
-    if (!app_state().seed_file(app_state().seed_key).readable)
+    ImGui::TextUnformatted("x:");
+    ImGui::SameLine(0, 0);
+    ImGui::SetNextItemWidth(length_width);
+    bool const max_length_entered =
+        ImGui::InputInt("##seed_max", &seed_max_length_, 0, 0,
+                        ImGuiInputTextFlags_EnterReturnsTrue);
+    if (!app_state().seed_pairs().readable) {
+      ImGui::SameLine();
       ImGui::TextDisabled("unreadable");
+    }
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("l:");
@@ -99,16 +113,20 @@ void Window::render() {
     AppState& state = app_state();
     if (seed_entered) {
       state.load_seed_and_bad_bags(seed_);
-      std::vector<std::string> keys;
-      for (Column& column : columns_) {
-        auto const* seed = std::get_if<Seed>(&column.source_);
-        if (!seed) continue;
-        if (!state.seed_map.contains(seed->key))
-          column.source_ = Seed{state.seed_key};
-        keys.push_back(std::get<Seed>(column.source_).key);
+      std::vector<SeedViewKey> keys;
+      for (Column const& column : columns_) {
+        if (std::optional<SeedViewKey> key = column.seed_view_key())
+          keys.push_back(std::move(*key));
       }
       state.refresh_seed_files(keys);
       state.refresh_dictionaries();
+    }
+    if (max_length_entered) {
+      seed_max_length_ = std::max(seed_max_length_, 0);
+      if (seed_max_length_ != state.seed_max_length) {
+        state.seed_max_length = seed_max_length_;
+        ++state.seed_max_length_version;
+      }
     }
     if (entered && (state.visual_letters != letters_ ||
                     state.used_letters != used_letters_)) {

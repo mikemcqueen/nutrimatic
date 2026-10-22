@@ -164,27 +164,56 @@ and what `rebuild.mk`'s commented-out `seed` target runs.
 
 The seed field names a pair file, `pairs.sN`. `load_app_state` opens
 `seed_directory/p1.idx`. When P1Index::open fails, its error is printed and
-the bands are left out; the `all` view still loads.
+every pair has no verdict, so the `seed50*` and `seed85*` views are empty;
+the source dropdown offers `all`, `seed50m3`, `seed50m4`, `seed85m3` and
+`seed85m4` either way. Enter in the seed field reopens `p1.idx` when it's
+newer, keeping the old index when it can't be opened, and rereads the pair
+file so new YES values reach the views. `seed_key` is always `seed85m4`:
+the first column's source, and what a seed column falls back to. pgui starts on `idx/pairs.s1` rather than
+`idx/seed.s1.m4.all.85.15.pairs`.
 
 `AppState` replaces `seed_map`/`seed_files`'s file per key with the pair
-file read once into a `std::vector<SeedPair>`, and three views of it under
-the keys `all`, `seed50` and `seed85` (`min_yes` unset, .5 and .85). The
-seed line gains the view filter beside the seed field:
+file read once into a `std::vector<SeedPair>`, and views of it, each under a
+band key and a dictionary key, `sml_dict` or `big_dict`: at most ten. One
+`seed_bands` table of `{key, min_yes, min_length}` names the bands: `all`
+(`min_yes` unset, m3), `seed50m3`/`seed50m4` (.5) and `seed85m3`/`seed85m4`
+(.85); it feeds the source dropdown, the default and the filter. A column's seed is
+the view under its source's band key and its D: dictionary, so D: is both
+the dictionary a column's command runs with and the one its seed is
+filtered by. A view is built the first time a column asks for it, and built
+again, under a new `seed_file_version`, when a column asks for it after the
+pair file, its dictionary (reloaded by `refresh_dictionaries`) or the `x`
+field has changed since it was built. Columns whose source is a seed rerun
+when that version changes, as they do when a seed file changes today.
+`refresh_seed_files` takes each seed column's band key and D: key and drops
+the views none of them name.
 
-- `m` and `x` fields, per-word min and max length, starting at 3 and 13.
-- a `D:` dropdown over `none`, `big_dict` and `sml_dict`, starting at
-  `big_dict`, using `AppState::dictionaries`.
+The seed line gains an `x` field beside the seed field, the per-word max
+length for every view, starting at `SeedFilter`'s 13; Enter in it applies
+it. The per-word min comes from the band. The pair file's mtime is checked where seed file mtimes are checked
+today, and a newer file is read again.
 
-Enter in either field, or a dropdown change, rebuilds the three views'
-`SharedLines` and bumps `seed_file_version`, so columns whose source is a
-seed rerun as they do when a seed file changes today. `refresh_dictionaries`
-reloading the chosen dictionary rebuilds the views the same way. The pair
-file's mtime is checked where seed file mtimes are checked today, and a newer
-file is read again.
+D: offers `sml_dict` and `big_dict` in every command, and no columns; it
+still starts at `sml_dict`, so a seed column's seed starts filtered by it.
+bag-stats' second line gains, after `ss:`, a `wb:` dropdown of `sml_dict`,
+`big_dict` and the number of each column before this one, naming the words
+its `wb` steps pick from; choosing bag-stats sets it to the column before,
+as it sets D: today. Column does for a `wb:` column what it does for a D:
+column today: waits for it to finish, and reruns when its output changes.
+`Column::Key` holds the `wb:` choice and, when it names a dictionary, that
+dictionary's version, so choosing another `wb:` or reloading its dictionary
+reruns the column.
+`has_columns_in_dictionaries` becomes `has_word_bag_source`, and
+`LetterToolsParams` gains `word_bag_lines`, the `wb:` dictionary's lines or
+column's output; `dictionary` and `dictionary_lines` are always D:'s.
+bag-stats' D: thus names the dictionary its `pb` and `pf` pairs, its seed,
+are filtered by; its final `p` still counts pairs in `big_dict`. bag-stats'
+`uses_dictionary` becomes false: it no longer reads D:'s dictionary, and a
+D: reload reaches a seed source through the view's version.
 
 Idea: a view could hold `std::vector<std::reference_wrapper<std::string const>>`
 to the passing pairs' `line`s instead of copying each into a `Lines`, so the
-three views cost a pointer per pair rather than a string. `SeedPair` keeps
+views cost a pointer per pair rather than a string. `SeedPair` keeps
 the pair as one `line` with a `comma` offset, not two word strings, so a
 reference to `line` is the whole pair a column reads. The pair file's vector
 is held by `std::shared_ptr`, and each view holds a copy of that pointer
@@ -193,8 +222,8 @@ without invalidating the lines of columns that haven't rerun yet.
 
 `get_seed_key`, `get_seed_universe`, `build_seed_name`,
 `add_seed_if_exists` and `add_other_seed_files` are deleted. `seed_m` goes;
-`column.cpp`'s fallback to `"seed85" + seed_m` becomes `"seed85"`, and
-`BagStats::default_seed` becomes `"seed50"`. The sentence for bad bags still
+`column.cpp`'s fallback to `"seed85" + seed_m` becomes `"seed85m4"`, and
+`BagStats::default_seed` stays `"seed50m3"`. The sentence for bad bags still
 comes from the seed name's `sN` component, which `pairs.sN` has.
 
 ## Scripts and docs

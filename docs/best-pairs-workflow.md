@@ -54,6 +54,69 @@ The details:
    this process as it is mostly a one-time cost and I think reasonably achieveable
    manually. But I should document the manual process here.
    
+   Steps for generating a sentence's pairs and seeds:
+
+    * build the universe dictionary, the sorted union of `$IDX_DIR/words`,
+      `$BIG` and `$DICT`, keeping words of 3 to 13 letters:
+
+      `make -f rebuild.mk universe S=2` (or `./rebuild.sh universe s2`)
+
+      writes `idx/universe`.
+
+    * build the sentence's pair file:
+
+      `make -f rebuild.mk S=2` (or `./rebuild.sh s2`)
+
+      runs, over `idx/universe`:
+
+      wiki:    `query-index $S2 --wf -w2 -n0 --csv -m3 --dict idx/universe > idx/idx.2.s2`
+
+      # filter out non-cluer-index dict words before sending to pairs
+      cluer:   `LC_ALL=C comm -12 cluer/data/index/tokens.txt idx/universe | pairs $S2 -d - -m3 |
+                python cluer/query_index.py -f - -j --threads 2 > idx/cluer.s2`
+
+      combine: `pcomm idx/cluer.s2 idx/idx.2.s2 [| pcomm - idx/s2.pairs] | sort -u > idx/pairs.s2`
+
+      `idx/s2.pairs`, hand-added pairs, is folded in when it exists; adding it
+      rebuilds only `pairs.s2`. The cluer step takes hours.
+
+      The pair files depend on `universe` order-only, so removing words from
+      `$BIG` or `$DICT` never rebuilds them: the seed filters drop those
+      pairs when they're read. After adding words, rebuild everything:
+
+      `make -f rebuild.mk -B universe wiki cluer combine S=2`
+      (or `./rebuild.sh -f universe wiki cluer combine s2`)
+
+    * calculate and auto-classify remaining:
+
+       `cat $WFROOT/.wf/p1/done/p1_done.pairs | pcomm -23 idx/pairs.s9 - > tmp/s9/pairs.s9.remain`
+
+       edit juniper.sh, run it.
+
+    * index the phase 1 results:
+
+      `make-p1-index -o idx/p1.idx`
+
+      reads `$WFROOT/.wf/p1/done/out/*.jsonl`. New phase 1 results take
+      effect on the next `make-p1-index`; the pair files aren't rebuilt.
+
+    * seeds are views of the pair file, filtered when it is read:
+
+      `seed-pairs --pm .85 -m 4 idx/pairs.s2`
+      `seed-pairs --pm .5 -x 10 -d $DICT idx/pairs.s2`
+
+      keeps the pairs whose larger-order YES in `$IDX_DIR/p1.idx` is at
+      least `--pm`, whose words both have `-m` to `-x` letters (defaults 3
+      and 13), and, with `-d`, whose words are both in that dictionary,
+      each written in the order with the larger YES. setup.sh's `seed` and
+      `seed50` functions print sentence `$S`'s `.85` and `.5` seeds, m4.
+
+      dfs-anagrams reads one through `--seed-pairs <(seed-pairs ...)`.
+
+   That will give us the --pairs file input to step 1.
+
+   Previous steps:
+
    Steps for generating pairs to submit/eval in P1 workflow:
 
     * build list of 4-letter wiki index pairs:
@@ -148,7 +211,7 @@ NEW WAY:
 
 1. Find letter bag subsets for over-represented and/or high-count letters.
 
-    `cat seed.pairs | bag-subset $S9 - -s9 [-u letters] | less`
+    `S=9 seed | bag-subset $S9 - -s9 [-u letters] | less`
     
     generally i look for a subset ~400 words or less as that fits into a single p2 review
     note and 
@@ -160,7 +223,7 @@ NEW WAY:
 
     e.g., for prefix 'bowie', subset 'llo':
 
-    `cat seed.pairs | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > resutls/s8/pairs/bowie.llo`
+    `S=8 seed | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > resutls/s8/pairs/bowie.llo`
 
 3. manual  review
 
@@ -170,10 +233,10 @@ NEW WAY:
 
 4. finding dictionary words to review/eliminate:
 
-    basically, filter a seed file by a already-filtered $DICT, because seed files are built with the unfiltered dict.
-    extract unique words, grep those words for whatever letter(-pair) you're interested in trimming.
+    filter the seed by $DICT, extract unique words, grep those words for whatever letter(-pair)
+    you're interested in trimming.
 
-    `cat idx/seed.s1.m4.dict.85.15.pairs | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
+    `S=1 seed | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
 
 
 
