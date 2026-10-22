@@ -8,17 +8,22 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 
 #include "app-state.h"
 #include "classified.h"
 #include "dfs-cli-args.h"
+#include "row-input.h"
 #include "workflow-paths.h"
 
 namespace {
@@ -84,11 +89,12 @@ bool run_command(std::vector<std::string> const& args, std::string* output) {
   return false;
 }
 
-// Records `yes` and `no` for `sentence` through `wf -d root classify pairs`.
-// Returns true when it succeeds; `output` gets what it printed.
-bool classify_pairs(std::string const& wf, std::string const& root,
-                    int sentence, std::vector<std::string> const& yes,
-                    std::vector<std::string> const& no, std::string* output) {
+// Calls `run` on a new temporary directory, removed after, and returns what
+// it returns. Returns false, with the error in `output`, when the directory
+// can't be made.
+bool with_temp_dir(
+    std::string* output,
+    std::function<bool(std::filesystem::path const&)> const& run) {
   std::string pattern =
       (std::filesystem::temp_directory_path() / "pgui-review.XXXXXX").string();
   if (mkdtemp(pattern.data()) == nullptr) {
@@ -96,53 +102,131 @@ bool classify_pairs(std::string const& wf, std::string const& root,
     return false;
   }
   std::filesystem::path const dir = pattern;
-  std::filesystem::path const yes_file = dir / "yes.pairs";
-  std::filesystem::path const no_file = dir / "no.pairs";
-  bool const ok = write_lines(yes_file, yes, output) &&
-      write_lines(no_file, no, output) &&
-      run_command({wf, "-d", root, "classify", "pairs", "-s",
-                   std::to_string(sentence), "--yes", yes_file.string(),
-                   "--no", no_file.string()},
-                  output);
+  bool const ok = run(dir);
   std::error_code ignored;
   std::filesystem::remove_all(dir, ignored);
   return ok;
 }
 
+// Records `yes` and `no` for `sentence` through `wf -d root classify pairs`.
+// Returns true when it succeeds; `output` gets what it printed.
+bool classify_pairs(std::string const& wf, std::string const& root,
+                    int sentence, std::vector<std::string> const& yes,
+                    std::vector<std::string> const& no, std::string* output) {
+  return with_temp_dir(output, [&](std::filesystem::path const& dir) {
+    std::filesystem::path const yes_file = dir / "yes.pairs";
+    std::filesystem::path const no_file = dir / "no.pairs";
+    return write_lines(yes_file, yes, output) &&
+        write_lines(no_file, no, output) &&
+        run_command({wf, "-d", root, "classify", "pairs", "-s",
+                     std::to_string(sentence), "--yes", yes_file.string(),
+                     "--no", no_file.string()},
+                    output);
+  });
+}
+
+// Records `reviewed` as reviewed and removes `removed` from the dictionary
+// through `wf -d root remove words --reviewed`, naming the round
+// pgui.sN.words for `sentence`. Returns true when it succeeds; `output` gets
+// what it printed.
+bool remove_words(std::string const& wf, std::string const& root,
+                  int sentence, std::vector<std::string> const& reviewed,
+                  std::vector<std::string> const& removed,
+                  std::string* output) {
+  return with_temp_dir(output, [&](std::filesystem::path const& dir) {
+    std::filesystem::path const reviewed_file = dir / "reviewed.words";
+    std::filesystem::path const removed_file =
+        dir / ("pgui.s" + std::to_string(sentence) + ".words");
+    return write_lines(reviewed_file, reviewed, output) &&
+        write_lines(removed_file, removed, output) &&
+        run_command({wf, "-d", root, "remove", "words", removed_file.string(),
+                     "--reviewed", reviewed_file.string()},
+                    output);
+  });
+}
+
+// The first whitespace-separated field of `line` when it is all a-z, else
+// empty.
+std::string_view row_word(std::string_view line) {
+  size_t const begin = line.find_first_not_of(" \t");
+  if (begin == std::string_view::npos) return std::string_view();
+  size_t const end = std::min(line.find_first_of(" \t", begin), line.size());
+  std::string_view const word = line.substr(begin, end - begin);
+  for (char const c : word)
+    if (c < 'a' || c > 'z') return std::string_view();
+  return word;
+}
+
+// Adds to `words` the words `wf remove words` has reviewed under `root`, none
+// when the file doesn't exist. Returns false, diagnosed, when it can't be
+// read.
+bool read_reviewed_words(std::string_view root,
+                         std::unordered_set<std::string>* words) {
+  std::filesystem::path const path =
+      std::filesystem::path(root) / WORKFLOW_REVIEWED_WORDS_PATH;
+  std::error_code error;
+  if (!std::filesystem::exists(path, error) && !error) return true;
+  return read_lines("pgui", path, [words](std::string const& line, size_t) {
+    words->insert(line);
+    return true;
+  });
+}
+
 }  // namespace
 
-std::unique_ptr<Review> Review::open(SharedLines items, SharedLines values,
+std::unique_ptr<Review> Review::open(ReviewKind kind, SharedLines items,
+                                     SharedLines values,
                                      std::vector<int> rows, int sentence) {
   char const* const wf = std::getenv("WF");
   if (wf == nullptr || wf[0] == '\0') {
-    std::fputs("pgui: WF must be set to review pairs\n", stderr);
+    std::fputs("pgui: WF must be set to review\n", stderr);
     return nullptr;
   }
   char const* const root = require_workflow_root("pgui");
   if (root == nullptr) return nullptr;
-  ClassifiedPairCache& cache = app_state().classified_pairs;
-  std::shared_ptr<DfsPairSet const> const global_yes =
-      cache.get("pgui", root, CLASSIFIED_NO_SENTENCE, "yes");
-  std::shared_ptr<DfsPairSet const> const sentence_yes =
-      cache.get("pgui", root, sentence, "yes");
-  if (global_yes == nullptr || sentence_yes == nullptr) return nullptr;
 
   std::unique_ptr<Review> review(new Review);
   review->checked_.resize(rows.size());
   review->locked_.resize(rows.size());
-  for (size_t n = 0; n < rows.size(); ++n) {
-    int const i = rows[n];
-    DfsPairRow row;
-    if (!parse_pair_row((*items)[i], "pair list", "review", i + 1, false,
-                        &row))
-      return nullptr;
-    if (global_yes->contains(row.entry()) ||
-        sentence_yes->contains(row.entry())) {
-      review->checked_[n] = 1;
-      review->locked_[n] = 1;
-      ++review->locked_count_;
+  auto const lock = [&review](size_t n) {
+    review->checked_[n] = 1;
+    review->locked_[n] = 1;
+    ++review->locked_count_;
+  };
+  if (kind == ReviewKind::pairs) {
+    ClassifiedPairCache& cache = app_state().classified_pairs;
+    std::shared_ptr<DfsPairSet const> const global_yes =
+        cache.get("pgui", root, CLASSIFIED_NO_SENTENCE, "yes");
+    std::shared_ptr<DfsPairSet const> const sentence_yes =
+        cache.get("pgui", root, sentence, "yes");
+    if (global_yes == nullptr || sentence_yes == nullptr) return nullptr;
+    for (size_t n = 0; n < rows.size(); ++n) {
+      int const i = rows[n];
+      DfsPairRow row;
+      if (!parse_pair_row((*items)[i], "pair list", "review", i + 1, false,
+                          &row))
+        return nullptr;
+      if (global_yes->contains(row.entry()) ||
+          sentence_yes->contains(row.entry()))
+        lock(n);
+    }
+  } else {
+    std::unordered_set<std::string> reviewed;
+    if (!read_reviewed_words(root, &reviewed)) return nullptr;
+    review->words_.reserve(rows.size());
+    for (size_t n = 0; n < rows.size(); ++n) {
+      int const i = rows[n];
+      std::string_view const word = row_word((*items)[i]);
+      if (word.empty()) {
+        std::fprintf(stderr, "pgui: review: row %d: not a word: %s\n", i + 1,
+                     (*items)[i].c_str());
+        return nullptr;
+      }
+      if (reviewed.contains(std::string(word))) lock(n);
+      review->words_.emplace_back(word);
     }
   }
+  review->kind_ = kind;
   review->items_ = std::move(items);
   review->values_ = std::move(values);
   review->rows_ = std::move(rows);
@@ -184,9 +268,10 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
   if (!open) return result;
 
   int const count = static_cast<int>(rows_.size());
-  ImGui::Text("S%d: %d YES / %d NO", sentence_,
-              locked_count_ + checked_count_,
-              count - locked_count_ - checked_count_);
+  bool const words = kind_ == ReviewKind::words;
+  int const unchecked = count - locked_count_ - checked_count_;
+  ImGui::Text(words ? "S%d: %d keep / %d remove" : "S%d: %d YES / %d NO",
+              sentence_, locked_count_ + checked_count_, unchecked);
   if (job_) {
     ImGui::SameLine();
     ImGui::TextDisabled("submitting...");
@@ -203,7 +288,8 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
       ImGui::Shortcut(ImGuiKey_Escape))
     confirm_ = Confirm::cancel;
   if (close_requested_) confirm_ = Confirm::cancel;
-  if (confirm_ == Confirm::cancel && checked_count_ == 0) {
+  if ((confirm_ == Confirm::cancel && checked_count_ == 0) ||
+      (confirm_ == Confirm::submit && count == locked_count_)) {
     confirm_ = Confirm::none;
     result = Result::cancelled;
   }
@@ -211,9 +297,13 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
     ImGui::OpenPopup(confirm_ == Confirm::submit ? "Submit?" : "Cancel?");
 
   char question[64];
-  std::snprintf(question, sizeof question, "Record %d YES / %d NO for S%d?",
-                checked_count_, count - locked_count_ - checked_count_,
-                sentence_);
+  if (words)
+    std::snprintf(question, sizeof question,
+                  "Record %d keep / %d remove in the dictionary?",
+                  checked_count_, unchecked);
+  else
+    std::snprintf(question, sizeof question, "Record %d YES / %d NO for S%d?",
+                  checked_count_, unchecked, sentence_);
   if (render_confirm("Submit?", question)) submit();
   if (render_confirm("Cancel?", "Discard these checks?"))
     result = close_requested_ ? Result::closed : Result::cancelled;
@@ -262,7 +352,7 @@ void Review::render_rows() {
       } else {
         int const i = rows_[n];
         ImGui::PushID(n);
-        if (ImGui::Selectable("##pair", checked_[n],
+        if (ImGui::Selectable("##row", checked_[n],
                               ImGuiSelectableFlags_NoAutoClosePopups,
                               ImVec2(0, height)) &&
             !locked_[n] && !job_) {
@@ -316,18 +406,37 @@ bool Review::render_confirm(char const* id, std::string const& question) {
 }
 
 void Review::submit() {
-  std::vector<std::string> yes;
-  std::vector<std::string> no;
-  for (size_t n = 0; n < rows_.size(); ++n) {
-    if (locked_[n]) continue;
-    (checked_[n] ? yes : no).push_back((*items_)[rows_[n]]);
-  }
   failure_.clear();
+  std::function<bool(std::string*)> run;
+  if (kind_ == ReviewKind::words) {
+    std::vector<std::string> reviewed;
+    std::vector<std::string> removed;
+    for (size_t n = 0; n < rows_.size(); ++n) {
+      if (locked_[n]) continue;
+      reviewed.push_back(words_[n]);
+      if (!checked_[n]) removed.push_back(words_[n]);
+    }
+    run = [wf = wf_, root = root_, sentence = sentence_,
+           reviewed = std::move(reviewed),
+           removed = std::move(removed)](std::string* output) {
+      return remove_words(wf, root, sentence, reviewed, removed, output);
+    };
+  } else {
+    std::vector<std::string> yes;
+    std::vector<std::string> no;
+    for (size_t n = 0; n < rows_.size(); ++n) {
+      if (locked_[n]) continue;
+      (checked_[n] ? yes : no).push_back((*items_)[rows_[n]]);
+    }
+    run = [wf = wf_, root = root_, sentence = sentence_, yes = std::move(yes),
+           no = std::move(no)](std::string* output) {
+      return classify_pairs(wf, root, sentence, yes, no, output);
+    };
+  }
   auto job = std::make_shared<Job>();
   job_ = job;
-  worker_ = std::jthread([job, wf = wf_, root = root_, sentence = sentence_,
-                          yes = std::move(yes), no = std::move(no)] {
-    job->ok = classify_pairs(wf, root, sentence, yes, no, &job->output);
+  worker_ = std::jthread([job, run = std::move(run)] {
+    job->ok = run(&job->output);
     job->done.store(true, std::memory_order_release);
     wake_main_loop();
   });

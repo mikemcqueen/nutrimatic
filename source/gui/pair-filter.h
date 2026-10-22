@@ -7,6 +7,7 @@
 #include "app-state.h"
 #include "input-source.h"
 #include "pfilter-impl.h"
+#include "review-kind.h"
 
 // A pfilter call on one input, taking its dictionary and sentence from the
 // LetterToolsParams. Its option widgets are an "ex" toggle button setting
@@ -27,8 +28,9 @@
 struct PairFilter {
   static constexpr bool reads_pairs = true;
   static constexpr bool reads_classified = true;
-  static constexpr bool reviewable = true;
   static constexpr bool uses_dictionary = true;
+
+  ReviewKind review_kind(InputSource const&) const { return ReviewKind::pairs; }
 
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;

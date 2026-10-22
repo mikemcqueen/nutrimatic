@@ -6,6 +6,7 @@
 #include "app-state.h"
 #include "freqsort-impl.h"
 #include "input-source.h"
+#include "review-kind.h"
 
 // A freqsort call on one input, taking its letters and used letters from the
 // LetterToolsParams in place of those in options. Its option widget is an
@@ -16,9 +17,15 @@
 // a max of 0 meaning none, then an "X" button, greyed out like them,
 // resetting the fields to those defaults (see cv_range_input()). Its fields
 // set their options when apply_fields() is called. Its source can be its D:
-// dictionary as well as a seed or a column.
+// dictionary as well as a seed or a column; its Column's shown words can be
+// reviewed when it is the dictionary.
 struct FreqSort {
   static constexpr bool has_dictionary_in_src = true;
+
+  ReviewKind review_kind(InputSource const& source) const {
+    return std::holds_alternative<Dict>(source) ? ReviewKind::words
+                                                : ReviewKind::none;
+  }
 
   FreqSort();
 

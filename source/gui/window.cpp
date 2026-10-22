@@ -158,8 +158,12 @@ void Window::render() {
         review_->render(columns_[reviewed_].list_.rect_min(),
                         columns_[reviewed_].list_.rect_max());
     if (result != Review::Result::open) {
-      if (result == Review::Result::submitted)
-        ++app_state().classified_version;
+      if (result == Review::Result::submitted) {
+        if (review_->kind() == ReviewKind::words)
+          app_state().refresh_dictionaries();
+        else
+          ++app_state().classified_version;
+      }
       if (result == Review::Result::closed) closed_ = true;
       review_.reset();
       columns_[reviewed_].list_.focus();
@@ -188,8 +192,12 @@ void Window::open_review(ColumnIdentifier id) {
   Column const& column = columns_[id];
   std::optional<Command> const& command = column.commands_[column.choice_];
   int const sentence = app_state().sentence;
-  if (!command || !command->reviewable()) {
-    std::fputs("pgui: only pfilter columns can be reviewed\n", stderr);
+  ReviewKind const kind =
+      command ? command->review_kind(column.source_) : ReviewKind::none;
+  if (kind == ReviewKind::none) {
+    std::fputs("pgui: only pfilter columns, or freqsort columns on dict, can "
+               "be reviewed\n",
+               stderr);
     return;
   }
   if (column.pending()) {
@@ -197,10 +205,10 @@ void Window::open_review(ColumnIdentifier id) {
     return;
   }
   if (sentence == CLASSIFIED_NO_SENTENCE) {
-    std::fputs("pgui: select a sentence to review pairs\n", stderr);
+    std::fputs("pgui: select a sentence to review\n", stderr);
     return;
   }
-  review_ = Review::open(column.output(), column.list_.values(),
+  review_ = Review::open(kind, column.output(), column.list_.values(),
                          column.list_.shown_items(), sentence);
   reviewed_ = id;
 }
