@@ -32,16 +32,16 @@ void MappedFile::close() {
     size_ = 0;
 }
 
-bool MappedFile::open(std::string const& path, std::string* error) {
+bool MappedFile::open(std::filesystem::path const& path, std::string* error) {
     close();
     int const fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
-        *error = path + ": " + strerror(errno);
+        *error = path.string() + ": " + strerror(errno);
         return false;
     }
     struct stat info;
     if (fstat(fd, &info) != 0) {
-        *error = path + ": " + strerror(errno);
+        *error = path.string() + ": " + strerror(errno);
         ::close(fd);
         return false;
     }
@@ -54,7 +54,7 @@ bool MappedFile::open(std::string const& path, std::string* error) {
     void* const map = mmap(nullptr, size_, PROT_READ, MAP_SHARED, fd, 0);
     ::close(fd);
     if (map == MAP_FAILED) {
-        *error = path + ": can't map: " + strerror(errno);
+        *error = path.string() + ": can't map: " + strerror(errno);
         size_ = 0;
         return false;
     }

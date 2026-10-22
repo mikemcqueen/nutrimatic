@@ -110,7 +110,7 @@ bool with_temp_dir(
 
 // Records `yes` and `no` for `sentence` through `wf -d root classify pairs`.
 // Returns true when it succeeds; `output` gets what it printed.
-bool classify_pairs(std::string const& wf, std::string const& root,
+bool classify_pairs(std::string const& wf, std::filesystem::path const& root,
                     int sentence, std::vector<std::string> const& yes,
                     std::vector<std::string> const& no, std::string* output) {
   return with_temp_dir(output, [&](std::filesystem::path const& dir) {
@@ -118,7 +118,7 @@ bool classify_pairs(std::string const& wf, std::string const& root,
     std::filesystem::path const no_file = dir / "no.pairs";
     return write_lines(yes_file, yes, output) &&
         write_lines(no_file, no, output) &&
-        run_command({wf, "-d", root, "classify", "pairs", "-s",
+        run_command({wf, "-d", root.string(), "classify", "pairs", "-s",
                      std::to_string(sentence), "--yes", yes_file.string(),
                      "--no", no_file.string()},
                     output);
@@ -129,7 +129,7 @@ bool classify_pairs(std::string const& wf, std::string const& root,
 // through `wf -d root remove words --reviewed`, naming the round
 // pgui.sN.words for `sentence`. Returns true when it succeeds; `output` gets
 // what it printed.
-bool remove_words(std::string const& wf, std::string const& root,
+bool remove_words(std::string const& wf, std::filesystem::path const& root,
                   int sentence, std::vector<std::string> const& reviewed,
                   std::vector<std::string> const& removed,
                   std::string* output) {
@@ -139,8 +139,9 @@ bool remove_words(std::string const& wf, std::string const& root,
         dir / ("pgui.s" + std::to_string(sentence) + ".words");
     return write_lines(reviewed_file, reviewed, output) &&
         write_lines(removed_file, removed, output) &&
-        run_command({wf, "-d", root, "remove", "words", removed_file.string(),
-                     "--reviewed", reviewed_file.string()},
+        run_command({wf, "-d", root.string(), "remove", "words",
+                     removed_file.string(), "--reviewed",
+                     reviewed_file.string()},
                     output);
   });
 }
@@ -160,10 +161,9 @@ std::string_view row_word(std::string_view line) {
 // Adds to `words` the words `wf remove words` has reviewed under `root`, none
 // when the file doesn't exist. Returns false, diagnosed, when it can't be
 // read.
-bool read_reviewed_words(std::string_view root,
+bool read_reviewed_words(std::filesystem::path const& root,
                          std::unordered_set<std::string>* words) {
-  std::filesystem::path const path =
-      std::filesystem::path(root) / WORKFLOW_REVIEWED_WORDS_PATH;
+  std::filesystem::path const path = root / WORKFLOW_REVIEWED_WORDS_PATH;
   std::error_code error;
   if (!std::filesystem::exists(path, error) && !error) return true;
   return read_lines("pgui", path, [words](std::string const& line, size_t) {
@@ -182,8 +182,8 @@ std::unique_ptr<Review> Review::open(ReviewKind kind, SharedLines items,
     std::fputs("pgui: WF must be set to review\n", stderr);
     return nullptr;
   }
-  char const* const root = require_workflow_root("pgui");
-  if (root == nullptr) return nullptr;
+  std::filesystem::path const root = require_workflow_root("pgui");
+  if (root.empty()) return nullptr;
 
   std::unique_ptr<Review> review(new Review);
   review->checked_.resize(rows.size());

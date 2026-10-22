@@ -117,9 +117,8 @@ bool add_classified_sentence_pairs(
   }
   std::filesystem::path root;
   if (args->workflow_root.empty()) {
-    char const* const env_root = require_workflow_root(program);
-    if (env_root == NULL) return false;
-    root = env_root;
+    root = require_workflow_root(program);
+    if (root.empty()) return false;
   } else {
     root = args->workflow_root;
     if (!check_workflow_root(program, root)) return false;

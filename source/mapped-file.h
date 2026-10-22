@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -18,7 +19,7 @@ class MappedFile {
 
     // Maps `path`, replacing what was mapped. False, with `*error` set, when
     // it can't be opened or mapped.
-    bool open(std::string const& path, std::string* error);
+    bool open(std::filesystem::path const& path, std::string* error);
 
     char const* data() const { return data_; }
     size_t size() const { return size_; }

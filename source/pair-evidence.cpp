@@ -14,11 +14,11 @@ bool PairEvidenceSource::open(
         std::string* error) {
     if (p1) {
         p1_ = std::make_unique<P1Index>();
-        if (!p1_->open(p1->string(), error)) return false;
+        if (!p1_->open(*p1, error)) return false;
     }
     if (cluedata) {
         clues_ = std::make_unique<ClueIndex>();
-        if (!clues_->open(cluedata->string(), error)) return false;
+        if (!clues_->open(*cluedata, error)) return false;
     }
     return true;
 }

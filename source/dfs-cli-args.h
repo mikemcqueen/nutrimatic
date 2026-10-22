@@ -96,7 +96,7 @@ struct DfsCommonArgs {
   std::string one_best_pair;
   bool best_pairs_given = false;
   bool workflow = false;
-  std::string workflow_root;
+  std::filesystem::path workflow_root;
   std::string target;
   bool target_complete = false;
   std::vector<std::string> solo_words;

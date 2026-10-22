@@ -231,8 +231,8 @@ int main(int argc, char* argv[]) {
   }
 
   if (args.source.empty()) {
-    char const* const root = require_workflow_root(PROGRAM);
-    if (root == NULL ||
+    std::filesystem::path const root = require_workflow_root(PROGRAM);
+    if (root.empty() ||
         !classified_pair_file(
             PROGRAM, root, args.sentence, "yes", &args.source))
       return 1;

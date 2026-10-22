@@ -32,7 +32,7 @@ long long metadata_value(std::string const& text, char const* key) {
 bool open_array(std::filesystem::path const& dir, std::string_view name,
                 MappedFile* file, auto* array, std::string* error) {
     std::filesystem::path const path = dir / name;
-    if (!file->open(path.string(), error)) return false;
+    if (!file->open(path, error)) return false;
     if (npy_array(*file, array, error)) return true;
     *error = path.string() + ": " + *error;
     return false;
@@ -95,9 +95,9 @@ void intersect(NpyArray<uint32_t> small, NpyArray<uint32_t> big,
 
 }  // namespace
 
-bool ClueIndex::open(std::string const& cluedata, std::string* error) {
-    std::filesystem::path const dir =
-        std::filesystem::path(cluedata).parent_path() / "index";
+bool ClueIndex::open(std::filesystem::path const& cluedata,
+                     std::string* error) {
+    std::filesystem::path const dir = cluedata.parent_path() / "index";
     std::string metadata;
     if (!read_text(dir / "metadata.json", &metadata, error)) return false;
     if (metadata_value(metadata, "version") != CLUE_INDEX_VERSION) {
@@ -108,14 +108,14 @@ bool ClueIndex::open(std::string const& cluedata, std::string* error) {
     }
     struct stat info;
     if (stat(cluedata.c_str(), &info) != 0) {
-        *error = cluedata + ": can't stat";
+        *error = cluedata.string() + ": can't stat";
         return false;
     }
     long long const mtime_ns =
         (long long)info.st_mtim.tv_sec * 1000000000LL + info.st_mtim.tv_nsec;
     if (metadata_value(metadata, "source_size") != (long long)info.st_size ||
         metadata_value(metadata, "source_mtime_ns") != mtime_ns) {
-        *error = dir.string() + " wasn't built from " + cluedata +
+        *error = dir.string() + " wasn't built from " + cluedata.string() +
             "; rebuild it with cluer/build_index.py";
         return false;
     }

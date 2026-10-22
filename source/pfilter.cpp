@@ -261,15 +261,10 @@ int main(int argc, char* argv[]) {
 
   DfsDictionary dictionary;
   if (!args.no_dict) {
-    std::filesystem::path dict_path;
-    if (args.dictionary_file) {
-      dict_path = *args.dictionary_file;
-    } else {
-      char const* const root = require_workflow_root(PROGRAM);
-      if (root == NULL) return 1;
-      dict_path = std::filesystem::path(root) / WORKFLOW_DICT_PATH;
-    }
-    if (!load_dictionary(dict_path, &dictionary)) return 1;
+    if (!default_workflow_path(PROGRAM, &args.dictionary_file,
+                               WORKFLOW_DICT_PATH))
+      return 1;
+    if (!load_dictionary(*args.dictionary_file, &dictionary)) return 1;
     args.options.dictionary = std::cref(dictionary);
   }
 

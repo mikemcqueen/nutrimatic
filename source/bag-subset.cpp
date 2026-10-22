@@ -216,11 +216,10 @@ int main(int argc, char* argv[]) {
   if (args.sentence == CLASSIFIED_NO_SENTENCE)
     alert(PROGRAM, "--sentence not supplied");
 
-  char const* const root = require_workflow_root(PROGRAM);
-  if (root == NULL) return 1;
+  std::filesystem::path const root = require_workflow_root(PROGRAM);
+  if (root.empty()) return 1;
   std::filesystem::path const dict_path =
-      args.dictionary_file.value_or(std::filesystem::path(root) /
-                                    WORKFLOW_DICT_PATH);
+      args.dictionary_file.value_or(root / WORKFLOW_DICT_PATH);
   DfsDictionary dictionary;
   if (!load_dictionary(dict_path, &dictionary)) return 1;
 

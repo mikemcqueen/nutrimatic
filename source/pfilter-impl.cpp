@@ -25,8 +25,8 @@ bool Pfilter::load(std::string_view program, PfilterOptions const& options,
   index_.reset();
 
   auto const add = [&](int sentence, std::string_view kind) {
-    char const* const root = require_workflow_root(program);
-    if (root == NULL) return false;
+    std::filesystem::path const root = require_workflow_root(program);
+    if (root.empty()) return false;
     std::shared_ptr<DfsPairSet const> pairs =
         cache.get(program, root, sentence, kind);
     if (pairs == nullptr) return false;
