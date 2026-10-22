@@ -32,14 +32,14 @@ check() {
   local expected=$1
   shift
   local actual
-  actual=$("$seed_pairs" "$@" "$test_dir/pairs") ||
+  actual=$("$seed_pairs" "$@" --pairs "$test_dir/pairs") ||
     fail "seed-pairs $* failed"
   [[ $actual == "$expected" ]] || fail "seed-pairs $*: $actual"
 }
 
 p1=(--p1 "$test_dir/p1.idx")
 check $'pound,writer\nabelard,author\ncat,dog' "${p1[@]}" --pm 0
-check 'pound,writer' "${p1[@]}" --pm .85
+check 'pound,writer' "${p1[@]}"
 check $'pound,writer\nabelard,author' "${p1[@]}" --prob-min .5
 check $'pound,writer\nabelard,author' "${p1[@]}" --pm 0 -m 4
 check $'pound,writer\ncat,dog' "${p1[@]}" --pm 0 -x 6
@@ -47,12 +47,15 @@ check $'pound,writer\ncat,dog' "${p1[@]}" --pm 0 -d "$test_dir/dict"
 
 mv "$test_dir/p1.idx" "$test_dir/p1/p1.idx"
 IDX_DIR=$test_dir/p1 check 'pound,writer' --pm .85
-if IDX_DIR= "$seed_pairs" --pm 0 "$test_dir/pairs" 2> /dev/null; then
+if IDX_DIR= "$seed_pairs" --pm 0 --pairs "$test_dir/pairs" 2> /dev/null; then
   fail "ran without --p1 or IDX_DIR"
 fi
-if "$seed_pairs" --p1 "$test_dir/p1/p1.idx" "$test_dir/pairs" 2> /dev/null
-then
-  fail "ran without --pm"
+cp "$test_dir/pairs" "$test_dir/p1/pairs.s3"
+[[ $(IDX_DIR=$test_dir/p1 "$seed_pairs" -s3) == pound,writer ]] ||
+  fail "-s3 did not read \$IDX_DIR/pairs.s3"
+if IDX_DIR=$test_dir/p1 "$seed_pairs" -s3 --pairs "$test_dir/pairs" \
+    2> /dev/null; then
+  fail "ran with both -s and --pairs"
 fi
 
 echo PASS

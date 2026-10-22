@@ -102,13 +102,14 @@ The details:
 
     * seeds are views of the pair file, filtered when it is read:
 
-      `seed-pairs --pm .85 -m 4 idx/pairs.s2`
-      `seed-pairs --pm .5 -x 10 -d $DICT idx/pairs.s2`
+      `seed-pairs -s2 -m 4`
+      `seed-pairs -s2 --pm .5 -x 10 -d $DICT`
 
-      keeps the pairs whose larger-order YES in `$IDX_DIR/p1.idx` is at
-      least `--pm`, whose words both have `-m` to `-x` letters (defaults 3
-      and 13), and, with `-d`, whose words are both in that dictionary,
-      each written in the order with the larger YES. setup.sh's `seed` and
+      reads `$IDX_DIR/pairs.s2` (`--pairs FILE` reads another pair file)
+      and keeps the pairs whose larger-order YES in `$IDX_DIR/p1.idx` is at
+      least `--pm` (default .85), whose words both have `-m` to `-x`
+      letters (defaults 3 and 13), and, with `-d`, whose words are both in
+      that dictionary, each written in the order with the larger YES. setup.sh's `seed` and
       `seed50` functions print sentence `$S`'s `.85` and `.5` seeds, m4.
 
       dfs-anagrams reads one through `--seed-pairs <(seed-pairs ...)`.
@@ -211,7 +212,7 @@ NEW WAY:
 
 1. Find letter bag subsets for over-represented and/or high-count letters.
 
-    `S=9 seed | bag-subset $S9 - -s9 [-u letters] | less`
+    `seed-pairs -s9 -m 4 | bag-subset $S9 - -s9 [-u letters] | less`
     
     generally i look for a subset ~400 words or less as that fits into a single p2 review
     note and 
@@ -223,7 +224,7 @@ NEW WAY:
 
     e.g., for prefix 'bowie', subset 'llo':
 
-    `S=8 seed | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > resutls/s8/pairs/bowie.llo`
+    `seed-pairs -s8 -m 4 | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > results/s8/pairs/bowie.llo`
 
 3. manual  review
 
@@ -236,7 +237,7 @@ NEW WAY:
     filter the seed by $DICT, extract unique words, grep those words for whatever letter(-pair)
     you're interested in trimming.
 
-    `S=1 seed | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
+    `seed-pairs -s1 -m 4 | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
 
 
 
