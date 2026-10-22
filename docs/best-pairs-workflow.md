@@ -112,32 +112,74 @@ The details:
       that dictionary, each written in the order with the larger YES. setup.sh's `seed` and
       `seed50` functions print sentence `$S`'s `.85` and `.5` seeds, m4.
 
-      dfs-anagrams reads one through `--seed-pairs <(seed-pairs ...)`.
+      dfs-anagrams reads one through `--seed-pairs <(seed-pairs ...)`
 
    That will give us the --pairs file input to step 1.
 
-   Previous steps:
+---------------------------------------
 
-   Steps for generating pairs to submit/eval in P1 workflow:
+NEW WAY:
 
-    * build list of 4-letter wiki index pairs:
+1. Find letter bag subsets for over-represented and/or high-count letters.
 
-      `query-index $S2 --wf -w2 -n0 --csv > idx/idx.2.s2.m4`
-      
-      NOTE: can remove sort (replace with uniq) after pcomm is broadly incorporated into workflow.
-
-      NOTE: this will have reversed entries: "one,two" and "two,one". this might be desirable at
-            this stage for p1_done filtering because it's still using comm instead of pcomm. when
-            P1 filtering gets upgraded to use pcomm it may not longer be desirable.
-
-    * build list of 4-letter cluer index pairs:
+    `seed-pairs -s1 -m4 | bag-subset $S1 - -s1 [-u letters] | less`
     
-      `pairs $S8 [-u subset] | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s8.m4`
+    NOTE: I think i always want to pass seed-pairs through pfilter, because we almost always
+          care about "min pair length" (9). the -s1 to bag-subset i think becomes redundant
+          in this case.
 
-    * making 3-letter word pairs:
+    `seed-pairs -s1 -m4 | pfilter - -s1 -l $S1 -d $DICT | bag-subset $S1 - [-l N] | less`
+
+    generally i look for a subset ~400 words or less as that fits into a single p2 review note
     
-      NOTE: for cluer, i should build a dictionary that combines words.filtered & a filtered 3-letter
-            wordlist (idx/words.3.bowie.filtered is a start).  and use that as pair's --dict.
+2. Find pairs with letters of that subset.
+
+    start with all letters or choose some word/pair you're biased towards as -u, and use the
+    solution to or abbreviation of that as a prefix
+
+    e.g., for prefix 'bowie', subset 'llo':
+
+    `seed-pairs -s8 -m4 | pfilter - -s8 -l $S8 -u bowie [-d $DICT] | grep 'l.*l' | grep 'o' > results/s8/pairs/bowie.llo`
+
+3. manual  review
+
+    `./wf review p2 results/s9/pairs/pairs.ooo --as s9.pairs.ooo -s9 --checked no`
+
+    ** perform manual review **
+
+    `./wf complete p2 s9.pairs.ooo`
+
+4. finding dictionary words to review/eliminate:
+
+    filter the seed by $DICT, extract unique words, grep those words for whatever letter(-pair)
+    you're interested in trimming.
+
+    `seed-pairs -s1 -m 4 | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
+
+----------------------------
+
+Previous steps:
+
+Steps for generating pairs to submit/eval in P1 workflow:
+
+  * build list of 4-letter wiki index pairs:
+
+  `query-index $S2 --wf -w2 -n0 --csv > idx/idx.2.s2.m4`
+        
+    NOTE: can remove sort (replace with uniq) after pcomm is broadly incorporated into workflow.
+  
+    NOTE: this will have reversed entries: "one,two" and "two,one". this might be desirable at
+          this stage for p1_done filtering because it's still using comm instead of pcomm. when
+          P1 filtering gets upgraded to use pcomm it may not longer be desirable.
+
+  * build list of 4-letter cluer index pairs:
+    
+    `pairs $S8 [-u subset] | python cluer/query_index.py -f - -j > ../nutrimatic/idx/cluer.s8.m4`
+
+  * making 3-letter word pairs:
+    
+    NOTE: for cluer, i should build a dictionary that combines words.filtered & a filtered 3-letter
+          wordlist (idx/words.3.bowie.filtered is a start).  and use that as pair's --dict.
 
       old way index:   `query-index $S9 --wf -w2 -n0 --csv -m3 --dict idx/words.big.l3-10 > idx/idx.2.s9.m3`
 
@@ -155,51 +197,41 @@ The details:
 
       combine: `pcomm idx/cluer.s2.m3.3.13 idx/idx.2.s2.m3.3.13 | sort -u > idx/all.s2.m3.3.13`
 
-    * calculate and auto-classify remaining:
+  * calculate and auto-classify remaining:
 
-       `cat $WFROOT/.wf/p1/done/p1_done.pairs | pcomm -23 idx/all.s9.m3 - > tmp/s9/all.s9.m3.remain`
+    `cat $WFROOT/.wf/p1/done/p1_done.pairs | pcomm -23 idx/all.s9.m3 - > tmp/s9/all.s9.m3.remain`
        
-       edit juniper.sh, run it.
+    edit juniper.sh, run it.
 
 
-    * merge them into final pairs file:
+  * merge them into final pairs file:
 
-      `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4  | sort -u > idx/all.s8.m4`
+    `pcomm idx/idx.2.s8.m4 idx/cluer.s8.m4  | sort -u > idx/all.s8.m4`
 
-    * TBD: for fine tuning later with specific subsets:
+  * TBD: for fine tuning later with specific subsets:
 
       `python cluer/query_index.py -f ../nutrimatic/results/s7/pairs.big.s7.w.w -j | sort -u  > ../nutrimatic/results/s7/pairs.cluer.s7.w.w`
       `python -m src.filter -y --pm .9 --pr .10 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.90.10`
       `python -m src.filter -y --pm .85 --pr .15 ../nutrimatic/results/s7/pairs.cluer.s7.w.w.p1_done.not.in.seed -d $WFROOT/.wf/p1/done/out > ../nutrimatic/results/s7/pairs.cluer.s7.w.w.85.15`
 
-
   * filter out already-auto-classified pairs:
 
-      `pcomm -23 idx/pairs.s2.m4 $WFROOT/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
+    `pcomm -23 idx/pairs.s2.m4 $WFROOT/.wf/p1/done/p1_done.pairs > idx/idx.2.s2.m4.remain`
       
-      NOTE:   this is dumb, need a better dedicated tool. need to think about it.
-      UPDATE: src.filter has the logic on how to approach this, that we can probably leverage in 
-            another tool.  load pairs in canonical form, check for membership in p1_done.pairs.
-            or, alternatively, just leverage src.filter itself, and add some freaky new option
-            to not filter on --pm/--pm at all, but stream *all* results and return all matches
-            whether YES or NO classified. normally you'd expect it to show matches, and -v to
-            show non-matches (like grep), but in our case maybe show non-matches by default is
-            better.  maybe --matches to "filter (out) matches". not thrilled with that option
-            name but that's the gist of it i think.
-      UPDATE: pcomm is probably the solution to this.
-           
-      * if necessary (substantially more than 1M lines):
-       `split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain`
+  * if necessary (substantially more than 1M lines):
 
-    * seems i left out a step here, where i actually submit the .remain to p1 for auto-classification?
-      why did I do the filter + split manually here instead of letting p1 handle it?  i do recall
-      there being some .enex artifacts in nutrimatic/tmp/ like i was manually downloading notes and
-      extracting yes-probs from them, but i can't remember why i would do it that way.
-      probably need to dig into the history log to refresh my memory.
-      in any case, if i do end up using p1 submit/eval i need to fix it's "done filtering" to be
-      smarter than the dumb version it's using, which i think is to use the `pcomm` tool.
+    `split -n N idx/idx.2.s2.m4.remain idx/idx.2.s2.m4.remain`
 
-   From here, we need to run
+  * seems i left out a step here, where i actually submit the .remain to p1 for auto-classification?
+    why did I do the filter + split manually here instead of letting p1 handle it?  i do recall
+    there being some .enex artifacts in nutrimatic/tmp/ like i was manually downloading notes and
+    extracting yes-probs from them, but i can't remember why i would do it that way.
+    probably need to dig into the history log to refresh my memory.
+    in any case, if i do end up using p1 submit/eval i need to fix it's "done filtering" to be
+    smarter than the dumb version it's using, which i think is to use the `pcomm` tool.
+
+  * From here, we need to run
+
      `./wf extract p1 yes --pairs idx/all.s2.m3.3.13 --pm .85 --pr .15 -o idx/seed.s2.m3.all.85.15.pairs`
      `./wf extract p1 yes --pairs idx/all.s2.m3.3.13 --pm .5 --pr .5 -o idx/seed.s2.m3.all.50.pairs`
 
@@ -208,41 +240,7 @@ The details:
        
    That will give us the --pairs file input to step 1.
 
-NEW WAY:
-
-1. Find letter bag subsets for over-represented and/or high-count letters.
-
-    `seed-pairs -s9 -m 4 | bag-subset $S9 - -s9 [-u letters] | less`
-    
-    generally i look for a subset ~400 words or less as that fits into a single p2 review
-    note and 
-    
-2. Find pairs with letters of that subset.
-
-    start with all letters or choose some word/pair you're biased towards as -u, and use the
-    solution to or abbreviation of that as a prefix
-
-    e.g., for prefix 'bowie', subset 'llo':
-
-    `seed-pairs -s8 -m 4 | pfilter - -s8 -l $S8 -u bowie | grep 'l.*l' | grep 'o' > results/s8/pairs/bowie.llo`
-
-3. manual  review
-
-    `./wf review p2 results/s9/pairs/pairs.ooo --as s9.pairs.ooo -s9 --checked no`
-    ** manual review **
-    `./wf complete p2 s9.pairs.ooo`
-
-4. finding dictionary words to review/eliminate:
-
-    filter the seed by $DICT, extract unique words, grep those words for whatever letter(-pair)
-    you're interested in trimming.
-
-    `seed-pairs -s1 -m 4 | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
-
-
-
-
-
+------------------------------
 
 OLD WAY:
 
