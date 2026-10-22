@@ -22,30 +22,36 @@ constexpr char PROGRAM[] = "seed-pairs";
 constexpr int OPT_P1 = 256;
 constexpr int OPT_PROB_MIN = 257;
 constexpr int OPT_THREADS = 258;
+constexpr int OPT_PAIRS = 259;
 
 struct Args {
     std::optional<std::filesystem::path> p1;
     std::optional<std::filesystem::path> dictionary;
     SeedFilter filter;
     int threads = 0;
-    std::filesystem::path pairs;
+    std::optional<std::filesystem::path> pairs;
+    std::optional<int> sentence;
 };
 
 void usage(std::string_view program, FILE* out) {
-    fprintf(out, "usage: %.*s [--p1 INDEX] --pm P [-m N] [-x N] "
-            "[-d FILE]\n       [--threads N] PAIRS\n", SV_ARG(program));
+    fprintf(out, "usage: %.*s (-s N | --pairs PAIRS) [--p1 INDEX] [--pm P] "
+            "[-m N]\n       [-x N] [-d FILE] [--threads N]\n",
+            SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  print each word,word line of PAIRS that passes the filter, in\n"
           "  file order, written in the word order with the larger phase 1\n"
           "  YES\n"
           "\noptions:\n", stdout);
+    dfs_help_option("-s, --sentence N",
+                    "read $IDX_DIR/pairs.sN");
+    dfs_help_option("--pairs PAIRS", "read PAIRS");
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
                     "(default: $IDX_DIR/p1.idx)");
     dfs_help_option("--pm, --prob-min P",
                     "keep pairs whose larger YES is in [P, 1]; pairs "
-                    "without a verdict are dropped (required)");
+                    "without a verdict are dropped (default .85)");
     dfs_help_option("-m N", "keep pairs whose words both have at least N "
                     "letters (default 3)");
     dfs_help_option("-x N", "keep pairs whose words both have at most N "
@@ -59,6 +65,8 @@ void usage(std::string_view program, FILE* out) {
 
 bool parse_args(char* argv[], Args* out, bool* help) {
     static struct optparse_long const long_options[] = {
+        { "sentence", 's', OPTPARSE_REQUIRED },
+        { "pairs", OPT_PAIRS, OPTPARSE_REQUIRED },
         { "p1", OPT_P1, OPTPARSE_REQUIRED },
         { "pm", OPT_PROB_MIN, OPTPARSE_REQUIRED },
         { "prob-min", OPT_PROB_MIN, OPTPARSE_REQUIRED },
@@ -73,8 +81,17 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     optparse_init(&options, argv);
     int option;
     double prob_min;
+    int sentence;
+    out->filter.min_yes = .85f;
     while ((option = optparse_long(&options, long_options, NULL)) != -1) {
         switch (option) {
+          case 's':
+            if (!parse_count(options.optarg, "-s", &sentence)) return false;
+            out->sentence = sentence;
+            break;
+          case OPT_PAIRS:
+            out->pairs = options.optarg;
+            break;
           case OPT_P1:
             out->p1 = options.optarg;
             break;
@@ -106,11 +123,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             return false;
         }
     }
-    char const* pairs = optparse_arg(&options);
-    if (pairs == NULL || optparse_arg(&options) != NULL) return false;
-    out->pairs = pairs;
-    if (!out->filter.min_yes) {
-        report(PROGRAM, "needs --pm");
+    if (optparse_arg(&options) != NULL) return false;
+    if (out->sentence.has_value() == out->pairs.has_value()) {
+        report(PROGRAM, "needs one of -s or --pairs");
         return false;
     }
     if (out->filter.min_len > out->filter.max_len) {
@@ -118,13 +133,16 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                out->filter.max_len);
         return false;
     }
-    if (!out->p1) {
+    if (!out->p1 || out->sentence) {
         char const* const idx_dir = getenv("IDX_DIR");
         if (idx_dir == NULL || idx_dir[0] == '\0') {
-            report(PROGRAM, "needs --p1 or a nonempty IDX_DIR");
+            report(PROGRAM, "needs a nonempty IDX_DIR without --p1 or with -s");
             return false;
         }
-        out->p1 = std::filesystem::path(idx_dir) / "p1.idx";
+        std::filesystem::path const dir(idx_dir);
+        if (!out->p1) out->p1 = dir / "p1.idx";
+        if (out->sentence)
+            out->pairs = dir / ("pairs.s" + std::to_string(*out->sentence));
     }
     return true;
 }
@@ -156,7 +174,7 @@ int main(int argc, char* argv[]) {
         args.filter.dictionary = &dictionary;
     }
     std::vector<SeedPair> pairs;
-    if (!read_seed_pairs(args.pairs, &p1,
+    if (!read_seed_pairs(*args.pairs, &p1,
                          resolve_search_threads(args.threads), &pairs,
                          &error)) {
         report(PROGRAM, "%s", error.c_str());
