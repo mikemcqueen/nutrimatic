@@ -17,17 +17,16 @@
 // checkbox, for one sentence. For pairs, checked records it YES, unchecked
 // NO; pairs already classified YES, for the sentence or globally, are shown
 // checked and locked, and are left out of what is recorded. For words, each
-// row's first field, checked keeps it, unchecked removes it from the
-// dictionary, and either way records it reviewed; words already reviewed
-// are shown checked and locked, and are left out of what is recorded. Space
-// or Enter toggles the focused row. A last row holds SUBMIT and CANCEL, each
-// asking for confirmation, NO first; Esc asks to cancel, or cancels outright
-// when nothing is checked, and Esc in a confirmation answers NO. SUBMIT with
-// every row locked cancels outright. A request to close pgui
-// asks the same as CANCEL when anything is checked. A confirmed SUBMIT runs
+// row's first field, checked records it NO, removing it from the dictionary,
+// and unchecked records nothing; words already reviewed are shown unchecked
+// and locked. Space or Enter toggles the focused row. A last row holds SUBMIT
+// and CANCEL, each asking for confirmation, NO first; Esc asks to cancel, or
+// cancels outright when nothing is checked, and Esc in a confirmation answers
+// NO. SUBMIT with nothing to record (every pair row locked, or no word row
+// checked) cancels outright. A request to close pgui asks the same as CANCEL
+// when anything is checked. A confirmed SUBMIT runs
 // `$WF -d "$WFROOT" classify pairs`, or `$WF -d "$WFROOT" remove words` on
-// pgui.sN.words with `--reviewed`, on a worker thread, during which the
-// review is locked. When it fails, its output is shown and the checks are
+// pgui.sN.words, on a worker thread, during which the review is locked. When it fails, its output is shown and the checks are
 // kept.
 class Review {
  public:

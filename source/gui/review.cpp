@@ -125,23 +125,18 @@ bool classify_pairs(std::string const& wf, std::filesystem::path const& root,
   });
 }
 
-// Records `reviewed` as reviewed and removes `removed` from the dictionary
-// through `wf -d root remove words --reviewed`, naming the round
-// pgui.sN.words for `sentence`. Returns true when it succeeds; `output` gets
-// what it printed.
+// Removes `removed` from the dictionary through `wf -d root remove words`,
+// naming the round pgui.sN.words for `sentence`. Returns true when it
+// succeeds; `output` gets what it printed.
 bool remove_words(std::string const& wf, std::filesystem::path const& root,
-                  int sentence, std::vector<std::string> const& reviewed,
-                  std::vector<std::string> const& removed,
+                  int sentence, std::vector<std::string> const& removed,
                   std::string* output) {
   return with_temp_dir(output, [&](std::filesystem::path const& dir) {
-    std::filesystem::path const reviewed_file = dir / "reviewed.words";
     std::filesystem::path const removed_file =
         dir / ("pgui.s" + std::to_string(sentence) + ".words");
-    return write_lines(reviewed_file, reviewed, output) &&
-        write_lines(removed_file, removed, output) &&
+    return write_lines(removed_file, removed, output) &&
         run_command({wf, "-d", root.string(), "remove", "words",
-                     removed_file.string(), "--reviewed",
-                     reviewed_file.string()},
+                     removed_file.string()},
                     output);
   });
 }
@@ -188,8 +183,8 @@ std::unique_ptr<Review> Review::open(ReviewKind kind, SharedLines items,
   std::unique_ptr<Review> review(new Review);
   review->checked_.resize(rows.size());
   review->locked_.resize(rows.size());
-  auto const lock = [&review](size_t n) {
-    review->checked_[n] = 1;
+  auto const lock = [&review, kind](size_t n) {
+    review->checked_[n] = kind == ReviewKind::pairs;
     review->locked_[n] = 1;
     ++review->locked_count_;
   };
@@ -270,8 +265,11 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
   int const count = static_cast<int>(rows_.size());
   bool const words = kind_ == ReviewKind::words;
   int const unchecked = count - locked_count_ - checked_count_;
-  ImGui::Text(words ? "S%d: %d keep / %d remove" : "S%d: %d YES / %d NO",
-              sentence_, locked_count_ + checked_count_, unchecked);
+  if (words)
+    ImGui::Text("S%d: %d NO", sentence_, checked_count_);
+  else
+    ImGui::Text("S%d: %d YES / %d NO", sentence_,
+                locked_count_ + checked_count_, unchecked);
   if (job_) {
     ImGui::SameLine();
     ImGui::TextDisabled("submitting...");
@@ -289,7 +287,8 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
     confirm_ = Confirm::cancel;
   if (close_requested_) confirm_ = Confirm::cancel;
   if ((confirm_ == Confirm::cancel && checked_count_ == 0) ||
-      (confirm_ == Confirm::submit && count == locked_count_)) {
+      (confirm_ == Confirm::submit &&
+       (words ? checked_count_ == 0 : count == locked_count_))) {
     confirm_ = Confirm::none;
     result = Result::cancelled;
   }
@@ -299,8 +298,7 @@ Review::Result Review::render(ImVec2 min, ImVec2 max) {
   char question[64];
   if (words)
     std::snprintf(question, sizeof question,
-                  "Record %d keep / %d remove in the dictionary?",
-                  checked_count_, unchecked);
+                  "Remove %d NO words from the dictionary?", checked_count_);
   else
     std::snprintf(question, sizeof question, "Record %d YES / %d NO for S%d?",
                   checked_count_, unchecked, sentence_);
@@ -409,17 +407,12 @@ void Review::submit() {
   failure_.clear();
   std::function<bool(std::string*)> run;
   if (kind_ == ReviewKind::words) {
-    std::vector<std::string> reviewed;
     std::vector<std::string> removed;
-    for (size_t n = 0; n < rows_.size(); ++n) {
-      if (locked_[n]) continue;
-      reviewed.push_back(words_[n]);
-      if (!checked_[n]) removed.push_back(words_[n]);
-    }
+    for (size_t n = 0; n < rows_.size(); ++n)
+      if (checked_[n]) removed.push_back(words_[n]);
     run = [wf = wf_, root = root_, sentence = sentence_,
-           reviewed = std::move(reviewed),
            removed = std::move(removed)](std::string* output) {
-      return remove_words(wf, root, sentence, reviewed, removed, output);
+      return remove_words(wf, root, sentence, removed, output);
     };
   } else {
     std::vector<std::string> yes;
