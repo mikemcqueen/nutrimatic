@@ -31,9 +31,11 @@ bool build_p1_index(std::filesystem::path const& dir,
 class P1Index {
   public:
     // Opens `path`. False, with `*error` set, when it isn't a version
-    // P1_INDEX_VERSION index or a source file it names is missing or has
-    // changed since.
-    bool open(std::filesystem::path const& path, std::string* error);
+    // P1_INDEX_VERSION index, or when a source file it names is missing or
+    // has changed since and `stale` is null; given `stale`, that opens anyway
+    // with `*stale` set to why, and `*stale` is cleared otherwise.
+    bool open(std::filesystem::path const& path, std::string* error,
+              std::string* stale = nullptr);
 
     // The pair's YES probabilities; false when it has no verdict.
     bool yes(std::string_view a, std::string_view b, P1Yes* out) const;

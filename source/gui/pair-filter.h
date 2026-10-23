@@ -14,12 +14,12 @@
 // exact, which requires letters, then a "u:" field with a clear button
 // setting used, which the Column adds to its used letters; clearing it counts
 // as Enter. Its second row has "m" and "x" fields setting min_letters and
-// max_letters, then a "cv" toggle button, setting cv, then "m" and "x"
-// fields, starting at 0.00 and 10.0 and greyed out unless cv is set, setting
-// min_cv and max_cv, then an "X" button, greyed out like them, resetting the
-// fields to those defaults (see cv_range_input()). Its fields set their
-// options when apply_fields() is called. While cv is set, items whose ratio
-// lies outside [min_cv, max_cv] are hidden (see display_hides()).
+// max_letters, then a "cv" toggle button, starting on, setting cv, then "m"
+// and "x" fields, starting at 0.00 and 10.0 and greyed out unless cv is set,
+// setting min_cv and max_cv, then an "X" button, greyed out like them,
+// resetting the fields to those defaults (see cv_range_input()). Its fields
+// set their options when apply_fields() is called. While cv is set, items
+// whose ratio lies outside [min_cv, max_cv] are hidden (see display_hides()).
 // With cv, which requires letters, each kept line is followed by a space and
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
@@ -43,7 +43,7 @@ struct PairFilter {
 
   bool yes = false;  // -y
   bool exact = false;  // --exact
-  bool cv = false;   // --cv
+  bool cv = true;   // --cv
   int min_letters = PFILTER_DEFAULT_MIN_LETTERS;  // -m
   int min_letters_field = PFILTER_DEFAULT_MIN_LETTERS;
   int max_letters = PFILTER_DEFAULT_MAX_LETTERS;  // -x

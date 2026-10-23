@@ -275,7 +275,9 @@ bool build_p1_index(std::filesystem::path const& dir,
     return true;
 }
 
-bool P1Index::open(std::filesystem::path const& path, std::string* error) {
+bool P1Index::open(std::filesystem::path const& path, std::string* error,
+                   std::string* stale) {
+    if (stale) stale->clear();
     if (!file_.open(path, error)) return false;
     auto const bad = [&](std::string_view what) {
         *error = (path.string() + ": ").append(what);
@@ -336,6 +338,8 @@ bool P1Index::open(std::filesystem::path const& path, std::string* error) {
     }
     if (!empty_slot) return bad("word slots don't agree; rebuild it");
 
+    std::string const why = path.filename().string() +
+        " is out of date; rebuild it with make-p1-index";
     size_t const first = sources.find('\n');
     std::filesystem::path const root(std::string(sources.substr(0, first)));
     size_t listed = 0;
@@ -350,9 +354,12 @@ bool P1Index::open(std::filesystem::path const& path, std::string* error) {
             std::to_string((long long)info.st_size) !=
                 line.substr(tab + 1, tab2 - tab - 1) ||
             std::to_string(mtime_ns(info)) != line.substr(tab2 + 1)) {
-            *error = path.string() + ": " + source.string() +
-                " is missing or has changed; rebuild it with make-p1-index";
-            return false;
+            if (!stale) {
+                *error = why;
+                return false;
+            }
+            *stale = why;
+            return true;
         }
         i = end + 1;
     }
@@ -361,9 +368,11 @@ bool P1Index::open(std::filesystem::path const& path, std::string* error) {
     for (auto const& entry : std::filesystem::directory_iterator(root, code))
         present += entry.path().extension() == ".jsonl";
     if (code || present != listed) {
-        *error = path.string() + ": " + root.string() +
-            " has new .jsonl files; rebuild it with make-p1-index";
-        return false;
+        if (!stale) {
+            *error = why;
+            return false;
+        }
+        *stale = why;
     }
     return true;
 }

@@ -110,18 +110,21 @@ AppState::SeedPairs read_seed_pairs_file(std::filesystem::path const& path,
   return file;
 }
 
-// Opens the p1 index at `path` into `*index`, setting `*mtime` to its
-// modification time, and returns true; leaves both as they were when it
-// can't be opened, which is diagnosed, and returns false.
+// Opens the p1 index at `path` into `*index`, even when it is out of date,
+// which is diagnosed, setting `*mtime` to its modification time, and returns
+// true; leaves both as they were when it can't be opened, which is
+// diagnosed, and returns false.
 bool open_p1_index(std::filesystem::path const& path, P1Index* index,
                    std::filesystem::file_time_type* mtime) {
   std::filesystem::file_time_type const modified = modification_time(path);
   P1Index opened;
   std::string error;
-  if (!opened.open(path, &error)) {
+  std::string stale;
+  if (!opened.open(path, &error, &stale)) {
     std::fprintf(stderr, "pgui: %s\n", error.c_str());
     return false;
   }
+  if (!stale.empty()) std::fprintf(stderr, "pgui: %s\n", stale.c_str());
   *index = std::move(opened);
   *mtime = modified;
   return true;

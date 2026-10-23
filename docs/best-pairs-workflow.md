@@ -156,6 +156,21 @@ NEW WAY:
 
     `seed-pairs -s1 -m 4 | pfilter -s1 -d $DICT - | tr ',' '\n'  | sort -u | grep 'r.*r' | wc -l`
 
+
+----------------------------
+
+S8 insight:
+
+find a couple of high over-represented letters and look for their subset combination
+
+  * e.g. for S1:
+  
+  `seed-pairs -s1 -x 10 | pfilter -s1 -l $S1 - -d $DICT | bag-subset $S1 - -l 6| grep "eeennn"`
+
+  or
+  
+  `seed-pairs -s1 -x 10 | pfilter -s1 -l $S1 - -d $DICT | bag-subset $S1 - -l 5| grep "ddeee"`
+
 ----------------------------
 
 Previous steps:

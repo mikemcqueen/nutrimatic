@@ -58,4 +58,9 @@ if IDX_DIR=$test_dir/p1 "$seed_pairs" -s3 --pairs "$test_dir/pairs" \
   fail "ran with both -s and --pairs"
 fi
 
+echo '{"pair": "ant,bee", "seq": 3}' >> "$test_dir/p1/a.jsonl"
+stale=$(IDX_DIR=$test_dir/p1 "$seed_pairs" -s3 2>&1 > /dev/null) ||
+  fail "a stale index failed the run"
+[[ $stale == *"is out of date"* ]] || fail "a stale index did not warn"
+
 echo PASS

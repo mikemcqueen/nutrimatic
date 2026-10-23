@@ -71,8 +71,8 @@ constexpr std::pair<char const*, char const*> dictionary_choices[] = {
     {"DICT", "sml_dict"}, {"BIG", "big_dict"}};
 
 // "(N): letters" for the N letters of `letters` left once `used` is removed,
-// in the order typed, then "  over: letters" for those of `used` that
-// weren't there to remove; sets `cv` to the consonant/vowel ratio of the
+// sorted, then "  over: letters" for those of `used` that weren't there to
+// remove, sorted; sets `cv` to the consonant/vowel ratio of the
 // letters left, and `sorted` to their a-z letters, lowercase and sorted, or
 // empty when some of `used` weren't there. Characters other than letters and
 // digits are skipped.
@@ -111,6 +111,8 @@ std::string remaining_letters(std::string const& letters,
   if (over.empty()) {
     for (int i = 0; i < 26; ++i) sorted->append(letter_counts[i], 'a' + i);
   }
+  std::ranges::sort(left);
+  std::ranges::sort(over);
   std::string text = "(" + std::to_string(left.size()) + "): " + left;
   if (!over.empty()) text += "  over: " + over;
   return text;
@@ -306,12 +308,12 @@ void Column::render() {
   } else if (failed_) {
     ImGui::TextDisabled("failed");
   } else if (bad_filter_) {
-    ImGui::TextDisabled("%zu items, bad filter", output()->size());
+    ImGui::TextDisabled("%zu, bad filter", output()->size());
   } else if (list_.shown_count() != output()->size()) {
-    ImGui::TextDisabled("%zu of %zu items", list_.shown_count(),
+    ImGui::TextDisabled("%zu of %zu", list_.shown_count(),
                         output()->size());
   } else {
-    ImGui::TextDisabled("%zu items", output()->size());
+    ImGui::TextDisabled("%zu", output()->size());
   }
   char cv_text[32];
   std::snprintf(cv_text, sizeof cv_text, "CV %.2f", remaining_cv_);

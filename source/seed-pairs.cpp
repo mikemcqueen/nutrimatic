@@ -163,11 +163,13 @@ int main(int argc, char* argv[]) {
     }
 
     std::string error;
+    std::string stale;
     P1Index p1;
-    if (!p1.open(*args.p1, &error)) {
+    if (!p1.open(*args.p1, &error, &stale)) {
         report(PROGRAM, "%s", error.c_str());
         return 1;
     }
+    if (!stale.empty()) alert(PROGRAM, "%s", stale.c_str());
     DfsDictionary dictionary;
     if (args.dictionary) {
         if (!load_dictionary(*args.dictionary, &dictionary)) return 1;

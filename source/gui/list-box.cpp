@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <numeric>
+#include <ranges>
+#include <string>
 #include <utility>
 
 ListBox::ListBox(SharedLines items, SharedLines values)
@@ -92,13 +94,17 @@ void ListBox::set_items(SharedLines items, SharedLines values) {
 }
 
 bool ListBox::set_filter(std::string const& pattern) {
-  filter_.reset();
+  filters_.clear();
   bool ok = true;
-  if (!pattern.empty()) {
+  for (auto const part : std::views::split(pattern, ';')) {
+    if (part.empty()) continue;
     try {
-      filter_.emplace(pattern, std::regex::ECMAScript | std::regex::optimize);
+      filters_.emplace_back(std::string(part.begin(), part.end()),
+                            std::regex::ECMAScript | std::regex::optimize);
     } catch (std::regex_error const&) {
+      filters_.clear();
       ok = false;
+      break;
     }
   }
   apply_filter();
@@ -153,6 +159,9 @@ void ListBox::apply_filter() {
   Lines const& items = *items_;
   for (int i = 0; i < static_cast<int>(items.size()); ++i) {
     if (!hidden_.empty() && hidden_[i]) continue;
-    if (!filter_ || std::regex_search(items[i], *filter_)) shown_.push_back(i);
+    if (std::ranges::all_of(filters_, [&](std::regex const& filter) {
+          return std::regex_search(items[i], filter);
+        }))
+      shown_.push_back(i);
   }
 }

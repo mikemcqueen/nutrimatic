@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -156,45 +155,48 @@ bool line_fits(
   return true;
 }
 
-// One letter of a subset: the entry column it is read from and the count
-// each entry must reach, or with -r not exceed.
-struct LetterCheck {
-  uint16_t const* column;
-  uint16_t limit;
+// The entries each subset matches, as the indexes of `numbers`; a subset's
+// matches are a subset of its parent's, so each depth filters the one above.
+struct SubsetSearch {
+  std::vector<char> const& letters;
+  Counts const& bag;
+  std::vector<std::vector<uint16_t>> const& columns;
+  std::vector<size_t> const& numbers;
+  int length;
+  bool reverse;
+  Counts subset;
+  std::string text;
+  std::vector<std::vector<uint32_t>> matches;
+  std::vector<SubsetCount> results;
 };
 
-template <bool REVERSE>
-size_t count_matches(
-    std::vector<LetterCheck> const& checks,
-    std::vector<size_t> const& numbers) {
-  size_t count = 0;
-  for (size_t g = 0; g < numbers.size(); ++g) {
-    bool match = true;
-    for (LetterCheck const& check : checks) {
-      uint16_t const need = check.column[g];
-      if (REVERSE ? need > check.limit : need < check.limit) {
-        match = false;
-        break;
+void each_subset(SubsetSearch* search, size_t index) {
+  size_t const depth = search->text.size();
+  if (int(depth) == search->length) return;
+  std::vector<uint32_t> const& parent = search->matches[depth];
+  std::vector<uint32_t>& child = search->matches[depth + 1];
+  for (size_t i = index; i < search->letters.size(); ++i) {
+    int const bag = search->bag[i];
+    if (search->subset[i] == bag) continue;
+    int const chosen = ++search->subset[i];
+    uint16_t const* const column = search->columns[i].data();
+    uint16_t const limit = uint16_t(search->reverse ? bag - chosen : chosen);
+    child.clear();
+    size_t count = 0;
+    for (uint32_t const g : parent) {
+      uint16_t const need = column[g];
+      if (search->reverse ? need <= limit : need >= limit) {
+        child.push_back(g);
+        count += search->numbers[g];
       }
     }
-    if (match) count += numbers[g];
-  }
-  return count;
-}
-
-void each_subset(
-    std::vector<char> const& letters, Counts const& bag, int length,
-    size_t index, Counts* subset, std::string* text,
-    std::function<void(Counts const&, std::string const&)> const& visit) {
-  if (!text->empty()) visit(*subset, *text);
-  if (int(text->size()) == length) return;
-  for (size_t i = index; i < letters.size(); ++i) {
-    if ((*subset)[i] == bag[i]) continue;
-    ++(*subset)[i];
-    text->push_back(letters[i]);
-    each_subset(letters, bag, length, i, subset, text, visit);
-    text->pop_back();
-    --(*subset)[i];
+    if (count != 0) {
+      search->text.push_back(search->letters[i]);
+      search->results.push_back({ search->text, count });
+      each_subset(search, i);
+      search->text.pop_back();
+    }
+    --search->subset[i];
   }
 }
 
@@ -275,22 +277,13 @@ int main(int argc, char* argv[]) {
     numbers.push_back(number);
   }
 
-  std::vector<SubsetCount> results;
-  Counts subset(letters.size(), 0);
-  std::vector<LetterCheck> checks;
-  std::string text;
-  each_subset(letters, bag, args.length, 0, &subset, &text,
-      [&](Counts const& chosen, std::string const& name) {
-        checks.clear();
-        for (size_t i = 0; i < chosen.size(); ++i)
-          if (chosen[i] != 0)
-            checks.push_back({ columns[i].data(), uint16_t(
-                args.reverse ? bag[i] - chosen[i] : chosen[i]) });
-        size_t const count = args.reverse
-            ? count_matches<true>(checks, numbers)
-            : count_matches<false>(checks, numbers);
-        if (count != 0) results.push_back({ name, count });
-      });
+  SubsetSearch search = { letters, bag, columns, numbers, args.length,
+      args.reverse, Counts(letters.size(), 0), "",
+      std::vector<std::vector<uint32_t>>(size_t(args.length) + 1), {} };
+  for (uint32_t g = 0; g < numbers.size(); ++g)
+    search.matches[0].push_back(g);
+  each_subset(&search, 0);
+  std::vector<SubsetCount>& results = search.results;
 
   std::sort(results.begin(), results.end(),
       [](SubsetCount const& a, SubsetCount const& b) {

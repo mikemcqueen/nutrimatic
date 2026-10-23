@@ -36,9 +36,9 @@ class ListBox {
   // possibly empty, per item.
   void set_items(SharedLines items, SharedLines values);
 
-  // Shows only the items `pattern` (ECMAScript) matches part of; empty shows
-  // every item. Returns false, and shows every item, when `pattern` is
-  // invalid.
+  // Shows only the items each ';'-separated regex (ECMAScript) of `pattern`
+  // matches part of, skipping empty ones; empty shows every item. Returns
+  // false, and shows every item, when any of them is invalid.
   bool set_filter(std::string const& pattern);
 
   // Hides the items whose entry in `hidden` is nonzero, alongside the
@@ -85,14 +85,14 @@ class ListBox {
 
  private:
   // Whether shown_ lists the items shown, rather than every item being shown.
-  bool filtering() const { return filter_ || !hidden_.empty(); }
+  bool filtering() const { return !filters_.empty() || !hidden_.empty(); }
   void apply_filter();
   // The row showing items_[item], or -1 when `item` is -1 or not shown.
   int shown_row(int item) const;
 
   SharedLines items_;
   SharedLines values_;
-  std::optional<std::regex> filter_;
+  std::vector<std::regex> filters_;
   // Empty when set_hidden() hides no item.
   std::vector<char> hidden_;
   std::vector<int> shown_;

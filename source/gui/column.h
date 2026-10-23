@@ -61,7 +61,7 @@ void load_letter_count_font();
 // ListBox::step_off_hidden()) when judged_bad_version or the command's
 // display_version() went up. Pressing Enter
 // in any field of the column, the filter field's or the command's, applies
-// them all (see Command::apply_fields()), the filter field as a regex to the
+// them all (see Command::apply_fields()), the filter field as regexes to the
 // ListBox (see ListBox::set_filter()); the X button beside a field clears it
 // and counts as Enter. The filter changes only what is shown, never output(), selected_item(), or
 // version(). Widget IDs are scoped to the Column, so any number can be
