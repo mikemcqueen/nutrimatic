@@ -120,6 +120,7 @@ void Window::render() {
       }
       state.refresh_seed_files(keys);
       state.refresh_dictionaries();
+      state.refresh_required_words();
     }
     if (max_length_entered) {
       seed_max_length_ = std::max(seed_max_length_, 0);
@@ -142,6 +143,7 @@ void Window::render() {
     if (state.sentence != sentence_) {
       state.sentence = sentence_;
       state.load_sentence_letters();
+      state.refresh_required_words();
       ++state.generation;
     }
   }

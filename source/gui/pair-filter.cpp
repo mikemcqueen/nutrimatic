@@ -40,6 +40,8 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   options.max_letters = max_letters;
   options.sentence = params.sentence;
   options.drop_yes = yes;
+  if (required && params.required_words)
+    options.required_words = std::cref(params.required_words->words);
   options.dictionary = std::cref(params.dictionary->words);
 
   Pfilter filter;
@@ -78,8 +80,12 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
 }
 
 bool PairFilter::render_options(bool* entered) {
-  bool const changed = toggle_button("ex", exact);
-  if (changed) exact = !exact;
+  bool const has_required = app_state().required_words.words != nullptr;
+  if (!has_required) required = false;
+  ImGui::BeginDisabled(!has_required);
+  bool const changed = toggle_button("rw", required);
+  ImGui::EndDisabled();
+  if (changed) required = !required;
   ImGui::SameLine();
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("u:");
@@ -105,7 +111,7 @@ bool PairFilter::render_display_options(bool* entered) {
   ImGui::SameLine(0, pad);
   letters_field("x", "##x", &max_letters_field);
   ImGui::SameLine();
-  bool const changed = toggle_button("cv", cv);
+  bool changed = toggle_button("cv", cv);
   if (changed) {
     cv = !cv;
     ++display_version_;
@@ -114,6 +120,11 @@ bool PairFilter::render_display_options(bool* entered) {
   static PairFilter const defaults;
   cv_range_input(min_cv_text, max_cv_text, sizeof min_cv_text,
                  defaults.min_cv_text, defaults.max_cv_text, cv, entered);
+  ImGui::SameLine();
+  if (toggle_button("ex", exact)) {
+    exact = !exact;
+    changed = true;
+  }
   return changed;
 }
 

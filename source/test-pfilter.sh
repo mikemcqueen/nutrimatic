@@ -40,4 +40,13 @@ actual=$("$pfilter" --no-dict -m 0 --no-nopairs --exact -l catdog \
 actual=$("$pfilter" --no-dict --no-nopairs -m 7 -l catdogx "$test_dir/pairs")
 [[ -z $actual ]] || fail "-m keeps a short pair: $actual"
 
+printf 'Dog\nlow\n' > "$test_dir/required"
+actual=$("$pfilter" --no-dict -m 0 --no-nopairs --rw "$test_dir/required" \
+  "$test_dir/pairs")
+[[ $actual == $'cat,dog\nlow,ant' ]] || fail "--rw is wrong: $actual"
+
+printf 'a-b\n!!\n' > "$test_dir/required"
+"$pfilter" --no-dict --no-nopairs --rw "$test_dir/required" \
+  "$test_dir/pairs" 2>/dev/null && fail "--rw accepts a file with no words"
+
 echo PASS

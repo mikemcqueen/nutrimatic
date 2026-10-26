@@ -27,10 +27,12 @@ int const OPT_CV = 257;
 int const OPT_CSV = 258;
 int const OPT_EXACT = 259;
 int const OPT_NO_NOPAIRS = 260;
+int const OPT_REQUIRED_WORDS = 261;
 
 struct Args {
   PfilterOptions options;
   std::optional<std::filesystem::path> dictionary_file;
+  std::optional<std::filesystem::path> required_words_file;
   bool no_dict = false;
   bool cv = false;
   bool csv = false;
@@ -40,6 +42,7 @@ struct Args {
 void usage(FILE* out) {
   fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [--exact]] [-m N] [-x N] "
         "[-s N] [--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] "
+        "[--rw FILE] "
         "[--cv [--csv]] PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
@@ -71,6 +74,8 @@ void usage(FILE* out) {
   dfs_help_option("--no-dict", "skip the dictionary check");
   dfs_help_option("-i, --idx INDEX",
       "print only pairs with \"word1 word2\" or \"word2 word1\" in INDEX");
+  dfs_help_option("--rw, --required-words FILE",
+      "print only pairs with at least one word in FILE, one word per line");
   dfs_help_option("--cv",
       "print after each pair the consonant/vowel ratio of the -l letters "
       "left once the pair's letters are removed; y is a consonant. inf "
@@ -94,6 +99,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "dict", 'd', OPTPARSE_REQUIRED },
     { "no-dict", OPT_NO_DICT, OPTPARSE_NONE },
     { "idx", 'i', OPTPARSE_REQUIRED },
+    { "rw", OPT_REQUIRED_WORDS, OPTPARSE_REQUIRED },
+    { "required-words", OPT_REQUIRED_WORDS, OPTPARSE_REQUIRED },
     { "cv", OPT_CV, OPTPARSE_NONE },
     { "csv", OPT_CSV, OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
@@ -151,6 +158,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         break;
       case 'i':
         out->options.index_file = options.optarg;
+        break;
+      case OPT_REQUIRED_WORDS:
+        out->required_words_file = options.optarg;
         break;
       case OPT_CV:
         out->cv = true;
@@ -266,6 +276,18 @@ int main(int argc, char* argv[]) {
       return 1;
     if (!load_dictionary(*args.dictionary_file, &dictionary)) return 1;
     args.options.dictionary = std::cref(dictionary);
+  }
+
+  DfsDictionary required_words;
+  if (args.required_words_file) {
+    if (!load_dictionary(*args.required_words_file, &required_words))
+      return 1;
+    if (required_words.empty()) {
+      report(PROGRAM, "--required-words \"%s\" has no words",
+             args.required_words_file->c_str());
+      return 1;
+    }
+    args.options.required_words = std::cref(required_words);
   }
 
   ClassifiedPairCache cache;

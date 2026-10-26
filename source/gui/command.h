@@ -68,6 +68,9 @@
 //   static constexpr bool uses_big_dictionary
 // true when run() reads its params' big_dictionary, so it reruns when
 // "big_dict" is reloaded; commands without it don't. And it may have
+//   bool uses_required_words() const
+// true when run() reads its params' required_words, so it reruns when they
+// change; commands without it don't. And it may have
 //   static constexpr bool cancellable
 // true when run() checks its params' stop token, so its Column offers an x
 // button that cancels it; commands without it aren't. And it may have
@@ -129,6 +132,8 @@ class Command {
 
   bool uses_big_dictionary() const { return self_->uses_big_dictionary(); }
 
+  bool uses_required_words() const { return self_->uses_required_words(); }
+
   // Empty when it has none.
   std::string default_seed() const { return self_->default_seed(); }
 
@@ -152,6 +157,7 @@ class Command {
     virtual bool has_word_bag_source() const = 0;
     virtual bool uses_dictionary() const = 0;
     virtual bool uses_big_dictionary() const = 0;
+    virtual bool uses_required_words() const = 0;
     virtual std::string default_seed() const = 0;
   };
 
@@ -246,6 +252,12 @@ class Command {
     bool uses_big_dictionary() const override {
       if constexpr (requires { T::uses_big_dictionary; })
         return T::uses_big_dictionary;
+      else
+        return false;
+    }
+    bool uses_required_words() const override {
+      if constexpr (requires { data.uses_required_words(); })
+        return data.uses_required_words();
       else
         return false;
     }

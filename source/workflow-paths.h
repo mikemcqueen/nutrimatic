@@ -62,6 +62,13 @@ inline std::filesystem::path require_workflow_root(std::string_view program) {
   return check_workflow_root(program, root) ? root : std::filesystem::path();
 }
 
+// IDX_DIR, the directory of the sentence pair files and p1.idx; empty when it
+// is unset or empty.
+inline std::filesystem::path idx_dir() {
+  char const* const dir = getenv("IDX_DIR");
+  return dir == NULL ? std::filesystem::path() : std::filesystem::path(dir);
+}
+
 // Sets an unset `*path` to `relative` under require_workflow_root(). False
 // when the root is needed and unusable, diagnosed prefixed by `program`.
 inline bool default_workflow_path(std::string_view program,

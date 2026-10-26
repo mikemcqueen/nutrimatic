@@ -17,8 +17,9 @@
 // seed_name, and Enter in it loads the pair file from the name typed, with
 // its bad bags (see AppState::load_seed_and_bad_bags()), keeps only the seed
 // views the columns' seed sources name and reads the pair file again when
-// it's newer (see AppState::refresh_seed_files()), and reloads the loaded
-// dictionaries whose files are newer (see AppState::refresh_dictionaries()).
+// it's newer (see AppState::refresh_seed_files()), reloads the loaded
+// dictionaries whose files are newer (see AppState::refresh_dictionaries()),
+// and refreshes the required words (see AppState::refresh_required_words()).
 // The x: field starts from app_state()'s seed_max_length, and Enter in it
 // stores it there.
 // The letters fields start from app_state(), and Enter in either stores both
@@ -26,8 +27,9 @@
 // is framed red while app_state()'s letters_valid is false. The buttons
 // start from app_state()'s sentence; clicking one selects it alone, or
 // deselects it when already selected, and stores the result there, loading
-// its letters (see AppState::load_sentence_letters()). Left and Right, while
-// a column's ListBox has keyboard focus, move it to the ListBox of the
+// its letters (see AppState::load_sentence_letters()) and refreshing its
+// required words (see AppState::refresh_required_words()). Left and Right,
+// while a column's ListBox has keyboard focus, move it to the ListBox of the
 // nearest column that shows one on that side (see ListBox::focus()).
 // Shift+R, while a column's ListBox has keyboard focus, opens a Review of the
 // items it shows, when its command can review them from its source (see

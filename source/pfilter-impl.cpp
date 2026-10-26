@@ -68,5 +68,8 @@ bool Pfilter::keep(DfsPairRow const& row) const {
       (!options_.bag ||
           ((!options_.exact || letters == options_.bag->size) &&
               fits_letter_bag(*options_.bag, row.left + row.right))) &&
+      (!options_.required_words ||
+          options_.required_words->get().contains(row.left) ||
+          options_.required_words->get().contains(row.right)) &&
       (index_ == nullptr || in_index(*index_, row));
 }

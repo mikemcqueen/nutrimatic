@@ -9,6 +9,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -92,6 +93,13 @@ std::filesystem::file_time_type modification_time(
   return error ? std::filesystem::file_time_type::min() : mtime;
 }
 
+// Whether the file at `path` was modified after `mtime`, the modification time
+// it was last read with.
+bool modified_since(std::filesystem::path const& path,
+                    std::filesystem::file_time_type mtime) {
+  return modification_time(path) > mtime;
+}
+
 // The pair file at `path`, read now, looking each pair up in `p1`, with
 // version `version`.
 AppState::SeedPairs read_seed_pairs_file(std::filesystem::path const& path,
@@ -131,9 +139,11 @@ bool open_p1_index(std::filesystem::path const& path, P1Index* index,
 }
 
 // Loads `dictionary`'s words from its path, empty when it can't be read,
-// which is diagnosed, with version `version`. Returns whether it could be.
-bool read_dictionary(AppState::Dictionary* dictionary, unsigned version) {
-  dictionary->mtime = modification_time(dictionary->path);
+// which is diagnosed, with version `version` and modification time `mtime`.
+// Returns whether it could be.
+bool read_dictionary(AppState::Dictionary* dictionary, unsigned version,
+                     std::filesystem::file_time_type mtime) {
+  dictionary->mtime = mtime;
   auto words = std::make_shared<LoadedDictionary>();
   bool const ok = load_dictionary(dictionary->path, &words->words);
   if (!ok) words->words.clear();
@@ -143,6 +153,17 @@ bool read_dictionary(AppState::Dictionary* dictionary, unsigned version) {
   dictionary->words = std::move(words);
   dictionary->version = version;
   return ok;
+}
+
+// Reloads `dictionary` from its path, with version `++*version`, when its
+// file's modification time isn't `dictionary->mtime`, leaving it empty when the
+// file is missing or can't be read, which is diagnosed. Returns false when it
+// reloaded and the file couldn't be read.
+bool refresh_dictionary(AppState::Dictionary* dictionary, unsigned* version) {
+  std::filesystem::file_time_type const mtime =
+      modification_time(dictionary->path);
+  if (mtime == dictionary->mtime) return true;
+  return read_dictionary(dictionary, ++*version, mtime);
 }
 
 }  // namespace
@@ -158,13 +179,16 @@ bool load_app_state(std::string const& seed_path) {
   state.dictionaries["sml_dict"].path = root / WORKFLOW_SMALL_DICT_PATH;
   AppState::Dictionary& big = state.dictionaries["big_dict"];
   big.path = root / WORKFLOW_DICT_PATH;
-  if (!read_dictionary(&big, ++state.dictionary_version)) return false;
+  if (!read_dictionary(&big, ++state.dictionary_version,
+                       modification_time(big.path)))
+    return false;
   std::filesystem::path const seed(seed_path);
   state.seed_directory = seed.parent_path().string();
   state.p1_path = seed.parent_path() / "p1.idx";
   state.p1_open = open_p1_index(state.p1_path, &state.p1, &state.p1_mtime);
   state.bad_bags_sentence.reset();
   state.load_seed_and_bad_bags(seed.filename().string());
+  state.refresh_required_words();
   return true;
 }
 
@@ -179,11 +203,11 @@ void AppState::refresh_seed_files(std::vector<SeedViewKey> const& keys) {
   });
   std::filesystem::path const path =
       std::filesystem::path(seed_directory) / seed_name;
-  bool const p1_reopened = modification_time(p1_path) > p1_mtime &&
+  bool const p1_reopened = modified_since(p1_path, p1_mtime) &&
                            open_p1_index(p1_path, &p1, &p1_mtime);
   if (p1_reopened) p1_open = true;
   if (seed_pairs_file &&
-      (p1_reopened || modification_time(path) > seed_pairs_file->mtime))
+      (p1_reopened || modified_since(path, seed_pairs_file->mtime)))
     seed_pairs_file = read_seed_pairs_file(path, p1_open ? &p1 : nullptr,
                                            ++seed_file_version);
 }
@@ -260,19 +284,32 @@ AppState::Dictionary const& AppState::dictionary(std::string const& key) {
     return empty;
   }
   Dictionary& dictionary = found->second;
-  if (!dictionary.words) read_dictionary(&dictionary, ++dictionary_version);
+  if (!dictionary.words)
+    read_dictionary(&dictionary, ++dictionary_version,
+                    modification_time(dictionary.path));
   return dictionary;
 }
 
 void AppState::refresh_dictionaries() {
-  for (auto& [key, dictionary] : dictionaries) {
-    if (!dictionary.words ||
-        modification_time(dictionary.path) <= dictionary.mtime)
-      continue;
-    Dictionary reloaded = dictionary;
-    if (read_dictionary(&reloaded, ++dictionary_version))
-      dictionary = std::move(reloaded);
-  }
+  for (auto& [key, dictionary] : dictionaries)
+    if (dictionary.words) refresh_dictionary(&dictionary, &dictionary_version);
+}
+
+void AppState::refresh_required_words() {
+  std::filesystem::path path;
+  if (sentence != CLASSIFIED_NO_SENTENCE)
+    path = std::filesystem::path(seed_directory) /
+           ("s" + std::to_string(sentence) + ".required");
+  if (path != required_words.path)
+    required_words = {std::move(path), nullptr,
+                      std::filesystem::file_time_type::min(), 0};
+  bool const readable =
+      refresh_dictionary(&required_words, &dictionary_version);
+  if (!required_words.words || !required_words.words->words.empty()) return;
+  if (readable)
+    std::fprintf(stderr, "pgui: \"%s\" has no words\n",
+                 required_words.path.c_str());
+  required_words.words = nullptr;
 }
 
 bool AppState::is_judged_bad(std::string const& letters,

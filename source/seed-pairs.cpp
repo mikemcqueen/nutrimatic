@@ -7,9 +7,9 @@
 #include "optparse.h"
 #include "p1-index.h"
 #include "seed-view.h"
+#include "workflow-paths.h"
 
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -134,12 +134,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         return false;
     }
     if (!out->p1 || out->sentence) {
-        char const* const idx_dir = getenv("IDX_DIR");
-        if (idx_dir == NULL || idx_dir[0] == '\0') {
+        std::filesystem::path const dir = idx_dir();
+        if (dir.empty()) {
             report(PROGRAM, "needs a nonempty IDX_DIR without --p1 or with -s");
             return false;
         }
-        std::filesystem::path const dir(idx_dir);
         if (!out->p1) out->p1 = dir / "p1.idx";
         if (out->sentence)
             out->pairs = dir / ("pairs.s" + std::to_string(*out->sentence));

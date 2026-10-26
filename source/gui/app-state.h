@@ -138,10 +138,18 @@ struct AppState {
   // the main thread.
   Dictionary const& dictionary(std::string const& key);
 
-  // Reloads the loaded dictionaries whose files are newer than when they
-  // were loaded, keeping a dictionary as it was when its file can't be
-  // read, which is diagnosed.
+  // Reloads the loaded dictionaries whose files' modification times changed
+  // since they were loaded, leaving a dictionary empty when its file is
+  // missing or can't be read, which is diagnosed.
   void refresh_dictionaries();
+
+  // Points required_words at sentence's sN.required in seed_directory, with
+  // no words and version 0 when that path changed, and reloads it as
+  // refresh_dictionaries() does. Its words are null while sentence is
+  // CLASSIFIED_NO_SENTENCE or that file has been missing since the path
+  // changed, which isn't diagnosed, and null when the file can't be read or
+  // has no words, which is diagnosed.
+  void refresh_required_words();
 
   // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't
   // there already, bumps judged_bad_version, and appends it as a line to the
@@ -224,6 +232,8 @@ struct AppState {
   ClassifiedPairCache classified_pairs;
   // Goes up whenever a Review of pairs records verdicts.
   unsigned classified_version = 0;
+  // The required words pfilter runs share, set by refresh_required_words().
+  Dictionary required_words;
 };
 
 // What a command runs with, taken when it starts so it runs unaffected by
@@ -231,8 +241,8 @@ struct AppState {
 // letters, the dictionary its Column's D: dropdown names and that
 // dictionary's lines, and the lines of the dictionary or the output of the
 // column its wb: dropdown names, empty when it has none; the "big_dict"
-// dictionary, whatever D: names; and the token a command may check to quit
-// early, its output then discarded.
+// dictionary, whatever D: names; app_state()'s required words; and the
+// token a command may check to quit early, its output then discarded.
 struct LetterToolsParams {
   std::string letters;
   std::string used_letters;
@@ -241,12 +251,14 @@ struct LetterToolsParams {
   SharedLines dictionary_lines;
   SharedLines word_bag_lines;
   SharedDictionary big_dictionary;
+  SharedDictionary required_words;
   std::stop_token stop;
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
 // "sml_dict", not loaded yet, with letters "$S1", empty used letters,
-// sentence 1's letters (see AppState::load_sentence_letters()), the pair
+// sentence 1's letters (see AppState::load_sentence_letters()) and required
+// words (see AppState::refresh_required_words()), the pair
 // file at `seed_path`, the p1.idx beside it, and judged_bad and
 // bad_bags_bitmap from the judged-bad and bad.sN files beside it (see
 // AppState::load_seed_and_bad_bags()). Returns false, with the error

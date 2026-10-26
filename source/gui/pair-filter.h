@@ -10,16 +10,19 @@
 #include "review-kind.h"
 
 // A pfilter call on one input, taking its dictionary and sentence from the
-// LetterToolsParams. Its option widgets are an "ex" toggle button setting
-// exact, which requires letters, then a "u:" field with a clear button
-// setting used, which the Column adds to its used letters; clearing it counts
-// as Enter. Its second row has "m" and "x" fields setting min_letters and
-// max_letters, then a "cv" toggle button, starting on, setting cv, then "m"
+// LetterToolsParams. Its option widgets are an "rw" toggle button setting
+// required, greyed out and turned off unless AppState::required_words holds the
+// words of sN.required in the seed directory for the sentence N, which run()
+// then hands pfilter as its required words, then a "u:" field with a clear
+// button setting used, which the Column adds to its used letters; clearing it
+// counts as Enter. Its second row has "m" and "x" fields setting min_letters
+// and max_letters, then a "cv" toggle button, starting on, setting cv, then "m"
 // and "x" fields, starting at 0.00 and 10.0 and greyed out unless cv is set,
 // setting min_cv and max_cv, then an "X" button, greyed out like them,
-// resetting the fields to those defaults (see cv_range_input()). Its fields
-// set their options when apply_fields() is called. While cv is set, items
-// whose ratio lies outside [min_cv, max_cv] are hidden (see display_hides()).
+// resetting the fields to those defaults (see cv_range_input()), then an "ex"
+// toggle button setting exact, which requires letters. Its fields set their
+// options when apply_fields() is called. While cv is set, items whose ratio
+// lies outside [min_cv, max_cv] are hidden (see display_hides()).
 // With cv, which requires letters, each kept line is followed by a space and
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
@@ -40,9 +43,11 @@ struct PairFilter {
   unsigned display_version() const { return display_version_; }
   bool display_hides(std::string const& value) const;
   std::string used_letters() const { return used; }
+  bool uses_required_words() const { return required; }
 
   bool yes = false;  // -y
   bool exact = false;  // --exact
+  bool required = false;  // --rw sN.required
   bool cv = true;   // --cv
   int min_letters = PFILTER_DEFAULT_MIN_LETTERS;  // -m
   int min_letters_field = PFILTER_DEFAULT_MIN_LETTERS;
