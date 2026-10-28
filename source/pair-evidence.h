@@ -19,15 +19,18 @@ struct PairEvidence {
     CluePairCounts clues;
 };
 
+// Which index PairEvidenceSource::open() couldn't open.
+enum class PriorIndex { none, p1, clues };
+
 // The phase 1 index and clue index a pair is looked up in, either optional.
 class PairEvidenceSource {
   public:
     // Opens a make-p1-index file, `p1`, and the clue index beside
-    // `cluedata`; either may be absent. False, with `*error` set, when one
-    // can't be opened.
+    // `cluedata`; either may be absent. False, with `*error` set and
+    // `*failed` the index, when one can't be opened.
     bool open(std::optional<std::filesystem::path> const& p1,
               std::optional<std::filesystem::path> const& cluedata,
-              std::string* error);
+              std::string* error, PriorIndex* failed = nullptr);
 
     PairEvidence lookup(std::string_view a, std::string_view b) const;
 
@@ -59,12 +62,12 @@ double prior_score(PairEvidence const& evidence, PriorWeights const& weights);
 // not given, into `weights`, and opens in `source` the indexes among `p1`
 // and `cluedata` that its terms read (both with `all`). False, with
 // `*error` set, on a bad SPEC, a weighted term whose index isn't given, or
-// an index that can't be opened.
+// an index that can't be opened, then `*failed` that index.
 bool open_prior(std::optional<std::filesystem::path> const& p1,
                 std::optional<std::filesystem::path> const& cluedata,
                 std::optional<std::string> const& spec, bool all,
                 PriorWeights* weights, PairEvidenceSource* source,
-                std::string* error);
+                std::string* error, PriorIndex* failed = nullptr);
 
 // The pair's key, the same for either order: "a,b" with a <= b.
 std::string pair_key(std::string_view a, std::string_view b);

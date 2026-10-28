@@ -11,14 +11,23 @@
 bool PairEvidenceSource::open(
         std::optional<std::filesystem::path> const& p1,
         std::optional<std::filesystem::path> const& cluedata,
-        std::string* error) {
+        std::string* error, PriorIndex* failed) {
+    PriorIndex unused;
+    if (failed == nullptr) failed = &unused;
+    *failed = PriorIndex::none;
     if (p1) {
         p1_ = std::make_unique<P1Index>();
-        if (!p1_->open(*p1, error)) return false;
+        if (!p1_->open(*p1, error)) {
+            *failed = PriorIndex::p1;
+            return false;
+        }
     }
     if (cluedata) {
         clues_ = std::make_unique<ClueIndex>();
-        if (!clues_->open(*cluedata, error)) return false;
+        if (!clues_->open(*cluedata, error)) {
+            *failed = PriorIndex::clues;
+            return false;
+        }
     }
     return true;
 }
@@ -52,7 +61,7 @@ PriorTerm const PRIOR_TERMS[] = {
     {"together", false, "1 when a clue has both words",
      [](PairEvidence const& e) { return double(e.clues.together > 0); }},
     {"adjacent", false,
-     "1 when a clue has them adjacent, one space or hyphen apart",
+     "1 when a clue has them adjacent, consecutive words",
      [](PairEvidence const& e) { return double(e.clues.adjacent > 0); }},
     {"adjacent-short", false,
      "1 when a clue of at most three words has them adjacent",
@@ -134,7 +143,8 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
                 std::optional<std::filesystem::path> const& cluedata,
                 std::optional<std::string> const& spec, bool all,
                 PriorWeights* weights, PairEvidenceSource* source,
-                std::string* error) {
+                std::string* error, PriorIndex* failed) {
+    if (failed != nullptr) *failed = PriorIndex::none;
     if (!parse_prior_weights(spec.value_or(PRIOR_WEIGHTS_DEFAULT), weights,
                              error)) {
         *error = "--prior-weights: " + *error;
@@ -157,7 +167,7 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
         }
     }
     return source->open(use_p1 ? p1 : std::nullopt,
-                        use_clues ? cluedata : std::nullopt, error);
+                        use_clues ? cluedata : std::nullopt, error, failed);
 }
 
 std::string pair_key(std::string_view a, std::string_view b) {

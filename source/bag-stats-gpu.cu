@@ -26,7 +26,6 @@ constexpr int PAIR_WARPS = PAIR_THREADS / 32;
 constexpr int CANDIDATE_CAPACITY = 1024;
 constexpr int MAX_HALF = GPU_MAX_LETTERS / 2;
 constexpr size_t SHARED_BYTES_MAX = 101376;
-constexpr int STREAMS = 2;
 constexpr int FILTER_BLOCK_WORDS = 8;
 constexpr int FILTER_BITS_PER_PAIR = 12;
 constexpr size_t FILTER_RESERVE = size_t(512) << 20;
@@ -735,7 +734,7 @@ struct GpuRowCounter::Impl {
     size_t filter_blocks = 0;
     GpuFilterInfo filter_info{};
     GpuFilterCounts filter_counts{};
-    Stream streams[STREAMS];
+    std::vector<Stream> streams;
     std::mutex mutex;
     std::condition_variable freed;
     // Every cudaMalloc buffer, for the destructor.
@@ -935,10 +934,12 @@ struct GpuRowCounter::Impl {
     }
 };
 
-GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs)
+GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs,
+                             size_t streams)
     : impl_(std::make_unique<Impl>()) {
     program_name = program;
     Impl& impl = *impl_;
+    impl.streams.resize(streams);
     int device_count = 0;
     check(cudaGetDeviceCount(&device_count));
     check(cudaSetDevice(0));
@@ -998,13 +999,17 @@ GpuFilterCounts GpuRowCounter::filter_counts() const {
 void GpuRowCounter::count(uint8_t const* rests, size_t rows,
                           GpuCounts* out) const {
     Impl& impl = *impl_;
-    Impl::Stream* stream;
+    Impl::Stream* stream = nullptr;
     {
         std::unique_lock<std::mutex> lock(impl.mutex);
         impl.freed.wait(lock, [&] {
-            return !impl.streams[0].busy || !impl.streams[1].busy;
+            for (Impl::Stream& free : impl.streams)
+                if (!free.busy) {
+                    stream = &free;
+                    return true;
+                }
+            return false;
         });
-        stream = &impl.streams[impl.streams[0].busy ? 1 : 0];
         stream->busy = true;
     }
 

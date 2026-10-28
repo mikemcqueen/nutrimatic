@@ -74,6 +74,14 @@ run_both catdoglowanttan "$test_dir/pairs" --min-pb-len 6 \
 run_both catdoglowanttan "$test_dir/pairs" --min-pb-len 6 \
   --ss pb,pb,wb,wb,p -n 5 --wb --mp --cache-size 0
 
+expected=$("$bag_stats" --min-pb-len 6 --ss pb,pb,wb,wb,p catdoglowanttan \
+  "$test_dir/pairs" "$test_dir/dict")
+actual=$("$bag_stats_cuda" --streams 3 --min-pb-len 6 --ss pb,pb,wb,wb,p \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ $actual == "$expected" ]] || fail "--streams 3 differs: $actual"
+"$bag_stats_cuda" --streams 0 x "$test_dir/pairs" "$test_dir/dict" \
+  >/dev/null 2>&1 && fail "--streams 0 accepted"
+
 alphabet=abcdefghijklmnopqrstuvwxyz
 run_both "$alphabet$alphabet$alphabet" "$test_dir/wide-pairs" \
   --min-pb-len 6 --min-wb-len 3

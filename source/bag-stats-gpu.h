@@ -71,11 +71,12 @@ struct GpuFilterCounts {
     uint64_t scanned;
 };
 
-// Counts rows' remainders on the GPU over two streams. A CUDA call failing
-// prints the program name and CUDA's error on stderr and exits 1.
+// Counts rows' remainders on the GPU over `streams` streams. A CUDA call
+// failing prints the program name and CUDA's error on stderr and exits 1.
 class GpuRowCounter {
   public:
-    GpuRowCounter(std::string_view program, GpuInputs const& inputs);
+    GpuRowCounter(std::string_view program, GpuInputs const& inputs,
+                  size_t streams);
     ~GpuRowCounter();
 
     // The device's name.
@@ -95,7 +96,7 @@ class GpuRowCounter {
 
     // Writes the counts of `rows` rests, at most GPU_BATCH_ROWS, each
     // GPU_LETTERS_BYTES of letter counts within the bag, to `out`. Any
-    // thread may call it; it waits while both streams are busy.
+    // thread may call it; it waits while every stream is busy.
     void count(uint8_t const* rests, size_t rows, GpuCounts* out) const;
 
   private:

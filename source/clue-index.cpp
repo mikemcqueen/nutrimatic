@@ -49,26 +49,17 @@ bool word_char(char c) {
     return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
 }
 
-// `clue`'s words as clean_words() splits them, and whether each follows the
-// one before it as adjacent_words() pairs them.
-void clue_words(std::string_view clue, std::vector<std::string>* words,
-                std::vector<char>* adjacent) {
+// `clue`'s words as clean_words() splits them.
+void clue_words(std::string_view clue, std::vector<std::string>* words) {
     words->clear();
-    adjacent->clear();
     std::string text;
     for (char c : clue)
         if (c != '\'') text += char(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
-    size_t previous_end = std::string::npos;
     for (size_t i = 0; i < text.size();) {
         if (!word_char(text[i])) { ++i; continue; }
         size_t j = i;
         while (j < text.size() && word_char(text[j])) ++j;
-        adjacent->push_back(previous_end != std::string::npos &&
-                            i == previous_end + 1 &&
-                            (text[previous_end] == ' ' ||
-                             text[previous_end] == '-'));
         words->push_back(text.substr(i, j - i));
-        previous_end = j;
         i = j;
     }
 }
@@ -235,14 +226,13 @@ CluePairCounts ClueIndex::pair(std::string_view a, std::string_view b) const {
 
     std::vector<uint32_t> shared;
     std::vector<std::string> words;
-    std::vector<char> adjacent;
     auto const answer_side = [&](std::string_view answer,
                                  NpyArray<uint32_t> other_clues,
                                  std::string_view other) {
         intersect(answer_clues(answer), other_clues, &shared);
         out.answer_links += uint32_t(shared.size());
         for (uint32_t id : shared) {
-            clue_words(clue(id), &words, &adjacent);
+            clue_words(clue(id), &words);
             out.answer_exact += words.size() == 1 && words[0] == other;
             if (out.answer_min_words == 0 ||
                 words.size() < out.answer_min_words)
@@ -263,12 +253,11 @@ CluePairCounts ClueIndex::pair(std::string_view a, std::string_view b) const {
     intersect(clues_a, clues_b, &shared);
     out.together = uint32_t(shared.size());
     for (uint32_t id : shared) {
-        clue_words(clue(id), &words, &adjacent);
+        clue_words(clue(id), &words);
         bool next_to = false;
         for (size_t i = 1; i < words.size(); ++i)
-            next_to |= adjacent[i] &&
-                ((words[i - 1] == a && words[i] == b) ||
-                 (words[i - 1] == b && words[i] == a));
+            next_to |= (words[i - 1] == a && words[i] == b) ||
+                (words[i - 1] == b && words[i] == a);
         out.adjacent += next_to;
         out.adjacent_short += next_to && words.size() <= 3;
         out.exact += words.size() == 2 &&

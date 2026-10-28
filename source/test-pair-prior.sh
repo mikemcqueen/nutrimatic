@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-pair_prior=$1
-make_p1_index=$2
+pair_prior=$(realpath "$1")
+make_p1_index=$(realpath "$2")
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/nutrimatic-pair-prior.XXXXXX")
 
 cleanup() {
   rm -rf "$test_dir"
 }
 trap cleanup EXIT
+cd "$test_dir"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -59,7 +60,7 @@ npy "$index/ref_start.npy" 0 1 1
 npy "$index/refs.npy" 0
 size=$(stat -c %s "$test_dir/data/cluedata")
 mtime=$(date -r "$test_dir/data/cluedata" +%s%N)
-printf '{"version": 3, "source_size": %s, "source_mtime_ns": %s}\n' \
+printf '{"version": 4, "source_size": %s, "source_mtime_ns": %s}\n' \
   "$size" "$mtime" > "$index/metadata.json"
 
 printf '%s\n' pound,writer nine,darts abelard,author writer,pound \
@@ -97,6 +98,24 @@ if "$pair_prior" --clues "$test_dir/data/cluedata" --prior-weights mean=1 \
     "$test_dir/pairs" 2> /dev/null; then
   fail "a p1 term ran without --p1"
 fi
+mkdir idx
+cp "$test_dir/p1.idx" idx/p1.idx
+actual=$("$pair_prior" --clues "$test_dir/data/cluedata" "$test_dir/pairs")
+expected='3.800008 pound,writer
+3.000000 nine,darts
+1.550004 abelard,author'
+[[ $actual == "$expected" ]] || fail "idx/p1.idx was not the default: $actual"
+
+mkdir -p cluer/data
+cp "$test_dir/data/cluedata" cluer/data/cluedata
+actual=$("$pair_prior" --p1 "$test_dir/p1.idx" "$test_dir/pairs" 2> err)
+expected='0.800008 pound,writer
+0.000000 nine,darts
+0.550004 abelard,author'
+[[ $actual == "$expected" ]] || fail "a bad default clue index wasn't skipped: $actual"
+grep -q 'skipping cluer/data/cluedata' err ||
+  fail "no warning for the skipped clue index"
+
 touch -d '2001-01-01' "$test_dir/data/cluedata"
 if "$pair_prior" --clues "$test_dir/data/cluedata" --features \
     "$test_dir/pairs" 2> /dev/null; then

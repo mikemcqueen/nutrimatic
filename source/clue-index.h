@@ -11,14 +11,14 @@
 #include <vector>
 
 // The index format version ClueIndex reads.
-inline constexpr int CLUE_INDEX_VERSION = 3;
+inline constexpr int CLUE_INDEX_VERSION = 4;
 
 // What crossword clues say about a pair of words.
 struct CluePairCounts {
     // Clues containing both words.
     uint32_t together = 0;
-    // Of those, the clues where the two are adjacent, in either order, one
-    // space or hyphen apart.
+    // Of those, the clues where the two are adjacent, consecutive words in
+    // either order.
     uint32_t adjacent = 0;
     // Clues of answer A containing word B, plus clues of answer B containing
     // word A.

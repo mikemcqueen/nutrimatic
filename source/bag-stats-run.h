@@ -54,7 +54,7 @@ struct BagStatsArgs {
     std::string search_text = DEFAULT_SEARCH;
     Search search;
     std::optional<std::filesystem::path> prospects_file;
-    int threads = 1;
+    int threads = 0;
     // At most this many MB of cached remainder counts, 0 for none.
     int cache_size_mb = BAG_STATS_DEFAULT_CACHE_SIZE_MB;
     int progress = DEFAULT_PROGRESS_SECONDS;

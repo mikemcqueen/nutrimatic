@@ -6,6 +6,8 @@
 #include "bag-stats-impl.h"
 #include "bag-stats-rank.h"
 #include "bag-stats-run.h"
+#include "dfs-cli-args.h"
+#include "dfs-cli-help.h"
 #include "log.h"
 #include "optparse.h"
 #include "pairs-impl.h"
@@ -20,6 +22,7 @@
 namespace {
 
 constexpr char PROGRAM[] = "bag-stats-cuda";
+constexpr int OPT_STREAMS = OPT_COMMON_END;
 
 static_assert(sizeof(PairsCounts) == GPU_LETTERS_BYTES);
 static_assert(sizeof(GpuCounts) == sizeof(BagStatsCounts));
@@ -28,8 +31,8 @@ void usage(std::string_view program, FILE* out) {
     fprintf(out,
             "usage: %.*s [-u LETTERS] [-s N | --no-nopairs] [--min-wb-len N]\n"
             "       [--min-pb-len N]\n"
-            "       [--ss STEPS] [--pp FILE] [--threads N] [--cache-size N]\n"
-            "       [--progress N]\n"
+            "       [--ss STEPS] [--pp FILE] [--threads N] [--streams N]\n"
+            "       [--cache-size N] [--progress N]\n"
             "       [-n N SORT... [--by-length | --by-pick]]\n"
             "       [--score W1,W2... [--score-detail]\n"
             "        [SORT... [--by-length | --by-pick]]]\n"
@@ -42,12 +45,16 @@ void usage(std::string_view program, FILE* out) {
 
     fputs("  bag-stats, counting every row on the GPU\n\n", stdout);
     help_common_options(false);
+    dfs_help_option("--streams N",
+                    "count on N GPU streams, each fed by its own thread; "
+                    "--threads N is for the CPU-only work (default: 1)");
     help_common_tail();
 }
 
-bool parse_args(char* argv[], BagStatsArgs* out, bool* help) {
+bool parse_args(char* argv[], BagStatsArgs* out, int* streams, bool* help) {
     static struct optparse_long const long_options[] = {
         BAG_STATS_COMMON_LONG_OPTIONS,
+        { "streams", OPT_STREAMS, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -62,6 +69,14 @@ bool parse_args(char* argv[], BagStatsArgs* out, bool* help) {
         if (common == RankOption::BAD) return false;
         if (common == RankOption::PARSED) continue;
         switch (option) {
+          case OPT_STREAMS:
+            if (!parse_count(options.optarg, "--streams", streams))
+                return false;
+            if (*streams == 0) {
+                report(PROGRAM, "--streams must be at least 1");
+                return false;
+            }
+            break;
           case 'h':
             *help = true;
             return true;
@@ -297,9 +312,10 @@ struct Walk : WalkBase {
 
 int main(int argc, char* argv[]) {
     BagStatsArgs args;
+    int streams = 1;
     bool help = false;
     std::string letters;
-    if (!parse_args(argv, &args, &help) ||
+    if (!parse_args(argv, &args, &streams, &help) ||
         (!help && !remaining_letters(args, &letters))) {
         usage(argv[0], stderr);
         return 2;
@@ -325,7 +341,8 @@ int main(int argc, char* argv[]) {
     stage("loading inputs");
     if (!load_bag_stats_inputs(PROGRAM, args, &inputs, nullptr)) return 1;
     stage("building GPU tables and pair-sum filter");
-    GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args));
+    GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args),
+                                size_t(streams));
     if (args.progress != 0) {
         report(PROGRAM, "%s, %d-bit bag keys, %.1f MB of GPU memory",
                counter.device().c_str(), counter.key_bits(),
@@ -351,7 +368,7 @@ int main(int argc, char* argv[]) {
     if (args.progress != 0) report_rest_table(PROGRAM, rest_table);
     if (!one_row) stage("counting each unit's rows");
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
-                     inputs.bag, inputs.word_bags, args, threads,
+                     inputs.bag, inputs.word_bags, args, size_t(streams),
                      rankers.passes ? 2 : 1,
                      one_row ? unit_blocks(steps[0]->size())
                              : census_blocks(steps, args.search.pairs,

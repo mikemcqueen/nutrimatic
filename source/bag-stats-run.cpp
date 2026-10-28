@@ -169,7 +169,7 @@ void help_common_options(bool pair_filter) {
                     "their bags are dropped from PAIRS");
     dfs_help_option("--threads N",
                     "count on N threads, at most the hardware threads, 0 for "
-                    "all of them (default: 1)");
+                    "all of them (default: 0)");
     dfs_help_option("--cache-size N",
                     "hold at most N MB of cached remainder counts, 0 for "
                     "none (default: %d)", BAG_STATS_DEFAULT_CACHE_SIZE_MB);
