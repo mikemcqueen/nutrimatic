@@ -171,9 +171,20 @@ find a couple of high over-represented letters and look for their subset combina
   
   `seed-pairs -s1 -x 10 | pfilter -s1 -l $S1 - -d $DICT | bag-subset $S1 - -l 5| grep "ddeee"`
 
+
 ----------------------------
 
-Previous steps:
+
+BAG-STATS:
+
+just throwing this in here so i have usage example. modern usage would pipe in seed-pairs.
+
+time bag-stats-cuda --threads 0 -s 1 -n 5000000 --min-wb-frac --mp --min-wbwp -u "catdog" --ss ppb,pb,wb,p --pp ../nutrimatic/results/s1/list  $S1TEST idx/seed.s1.m4.all.85.15.pairs $DICT --progress 30
+
+
+----------------------------
+
+PREVIOUS WAY (individual seed pair files, before seed-pairs:b)
 
 Steps for generating pairs to submit/eval in P1 workflow:
 

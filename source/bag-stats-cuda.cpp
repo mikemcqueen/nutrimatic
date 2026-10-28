@@ -315,10 +315,20 @@ int main(int argc, char* argv[]) {
     }
     if (!load_bag_stats_inputs(PROGRAM, args, &inputs, nullptr)) return 1;
     GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args));
-    if (args.progress != 0)
+    if (args.progress != 0) {
         report(PROGRAM, "%s, %d-bit bag keys, %.1f MB of GPU memory",
                counter.device().c_str(), counter.key_bits(),
                double(counter.bytes()) / (1024 * 1024));
+        GpuFilterInfo const filter = counter.filter_info();
+        report(PROGRAM,
+               "pair-sum filter: %llu group pairs, %.1f MB (%.1f bits per "
+               "pair), built in %.1fs",
+               (unsigned long long)filter.pairs,
+               double(filter.bytes) / (1024 * 1024),
+               filter.pairs == 0 ? 0.0
+                                 : double(filter.bytes) * 8 / filter.pairs,
+               filter.seconds);
+    }
 
     size_t const threads = bag_stats_threads(args);
     BagStatsRankers rankers(args, inputs);
@@ -336,5 +346,16 @@ int main(int argc, char* argv[]) {
                                              inputs.bag, threads,
                                              GPU_BATCH_ROWS)},
                     counter, rest_table};
-    return run_bag_stats(walk, letters, &rankers);
+    int const status = run_bag_stats(walk, letters, &rankers);
+    if (args.progress != 0) {
+        GpuFilterCounts const filtered = counter.filter_counts();
+        report(PROGRAM, "pair-sum filter: scanned %llu of %llu leftovers "
+               "(%.1f%%)",
+               (unsigned long long)filtered.scanned,
+               (unsigned long long)filtered.leftovers,
+               filtered.leftovers == 0
+                   ? 0.0
+                   : 100.0 * double(filtered.scanned) / filtered.leftovers);
+    }
+    return status;
 }

@@ -56,6 +56,21 @@ struct GpuCounts {
     uint64_t with_min_pairs;
 };
 
+// The pair-sum filter: the group pairs it was sized for, its device bytes
+// and the seconds its two kernels took.
+struct GpuFilterInfo {
+    uint64_t pairs;
+    size_t bytes;
+    double seconds;
+};
+
+// The leftovers checked against the pair-sum filter and those it let
+// through to a scan.
+struct GpuFilterCounts {
+    uint64_t leftovers;
+    uint64_t scanned;
+};
+
 // Counts rows' remainders on the GPU over two streams. A CUDA call failing
 // prints the program name and CUDA's error on stderr and exits 1.
 class GpuRowCounter {
@@ -71,6 +86,12 @@ class GpuRowCounter {
 
     // The device memory taken.
     size_t bytes() const;
+
+    // The pair-sum filter's size and build time.
+    GpuFilterInfo filter_info() const;
+
+    // The pair-sum filter's counts over every count() so far.
+    GpuFilterCounts filter_counts() const;
 
     // Writes the counts of `rows` rests, at most GPU_BATCH_ROWS, each
     // GPU_LETTERS_BYTES of letter counts within the bag, to `out`. Any
