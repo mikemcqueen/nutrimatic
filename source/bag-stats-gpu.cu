@@ -20,9 +20,10 @@ namespace {
 using Key64 = unsigned long long;
 using Key128 = unsigned __int128;
 
-constexpr int THREADS = 1024;
-constexpr int FILTER_BITS = 1 << 18;
-constexpr int FILTER_WORDS = FILTER_BITS / 32;
+constexpr int LEFTOVER_THREADS = 256;
+constexpr int PAIR_THREADS = 512;
+constexpr int PAIR_WARPS = PAIR_THREADS / 32;
+constexpr int CANDIDATE_CAPACITY = 1024;
 constexpr int MAX_HALF = GPU_MAX_LETTERS / 2;
 constexpr size_t SHARED_BYTES_MAX = 101376;
 constexpr int STREAMS = 2;
@@ -30,6 +31,8 @@ constexpr int FILTER_BLOCK_WORDS = 8;
 constexpr int FILTER_BITS_PER_PAIR = 12;
 constexpr size_t FILTER_RESERVE = size_t(512) << 20;
 constexpr int BUILD_THREADS = 256;
+
+static_assert(CANDIDATE_CAPACITY == 2 * PAIR_THREADS);
 
 __constant__ uint32_t SALT[FILTER_BLOCK_WORDS] = {
     0x47b6137bU, 0x44974d91U, 0x8824ad5bU, 0xa2b7289dU,
@@ -45,7 +48,7 @@ void check(cudaError_t error) {
 }
 
 template <typename Key>
-constexpr int LIST_CAPACITY = sizeof(Key) == 8 ? 4096 : 2048;
+constexpr int WORD_CAPACITY = sizeof(Key) == 8 ? 2048 : 1024;
 
 __host__ __device__ inline uint64_t mix64(uint64_t value) {
     value ^= value >> 30;
@@ -61,69 +64,82 @@ __host__ __device__ inline uint64_t mix_key(Key128 key) {
     return mix64(uint64_t(key) ^ mix64(uint64_t(key >> 64)));
 }
 
-__device__ inline int bit_width(unsigned value) {
-    return 32 - __clz(value);
+__host__ __device__ inline size_t home_slot(uint64_t hash, size_t slots) {
+#ifdef __CUDA_ARCH__
+    return size_t(__umul64hi(hash, slots));
+#else
+    return size_t((unsigned __int128)hash * slots >> 64);
+#endif
 }
 
-// A group's slot in a block's hash: its key and index, and the stamp of the
-// row that wrote it.
+// A slot in the group hash: a group's key and index. Key 0 marks an empty
+// slot.
 template <typename Key>
-struct Slot {
+struct GroupSlot {
     Key key;
     uint32_t index;
-    uint32_t stamp;
 };
 
-// What one block keeps in shared memory for its row.
-template <typename RestKey>
-struct Shared {
-    uint32_t filter[FILTER_WORDS];
-    RestKey list_keys[LIST_CAPACITY<RestKey>];
-    uint32_t list_indexes[LIST_CAPACITY<RestKey>];
-    int pos[MAX_HALF + 2];
-    int fill[MAX_HALF + 2];
-    unsigned long long counts[6];
-    RestKey rest;
-    RestKey guards;
+// What a block keeps in shared memory for its row's word list.
+template <typename Key>
+struct RowShared {
+    Key word_keys[WORD_CAPACITY<Key>];
+    uint8_t word_lengths[WORD_CAPACITY<Key>];
     uint8_t letters[GPU_LETTERS_BYTES];
-    uint8_t present[26];
-    uint8_t shifts[26];
-    uint8_t bag_shifts[26];
-    uint8_t masks[26];
-    int present_count;
-    int length;
     int row;
     int next_word;
     int words;
 };
 
-template <typename BagKey>
+template <typename Key>
+struct LeftoverShared {
+    RowShared<Key> row;
+    unsigned long long word_bags;
+    unsigned long long solo;
+    unsigned long long passed;
+};
+
+template <typename Key>
+struct PairShared {
+    RowShared<Key> row;
+    Key candidate_keys[CANDIDATE_CAPACITY];
+    unsigned long long candidate_pairs[CANDIDATE_CAPACITY];
+    int chunk_start[CANDIDATE_CAPACITY];
+    uint8_t candidate_lengths[CANDIDATE_CAPACITY];
+    // with_pairs, total_pairs, max_pairs and with_min_pairs.
+    unsigned long long counts[4];
+    int pos[MAX_HALF + 2];
+    int warp_counts[PAIR_WARPS];
+    int candidate_count;
+};
+
+template <typename Key>
 struct Params {
-    BagKey const* group_keys;
+    Key const* group_keys;
     uint8_t const* group_lengths;
     uint32_t const* group_sizes;
     int const* lenstart;
-    BagKey const* word_keys;
+    GroupSlot<Key> const* group_hash;
+    size_t group_slots;
+    Key const* word_keys;
     uint8_t const* word_lengths;
     int word_count;
-    BagKey bag_guards;
+    Key bag_guards;
     uint8_t bag_shifts[26];
     int min_group_length;
     int words;
     unsigned long long min_pairs;
     uint8_t const* rests;
     int rows;
-    uint32_t stamp_base;
+    // The next row, the next flagged row and the flagged count.
     int* next;
+    int* flagged;
     GpuCounts* out;
-    Slot<BagKey>* hash;
-    size_t hash_slots;
-    void* list_keys;
+    Key* word_list_keys;
+    uint8_t* word_list_lengths;
+    Key* list_keys;
     uint32_t* list_indexes;
     size_t list_capacity;
-    void* word_list_keys;
-    uint8_t* word_list_lengths;
-    BagKey* word_list_bag_keys;
     uint32_t const* filter;
     size_t filter_blocks;
     unsigned long long* filter_counts;
@@ -154,36 +170,10 @@ __device__ inline bool fits(Key pool, Key key, Key guards, Key* rest) {
     return (left & guards) == guards;
 }
 
-template <typename RestKey>
-__device__ inline RestKey pack_rest(Shared<RestKey> const& s,
-                                    uint8_t const* letters) {
-    RestKey out = 0;
-    for (int k = 0; k < s.present_count; ++k)
-        out |= RestKey(letters[s.present[k]]) << s.shifts[k];
-    return out;
-}
-
-// `key`, packed for the bag, repacked for the row; its counts must fit the
-// row's.
-template <typename RestKey, typename BagKey>
-__device__ inline RestKey repack(Shared<RestKey> const& s, BagKey key) {
-    RestKey out = 0;
-    for (int k = 0; k < s.present_count; ++k)
-        out |= RestKey(unsigned(key >> s.bag_shifts[k]) & s.masks[k])
-            << s.shifts[k];
-    return out;
-}
-
-template <typename RestKey>
-__device__ inline bool filter_has(Shared<RestKey> const& s, uint64_t hash) {
-    unsigned const b1 = unsigned(hash) & (FILTER_BITS - 1);
-    unsigned const b2 = unsigned(hash >> 32) & (FILTER_BITS - 1);
-    return (s.filter[b1 >> 5] >> (b1 & 31)) & (s.filter[b2 >> 5] >> (b2 & 31)) &
-        1;
-}
-
-__device__ inline size_t home_slot(uint64_t hash, size_t slots) {
-    return size_t(__umul64hi(hash, slots));
+__device__ inline unsigned long long warp_sum(unsigned long long value) {
+    for (int offset = 16; offset > 0; offset >>= 1)
+        value += __shfl_xor_sync(~0u, value, offset);
+    return value;
 }
 
 __device__ inline uint32_t filter_bit(uint64_t hash, int k) {
@@ -196,6 +186,22 @@ __device__ inline void filter_insert(uint32_t* filter, size_t blocks,
         filter + home_slot(hash, blocks) * FILTER_BLOCK_WORDS;
     for (int k = 0; k < FILTER_BLOCK_WORDS; ++k)
         atomicOr(&block[k], filter_bit(hash, k));
+}
+
+// Whether the pair-sum filter holds `key`.
+template <typename Key>
+__device__ inline bool passes(Params<Key> const& p, Key key) {
+    uint64_t const hash = mix_key(key);
+    uint4 const* block = reinterpret_cast<uint4 const*>(
+        p.filter + home_slot(hash, p.filter_blocks) * FILTER_BLOCK_WORDS);
+    uint4 const low = block[0];
+    uint4 const high = block[1];
+    uint32_t const words[FILTER_BLOCK_WORDS] = {
+        low.x, low.y, low.z, low.w, high.x, high.y, high.z, high.w};
+    bool out = true;
+    for (int k = 0; k < FILTER_BLOCK_WORDS; ++k)
+        out &= (words[k] & filter_bit(hash, k)) != 0;
+    return out;
 }
 
 // One warp per group `a`: counts the groups `b` from `a` on whose sum with
@@ -223,277 +229,427 @@ __global__ void pair_sums(PairSumParams<BagKey> p) {
             ++pairs;
     }
     if constexpr (!INSERT) {
-        for (int offset = 16; offset > 0; offset >>= 1)
-            pairs += __shfl_xor_sync(~0u, pairs, offset);
+        pairs = warp_sum(pairs);
         if (lane == 0 && pairs != 0) atomicAdd(p.pairs, pairs);
     }
 }
 
-template <typename BagKey>
-__device__ inline int find_group(Slot<BagKey> const* hash, size_t slots,
-                                 uint32_t stamp, BagKey key, uint64_t mixed) {
-    for (size_t i = home_slot(mixed, slots);; i = i + 1 == slots ? 0 : i + 1) {
-        Slot<BagKey> const& slot = hash[i];
-        if (slot.stamp != stamp) return -1;
+// The index of the group with `key`, or -1.
+template <typename Key>
+__device__ inline int find_group(GroupSlot<Key> const* hash, size_t slots,
+                                 Key key) {
+    for (size_t i = home_slot(mix_key(key), slots);;
+         i = i + 1 == slots ? 0 : i + 1) {
+        GroupSlot<Key> const slot = hash[i];
         if (slot.key == key) return int(slot.index);
+        if (slot.key == 0) return -1;
     }
 }
 
-template <typename BagKey, typename RestKey>
-__device__ void count_leftover(Params<BagKey> const& p,
-                               Shared<RestKey> const& s,
-                               RestKey const* list_keys,
-                               uint32_t const* list_indexes,
-                               Slot<BagKey> const* hash, uint32_t stamp,
-                               RestKey leftover, BagKey bag_leftover,
-                               int length, int lane, GpuCounts* counts,
-                               GpuFilterCounts* filtered) {
-    ++counts->word_bags;
-    if (length == 0) {
-        ++counts->solo;
-        return;
+// A row's letters packed for the bag, its length, and the word bags that
+// fit it.
+template <typename Key>
+struct Row {
+    Key y;
+    int length;
+    Key const* word_keys;
+    uint8_t const* word_lengths;
+    int words;
+};
+
+// Loads `row` into `s` and compacts its word list, into shared memory or,
+// past WORD_CAPACITY, into `big_keys` and `big_lengths`. Every thread calls
+// it, after s.next_word and s.words are zeroed.
+template <typename Key>
+__device__ Row<Key> load_row(Params<Key> const& p, RowShared<Key>& s, int row,
+                             Key* big_keys, uint8_t* big_lengths) {
+    int const tid = threadIdx.x;
+    int const threads = blockDim.x;
+    if (tid < GPU_LETTERS_BYTES)
+        s.letters[tid] = p.rests[size_t(row) * GPU_LETTERS_BYTES + tid];
+    __syncthreads();
+    Row<Key> out{};
+    for (int letter = 0; letter < 26; ++letter) {
+        out.y |= Key(s.letters[letter]) << p.bag_shifts[letter];
+        out.length += s.letters[letter];
     }
-    if (length < 2 * p.min_group_length) return;
-    ++filtered->leftovers;
-    uint64_t const sum_hash = mix_key(bag_leftover);
-    bool bit = true;
-    if (lane < FILTER_BLOCK_WORDS) {
-        uint32_t const word =
-            p.filter[home_slot(sum_hash, p.filter_blocks) * FILTER_BLOCK_WORDS +
-                     lane];
-        bit = (word & filter_bit(sum_hash, lane)) != 0;
-    }
-    if (__ballot_sync(~0u, bit) != ~0u) return;
-    ++filtered->scanned;
-    int const end = s.pos[length / 2 + 1];
-    RestKey const pool = leftover | s.guards;
-    unsigned long long pairs = 0;
-    for (int k = lane; k < end; k += 32) {
-        RestKey const a = list_keys[k];
-        RestKey r;
-        if (!fits(pool, a, s.guards, &r)) continue;
-        uint32_t const i = list_indexes[k];
-        if (r == a) {
-            unsigned long long const size = p.group_sizes[i];
-            pairs += size * (size - 1) / 2;
-            continue;
+    Key const pool = out.y | p.bag_guards;
+    for (int j = tid; j < p.word_count; j += threads) {
+        Key const word = p.word_keys[j];
+        Key left;
+        if (!fits(pool, word, p.bag_guards, &left)) continue;
+        int const k = atomicAdd(&s.words, 1);
+        if (k < WORD_CAPACITY<Key>) {
+            s.word_keys[k] = word;
+            s.word_lengths[k] = p.word_lengths[j];
+        } else {
+            big_keys[k] = word;
+            big_lengths[k] = p.word_lengths[j];
         }
-        BagKey const bag_r = bag_leftover - p.group_keys[i];
-        uint64_t const mixed = mix_key(bag_r);
-        if (!filter_has(s, mixed)) continue;
-        int const b = find_group(hash, p.hash_slots, stamp, bag_r, mixed);
-        if (b >= 0 && (2 * p.group_lengths[i] < length || uint32_t(b) > i))
-            pairs += (unsigned long long)p.group_sizes[i] * p.group_sizes[b];
     }
-    for (int offset = 16; offset > 0; offset >>= 1)
-        pairs += __shfl_xor_sync(~0u, pairs, offset);
-    if (pairs == 0) return;
-    ++counts->with_pairs;
-    counts->total_pairs += pairs;
-    if (pairs > counts->max_pairs) counts->max_pairs = pairs;
-    counts->with_min_pairs += pairs >= p.min_pairs;
+    __syncthreads();
+    out.words = s.words;
+    if (out.words <= WORD_CAPACITY<Key>) {
+        out.word_keys = s.word_keys;
+        out.word_lengths = s.word_lengths;
+        return out;
+    }
+    for (int k = tid; k < WORD_CAPACITY<Key>; k += threads) {
+        big_keys[k] = s.word_keys[k];
+        big_lengths[k] = s.word_lengths[k];
+    }
+    __syncthreads();
+    out.word_keys = big_keys;
+    out.word_lengths = big_lengths;
+    return out;
 }
 
-template <typename BagKey, typename RestKey>
-__global__ void __launch_bounds__(THREADS, 1)
-count_rows(Params<BagKey> p) {
-    static_assert(sizeof(Shared<RestKey>) <= SHARED_BYTES_MAX);
+// A warp's walk over a row's word bag combinations: word bags j1 <= j2 <=
+// ... <= jk from the row's word list, every depth's rest fitting. Each
+// step() hands each lane at most one leftover.
+template <typename Key>
+struct LeftoverWalk {
+    Row<Key> const& row;
+    int* next_word;
+    int words;
+    Key guards;
+    int lane;
+    // The rests and lengths after picks[0..depth-1].
+    Key rests[GPU_MAX_WORDS];
+    int lengths[GPU_MAX_WORDS];
+    int picks[GPU_MAX_WORDS];
+    int depth = 0;
+    // The next word bag at the last depth.
+    int next = 0;
+
+    // Sets `valid`, and for a valid lane its leftover's `key` and `length`,
+    // for the warp's next chunk; false once the row has no work left for the
+    // warp. Warp-uniform.
+    __device__ bool step(bool* valid, Key* key, int* length) {
+        while (true) {
+            if (depth == 0) {
+                int first = 0;
+                if (lane == 0) first = atomicAdd(next_word, words == 1 ? 32 : 1);
+                first = __shfl_sync(~0u, first, 0);
+                if (first >= row.words) return false;
+                if (words == 1) {
+                    int const j = first + lane;
+                    *valid = j < row.words;
+                    if (*valid) {
+                        *key = row.y - row.word_keys[j];
+                        *length = row.length - row.word_lengths[j];
+                    }
+                    return true;
+                }
+                picks[0] = first;
+                rests[0] = row.y - row.word_keys[first];
+                lengths[0] = row.length - row.word_lengths[first];
+                depth = 1;
+                if (words == 2)
+                    next = first;
+                else
+                    picks[1] = first;
+                continue;
+            }
+            if (depth == words - 1) {
+                if (next >= row.words) {
+                    if (--depth > 0) ++picks[depth];
+                    continue;
+                }
+                int const j = next + lane;
+                next += 32;
+                Key left;
+                *valid = j < row.words &&
+                    fits(rests[depth - 1] | guards, row.word_keys[j], guards,
+                         &left);
+                if (*valid) {
+                    *key = left;
+                    *length = lengths[depth - 1] - row.word_lengths[j];
+                }
+                return true;
+            }
+            int const j = picks[depth];
+            if (j >= row.words) {
+                if (--depth > 0) ++picks[depth];
+                continue;
+            }
+            Key left;
+            if (!fits(rests[depth - 1] | guards, row.word_keys[j], guards,
+                      &left)) {
+                ++picks[depth];
+                continue;
+            }
+            rests[depth] = left;
+            lengths[depth] = lengths[depth - 1] - row.word_lengths[j];
+            ++depth;
+            if (depth == words - 1)
+                next = j;
+            else
+                picks[depth] = j;
+        }
+    }
+};
+
+// Counts each row's word bags and solo leftovers, and flags the rows with a
+// leftover that passes the pair-sum filter.
+template <typename Key>
+__global__ void __launch_bounds__(LEFTOVER_THREADS)
+count_leftovers(Params<Key> p) {
     extern __shared__ __align__(16) unsigned char shared_bytes[];
-    Shared<RestKey>& s = *reinterpret_cast<Shared<RestKey>*>(shared_bytes);
+    LeftoverShared<Key>& s =
+        *reinterpret_cast<LeftoverShared<Key>*>(shared_bytes);
     int const tid = threadIdx.x;
     int const lane = tid & 31;
-    Slot<BagKey>* const hash = p.hash + blockIdx.x * p.hash_slots;
-    RestKey* const big_keys = reinterpret_cast<RestKey*>(p.list_keys) +
-        blockIdx.x * p.list_capacity;
-    uint32_t* const big_indexes =
-        p.list_indexes + blockIdx.x * p.list_capacity;
-    RestKey* const word_keys = reinterpret_cast<RestKey*>(p.word_list_keys) +
-        size_t(blockIdx.x) * p.word_count;
-    uint8_t* const word_lengths =
+    Key* const big_keys = p.word_list_keys + size_t(blockIdx.x) * p.word_count;
+    uint8_t* const big_lengths =
         p.word_list_lengths + size_t(blockIdx.x) * p.word_count;
-    BagKey* const word_bag_keys =
-        p.word_list_bag_keys + size_t(blockIdx.x) * p.word_count;
 
-    GpuFilterCounts filtered{};
-    if (tid < 6) s.counts[tid] = 0;
+    unsigned long long leftovers = 0;
+    unsigned long long scanned = 0;
     while (true) {
         if (tid == 0) {
-            s.row = atomicAdd(p.next, 1);
-            s.next_word = 0;
-            s.words = 0;
+            s.row.row = atomicAdd(&p.next[0], 1);
+            s.row.next_word = 0;
+            s.row.words = 0;
+            s.word_bags = 0;
+            s.solo = 0;
+            s.passed = 0;
         }
-        if (tid < MAX_HALF + 2) s.fill[tid] = 0;
         __syncthreads();
-        int const row = s.row;
+        int const row = s.row.row;
         if (row >= p.rows) {
+            leftovers = warp_sum(leftovers);
+            scanned = warp_sum(scanned);
             if (lane == 0) {
-                atomicAdd(&p.filter_counts[0],
-                          (unsigned long long)filtered.leftovers);
-                atomicAdd(&p.filter_counts[1],
-                          (unsigned long long)filtered.scanned);
+                atomicAdd(&p.filter_counts[0], leftovers);
+                atomicAdd(&p.filter_counts[1], scanned);
             }
             return;
         }
-        if (tid < GPU_LETTERS_BYTES)
-            s.letters[tid] = p.rests[size_t(row) * GPU_LETTERS_BYTES + tid];
-        for (int w = tid; w < FILTER_WORDS; w += THREADS) s.filter[w] = 0;
-        __syncthreads();
-        if (tid == 0) {
-            int bits = 0;
-            int count = 0;
-            int length = 0;
-            RestKey guards = 0;
-            for (int letter = 0; letter < 26; ++letter) {
-                unsigned const value = s.letters[letter];
-                if (value == 0) continue;
-                int const width = bit_width(value) + 1;
-                s.present[count] = uint8_t(letter);
-                s.shifts[count] = uint8_t(bits);
-                s.bag_shifts[count] = p.bag_shifts[letter];
-                s.masks[count] = uint8_t((1u << (width - 1)) - 1);
-                guards |= RestKey(1) << (bits + width - 1);
-                bits += width;
-                length += int(value);
-                ++count;
-            }
-            s.present_count = count;
-            s.length = length;
-            s.guards = guards;
-        }
-        __syncthreads();
-        if (tid == 0) s.rest = pack_rest(s, s.letters);
-        int const length = s.length;
-        uint32_t const stamp = p.stamp_base + uint32_t(row);
-        BagKey y = 0;
-        for (int letter = 0; letter < 26; ++letter)
-            y |= BagKey(s.letters[letter]) << p.bag_shifts[letter];
-        BagKey const y_pool = y | p.bag_guards;
-
-        int const half = length / 2;
-        bool const pairs_possible = length >= 2 * p.min_group_length;
-        int const half_end = pairs_possible ? p.lenstart[half + 1] : 0;
-        if (pairs_possible) {
-            int const end = p.lenstart[length - p.min_group_length + 1];
-            for (int i = tid; i < end; i += THREADS) {
-                BagKey const group = p.group_keys[i];
-                BagKey left;
-                if (!fits(y_pool, group, p.bag_guards, &left)) continue;
-                uint64_t const mixed = mix_key(group);
-                unsigned const b1 = unsigned(mixed) & (FILTER_BITS - 1);
-                unsigned const b2 = unsigned(mixed >> 32) & (FILTER_BITS - 1);
-                atomicOr(&s.filter[b1 >> 5], 1u << (b1 & 31));
-                atomicOr(&s.filter[b2 >> 5], 1u << (b2 & 31));
-                for (size_t k = home_slot(mixed, p.hash_slots);;
-                     k = k + 1 == p.hash_slots ? 0 : k + 1) {
-                    uint32_t const seen =
-                        *reinterpret_cast<uint32_t volatile*>(&hash[k].stamp);
-                    if (seen == stamp ||
-                        atomicCAS(&hash[k].stamp, seen, stamp) != seen)
-                        continue;
-                    hash[k].key = group;
-                    hash[k].index = uint32_t(i);
-                    break;
-                }
-                if (i < half_end) atomicAdd(&s.fill[p.group_lengths[i]], 1);
-            }
-        }
-        __syncthreads();
-        if (tid == 0) {
-            s.pos[0] = 0;
-            for (int l = 0; l <= half; ++l) {
-                s.pos[l + 1] = s.pos[l] + s.fill[l];
-                s.fill[l] = s.pos[l];
-            }
-        }
-        __syncthreads();
-        bool const big = s.pos[half + 1] > LIST_CAPACITY<RestKey>;
-        RestKey* const list_keys = big ? big_keys : s.list_keys;
-        uint32_t* const list_indexes = big ? big_indexes : s.list_indexes;
-        for (int i = tid; i < half_end; i += THREADS) {
-            BagKey const group = p.group_keys[i];
-            BagKey left;
-            if (!fits(y_pool, group, p.bag_guards, &left)) continue;
-            int const k = atomicAdd(&s.fill[p.group_lengths[i]], 1);
-            list_keys[k] = repack(s, group);
-            list_indexes[k] = uint32_t(i);
-        }
-        for (int j = tid; j < p.word_count; j += THREADS) {
-            BagKey const word = p.word_keys[j];
-            BagKey left;
-            if (!fits(y_pool, word, p.bag_guards, &left)) continue;
-            int const k = atomicAdd(&s.words, 1);
-            word_keys[k] = repack(s, word);
-            word_lengths[k] = p.word_lengths[j];
-            word_bag_keys[k] = word;
-        }
-        __syncthreads();
-
-        GpuCounts counts{};
-        int const words = s.words;
-        RestKey const guards = s.guards;
-        RestKey const rest = s.rest;
-        while (true) {
-            int first = 0;
-            if (lane == 0) first = atomicAdd(&s.next_word, 1);
-            first = __shfl_sync(~0u, first, 0);
-            if (first >= words) break;
-            RestKey rests[GPU_MAX_WORDS];
-            BagKey bag_rests[GPU_MAX_WORDS];
-            int lengths[GPU_MAX_WORDS];
-            int picks[GPU_MAX_WORDS];
-            fits(rest | guards, word_keys[first], guards, &rests[0]);
-            bag_rests[0] = y - word_bag_keys[first];
-            lengths[0] = length - word_lengths[first];
-            if (p.words == 1) {
-                count_leftover(p, s, list_keys, list_indexes, hash, stamp,
-                               rests[0], bag_rests[0], lengths[0], lane,
-                               &counts, &filtered);
+        Row<Key> const r = load_row(p, s.row, row, big_keys, big_lengths);
+        LeftoverWalk<Key> walk{r, &s.row.next_word, p.words, p.bag_guards,
+                               lane};
+        unsigned long long word_bags = 0;
+        unsigned long long solo = 0;
+        unsigned long long passed = 0;
+        bool valid;
+        Key key;
+        int length;
+        while (walk.step(&valid, &key, &length)) {
+            if (!valid) continue;
+            ++word_bags;
+            if (length == 0) {
+                ++solo;
                 continue;
             }
-            int depth = 1;
-            picks[1] = first;
-            while (true) {
-                if (picks[depth] >= words) {
-                    if (--depth == 0) break;
-                    ++picks[depth];
-                    continue;
-                }
-                int const j = picks[depth];
-                RestKey left;
-                if (!fits(rests[depth - 1] | guards, word_keys[j], guards,
-                          &left)) {
-                    ++picks[depth];
-                    continue;
-                }
-                int const left_length = lengths[depth - 1] - word_lengths[j];
-                BagKey const bag_left = bag_rests[depth - 1] - word_bag_keys[j];
-                if (depth + 1 == p.words) {
-                    count_leftover(p, s, list_keys, list_indexes, hash,
-                                   stamp, left, bag_left, left_length, lane,
-                                   &counts, &filtered);
-                    ++picks[depth];
-                    continue;
-                }
-                rests[depth] = left;
-                bag_rests[depth] = bag_left;
-                lengths[depth] = left_length;
-                ++depth;
-                picks[depth] = j;
-            }
+            if (length < 2 * p.min_group_length) continue;
+            ++leftovers;
+            if (!passes(p, key)) continue;
+            ++scanned;
+            ++passed;
         }
+        word_bags = warp_sum(word_bags);
+        solo = warp_sum(solo);
+        passed = warp_sum(passed);
         if (lane == 0) {
-            atomicAdd(&s.counts[0], counts.word_bags);
-            atomicAdd(&s.counts[1], counts.with_pairs);
-            atomicAdd(&s.counts[2], counts.total_pairs);
-            atomicMax(&s.counts[3], counts.max_pairs);
-            atomicAdd(&s.counts[4], counts.solo);
-            atomicAdd(&s.counts[5], counts.with_min_pairs);
+            atomicAdd(&s.word_bags, word_bags);
+            atomicAdd(&s.solo, solo);
+            atomicAdd(&s.passed, passed);
         }
         __syncthreads();
         if (tid == 0) {
-            p.out[row] = {s.counts[0], s.counts[1], s.counts[2], s.counts[3],
-                          s.counts[4], s.counts[5]};
-            for (int k = 0; k < 6; ++k) s.counts[k] = 0;
+            p.out[row] = {s.word_bags, 0, 0, 0, s.solo, 0};
+            if (s.passed != 0) p.flagged[atomicAdd(&p.next[2], 1)] = row;
+        }
+    }
+}
+
+// Counts the pairs of the block's candidates and adds them to the row's
+// counts, building the row's group list first if it isn't built yet.
+template <typename Key>
+__device__ void flush(Params<Key> const& p, PairShared<Key>& s,
+                      Row<Key> const& r, Key* list_keys,
+                      uint32_t* list_indexes, bool* built) {
+    int const tid = threadIdx.x;
+    int const lane = tid & 31;
+    int const warp = tid >> 5;
+    if (!*built) {
+        int const half = r.length / 2;
+        Key const pool = r.y | p.bag_guards;
+        int const end = p.lenstart[half + 1];
+        int base = 0;
+        for (int tile = 0; tile < end; tile += PAIR_THREADS) {
+            int const i = tile + tid;
+            Key left;
+            bool const fit =
+                i < end && fits(pool, p.group_keys[i], p.bag_guards, &left);
+            unsigned const ballot = __ballot_sync(~0u, fit);
+            if (lane == 0) s.warp_counts[warp] = __popc(ballot);
+            __syncthreads();
+            int offset = base;
+            for (int w = 0; w < PAIR_WARPS; ++w) {
+                int const n = s.warp_counts[w];
+                if (w < warp) offset += n;
+                base += n;
+            }
+            if (fit) {
+                int const k = offset + __popc(ballot & ((1u << lane) - 1));
+                list_keys[k] = p.group_keys[i];
+                list_indexes[k] = uint32_t(i);
+            }
+            __syncthreads();
+        }
+        for (int l = tid; l <= half + 1; l += PAIR_THREADS) {
+            int low = 0;
+            int high = base;
+            while (low < high) {
+                int const mid = (low + high) / 2;
+                if (p.group_lengths[list_indexes[mid]] < l)
+                    low = mid + 1;
+                else
+                    high = mid;
+            }
+            s.pos[l] = low;
+        }
+        __syncthreads();
+        *built = true;
+    }
+
+    int const count = s.candidate_count;
+    int chunks[2];
+    for (int e = 0; e < 2; ++e) {
+        int const c = 2 * tid + e;
+        chunks[e] = c < count
+            ? (s.pos[s.candidate_lengths[c] / 2 + 1] + 31) / 32
+            : 0;
+    }
+    int const sum = chunks[0] + chunks[1];
+    int inclusive = sum;
+    for (int offset = 1; offset < 32; offset <<= 1) {
+        int const n = __shfl_up_sync(~0u, inclusive, offset);
+        if (lane >= offset) inclusive += n;
+    }
+    if (lane == 31) s.warp_counts[warp] = inclusive;
+    __syncthreads();
+    int start = inclusive - sum;
+    int total = 0;
+    for (int w = 0; w < PAIR_WARPS; ++w) {
+        int const n = s.warp_counts[w];
+        if (w < warp) start += n;
+        total += n;
+    }
+    s.chunk_start[2 * tid] = start;
+    s.chunk_start[2 * tid + 1] = start + chunks[0];
+    __syncthreads();
+
+    for (int t = warp; t < total; t += PAIR_WARPS) {
+        int low = 0;
+        int high = count - 1;
+        while (low < high) {
+            int const mid = (low + high + 1) / 2;
+            if (s.chunk_start[mid] <= t)
+                low = mid;
+            else
+                high = mid - 1;
+        }
+        int const c = low;
+        Key const leftover = s.candidate_keys[c];
+        int const length = s.candidate_lengths[c];
+        int const k = (t - s.chunk_start[c]) * 32 + lane;
+        unsigned long long pairs = 0;
+        Key rest;
+        if (k < s.pos[length / 2 + 1] &&
+            fits(leftover | p.bag_guards, list_keys[k], p.bag_guards, &rest)) {
+            uint32_t const i = list_indexes[k];
+            unsigned long long const size = p.group_sizes[i];
+            if (rest == list_keys[k]) {
+                pairs = size * (size - 1) / 2;
+            } else {
+                int const b = find_group(p.group_hash, p.group_slots, rest);
+                if (b >= 0 &&
+                    (2 * p.group_lengths[i] < length || uint32_t(b) > i))
+                    pairs = size * p.group_sizes[b];
+            }
+        }
+        pairs = warp_sum(pairs);
+        if (lane == 0 && pairs != 0) atomicAdd(&s.candidate_pairs[c], pairs);
+    }
+    __syncthreads();
+
+    for (int c = tid; c < count; c += PAIR_THREADS) {
+        unsigned long long const pairs = s.candidate_pairs[c];
+        if (pairs == 0) continue;
+        s.candidate_pairs[c] = 0;
+        atomicAdd(&s.counts[0], 1ULL);
+        atomicAdd(&s.counts[1], pairs);
+        atomicMax(&s.counts[2], pairs);
+        if (pairs >= p.min_pairs) atomicAdd(&s.counts[3], 1ULL);
+    }
+    if (tid == 0) s.candidate_count = 0;
+    __syncthreads();
+}
+
+// Counts the pairs of each flagged row's leftovers that pass the pair-sum
+// filter.
+template <typename Key>
+__global__ void __launch_bounds__(PAIR_THREADS, 2)
+count_pairs(Params<Key> p) {
+    static_assert(2 * sizeof(PairShared<Key>) <= SHARED_BYTES_MAX);
+    extern __shared__ __align__(16) unsigned char shared_bytes[];
+    PairShared<Key>& s = *reinterpret_cast<PairShared<Key>*>(shared_bytes);
+    int const tid = threadIdx.x;
+    int const lane = tid & 31;
+    Key* const big_keys = p.word_list_keys + size_t(blockIdx.x) * p.word_count;
+    uint8_t* const big_lengths =
+        p.word_list_lengths + size_t(blockIdx.x) * p.word_count;
+    Key* const list_keys = p.list_keys + blockIdx.x * p.list_capacity;
+    uint32_t* const list_indexes =
+        p.list_indexes + blockIdx.x * p.list_capacity;
+
+    for (int c = tid; c < CANDIDATE_CAPACITY; c += PAIR_THREADS)
+        s.candidate_pairs[c] = 0;
+    if (tid == 0) s.candidate_count = 0;
+    while (true) {
+        if (tid == 0) {
+            int const k = atomicAdd(&p.next[1], 1);
+            s.row.row = k < p.next[2] ? p.flagged[k] : -1;
+            s.row.next_word = 0;
+            s.row.words = 0;
+            for (int n = 0; n < 4; ++n) s.counts[n] = 0;
+        }
+        __syncthreads();
+        int const row = s.row.row;
+        if (row < 0) return;
+        Row<Key> const r = load_row(p, s.row, row, big_keys, big_lengths);
+        LeftoverWalk<Key> walk{r, &s.row.next_word, p.words, p.bag_guards,
+                               lane};
+        bool built = false;
+        bool more = true;
+        while (__syncthreads_or(more)) {
+            if (more) {
+                bool valid;
+                Key key;
+                int length;
+                more = walk.step(&valid, &key, &length);
+                if (more && valid && length >= 2 * p.min_group_length &&
+                    passes(p, key)) {
+                    int const c = atomicAdd(&s.candidate_count, 1);
+                    s.candidate_keys[c] = key;
+                    s.candidate_lengths[c] = uint8_t(length);
+                }
+            }
+            __syncthreads();
+            if (s.candidate_count > CANDIDATE_CAPACITY - PAIR_THREADS)
+                flush(p, s, r, list_keys, list_indexes, &built);
+        }
+        if (s.candidate_count > 0)
+            flush(p, s, r, list_keys, list_indexes, &built);
+        if (tid == 0) {
+            GpuCounts& out = p.out[row];
+            out.with_pairs = s.counts[0];
+            out.total_pairs = s.counts[1];
+            out.max_pairs = s.counts[2];
+            out.with_min_pairs = s.counts[3];
         }
     }
 }
@@ -526,20 +682,6 @@ struct Packing {
     }
 };
 
-int rest_bits(uint8_t const* letters) {
-    int bits = 0;
-    for (int letter = 0; letter < 26; ++letter) {
-        unsigned value = letters[letter];
-        if (value == 0) continue;
-        while (value != 0) {
-            ++bits;
-            value >>= 1;
-        }
-        ++bits;
-    }
-    return bits;
-}
-
 int rest_length(uint8_t const* letters) {
     int length = 0;
     for (int letter = 0; letter < 26; ++letter) length += letters[letter];
@@ -554,25 +696,25 @@ struct GpuRowCounter::Impl {
         uint8_t* rests = nullptr;
         GpuCounts* out = nullptr;
         int* next = nullptr;
-        void* hash = nullptr;
-        void* list_keys = nullptr;
-        uint32_t* list_indexes = nullptr;
+        int* flagged = nullptr;
         void* word_keys = nullptr;
         uint8_t* word_lengths = nullptr;
-        void* word_bag_keys = nullptr;
+        void* list_keys = nullptr;
+        uint32_t* list_indexes = nullptr;
         unsigned long long* filter_counts = nullptr;
         uint8_t* host_rests = nullptr;
         GpuCounts* host_out = nullptr;
         unsigned long long* host_filter_counts = nullptr;
         std::vector<uint32_t> order;
-        uint32_t next_stamp = 1;
         bool busy = false;
     };
 
     std::string device;
     int key_bits = 0;
     size_t bytes = 0;
-    int blocks = 0;
+    int sms = 0;
+    int leftover_blocks = 0;
+    int pair_blocks = 0;
     int group_count = 0;
     int word_count = 0;
     int words = 0;
@@ -580,9 +722,10 @@ struct GpuRowCounter::Impl {
     unsigned long long min_pairs = 0;
     uint8_t bag_shifts[26] = {};
     Key128 bag_guards = 0;
-    size_t hash_slots = 0;
+    size_t group_slots = 0;
     size_t list_capacity = 0;
     void* group_keys = nullptr;
+    void* group_hash = nullptr;
     uint8_t* group_lengths = nullptr;
     uint32_t* group_sizes = nullptr;
     int* lenstart = nullptr;
@@ -637,6 +780,13 @@ struct GpuRowCounter::Impl {
             keys[i] = packing.pack<Key>(&inputs.group_letters[size_t(i) *
                                                               GPU_LETTERS_BYTES]);
         group_keys = upload(keys);
+        std::vector<GroupSlot<Key>> hash(group_slots, GroupSlot<Key>{0, 0});
+        for (int i = 0; i < group_count; ++i) {
+            size_t k = home_slot(mix_key(keys[i]), group_slots);
+            while (hash[k].key != 0) k = k + 1 == group_slots ? 0 : k + 1;
+            hash[k] = {keys[i], uint32_t(i)};
+        }
+        group_hash = upload(hash);
         keys.assign(word_count, 0);
         for (int j = 0; j < word_count; ++j)
             keys[j] = packing.pack<Key>(&inputs.word_letters[size_t(j) *
@@ -650,16 +800,15 @@ struct GpuRowCounter::Impl {
                                         cudaStreamNonBlocking));
         stream->rests = allocate<uint8_t>(GPU_BATCH_ROWS * GPU_LETTERS_BYTES);
         stream->out = allocate<GpuCounts>(GPU_BATCH_ROWS);
-        stream->next = allocate<int>(2);
-        stream->hash = allocate<Slot<Key>>(size_t(blocks) * hash_slots);
-        check(cudaMemset(stream->hash, 0,
-                         size_t(blocks) * hash_slots * sizeof(Slot<Key>)));
-        stream->list_keys = allocate<Key>(size_t(blocks) * list_capacity);
+        stream->next = allocate<int>(3);
+        stream->flagged = allocate<int>(GPU_BATCH_ROWS);
+        size_t const word_entries =
+            size_t(leftover_blocks + pair_blocks) * word_count;
+        stream->word_keys = allocate<Key>(word_entries);
+        stream->word_lengths = allocate<uint8_t>(word_entries);
+        stream->list_keys = allocate<Key>(size_t(pair_blocks) * list_capacity);
         stream->list_indexes =
-            allocate<uint32_t>(size_t(blocks) * list_capacity);
-        stream->word_keys = allocate<Key>(size_t(blocks) * word_count);
-        stream->word_lengths = allocate<uint8_t>(size_t(blocks) * word_count);
-        stream->word_bag_keys = allocate<Key>(size_t(blocks) * word_count);
+            allocate<uint32_t>(size_t(pair_blocks) * list_capacity);
         stream->filter_counts = allocate<unsigned long long>(2);
         check(cudaMallocHost(&stream->host_rests,
                              GPU_BATCH_ROWS * GPU_LETTERS_BYTES));
@@ -718,53 +867,71 @@ struct GpuRowCounter::Impl {
                 .count()};
     }
 
-    template <typename BagKey, typename RestKey>
-    void launch(Stream* stream, size_t first, size_t rows, uint32_t stamp,
-                int* next) {
-        Params<BagKey> p{};
-        p.group_keys = static_cast<BagKey const*>(group_keys);
+    template <typename Key>
+    void launch(Stream* stream, size_t rows) {
+        Params<Key> p{};
+        p.group_keys = static_cast<Key const*>(group_keys);
         p.group_lengths = group_lengths;
         p.group_sizes = group_sizes;
         p.lenstart = lenstart;
-        p.word_keys = static_cast<BagKey const*>(word_keys);
+        p.group_hash = static_cast<GroupSlot<Key> const*>(group_hash);
+        p.group_slots = group_slots;
+        p.word_keys = static_cast<Key const*>(word_keys);
         p.word_lengths = word_lengths;
         p.word_count = word_count;
-        p.bag_guards = BagKey(bag_guards);
+        p.bag_guards = Key(bag_guards);
         memcpy(p.bag_shifts, bag_shifts, sizeof bag_shifts);
         p.min_group_length = min_group_length;
         p.words = words;
         p.min_pairs = min_pairs;
-        p.rests = stream->rests + first * GPU_LETTERS_BYTES;
+        p.rests = stream->rests;
         p.rows = int(rows);
-        p.stamp_base = stamp;
-        p.next = next;
-        p.out = stream->out + first;
-        p.hash = static_cast<Slot<BagKey>*>(stream->hash);
-        p.hash_slots = hash_slots;
-        p.list_keys = stream->list_keys;
+        p.next = stream->next;
+        p.flagged = stream->flagged;
+        p.out = stream->out;
+        p.word_list_keys = static_cast<Key*>(stream->word_keys);
+        p.word_list_lengths = stream->word_lengths;
+        p.list_keys = static_cast<Key*>(stream->list_keys);
         p.list_indexes = stream->list_indexes;
         p.list_capacity = list_capacity;
-        p.word_list_keys = stream->word_keys;
-        p.word_list_lengths = stream->word_lengths;
-        p.word_list_bag_keys = static_cast<BagKey*>(stream->word_bag_keys);
         p.filter = filter;
         p.filter_blocks = filter_blocks;
         p.filter_counts = stream->filter_counts;
-        count_rows<BagKey, RestKey>
-            <<<blocks, THREADS, sizeof(Shared<RestKey>), stream->stream>>>(p);
+        count_leftovers<Key><<<leftover_blocks, LEFTOVER_THREADS,
+                               sizeof(LeftoverShared<Key>), stream->stream>>>(
+            p);
+        check(cudaGetLastError());
+        size_t const offset = size_t(leftover_blocks) * word_count;
+        p.word_list_keys += offset;
+        p.word_list_lengths += offset;
+        count_pairs<Key><<<pair_blocks, PAIR_THREADS, sizeof(PairShared<Key>),
+                           stream->stream>>>(p);
         check(cudaGetLastError());
     }
 
-    template <typename BagKey, typename RestKey>
-    static void allow_shared() {
-        check(cudaFuncSetAttribute(count_rows<BagKey, RestKey>,
+    // Lets the kernels take their shared memory and sets the grids.
+    template <typename Key>
+    void allow_shared() {
+        check(cudaFuncSetAttribute(count_leftovers<Key>,
                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                   int(sizeof(Shared<RestKey>))));
+                                   int(sizeof(LeftoverShared<Key>))));
+        check(cudaFuncSetAttribute(count_pairs<Key>,
+                                   cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                   int(sizeof(PairShared<Key>))));
+        int per_sm = 0;
+        check(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &per_sm, count_leftovers<Key>, LEFTOVER_THREADS,
+            sizeof(LeftoverShared<Key>)));
+        leftover_blocks = sms * std::max(per_sm, 1);
+        pair_blocks = 2 * sms;
     }
 
     template <typename Key>
-    size_t slot_bytes() const {
-        return size_t(blocks) * hash_slots * sizeof(Slot<Key>);
+    void set_up(GpuInputs const& inputs, Packing const& packing, int letters) {
+        upload_keys<Key>(inputs, packing);
+        allow_shared<Key>();
+        for (Stream& stream : streams) allocate_stream<Key>(&stream);
+        build_filter<Key>(inputs.bag, packing, letters);
     }
 };
 
@@ -778,7 +945,7 @@ GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs)
     cudaDeviceProp properties;
     check(cudaGetDeviceProperties(&properties, 0));
     impl.device = properties.name;
-    impl.blocks = properties.multiProcessorCount;
+    impl.sms = properties.multiProcessorCount;
 
     Packing const packing(inputs.bag);
     impl.key_bits = packing.bits <= 64 ? 64 : 128;
@@ -797,27 +964,17 @@ GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs)
             std::lower_bound(inputs.group_lengths.begin(),
                              inputs.group_lengths.end(), length) -
             inputs.group_lengths.begin());
-    impl.hash_slots = 2 * size_t(impl.group_count) + 1;
+    impl.group_slots = 2 * size_t(impl.group_count) + 1;
     impl.list_capacity = size_t(lenstart[letters / 2 + 1]);
 
     impl.group_lengths = impl.upload(inputs.group_lengths);
     impl.group_sizes = impl.upload(inputs.group_sizes);
     impl.lenstart = impl.upload(lenstart);
     impl.word_lengths = impl.upload(inputs.word_lengths);
-    if (impl.key_bits == 64) {
-        impl.upload_keys<Key64>(inputs, packing);
-        for (Impl::Stream& stream : impl.streams)
-            impl.allocate_stream<Key64>(&stream);
-        impl.build_filter<Key64>(inputs.bag, packing, letters);
-        Impl::allow_shared<Key64, Key64>();
-    } else {
-        impl.upload_keys<Key128>(inputs, packing);
-        for (Impl::Stream& stream : impl.streams)
-            impl.allocate_stream<Key128>(&stream);
-        impl.build_filter<Key128>(inputs.bag, packing, letters);
-        Impl::allow_shared<Key128, Key64>();
-        Impl::allow_shared<Key128, Key128>();
-    }
+    if (impl.key_bits == 64)
+        impl.set_up<Key64>(inputs, packing, letters);
+    else
+        impl.set_up<Key128>(inputs, packing, letters);
     check(cudaDeviceSynchronize());
 }
 
@@ -854,15 +1011,10 @@ void GpuRowCounter::count(uint8_t const* rests, size_t rows,
     std::vector<uint32_t>& order = stream->order;
     order.resize(rows);
     std::iota(order.begin(), order.end(), 0u);
-    std::vector<uint64_t> sort_keys(rows);
-    size_t wide = 0;
-    for (size_t row = 0; row < rows; ++row) {
-        uint8_t const* letters = rests + row * GPU_LETTERS_BYTES;
-        bool const is_wide = rest_bits(letters) > 64;
-        wide += is_wide;
-        sort_keys[row] = uint64_t(is_wide) << 32 |
-            uint64_t(GPU_MAX_LETTERS - rest_length(letters));
-    }
+    std::vector<int> sort_keys(rows);
+    for (size_t row = 0; row < rows; ++row)
+        sort_keys[row] =
+            GPU_MAX_LETTERS - rest_length(rests + row * GPU_LETTERS_BYTES);
     std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
         return sort_keys[a] < sort_keys[b];
     });
@@ -872,34 +1024,16 @@ void GpuRowCounter::count(uint8_t const* rests, size_t rows,
                GPU_LETTERS_BYTES);
 
     cudaStream_t const s = stream->stream;
-    if (uint64_t(stream->next_stamp) + rows >= UINT32_MAX) {
-        check(cudaMemsetAsync(stream->hash, 0,
-                              impl.key_bits == 64
-                                  ? impl.slot_bytes<Key64>()
-                                  : impl.slot_bytes<Key128>(),
-                              s));
-        stream->next_stamp = 1;
-    }
-    uint32_t const stamp = stream->next_stamp;
-    stream->next_stamp += uint32_t(rows);
     check(cudaMemcpyAsync(stream->rests, stream->host_rests,
                           rows * GPU_LETTERS_BYTES, cudaMemcpyHostToDevice,
                           s));
-    check(cudaMemsetAsync(stream->next, 0, 2 * sizeof(int), s));
+    check(cudaMemsetAsync(stream->next, 0, 3 * sizeof(int), s));
     check(cudaMemsetAsync(stream->filter_counts, 0,
                           2 * sizeof(unsigned long long), s));
-    size_t const narrow = rows - wide;
-    if (impl.key_bits == 64) {
-        impl.launch<Key64, Key64>(stream, 0, rows, stamp, stream->next);
-    } else {
-        if (narrow > 0)
-            impl.launch<Key128, Key64>(stream, 0, narrow, stamp,
-                                       stream->next);
-        if (wide > 0)
-            impl.launch<Key128, Key128>(stream, narrow, wide,
-                                        stamp + uint32_t(narrow),
-                                        stream->next + 1);
-    }
+    if (impl.key_bits == 64)
+        impl.launch<Key64>(stream, rows);
+    else
+        impl.launch<Key128>(stream, rows);
     check(cudaMemcpyAsync(stream->host_out, stream->out,
                           rows * sizeof(GpuCounts), cudaMemcpyDeviceToHost,
                           s));
