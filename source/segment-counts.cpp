@@ -97,7 +97,12 @@ bool segment_counts_read(
       }
       row_number = ++data->surviving_rows;
     }
-    for (std::string const& segment : row.segments) {
+    for (size_t i = 0; i < row.segments.size(); ++i) {
+      if (!options.segments.empty() &&
+          !std::binary_search(options.segments.begin(),
+              options.segments.end(), i + 1))
+        continue;
+      std::string const& segment = row.segments[i];
       if (filters.sources.classified_yes.find(segment) !=
           filters.sources.classified_yes.end()) {
         ++data->filtered.classified_yes_instances;

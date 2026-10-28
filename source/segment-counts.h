@@ -9,6 +9,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "pair-exclusions.h"
 #include "segment-output.h"
@@ -47,6 +48,9 @@ struct SegmentCountsOptions {
   // -u: cleaned letters to remove from the first row's letter bag; only
   // segments that fit in what remains are printed.
   std::optional<std::string> used_letters;
+  // --segments: sorted 1-based indexes of the only segments counted in each
+  // row; empty counts every segment.
+  std::vector<size_t> segments;
 };
 
 // Everything accumulated across every input. `program` prefixes diagnostics.

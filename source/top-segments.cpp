@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@
 #include "letter-bag.h"
 #include "log.h"
 #include "option-value.h"
+#include "parse-number.h"
 #include "pair-exclusions.h"
 #include "row-input.h"
 #include "segment-counts.h"
@@ -34,6 +36,7 @@ static void usage(std::string_view program) {
       "usage: %.*s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
       "          [-c | --no-counts] [-l | --elim] [-n N]\n"
+      "          [--segments N[,N...]]\n"
       "          [-u LETTERS | --used-letters LETTERS]...\n"
       "          [-i FILE | --ignore FILE]...\n"
       "          [-r FILE | --reject FILE]...\n"
@@ -59,6 +62,9 @@ static void usage(std::string_view program) {
       "                      rows\n"
       "  -n N                print at most N rows; 0 prints all; defaults to "
       "%" PRIu64 "\n"
+      "  --segments N[,N...]\n"
+      "                      count only each row's Nth segments, 1-based;\n"
+      "                      0, the default, counts them all\n"
       "  -u, --used-letters LETTERS\n"
       "                      print only segments made from the first input\n"
       "                      row's letters less LETTERS; may be repeated\n"
@@ -88,6 +94,25 @@ static void usage(std::string_view program) {
       WORKFLOW_YES_PAIRS_PATH);
 }
 
+// Parses --segments' comma-separated 1-based indexes into sorted, distinct
+// *out; a lone 0 leaves it empty.
+static bool parse_segments(std::string_view text, std::vector<size_t>* out) {
+  out->clear();
+  if (text == "0") return true;
+  while (true) {
+    size_t const comma = text.find(',');
+    size_t index;
+    if (!parse_number(text.substr(0, comma), &index) || index == 0)
+      return false;
+    out->push_back(index);
+    if (comma == std::string_view::npos) break;
+    text.remove_prefix(comma + 1);
+  }
+  std::sort(out->begin(), out->end());
+  out->erase(std::unique(out->begin(), out->end()), out->end());
+  return true;
+}
+
 static bool parse_args(
     int argc, char* argv[], Args* out, bool* requested_help) {
   *requested_help = false;
@@ -98,6 +123,7 @@ static bool parse_args(
   bool suppress_counts = false;
   bool elimination = false;
   std::optional<std::string> used_letters;
+  std::vector<size_t> segments;
   SegmentOutputOptions output_options;
   for (int i = 1; i < argc; ++i) {
     if (parse_options) {
@@ -141,6 +167,15 @@ static bool parse_args(
         }
         if (!used_letters) used_letters.emplace();
         *used_letters += bag_letters(value);
+        continue;
+      }
+      if (match_option_value(argc, argv, &i, NULL, "--segments", &value)) {
+        if (value == NULL || !parse_segments(value, &segments)) {
+          report(PROGRAM, "--segments requires 0 or a list of positive "
+                 "integers N[,N...]");
+          usage(argv[0]);
+          return false;
+        }
         continue;
       }
     }
@@ -210,6 +245,7 @@ static bool parse_args(
   out->options.elimination = elimination;
   out->options.show_counts = show_counts;
   out->options.used_letters = std::move(used_letters);
+  out->options.segments = std::move(segments);
   return true;
 }
 

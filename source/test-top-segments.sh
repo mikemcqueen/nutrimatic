@@ -283,6 +283,21 @@ actual=$("$top_segments" --unique --pair-words "$pair_words_input")
 [[ $actual == "$expected_unique_pair_words" ]] ||
   fail "--unique --pair-words output is wrong: $actual"
 
+expected_segments='2 red fox
+1 red dog'
+actual=$("$top_segments" --segments 1 "$pair_words_input")
+[[ $actual == "$expected_segments" ]] ||
+  fail "--segments output is wrong: $actual"
+
+expected_segments_words='3 alpha
+1 beta
+1 epsilon
+1 gamma
+1 zeta'
+actual=$("$top_segments" --segments 3,1 --all-words "$input")
+[[ $actual == "$expected_segments_words" ]] ||
+  fail "--segments --all-words output is wrong: $actual"
+
 if "$top_segments" --pairs --all-words "$input" >/dev/null 2>&1; then
   fail "--pairs with --all-words succeeded"
 fi
