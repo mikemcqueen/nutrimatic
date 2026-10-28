@@ -58,7 +58,7 @@ npy "$index/clue_off.npy" 22 46
 npy "$index/ref_start.npy" 0 1 1
 npy "$index/refs.npy" 0
 size=$(stat -c %s "$test_dir/data/cluedata")
-mtime=$(stat -c %.9Y "$test_dir/data/cluedata" | tr -d .)
+mtime=$(date -r "$test_dir/data/cluedata" +%s%N)
 printf '{"version": 3, "source_size": %s, "source_mtime_ns": %s}\n' \
   "$size" "$mtime" > "$index/metadata.json"
 

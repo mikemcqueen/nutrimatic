@@ -286,7 +286,7 @@ if have_cuda and cuda_dep.found()
                 pairs_lib, pair_evidence_lib, dfs_class_list_lib,
                 optparse_lib],
     dependencies: [thread_dep, cuda_dep],
-    cuda_args: ['-arch=native', '-std=c++20', '-O3'],
+    cuda_args: ['-arch=native', '-std=c++20', '-O3', '-lineinfo'],
     link_language: 'cpp',
     install: true)
 endif

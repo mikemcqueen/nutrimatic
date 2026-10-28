@@ -65,8 +65,8 @@ __device__ inline int bit_width(unsigned value) {
     return 32 - __clz(value);
 }
 
-// A group's slot in a block's hash: its rest-local key and index, and the
-// stamp of the row that wrote it.
+// A group's slot in a block's hash: its key and index, and the stamp of the
+// row that wrote it.
 template <typename Key>
 struct Slot {
     Key key;
@@ -88,6 +88,8 @@ struct Shared {
     uint8_t letters[GPU_LETTERS_BYTES];
     uint8_t present[26];
     uint8_t shifts[26];
+    uint8_t bag_shifts[26];
+    uint8_t masks[26];
     int present_count;
     int length;
     int row;
@@ -98,12 +100,10 @@ struct Shared {
 template <typename BagKey>
 struct Params {
     BagKey const* group_keys;
-    uint8_t const* group_letters;
     uint8_t const* group_lengths;
     uint32_t const* group_sizes;
     int const* lenstart;
     BagKey const* word_keys;
-    uint8_t const* word_letters;
     uint8_t const* word_lengths;
     int word_count;
     BagKey bag_guards;
@@ -163,6 +163,17 @@ __device__ inline RestKey pack_rest(Shared<RestKey> const& s,
     return out;
 }
 
+// `key`, packed for the bag, repacked for the row; its counts must fit the
+// row's.
+template <typename RestKey, typename BagKey>
+__device__ inline RestKey repack(Shared<RestKey> const& s, BagKey key) {
+    RestKey out = 0;
+    for (int k = 0; k < s.present_count; ++k)
+        out |= RestKey(unsigned(key >> s.bag_shifts[k]) & s.masks[k])
+            << s.shifts[k];
+    return out;
+}
+
 template <typename RestKey>
 __device__ inline bool filter_has(Shared<RestKey> const& s, uint64_t hash) {
     unsigned const b1 = unsigned(hash) & (FILTER_BITS - 1);
@@ -218,13 +229,13 @@ __global__ void pair_sums(PairSumParams<BagKey> p) {
     }
 }
 
-template <typename BagKey, typename RestKey>
+template <typename BagKey>
 __device__ inline int find_group(Slot<BagKey> const* hash, size_t slots,
-                                 uint32_t stamp, RestKey key, uint64_t mixed) {
+                                 uint32_t stamp, BagKey key, uint64_t mixed) {
     for (size_t i = home_slot(mixed, slots);; i = i + 1 == slots ? 0 : i + 1) {
         Slot<BagKey> const& slot = hash[i];
         if (slot.stamp != stamp) return -1;
-        if (slot.key == BagKey(key)) return int(slot.index);
+        if (slot.key == key) return int(slot.index);
     }
 }
 
@@ -267,9 +278,10 @@ __device__ void count_leftover(Params<BagKey> const& p,
             pairs += size * (size - 1) / 2;
             continue;
         }
-        uint64_t const mixed = mix_key(r);
+        BagKey const bag_r = bag_leftover - p.group_keys[i];
+        uint64_t const mixed = mix_key(bag_r);
         if (!filter_has(s, mixed)) continue;
-        int const b = find_group(hash, p.hash_slots, stamp, r, mixed);
+        int const b = find_group(hash, p.hash_slots, stamp, bag_r, mixed);
         if (b >= 0 && (2 * p.group_lengths[i] < length || uint32_t(b) > i))
             pairs += (unsigned long long)p.group_sizes[i] * p.group_sizes[b];
     }
@@ -337,6 +349,8 @@ count_rows(Params<BagKey> p) {
                 int const width = bit_width(value) + 1;
                 s.present[count] = uint8_t(letter);
                 s.shifts[count] = uint8_t(bits);
+                s.bag_shifts[count] = p.bag_shifts[letter];
+                s.masks[count] = uint8_t((1u << (width - 1)) - 1);
                 guards |= RestKey(1) << (bits + width - 1);
                 bits += width;
                 length += int(value);
@@ -361,12 +375,10 @@ count_rows(Params<BagKey> p) {
         if (pairs_possible) {
             int const end = p.lenstart[length - p.min_group_length + 1];
             for (int i = tid; i < end; i += THREADS) {
+                BagKey const group = p.group_keys[i];
                 BagKey left;
-                if (!fits(y_pool, p.group_keys[i], p.bag_guards, &left))
-                    continue;
-                RestKey const key =
-                    pack_rest(s, p.group_letters + size_t(i) * GPU_LETTERS_BYTES);
-                uint64_t const mixed = mix_key(key);
+                if (!fits(y_pool, group, p.bag_guards, &left)) continue;
+                uint64_t const mixed = mix_key(group);
                 unsigned const b1 = unsigned(mixed) & (FILTER_BITS - 1);
                 unsigned const b2 = unsigned(mixed >> 32) & (FILTER_BITS - 1);
                 atomicOr(&s.filter[b1 >> 5], 1u << (b1 & 31));
@@ -378,7 +390,7 @@ count_rows(Params<BagKey> p) {
                     if (seen == stamp ||
                         atomicCAS(&hash[k].stamp, seen, stamp) != seen)
                         continue;
-                    hash[k].key = BagKey(key);
+                    hash[k].key = group;
                     hash[k].index = uint32_t(i);
                     break;
                 }
@@ -398,21 +410,21 @@ count_rows(Params<BagKey> p) {
         RestKey* const list_keys = big ? big_keys : s.list_keys;
         uint32_t* const list_indexes = big ? big_indexes : s.list_indexes;
         for (int i = tid; i < half_end; i += THREADS) {
+            BagKey const group = p.group_keys[i];
             BagKey left;
-            if (!fits(y_pool, p.group_keys[i], p.bag_guards, &left)) continue;
+            if (!fits(y_pool, group, p.bag_guards, &left)) continue;
             int const k = atomicAdd(&s.fill[p.group_lengths[i]], 1);
-            list_keys[k] =
-                pack_rest(s, p.group_letters + size_t(i) * GPU_LETTERS_BYTES);
+            list_keys[k] = repack(s, group);
             list_indexes[k] = uint32_t(i);
         }
         for (int j = tid; j < p.word_count; j += THREADS) {
+            BagKey const word = p.word_keys[j];
             BagKey left;
-            if (!fits(y_pool, p.word_keys[j], p.bag_guards, &left)) continue;
+            if (!fits(y_pool, word, p.bag_guards, &left)) continue;
             int const k = atomicAdd(&s.words, 1);
-            word_keys[k] =
-                pack_rest(s, p.word_letters + size_t(j) * GPU_LETTERS_BYTES);
+            word_keys[k] = repack(s, word);
             word_lengths[k] = p.word_lengths[j];
-            word_bag_keys[k] = p.word_keys[j];
+            word_bag_keys[k] = word;
         }
         __syncthreads();
 
@@ -571,12 +583,10 @@ struct GpuRowCounter::Impl {
     size_t hash_slots = 0;
     size_t list_capacity = 0;
     void* group_keys = nullptr;
-    uint8_t* group_letters = nullptr;
     uint8_t* group_lengths = nullptr;
     uint32_t* group_sizes = nullptr;
     int* lenstart = nullptr;
     void* word_keys = nullptr;
-    uint8_t* word_letters = nullptr;
     uint8_t* word_lengths = nullptr;
     uint32_t* filter = nullptr;
     size_t filter_blocks = 0;
@@ -713,12 +723,10 @@ struct GpuRowCounter::Impl {
                 int* next) {
         Params<BagKey> p{};
         p.group_keys = static_cast<BagKey const*>(group_keys);
-        p.group_letters = group_letters;
         p.group_lengths = group_lengths;
         p.group_sizes = group_sizes;
         p.lenstart = lenstart;
         p.word_keys = static_cast<BagKey const*>(word_keys);
-        p.word_letters = word_letters;
         p.word_lengths = word_lengths;
         p.word_count = word_count;
         p.bag_guards = BagKey(bag_guards);
@@ -792,11 +800,9 @@ GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs)
     impl.hash_slots = 2 * size_t(impl.group_count) + 1;
     impl.list_capacity = size_t(lenstart[letters / 2 + 1]);
 
-    impl.group_letters = impl.upload(inputs.group_letters);
     impl.group_lengths = impl.upload(inputs.group_lengths);
     impl.group_sizes = impl.upload(inputs.group_sizes);
     impl.lenstart = impl.upload(lenstart);
-    impl.word_letters = impl.upload(inputs.word_letters);
     impl.word_lengths = impl.upload(inputs.word_lengths);
     if (impl.key_bits == 64) {
         impl.upload_keys<Key64>(inputs, packing);

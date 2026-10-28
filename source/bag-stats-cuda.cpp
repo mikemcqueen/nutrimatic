@@ -11,6 +11,7 @@
 #include "pairs-impl.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -308,12 +309,22 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    auto const start = std::chrono::steady_clock::now();
+    auto const stage = [&](char const* what) {
+        if (args.progress == 0) return;
+        std::chrono::duration<double> const elapsed =
+            std::chrono::steady_clock::now() - start;
+        report(PROGRAM, "[%.1fs] %s", elapsed.count(), what);
+    };
+
     BagStatsInputs inputs(pairs_letter_counts(letters));
     if (letter_total(inputs.bag) > GPU_MAX_LETTERS) {
         report(PROGRAM, "LETTERS has more than %d letters", GPU_MAX_LETTERS);
         return 1;
     }
+    stage("loading inputs");
     if (!load_bag_stats_inputs(PROGRAM, args, &inputs, nullptr)) return 1;
+    stage("building GPU tables and pair-sum filter");
     GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args));
     if (args.progress != 0) {
         report(PROGRAM, "%s, %d-bit bag keys, %.1f MB of GPU memory",
@@ -338,6 +349,7 @@ int main(int argc, char* argv[]) {
                                size_t(args.cache_size_mb),
                                args.progress != 0);
     if (args.progress != 0) report_rest_table(PROGRAM, rest_table);
+    if (!one_row) stage("counting each unit's rows");
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
                      inputs.bag, inputs.word_bags, args, threads,
                      rankers.passes ? 2 : 1,
@@ -346,6 +358,7 @@ int main(int argc, char* argv[]) {
                                              inputs.bag, threads,
                                              GPU_BATCH_ROWS)},
                     counter, rest_table};
+    stage("walking");
     int const status = run_bag_stats(walk, letters, &rankers);
     if (args.progress != 0) {
         GpuFilterCounts const filtered = counter.filter_counts();
