@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1037,12 +1038,58 @@ struct alignas(64) LeftoverPart {
     std::vector<uint64_t> leftovers;
 };
 
+// HyperLogLog sketches of distinct leftovers, one per leftover length, each
+// of 2^HLL_BITS one-byte registers.
+class LeftoverSketch {
+  public:
+    static constexpr int HLL_BITS = 14;
+    static constexpr size_t REGISTERS = size_t(1) << HLL_BITS;
+
+    explicit LeftoverSketch(size_t lengths)
+        : registers_(lengths * REGISTERS, 0) {}
+
+    void add(size_t length, uint64_t key) {
+        uint64_t const mixed = mix_bits(key);
+        uint64_t const rest =
+            (mixed << HLL_BITS) | (uint64_t(1) << (HLL_BITS - 1));
+        uint8_t const rank = uint8_t(std::countl_zero(rest) + 1);
+        uint8_t& slot =
+            registers_[length * REGISTERS + (mixed >> (64 - HLL_BITS))];
+        slot = std::max(slot, rank);
+    }
+
+    void merge(LeftoverSketch const& other) {
+        for (size_t i = 0; i < registers_.size(); ++i)
+            registers_[i] = std::max(registers_[i], other.registers_[i]);
+    }
+
+    // The estimated distinct leftovers of `length` letters.
+    uint64_t estimate(size_t length) const {
+        double const m = double(REGISTERS);
+        double sum = 0;
+        size_t zeros = 0;
+        for (size_t i = 0; i < REGISTERS; ++i) {
+            uint8_t const value = registers_[length * REGISTERS + i];
+            sum += std::ldexp(1.0, -int(value));
+            zeros += value == 0;
+        }
+        double out = 0.7213 / (1 + 1.079 / m) * m * m / sum;
+        if (out <= 2.5 * m && zeros != 0) out = m * std::log(m / zeros);
+        return uint64_t(std::llround(out));
+    }
+
+  private:
+    std::vector<uint8_t> registers_;
+};
+
+// `keys`: null with --hll.
 struct LeftoverHooks {
     KeySet const* keys;
 
     void finished(PickWalk*) {}
 
     std::string text() const {
+        if (!keys) return {};
         return ", " + std::to_string(keys->size()) + " leftovers";
     }
 };
@@ -1054,7 +1101,7 @@ struct LeftoverWalk : WalkBase {
 };
 
 int count_leftovers(BagStatsArgs const& args, std::string const& letters,
-                    BagStatsInputs const& inputs) {
+                    BagStatsInputs const& inputs, bool hll) {
     RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
     if (index.total() == 0) {
         report(PROGRAM, "the letters have too many sub-bags to number "
@@ -1068,8 +1115,10 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
                              inputs.prospect_bags, inputs.bag,
                              inputs.word_bags, args, bag_stats_threads(args),
                              1, unit_blocks(walk_units(inputs.steps))},
-                            &keys};
+                            hll ? nullptr : &keys};
     std::vector<LeftoverPart> parts(walk.threads);
+    std::vector<LeftoverSketch> sketches(hll ? walk.threads : 0,
+                                         LeftoverSketch(length + 1));
     for (LeftoverPart& part : parts) {
         part.by_picks.assign(steps, 0);
         part.combinations.assign(length + 1, 0);
@@ -1085,13 +1134,15 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
                             walk.pair_bags.size());
             auto const enter = [&](size_t step, PairsCounts const&) {
                 ++part.by_picks[step];
+                progress.tick();
             };
             auto const leaf = [&](PairsCounts const& rest, int) {
                 size_t const left = size_t(letter_total(rest));
                 ++part.combinations[left];
                 part.rows[left] += walker.pairs();
-                if (keys.insert(index.number(rest) + 1))
-                    ++part.leftovers[left];
+                uint64_t const key = index.number(rest) + 1;
+                if (hll) sketches[t].add(left, key);
+                else if (keys.insert(key)) ++part.leftovers[left];
             };
             for (size_t unit; (unit = next.fetch_add(1)) < walk.units();) {
                 walker.walk(unit, walk.bag, enter, leaf);
@@ -1113,6 +1164,12 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
             total.leftovers[n] += part.leftovers[n];
         }
     }
+    if (hll) {
+        for (size_t t = 1; t < sketches.size(); ++t)
+            sketches[0].merge(sketches[t]);
+        for (size_t n = 0; n <= length; ++n)
+            total.leftovers[n] = sketches[0].estimate(n);
+    }
     uint64_t all[3] = {0, 0, 0};
     for (size_t n = 0; n <= length; ++n) {
         all[0] += total.combinations[n];
@@ -1130,7 +1187,8 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
     for (size_t j = 0; j < steps; ++j)
         printf("%zu,%llu\n", j + 1,
                static_cast<unsigned long long>(total.by_picks[j]));
-    printf("\nLEFT,COMBINATIONS,ROWS,LEFTOVERS\n");
+    printf("\nLEFT,COMBINATIONS,ROWS,%s\n",
+           hll ? "LEFTOVERS_HLL" : "LEFTOVERS");
     for (size_t n = 0; n <= length; ++n) {
         if (total.combinations[n] == 0) continue;
         printf("%zu,%llu,%llu,%llu\n", n,
@@ -1192,7 +1250,7 @@ int bag_stats(BagStatsOptions const& options, std::string const& letters) {
                                listed ? &spellings : nullptr))
         return 1;
     if (!common.search.measured)
-        return count_leftovers(common, letters, inputs);
+        return count_leftovers(common, letters, inputs, options.hll);
     return with_walk(options, letters, inputs, spellings,
                      [&](Walk const& walk, BagStatsRankers* rankers) {
         if (!walk.steps.empty()) return run_bag_stats(walk, letters, rankers);

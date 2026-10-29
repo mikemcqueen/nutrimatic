@@ -317,8 +317,13 @@ class Progress {
     template <typename Walker>
     void finished(Walker* walker, size_t units) {
         hooks_.finished(walker);
-        size_t const done =
-            done_.fetch_add(units, std::memory_order_relaxed) + units;
+        done_.fetch_add(units, std::memory_order_relaxed);
+        tick();
+    }
+
+    // Reports when the interval has passed, whether or not a unit finished.
+    void tick() {
+        if (interval_.count() == 0) return;
         Clock::time_point const now = Clock::now();
         int64_t due = next_report_.load(std::memory_order_relaxed);
         if (now.time_since_epoch().count() < due ||
@@ -326,13 +331,16 @@ class Progress {
                 due, (now + interval_).time_since_epoch().count(),
                 std::memory_order_relaxed))
             return;
+        size_t const done = done_.load(std::memory_order_relaxed);
         double const elapsed = seconds_since_start(now);
-        report(program_, "pass %d/%d: %zu/%zu pair bags (%.1f%%), %s, "
-               "~%s left%s", pass_, passes_, done, units_,
+        std::string const left = done == 0
+            ? std::string()
+            : ", ~" + format_duration(elapsed * double(units_ - done) /
+                                      double(done)) + " left";
+        report(program_, "pass %d/%d: %zu/%zu pair bags (%.1f%%), %s%s%s",
+               pass_, passes_, done, units_,
                100.0 * double(done) / double(units_),
-               format_duration(elapsed).c_str(),
-               format_duration(elapsed * double(units_ - done) /
-                                double(done)).c_str(),
+               format_duration(elapsed).c_str(), left.c_str(),
                hooks_.text().c_str());
     }
 

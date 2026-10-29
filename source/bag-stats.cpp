@@ -20,6 +20,7 @@ constexpr int OPT_COMPLETIONS = OPT_COMMON_END + 1;
 constexpr int OPT_EXACT = OPT_COMMON_END + 2;
 constexpr int OPT_ALL = OPT_COMMON_END + 3;
 constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 4;
+constexpr int OPT_HLL = OPT_COMMON_END + 5;
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
@@ -40,7 +41,7 @@ void usage(std::string_view program, FILE* out) {
             "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
             "       [--exact] [--completions N | --all]\n"
             "       LETTERS PAIRS DICT\n"
-            "       %.*s --leftovers --ss pb[,pb...] [-u LETTERS]\n"
+            "       %.*s --leftovers [--hll] --ss pb[,pb...] [-u LETTERS]\n"
             "       [-s N | --no-nopairs] [--min-pb-len N] [--threads N]\n"
             "       [--progress N] LETTERS PAIRS DICT\n",
             SV_ARG(program),
@@ -70,6 +71,10 @@ void usage(std::string_view program, FILE* out) {
                     "that fit, by how many picks they make, and those of "
                     "every pb step, their PAIRS rows and their distinct "
                     "leftovers by how many letters they leave");
+    dfs_help_option("--hll, --hyper-log-log",
+                    "with --leftovers, estimate the distinct leftovers by "
+                    "HyperLogLog, within about 1%%, in little memory, as "
+                    "LEFTOVERS_HLL");
     dfs_help_option("--exact",
                     "with a last pf, count only the PAIRS rows that use all "
                     "of what's left, as wb and pb steps before it need; a "
@@ -85,6 +90,8 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         { "exact", OPT_EXACT, OPTPARSE_NONE },
         { "all", OPT_ALL, OPTPARSE_NONE },
         { "leftovers", OPT_LEFTOVERS, OPTPARSE_NONE },
+        { "hll", OPT_HLL, OPTPARSE_NONE },
+        { "hyper-log-log", OPT_HLL, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -118,6 +125,9 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
           case OPT_LEFTOVERS:
             out->common.leftovers = true;
             break;
+          case OPT_HLL:
+            out->hll = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -127,6 +137,10 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         }
     }
 
+    if (out->hll && !out->common.leftovers) {
+        report(PROGRAM, "--hll goes with --leftovers");
+        return false;
+    }
     if (!check_common_args(PROGRAM, &options, &out->common)) return false;
     Search const& search = out->common.search;
     if (out->common.leftovers) {

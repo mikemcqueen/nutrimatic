@@ -129,6 +129,14 @@ bool check_common_args(std::string_view program, struct optparse* options,
                "be -");
         return false;
     }
+    if (!out->leftovers && out->search.prospects + out->search.pairs > 0 &&
+        !ranked) {
+        report(program, "WARNING: no -n: printing EVERY row, unsorted, in "
+               "walk order");
+        report(program, "WARNING: that can be billions of rows and over "
+               "100 GB; -n N with a SORT option (--tp, --mp, ...) keeps "
+               "the best N");
+    }
     return true;
 }
 

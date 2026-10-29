@@ -188,4 +188,11 @@ actual=$("$bag_stats" --min-wb-len 3 --ss wb,p catdoglow "$test_dir/pairs" \
   "$test_dir/dict" 2>/dev/null | tail -n 1)
 [[ $actual == ',1,1,1,4,4,0,1' ]] || fail "--ss wb,p is wrong: $actual"
 
+exact=$("$bag_stats" --leftovers --min-pb-len 6 --ss pb,pb catdoglowanttan \
+  "$test_dir/pairs" "$test_dir/dict")
+hll=$("$bag_stats" --leftovers --hll --min-pb-len 6 --ss pb,pb \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ -n $exact && ${hll/LEFTOVERS_HLL/LEFTOVERS} == "$exact" ]] ||
+  fail "--leftovers --hll differs: $hll"
+
 echo PASS

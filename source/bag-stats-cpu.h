@@ -23,13 +23,15 @@ inline constexpr int BAG_STATS_DEFAULT_PAIR_CACHE_SIZE_MB = 1000;
 // --score or without pick steps, how many completions to list
 // (--completions), or whether to list every one with pairs, or SOLO (--all);
 // and with a last pf, whether it counts only the PAIRS rows that use all of
-// what's left (--exact).
+// what's left (--exact); with --leftovers, whether distinct leftovers are
+// estimated by HyperLogLog (--hll).
 struct BagStatsOptions {
     BagStatsArgs common;
     int pair_cache_size_mb = BAG_STATS_DEFAULT_PAIR_CACHE_SIZE_MB;
     int completions = 0;
     bool exact = false;
     bool all = false;
+    bool hll = false;
 };
 
 // One combination of one word bag per word step that fits a remainder; with
