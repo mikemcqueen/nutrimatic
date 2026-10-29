@@ -44,11 +44,11 @@ void usage(std::string_view program, FILE* out) {
           "  YES\n"
           "\noptions:\n", stdout);
     dfs_help_option("-s, --sentence N",
-                    "read $IDX_DIR/pairs.sN");
+                    "read %s/pairs.sN", IDX_PATH);
     dfs_help_option("--pairs PAIRS", "read PAIRS");
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
-                    "(default: $IDX_DIR/p1.idx)");
+                    "(default: %s)", P1_INDEX_PATH);
     dfs_help_option("--pm, --prob-min P",
                     "keep pairs whose larger YES is in [P, 1]; pairs "
                     "without a verdict are dropped (default .85)");
@@ -133,16 +133,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                out->filter.max_len);
         return false;
     }
-    if (!out->p1 || out->sentence) {
-        std::filesystem::path const dir = idx_dir();
-        if (dir.empty()) {
-            report(PROGRAM, "needs a nonempty IDX_DIR without --p1 or with -s");
-            return false;
-        }
-        if (!out->p1) out->p1 = dir / "p1.idx";
-        if (out->sentence)
-            out->pairs = dir / ("pairs.s" + std::to_string(*out->sentence));
-    }
+    if (!out->p1) out->p1 = P1_INDEX_PATH;
+    if (out->sentence)
+        out->pairs = std::filesystem::path(IDX_PATH) /
+            ("pairs.s" + std::to_string(*out->sentence));
     return true;
 }
 

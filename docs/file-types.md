@@ -88,7 +88,7 @@ not a file: a view of pairs.sN, filtered when it is read.
 
 `seed-pairs (-s N | --pairs FILE) [--p1 INDEX] [--pm P] [-m N] [-x N] [-d FILE]`
 
--s N reads $IDX_DIR/pairs.sN. keeps pairs whose larger-order YES in p1.idx
+-s N reads idx/pairs.sN. keeps pairs whose larger-order YES in p1.idx
 is in [P, 1], whose words both have -m to -x letters (defaults 3 and 13),
 and, with -d, whose words are both in FILE, each written in the order with
 the larger YES. .85 (the default) and .5 are the usual bands. pgui offers

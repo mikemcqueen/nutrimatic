@@ -48,8 +48,8 @@ void usage(std::string_view program, FILE* out) {
             "usage: %.*s [-s N] [-n N] SORT... [--by-length | --by-pick]\n"
             "       [--score W1,W2... [--score-detail]]\n"
             "       [--best-pairs appear|lead]\n"
-            "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
-            "        [--prior-weights SPEC]]\n"
+            "       [--prior FILE | --no-prior |\n"
+            "        [--p1 INDEX] [--clues CLUEDATA] [--prior-weights SPEC]]\n"
             "       [--top-segments] [--pb-len N] [--ss STEPS] [--pp FILE]\n"
             "       [FILE|-]\n",
             SV_ARG(program));

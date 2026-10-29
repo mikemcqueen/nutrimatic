@@ -22,6 +22,7 @@
 #include "dfs-class-list.h"
 #include "dfs-cli-args.h"
 #include "optparse.h"
+#include "pair-evidence.h"
 #include "pairs-impl.h"
 
 // How many picks of each kind a search sequence makes before its last step,
@@ -56,8 +57,9 @@ struct RankArgs {
     bool by_length = false;
     bool by_pick = false;
     std::optional<std::filesystem::path> prior_file;
-    std::optional<std::filesystem::path> p1;
-    std::optional<std::filesystem::path> clues;
+    bool no_prior = false;
+    // --p1 and --clues as given; load_pick_bags() defaults them.
+    PriorPaths evidence;
     std::optional<std::string> prior_weights;
     bool top_segments = false;
     // --score, the row's picks as PAIR names them, each as its two words.
@@ -77,6 +79,7 @@ enum {
     OPT_RANK_PRIOR_WEIGHTS,
     OPT_RANK_SCORE_DETAIL,
     OPT_RANK_BEST_PAIRS,
+    OPT_RANK_NO_PRIOR,
     OPT_RANK_SORT,
 };
 
@@ -87,6 +90,7 @@ enum {
     { "top-segments", OPT_RANK_TOP_SEGMENTS, OPTPARSE_NONE }, \
     { "score", OPT_RANK_SCORE, OPTPARSE_REQUIRED }, \
     { "prior", OPT_RANK_PRIOR, OPTPARSE_REQUIRED }, \
+    { "no-prior", OPT_RANK_NO_PRIOR, OPTPARSE_NONE }, \
     { "by-pick", OPT_RANK_BY_PICK, OPTPARSE_NONE }, \
     { "p1", OPT_RANK_P1, OPTPARSE_REQUIRED }, \
     { "clues", OPT_RANK_CLUES, OPTPARSE_REQUIRED }, \
@@ -125,8 +129,8 @@ struct PairBag {
     PairsCounts counts;
     std::string pair;
     uint64_t pairs = 0;
-    // The best prior of its rows, from --prior or --p1 and --clues;
-    // -INFINITY when none has one.
+    // The best prior of its rows, from --prior or the --p1 and --clues
+    // indexes; -INFINITY when none has one.
     double prior = -INFINITY;
 };
 
@@ -184,11 +188,12 @@ class PairPickFilter {
 
 // load_pair_bags() of PAIRS into `pair_bags`, less PairPickFilter's, and,
 // when `prospects_file` is given, of it into `prospect_bags`, their priors
-// from `args`' --prior or --p1, --clues and --prior-weights, freed before it
-// returns. Unless `final_bags` is null, also every bag of PAIRS into it, with
-// `final_rows` as load_pair_bags() takes `rows`. `pair_bags` may be null to
-// skip it, and with `final_bags` null too PAIRS isn't read. `has_prior`:
-// whether `args` gives one.
+// with --by-pick from `args`' --prior, or unless --no-prior from --p1,
+// --clues and --prior-weights, defaulted by open_default_prior(), freed
+// before it returns. Unless `final_bags` is null, also every bag of PAIRS
+// into it, with `final_rows` as load_pair_bags() takes `rows`. `pair_bags`
+// may be null to skip it, and with `final_bags` null too PAIRS isn't read.
+// `has_prior`: whether the bags have priors.
 bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::optional<std::filesystem::path> const& prospects_file,
                     std::filesystem::path const& pairs_file,

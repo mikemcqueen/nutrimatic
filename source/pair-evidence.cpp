@@ -1,12 +1,15 @@
 #include "pair-evidence.h"
 
 #include "dfs-cli-help.h"
+#include "log.h"
 #include "parse-number.h"
+#include "workflow-paths.h"
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <optional>
+#include <system_error>
 
 bool PairEvidenceSource::open(
         std::optional<std::filesystem::path> const& p1,
@@ -168,6 +171,50 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
     }
     return source->open(use_p1 ? p1 : std::nullopt,
                         use_clues ? cluedata : std::nullopt, error, failed);
+}
+
+void default_prior_paths(PriorPaths* paths) {
+    std::error_code error;
+    if (!paths->p1 && std::filesystem::exists(P1_INDEX_PATH, error)) {
+        paths->p1 = P1_INDEX_PATH;
+        paths->p1_default = true;
+    }
+    if (!paths->clues && std::filesystem::exists(CLUEDATA_PATH, error)) {
+        paths->clues = CLUEDATA_PATH;
+        paths->clues_default = true;
+    }
+}
+
+bool open_default_prior(std::string_view program, PriorPaths* paths,
+                        std::optional<std::string> const& spec, bool all,
+                        PriorWeights* weights, PairEvidenceSource* source) {
+    std::string error;
+    std::string skipped;
+    PriorIndex failed;
+    while (!open_prior(paths->p1, paths->clues, spec, all, weights, source,
+                       &error, &failed)) {
+        std::optional<std::filesystem::path>* path;
+        if (failed == PriorIndex::p1 && paths->p1_default) {
+            path = &paths->p1;
+            paths->p1_default = false;
+        } else if (failed == PriorIndex::clues && paths->clues_default) {
+            path = &paths->clues;
+            paths->clues_default = false;
+        } else if (skipped.empty()) {
+            report(program, "%s", error.c_str());
+            return false;
+        } else {
+            report(program, "%s, having skipped %s", error.c_str(),
+                   skipped.c_str());
+            return false;
+        }
+        warn(program, "skipping %s: %s", (*path)->c_str(), error.c_str());
+        if (!skipped.empty()) skipped += " and ";
+        skipped += (*path)->string();
+        path->reset();
+        *source = PairEvidenceSource();
+    }
+    return true;
 }
 
 std::string pair_key(std::string_view a, std::string_view b) {

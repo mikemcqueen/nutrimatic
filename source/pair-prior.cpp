@@ -7,13 +7,13 @@
 #include "optparse.h"
 #include "pair-evidence.h"
 #include "row-input.h"
+#include "workflow-paths.h"
 
 #include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <unordered_set>
 #include <vector>
 
@@ -24,15 +24,9 @@ constexpr int OPT_P1 = 256;
 constexpr int OPT_CLUES = 257;
 constexpr int OPT_FEATURES = 258;
 constexpr int OPT_PRIOR_WEIGHTS = 259;
-constexpr char DEFAULT_P1[] = "idx/p1.idx";
-constexpr char DEFAULT_CLUES[] = "cluer/data/cluedata";
 
 struct Args {
-    std::optional<std::filesystem::path> p1;
-    std::optional<std::filesystem::path> clues;
-    // Whether p1 and clues are the defaults rather than given.
-    bool p1_default = false;
-    bool clues_default = false;
+    PriorPaths paths;
     std::optional<std::string> prior_weights;
     bool features = false;
     std::vector<std::filesystem::path> pairs;
@@ -51,12 +45,12 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
                     "(default: %s when it exists, skipped with a warning when it "
-                    "can't be opened)", DEFAULT_P1);
+                    "can't be opened)", P1_INDEX_PATH);
     dfs_help_option("--clues CLUEDATA",
                     "look pairs up in the cluer clue index beside CLUEDATA, "
                     "in its index directory (default: %s when it exists, "
                     "skipped with a warning when it can't be opened)",
-                    DEFAULT_CLUES);
+                    CLUEDATA_PATH);
     dfs_help_option("--prior-weights SPEC",
                     "SCORE is the sum of each term's weight times its value, "
                     "SPEC comma-separated NAME=WEIGHT, unnamed terms 0; "
@@ -90,10 +84,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     while ((option = optparse_long(&options, long_options, NULL)) != -1) {
         switch (option) {
           case OPT_P1:
-            out->p1 = options.optarg;
+            out->paths.p1 = options.optarg;
             break;
           case OPT_CLUES:
-            out->clues = options.optarg;
+            out->paths.clues = options.optarg;
             break;
           case OPT_PRIOR_WEIGHTS:
             out->prior_weights = options.optarg;
@@ -112,18 +106,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     for (char const* arg; (arg = optparse_arg(&options)) != NULL;)
         out->pairs.push_back(arg);
     if (out->pairs.empty()) return false;
-    std::error_code error;
-    if (!out->p1 && std::filesystem::exists(DEFAULT_P1, error)) {
-        out->p1 = DEFAULT_P1;
-        out->p1_default = true;
-    }
-    if (!out->clues && std::filesystem::exists(DEFAULT_CLUES, error)) {
-        out->clues = DEFAULT_CLUES;
-        out->clues_default = true;
-    }
-    if (!out->p1 && !out->clues) {
+    default_prior_paths(&out->paths);
+    if (!out->paths.p1 && !out->paths.clues) {
         report(PROGRAM, "needs --p1, --clues or both, or %s or %s here",
-               DEFAULT_P1, DEFAULT_CLUES);
+               P1_INDEX_PATH, CLUEDATA_PATH);
         return false;
     }
     if (out->features && out->prior_weights) {
@@ -150,27 +136,12 @@ int main(int argc, char* argv[]) {
 
     PriorWeights weights;
     PairEvidenceSource source;
-    std::string error;
-    PriorIndex failed;
-    while (!open_prior(args.p1, args.clues, args.prior_weights,
-                       args.features, &weights, &source, &error, &failed)) {
-        if (failed == PriorIndex::p1 && args.p1_default) {
-            args.p1.reset();
-            args.p1_default = false;
-        } else if (failed == PriorIndex::clues && args.clues_default) {
-            args.clues.reset();
-            args.clues_default = false;
-        } else {
-            report(PROGRAM, "%s", error.c_str());
-            return 1;
-        }
-        warn(PROGRAM, "skipping %s: %s", failed == PriorIndex::p1
-             ? DEFAULT_P1 : DEFAULT_CLUES, error.c_str());
-        if (!args.p1 && !args.clues) {
-            report(PROGRAM, "no index left to read");
-            return 1;
-        }
-        source = PairEvidenceSource();
+    if (!open_default_prior(PROGRAM, &args.paths, args.prior_weights,
+                            args.features, &weights, &source))
+        return 1;
+    if (!args.paths.p1 && !args.paths.clues) {
+        report(PROGRAM, "no index left to read");
+        return 1;
     }
     std::unordered_set<std::string> seen;
     for (std::filesystem::path const& path : args.pairs) {

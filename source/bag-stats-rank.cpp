@@ -14,6 +14,7 @@
 #include "log.h"
 #include "pair-evidence.h"
 #include "row-input.h"
+#include "workflow-paths.h"
 
 bool parse_search(std::string_view program, std::string_view text,
                   Search* out, bool measured) {
@@ -94,6 +95,9 @@ RankOption parse_rank_option(std::string_view program, int option,
       case OPT_RANK_PRIOR:
         out->prior_file = arg;
         break;
+      case OPT_RANK_NO_PRIOR:
+        out->no_prior = true;
+        break;
       case OPT_RANK_BY_PICK:
         out->by_pick = true;
         break;
@@ -111,10 +115,10 @@ RankOption parse_rank_option(std::string_view program, int option,
         }
         break;
       case OPT_RANK_P1:
-        out->p1 = arg;
+        out->evidence.p1 = arg;
         break;
       case OPT_RANK_CLUES:
-        out->clues = arg;
+        out->evidence.clues = arg;
         break;
       case OPT_RANK_PRIOR_WEIGHTS:
         out->prior_weights = arg;
@@ -137,17 +141,16 @@ bool check_rank_args(std::string_view program, RankArgs const& args,
                "or more ppb and pb steps");
         return false;
     }
-    bool const evidence = args.p1 || args.clues;
-    if ((args.prior_file || evidence) && !args.by_pick) {
-        report(program, "--prior, --p1 and --clues go with --by-pick");
+    bool const evidence = args.evidence.p1 || args.evidence.clues ||
+        args.prior_weights;
+    if ((args.prior_file || args.no_prior || evidence) && !args.by_pick) {
+        report(program, "--prior, --no-prior, --p1, --clues and "
+               "--prior-weights go with --by-pick");
         return false;
     }
-    if (args.prior_file && evidence) {
-        report(program, "--prior doesn't go with --p1 or --clues");
-        return false;
-    }
-    if (args.prior_weights && !evidence) {
-        report(program, "--prior-weights goes with --p1 or --clues");
+    if (int(args.prior_file.has_value()) + args.no_prior + evidence > 1) {
+        report(program, "--prior, --no-prior and --p1, --clues or "
+               "--prior-weights don't go together");
         return false;
     }
     if (!args.score.empty() &&
@@ -213,22 +216,32 @@ void help_rank_sort_options() {
                     "a pick's Q is weighted by P, its prior's percentile from "
                     "the top among its list's bags, as P * Q * sqrt(P) * "
                     "Q^(1/4) of each other pick, and rows sort by the "
-                    "smallest; needs two or more ppb and pb steps");
+                    "smallest; needs two or more ppb and pb steps; without "
+                    "--prior or --no-prior, the prior is from --p1 and "
+                    "--clues");
     dfs_help_option("--prior FILE",
                     "\"SCORE word,word\" lines, as pair-prior prints them, "
                     "larger better; a pick bag scores its best row, below "
                     "every score when none is in FILE; only with --by-pick");
+    dfs_help_option("--no-prior",
+                    "with --by-pick, weight no pick by a prior, reading no "
+                    "index");
     dfs_help_option("--p1 INDEX",
                     "score each pair's prior from its phase 1 verdicts in "
-                    "INDEX, as make-p1-index writes it, as pair-prior does; "
-                    "only with --by-pick, not with --prior");
+                    "INDEX, as make-p1-index writes it, as pair-prior does "
+                    "(default: %s when it exists, skipped with a warning "
+                    "when it can't be opened); only with --by-pick, not "
+                    "with --prior or --no-prior", P1_INDEX_PATH);
     dfs_help_option("--clues CLUEDATA",
                     "score each pair's prior from the cluer clue index "
-                    "beside CLUEDATA too, or alone");
+                    "beside CLUEDATA too, or alone (default: %s when it "
+                    "exists, skipped with a warning when it can't be "
+                    "opened); with neither index, --by-pick has no prior",
+                    CLUEDATA_PATH);
     dfs_help_option("--prior-weights SPEC",
                     "how --p1 and --clues score a pair, as pair-prior "
                     "--prior-weights (default %s, less the terms of an index "
-                    "not given)", PRIOR_WEIGHTS_DEFAULT);
+                    "not opened)", PRIOR_WEIGHTS_DEFAULT);
     fputs("\n--prior-weights terms:\n", stdout);
     help_prior_terms();
 }
@@ -329,17 +342,21 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
             *out = found->second;
             return true;
         };
-    } else if (args.p1 || args.clues) {
-        std::string error;
-        if (!open_prior(args.p1, args.clues, args.prior_weights, false,
-                        &weights, &evidence, &error)) {
-            report(program, "%s", error.c_str());
+    } else if (args.by_pick && !args.no_prior) {
+        PriorPaths paths = args.evidence;
+        default_prior_paths(&paths);
+        if (!open_default_prior(program, &paths, args.prior_weights, false,
+                                &weights, &evidence))
             return false;
-        }
-        prior = [&](DfsPairRow const& row, double* out) {
-            *out = prior_score(evidence.lookup(row.left, row.right), weights);
-            return true;
-        };
+        if (paths.p1 || paths.clues)
+            prior = [&](DfsPairRow const& row, double* out) {
+                *out = prior_score(evidence.lookup(row.left, row.right),
+                                   weights);
+                return true;
+            };
+        else
+            warn(program, "no prior index, neither %s nor %s; --by-pick "
+                 "ranks without a prior", P1_INDEX_PATH, CLUEDATA_PATH);
     }
     *has_prior = bool(prior);
     std::vector<PairBag>* const loaded = final_bags ? final_bags : pair_bags;

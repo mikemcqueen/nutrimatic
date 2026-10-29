@@ -29,6 +29,12 @@ inline constexpr char WORKFLOW_REVIEWED_WORDS_PATH[] =
     ".wf/dict/done/reviewed.words";
 inline constexpr char WORKFLOW_P1_OUT_PATH[] = ".wf/p1/done/out";
 
+// Paths relative to the working directory: the directory of the sentence
+// pair files and p1.idx, and the cluer clue data.
+inline constexpr char IDX_PATH[] = "idx";
+inline constexpr char P1_INDEX_PATH[] = "idx/p1.idx";
+inline constexpr char CLUEDATA_PATH[] = "cluer/data/cluedata";
+
 inline constexpr char WORKFLOW_TARGET_NO_PAIRS_NAME[] = "no.pairs";
 inline constexpr char WORKFLOW_TARGET_BEST_PAIRS_NAME[] = "best.pairs";
 inline constexpr char WORKFLOW_TARGET_PATH[] =
@@ -60,13 +66,6 @@ inline std::filesystem::path require_workflow_root(std::string_view program) {
     return {};
   }
   return check_workflow_root(program, root) ? root : std::filesystem::path();
-}
-
-// IDX_DIR, the directory of the sentence pair files and p1.idx; empty when it
-// is unset or empty.
-inline std::filesystem::path idx_dir() {
-  char const* const dir = getenv("IDX_DIR");
-  return dir == NULL ? std::filesystem::path() : std::filesystem::path(dir);
 }
 
 // Sets an unset `*path` to `relative` under require_workflow_root(). False

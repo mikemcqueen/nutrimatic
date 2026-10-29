@@ -105,8 +105,8 @@ The details:
       `seed-pairs -s2 -m 4`
       `seed-pairs -s2 --pm .5 -x 10 -d $DICT`
 
-      reads `$IDX_DIR/pairs.s2` (`--pairs FILE` reads another pair file)
-      and keeps the pairs whose larger-order YES in `$IDX_DIR/p1.idx` is at
+      reads `idx/pairs.s2` (`--pairs FILE` reads another pair file)
+      and keeps the pairs whose larger-order YES in `idx/p1.idx` is at
       least `--pm` (default .85), whose words both have `-m` to `-x`
       letters (defaults 3 and 13), and, with `-d`, whose words are both in
       that dictionary, each written in the order with the larger YES. setup.sh's `seed` and

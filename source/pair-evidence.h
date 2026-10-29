@@ -69,6 +69,27 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
                 PriorWeights* weights, PairEvidenceSource* source,
                 std::string* error, PriorIndex* failed = nullptr);
 
+// The indexes a prior reads: --p1 and --clues, each given or its default.
+struct PriorPaths {
+    std::optional<std::filesystem::path> p1;
+    std::optional<std::filesystem::path> clues;
+    // Whether p1 and clues are the defaults rather than given.
+    bool p1_default = false;
+    bool clues_default = false;
+};
+
+// Sets each unset path of `paths` to its default, P1_INDEX_PATH or
+// CLUEDATA_PATH, when that exists.
+void default_prior_paths(PriorPaths* paths);
+
+// open_prior() of `paths`, except that a default index that can't be opened
+// is dropped from `paths` with a warning prefixed by `program`. False,
+// diagnosed prefixed by `program`, naming any dropped index, when
+// open_prior() fails otherwise.
+bool open_default_prior(std::string_view program, PriorPaths* paths,
+                        std::optional<std::string> const& spec, bool all,
+                        PriorWeights* weights, PairEvidenceSource* source);
+
 // The pair's key, the same for either order: "a,b" with a <= b.
 std::string pair_key(std::string_view a, std::string_view b);
 
