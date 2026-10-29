@@ -144,10 +144,6 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
     if (!check_common_args(PROGRAM, &options, &out->common)) return false;
     Search const& search = out->common.search;
     if (out->common.leftovers) {
-        if (search.pairs == 0 || search.prospects + search.words > 0) {
-            report(PROGRAM, "--leftovers takes --ss of pb steps alone");
-            return false;
-        }
         if (out->exact || out->all || out->completions > 0) {
             report(PROGRAM, "--leftovers doesn't go with --exact, --all or "
                    "--completions");

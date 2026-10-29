@@ -6,6 +6,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "bag-stats-cache.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "letter-bag.h"
@@ -70,6 +71,12 @@ bool check_common_args(std::string_view program, struct optparse* options,
     if (!parse_search(program, out->search_text.value_or(DEFAULT_SEARCH),
                       &out->search, !out->leftovers))
         return false;
+    if (out->leftovers &&
+        (out->search.pairs == 0 ||
+         out->search.prospects + out->search.words > 0)) {
+        report(program, "--leftovers takes --ss of pb steps alone");
+        return false;
+    }
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
         report(program, "-s doesn't go with --no-nopairs");
         return false;
@@ -352,6 +359,70 @@ bool PickWalk::repeats_bag(size_t step, PairsCounts const& counts) const {
             (*steps_[j])[chosen_[j]].counts == counts)
             return true;
     return false;
+}
+
+uint64_t LeftoverSketch::estimate(size_t length) const {
+    double const m = double(REGISTERS);
+    double sum = 0;
+    size_t zeros = 0;
+    for (size_t i = 0; i < REGISTERS; ++i) {
+        uint8_t const value = registers_[length * REGISTERS + i];
+        sum += std::ldexp(1.0, -int(value));
+        zeros += value == 0;
+    }
+    double out = 0.7213 / (1 + 1.079 / m) * m * m / sum;
+    if (out <= 2.5 * m && zeros != 0) out = m * std::log(m / zeros);
+    return uint64_t(std::llround(out));
+}
+
+int print_leftovers(BagStatsArgs const& args, std::string const& letters,
+                    size_t pair_bags, LeftoverCounts counts,
+                    LeftoverSketch const* hll) {
+    size_t const steps = counts.by_picks.size();
+    size_t const lengths = counts.combinations.size();
+    if (hll)
+        for (size_t n = 0; n < lengths; ++n)
+            counts.leftovers[n] = hll->estimate(n);
+    uint64_t all[3] = {0, 0, 0};
+    for (size_t n = 0; n < lengths; ++n) {
+        all[0] += counts.combinations[n];
+        all[1] += counts.rows[n];
+        all[2] += counts.leftovers[n];
+    }
+    counts.by_picks[steps - 1] = all[0];
+
+    double constexpr MB = 1024 * 1024;
+    uint64_t const cap = uint64_t(
+        std::ceil(double(UINT32_MAX) * REST_CACHE_ENTRY_BYTES / MB));
+    uint64_t const needed = uint64_t(std::ceil(
+        double(all[2]) * (hll ? 1.03 : 1.0) * REST_CACHE_ENTRY_BYTES / MB));
+    printf("letters %s\nmin-pb %d\nss %s\npairs %s\npair bags %zu\n",
+           letters.c_str(), args.min_pair_bag_length,
+           search_text(args.search).c_str(),
+           bag_stats_header_path(args.pairs_file).c_str(), pair_bags);
+    if (needed > cap)
+        printf("cache-size %llu (capped; %llu needed)\n",
+               static_cast<unsigned long long>(cap),
+               static_cast<unsigned long long>(needed));
+    else
+        printf("cache-size %llu\n", static_cast<unsigned long long>(needed));
+    printf("\nPICKS,COMBINATIONS\n");
+    for (size_t j = 0; j < steps; ++j)
+        printf("%zu,%llu\n", j + 1,
+               static_cast<unsigned long long>(counts.by_picks[j]));
+    printf("\nLEFT,COMBINATIONS,ROWS,%s\n",
+           hll ? "LEFTOVERS_HLL" : "LEFTOVERS");
+    for (size_t n = 0; n < lengths; ++n) {
+        if (counts.combinations[n] == 0) continue;
+        printf("%zu,%llu,%llu,%llu\n", n,
+               static_cast<unsigned long long>(counts.combinations[n]),
+               static_cast<unsigned long long>(counts.rows[n]),
+               static_cast<unsigned long long>(counts.leftovers[n]));
+    }
+    printf("all,%llu,%llu,%llu\n", static_cast<unsigned long long>(all[0]),
+           static_cast<unsigned long long>(all[1]),
+           static_cast<unsigned long long>(all[2]));
+    return fflush(stdout) == 0 ? 0 : 1;
 }
 
 std::vector<size_t> unit_blocks(size_t units) {

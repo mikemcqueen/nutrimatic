@@ -10,10 +10,12 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <numeric>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -1055,4 +1057,431 @@ void GpuRowCounter::count(uint8_t const* rests, size_t rows,
         stream->busy = false;
     }
     impl.freed.notify_one();
+}
+
+namespace {
+
+constexpr int WALK_THREADS = 256;
+constexpr int WALK_WARPS = WALK_THREADS / 32;
+
+template <typename BagKey>
+struct LeftoverParams {
+    BagKey const* keys;
+    uint64_t const* numbers;
+    uint64_t const* pairs;
+    uint8_t const* letters;
+    int count;
+    int steps;
+    BagKey bag;
+    BagKey bag_guards;
+    uint64_t bag_number;
+    int bag_letters;
+    // The next unit, the finished units, and their count as the host reads
+    // it, in mapped memory.
+    unsigned long long* next_unit;
+    unsigned long long* finished;
+    unsigned long long* units_done;
+    unsigned long long* by_picks;
+    unsigned long long* combinations;
+    unsigned long long* rows;
+    uint32_t* registers;
+};
+
+// What the picks through a step leave: the rest, its number, the picks'
+// PAIRS product and the rest's letters; and the step's pick.
+template <typename BagKey>
+struct Picked {
+    BagKey rest;
+    uint64_t number;
+    unsigned long long rows;
+    int letters;
+    int index;
+};
+
+// A kernel 2 warp's stack entry for a step: what the picks through it leave;
+// and of its candidates, those from `base` that fit and aren't taken yet, as
+// bits, and the next to ballot.
+template <typename BagKey>
+struct BallotFrame {
+    Picked<BagKey> picked;
+    unsigned mask;
+    int base;
+    int next;
+};
+
+// A block's counts in shared memory.
+struct WalkCounts {
+    unsigned long long* combinations;
+    unsigned long long* rows;
+    unsigned long long* by_picks;
+};
+
+__host__ __device__ inline size_t walk_counts_bytes(int letters, int steps) {
+    size_t const bytes =
+        (2 * size_t(letters + 1) + size_t(steps)) * sizeof(unsigned long long);
+    return (bytes + 15) & ~size_t(15);
+}
+
+// Zeroes the block's counts at the start of `shared`. Every thread calls it.
+template <typename BagKey>
+__device__ WalkCounts start_walk_counts(LeftoverParams<BagKey> const& p,
+                                        unsigned char* shared) {
+    auto* const words = reinterpret_cast<unsigned long long*>(shared);
+    int const lengths = p.bag_letters + 1;
+    for (int k = threadIdx.x; k < 2 * lengths + p.steps; k += blockDim.x)
+        words[k] = 0;
+    __syncthreads();
+    return {words, words + lengths, words + 2 * lengths};
+}
+
+// Adds the block's counts to the totals. Every thread calls it.
+template <typename BagKey>
+__device__ void flush_walk_counts(LeftoverParams<BagKey> const& p,
+                                  WalkCounts const& c) {
+    __syncthreads();
+    for (int k = threadIdx.x; k <= p.bag_letters; k += blockDim.x) {
+        if (c.combinations[k] == 0) continue;
+        atomicAdd(&p.combinations[k], c.combinations[k]);
+        atomicAdd(&p.rows[k], c.rows[k]);
+    }
+    for (int k = threadIdx.x; k < p.steps; k += blockDim.x)
+        if (c.by_picks[k] != 0) atomicAdd(&p.by_picks[k], c.by_picks[k]);
+}
+
+// Whether pair bag `i` fits what `from` leaves; writes what picking it
+// leaves to `out`.
+template <typename BagKey>
+__device__ inline bool pick(LeftoverParams<BagKey> const& p,
+                            Picked<BagKey> const& from, int i,
+                            Picked<BagKey>* out) {
+    BagKey rest;
+    if (!fits(from.rest | p.bag_guards, p.keys[i], p.bag_guards, &rest))
+        return false;
+    *out = {rest, from.number - p.numbers[i], from.rows * p.pairs[i],
+            from.letters - int(p.letters[i]), i};
+    return true;
+}
+
+// Adds the leftover numbered `number` to the register of `left` letters, as
+// LeftoverSketch::add does.
+template <typename BagKey>
+__device__ inline void add_register(LeftoverParams<BagKey> const& p, int left,
+                                    uint64_t number) {
+    uint64_t const mixed = mix64(number + 1);
+    uint64_t const rest =
+        (mixed << GPU_HLL_BITS) | (uint64_t(1) << (GPU_HLL_BITS - 1));
+    uint32_t const rank = uint32_t(__clzll((long long)rest) + 1);
+    uint32_t* const slot = p.registers + (size_t(left) << GPU_HLL_BITS) +
+        (mixed >> (64 - GPU_HLL_BITS));
+    if (rank > __ldcg(slot)) atomicMax(slot, rank);
+}
+
+// Counts a combination for each lane of `group`, every one leaving `left`
+// letters, each with its own `rows` and `number`. The group's lanes call
+// it; its lowest adds the group's counts.
+template <typename BagKey>
+__device__ inline void add_combination(LeftoverParams<BagKey> const& p,
+                                       WalkCounts const& c, unsigned group,
+                                       int left, unsigned long long rows,
+                                       uint64_t number) {
+    unsigned long long sum = 0;
+    for (unsigned rest = group; rest != 0; rest &= rest - 1)
+        sum += __shfl_sync(group, rows, __ffs(int(rest)) - 1);
+    if (int(threadIdx.x & 31) == __ffs(int(group)) - 1) {
+        atomicAdd(&c.combinations[left], (unsigned long long)__popc(group));
+        atomicAdd(&c.rows[left], sum);
+    }
+    add_register(p, left, number);
+}
+
+// The last step's candidates past `from`'s pick, strided over the lanes;
+// GROUPED combines lanes leaving the same letters first.
+template <typename BagKey, bool GROUPED>
+__device__ void last_step(LeftoverParams<BagKey> const& p, WalkCounts const& c,
+                          Picked<BagKey> const& from) {
+    int const lane = threadIdx.x & 31;
+    Picked<BagKey> next;
+    if constexpr (GROUPED) {
+        for (int base = from.index + 1; base < p.count; base += 32) {
+            int const i = base + lane;
+            bool const fit = i < p.count && pick(p, from, i, &next);
+            unsigned const fitting = __ballot_sync(~0u, fit);
+            if (!fit) continue;
+            add_combination(p, c, __match_any_sync(fitting, next.letters),
+                            next.letters, next.rows, next.number);
+        }
+    } else {
+        for (int i = from.index + 1 + lane; i < p.count; i += 32)
+            if (pick(p, from, i, &next))
+                add_combination(p, c, 1u << lane, next.letters, next.rows,
+                                next.number);
+    }
+}
+
+// The warp's next unit, or -1 past the last.
+template <typename BagKey>
+__device__ inline int take_unit(LeftoverParams<BagKey> const& p) {
+    unsigned long long unit = 0;
+    if ((threadIdx.x & 31) == 0) unit = atomicAdd(p.next_unit, 1ULL);
+    unit = __shfl_sync(~0u, unit, 0);
+    return unit < (unsigned long long)p.count ? int(unit) : -1;
+}
+
+template <typename BagKey>
+__device__ inline void finish_unit(LeftoverParams<BagKey> const& p) {
+    if ((threadIdx.x & 31) != 0) return;
+    unsigned long long const done = atomicAdd(p.finished, 1ULL) + 1;
+    *static_cast<unsigned long long volatile*>(p.units_done) = done;
+}
+
+// Picks the warp's unit, counting it; true when it fits and there are steps
+// past it. With one step, counts its combination.
+template <typename BagKey>
+__device__ inline bool start_unit(LeftoverParams<BagKey> const& p,
+                                  WalkCounts const& c, int unit,
+                                  Picked<BagKey>* out) {
+    Picked<BagKey> const root{p.bag, p.bag_number, 1, p.bag_letters, -1};
+    if (!pick(p, root, unit, out)) return false;
+    if ((threadIdx.x & 31) != 0) return p.steps > 1;
+    atomicAdd(&c.by_picks[0], 1ULL);
+    if (p.steps > 1) return true;
+    add_combination(p, c, 1u, out->letters, out->rows, out->number);
+    return false;
+}
+
+template <typename BagKey>
+__global__ void __launch_bounds__(WALK_THREADS)
+walk_leftovers_simple(LeftoverParams<BagKey> p) {
+    extern __shared__ __align__(16) unsigned char shared_bytes[];
+    WalkCounts const c = start_walk_counts(p, shared_bytes);
+    int const lane = threadIdx.x & 31;
+    int const last = p.steps - 1;
+    Picked<BagKey> picked[GPU_MAX_PAIR_STEPS];
+    int next[GPU_MAX_PAIR_STEPS];
+    for (int unit; (unit = take_unit(p)) >= 0; finish_unit(p)) {
+        if (!start_unit(p, c, unit, &picked[0])) continue;
+        int depth = 1;
+        next[1] = unit + 1;
+        while (depth > 0) {
+            if (depth == last) {
+                last_step<BagKey, false>(p, c, picked[depth - 1]);
+                --depth;
+                continue;
+            }
+            int i = next[depth];
+            while (i < p.count && !pick(p, picked[depth - 1], i,
+                                        &picked[depth]))
+                ++i;
+            if (i >= p.count) {
+                --depth;
+                continue;
+            }
+            next[depth] = i + 1;
+            if (lane == 0) atomicAdd(&c.by_picks[depth], 1ULL);
+            ++depth;
+            next[depth] = i + 1;
+        }
+    }
+    flush_walk_counts(p, c);
+}
+
+template <typename BagKey>
+__global__ void __launch_bounds__(WALK_THREADS)
+walk_leftovers_ballot(LeftoverParams<BagKey> p) {
+    extern __shared__ __align__(16) unsigned char shared_bytes[];
+    WalkCounts const c = start_walk_counts(p, shared_bytes);
+    int const lane = threadIdx.x & 31;
+    int const last = p.steps - 1;
+    BallotFrame<BagKey>* const frames =
+        reinterpret_cast<BallotFrame<BagKey>*>(
+            shared_bytes + walk_counts_bytes(p.bag_letters, p.steps)) +
+        (threadIdx.x >> 5) * GPU_MAX_PAIR_STEPS;
+    for (int unit; (unit = take_unit(p)) >= 0; finish_unit(p)) {
+        Picked<BagKey> first;
+        if (!start_unit(p, c, unit, &first)) continue;
+        __syncwarp();
+        if (lane == 0) {
+            frames[0].picked = first;
+            frames[1].mask = 0;
+            frames[1].next = unit + 1;
+        }
+        __syncwarp();
+        int depth = 1;
+        while (depth > 0) {
+            BallotFrame<BagKey>& frame = frames[depth];
+            Picked<BagKey> const from = frames[depth - 1].picked;
+            if (depth == last) {
+                last_step<BagKey, true>(p, c, from);
+                --depth;
+                continue;
+            }
+            unsigned const mask = frame.mask;
+            Picked<BagKey> picked;
+            if (mask == 0) {
+                int const base = frame.next;
+                if (base >= p.count) {
+                    --depth;
+                    continue;
+                }
+                int const i = base + lane;
+                unsigned const fitting =
+                    __ballot_sync(~0u, i < p.count && pick(p, from, i,
+                                                           &picked));
+                __syncwarp();
+                if (lane == 0) {
+                    frame.mask = fitting;
+                    frame.base = base;
+                    frame.next = base + 32;
+                    if (fitting != 0)
+                        atomicAdd(&c.by_picks[depth],
+                                  (unsigned long long)__popc(fitting));
+                }
+                __syncwarp();
+                continue;
+            }
+            int const i = frame.base + __ffs(int(mask)) - 1;
+            pick(p, from, i, &picked);
+            __syncwarp();
+            if (lane == 0) {
+                frame.mask = mask & (mask - 1);
+                frame.picked = picked;
+                frames[depth + 1].mask = 0;
+                frames[depth + 1].next = i + 1;
+            }
+            __syncwarp();
+            ++depth;
+        }
+    }
+    flush_walk_counts(p, c);
+}
+
+// Device buffers, zeroed, freed with it.
+struct DeviceBuffers {
+    std::vector<void*> buffers;
+
+    ~DeviceBuffers() {
+        for (void* buffer : buffers) check(cudaFree(buffer));
+    }
+
+    template <typename T>
+    T* allocate(size_t count) {
+        void* out = nullptr;
+        size_t const size = std::max<size_t>(count * sizeof(T), 16);
+        check(cudaMalloc(&out, size));
+        buffers.push_back(out);
+        check(cudaMemset(out, 0, size));
+        return static_cast<T*>(out);
+    }
+
+    template <typename T>
+    T* upload(std::vector<T> const& from) {
+        T* out = allocate<T>(from.size());
+        check(cudaMemcpy(out, from.data(), from.size() * sizeof(T),
+                         cudaMemcpyHostToDevice));
+        return out;
+    }
+
+    template <typename T>
+    void download(T const* from, std::vector<T>* out) {
+        check(cudaMemcpy(out->data(), from, out->size() * sizeof(T),
+                         cudaMemcpyDeviceToHost));
+    }
+};
+
+template <typename BagKey>
+void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
+                    std::function<void(size_t)> const& progress,
+                    GpuLeftoverCounts* out) {
+    int const count = int(inputs.numbers.size());
+    int const letters = rest_length(inputs.bag);
+    size_t const lengths = size_t(letters) + 1;
+    size_t const steps = size_t(inputs.steps);
+    DeviceBuffers d;
+    std::vector<BagKey> keys(count);
+    for (int i = 0; i < count; ++i)
+        keys[i] = packing.pack<BagKey>(
+            &inputs.pair_letters[size_t(i) * GPU_LETTERS_BYTES]);
+    LeftoverParams<BagKey> p{};
+    p.keys = d.upload(keys);
+    p.numbers = d.upload(inputs.numbers);
+    p.pairs = d.upload(inputs.pairs);
+    p.letters = d.upload(inputs.lengths);
+    p.count = count;
+    p.steps = inputs.steps;
+    p.bag = packing.pack<BagKey>(inputs.bag);
+    p.bag_guards = BagKey(packing.guards);
+    p.bag_number = inputs.bag_number;
+    p.bag_letters = letters;
+    p.next_unit = d.allocate<unsigned long long>(1);
+    p.finished = d.allocate<unsigned long long>(1);
+    p.by_picks = d.allocate<unsigned long long>(steps);
+    p.combinations = d.allocate<unsigned long long>(lengths);
+    p.rows = d.allocate<unsigned long long>(lengths);
+    p.registers = d.allocate<uint32_t>(lengths << GPU_HLL_BITS);
+    unsigned long long* host_done = nullptr;
+    check(cudaHostAlloc(&host_done, sizeof *host_done, cudaHostAllocMapped));
+    *host_done = 0;
+    check(cudaHostGetDevicePointer(&p.units_done, host_done, 0));
+
+    auto const kernel = inputs.kernel == 2 ? walk_leftovers_ballot<BagKey>
+                                           : walk_leftovers_simple<BagKey>;
+    size_t const shared = walk_counts_bytes(letters, inputs.steps) +
+        (inputs.kernel == 2
+             ? WALK_WARPS * GPU_MAX_PAIR_STEPS * sizeof(BallotFrame<BagKey>)
+             : 0);
+    int device = 0;
+    int sms = 0;
+    int per_sm = 0;
+    check(cudaGetDevice(&device));
+    check(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount,
+                                 device));
+    check(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &per_sm, kernel, WALK_THREADS, shared));
+    cudaStream_t stream = nullptr;
+    check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    kernel<<<sms * std::max(per_sm, 1), WALK_THREADS, shared, stream>>>(p);
+    check(cudaGetLastError());
+    size_t done = 0;
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        cudaError_t const status = cudaStreamQuery(stream);
+        done = std::max(done, size_t(*static_cast<unsigned long long volatile*>(
+                                  host_done)));
+        progress(done);
+        if (status == cudaErrorNotReady) continue;
+        check(status);
+        break;
+    }
+    check(cudaStreamSynchronize(stream));
+    check(cudaGetLastError());
+    out->by_picks.assign(steps, 0);
+    out->combinations.assign(lengths, 0);
+    out->rows.assign(lengths, 0);
+    out->registers.assign(lengths << GPU_HLL_BITS, 0);
+    std::vector<unsigned long long> counts(steps);
+    d.download(p.by_picks, &counts);
+    std::copy(counts.begin(), counts.end(), out->by_picks.begin());
+    counts.resize(lengths);
+    d.download(p.combinations, &counts);
+    std::copy(counts.begin(), counts.end(), out->combinations.begin());
+    d.download(p.rows, &counts);
+    std::copy(counts.begin(), counts.end(), out->rows.begin());
+    d.download(p.registers, &out->registers);
+    check(cudaStreamDestroy(stream));
+    check(cudaFreeHost(host_done));
+}
+
+}  // namespace
+
+void run_leftovers_gpu(std::string_view program,
+                       GpuLeftoverInputs const& inputs,
+                       std::function<void(size_t)> const& progress,
+                       GpuLeftoverCounts* out) {
+    program_name = program;
+    check(cudaSetDevice(0));
+    Packing const packing(inputs.bag);
+    if (packing.bits <= 64)
+        walk_leftovers<Key64>(inputs, packing, progress, out);
+    else
+        walk_leftovers<Key128>(inputs, packing, progress, out);
 }

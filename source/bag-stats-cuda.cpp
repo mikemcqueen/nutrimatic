@@ -23,9 +23,21 @@ namespace {
 
 constexpr char PROGRAM[] = "bag-stats-cuda";
 constexpr int OPT_STREAMS = OPT_COMMON_END;
+constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 1;
+constexpr int OPT_HLL = OPT_COMMON_END + 2;
+constexpr int OPT_KERNEL = OPT_COMMON_END + 3;
 
 static_assert(sizeof(PairsCounts) == GPU_LETTERS_BYTES);
 static_assert(sizeof(GpuCounts) == sizeof(BagStatsCounts));
+static_assert(GPU_HLL_BITS == LeftoverSketch::HLL_BITS);
+
+// What the command line asks for beyond BagStatsArgs: --streams; with
+// --leftovers, --hll and the walk --kernel.
+struct CudaOptions {
+    int streams = 1;
+    bool hll = false;
+    int kernel = 0;
+};
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
@@ -39,8 +51,11 @@ void usage(std::string_view program, FILE* out) {
             "       [--best-pairs appear|lead]\n"
             "       [--prior FILE | [--p1 INDEX] [--clues CLUEDATA]\n"
             "        [--prior-weights SPEC]] [--top-segments]\n"
-            "       LETTERS PAIRS DICT\n",
-            SV_ARG(program));
+            "       LETTERS PAIRS DICT\n"
+            "       %.*s --leftovers --hll --ss pb[,pb...] [--kernel N]\n"
+            "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
+            "       [--progress N] LETTERS PAIRS DICT\n",
+            SV_ARG(program), SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  bag-stats, counting every row on the GPU\n\n", stdout);
@@ -48,13 +63,30 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("--streams N",
                     "count on N GPU streams, each fed by its own thread; "
                     "--threads N is for the CPU-only work (default: 1)");
+    dfs_help_option("--leftovers",
+                    "with --ss of pb steps alone and --hll, count the "
+                    "combinations that fit, by how many picks they make, "
+                    "and those of every pb step, their PAIRS rows and their "
+                    "distinct leftovers by how many letters they leave, all "
+                    "on the GPU");
+    dfs_help_option("--hll, --hyper-log-log",
+                    "with --leftovers, estimate the distinct leftovers by "
+                    "HyperLogLog, within about 1%%, as LEFTOVERS_HLL");
+    dfs_help_option("--kernel N",
+                    "with --leftovers, walk with kernel 1, the simple one, "
+                    "or 2, the experimental one (default: 1)");
     help_common_tail();
 }
 
-bool parse_args(char* argv[], BagStatsArgs* out, int* streams, bool* help) {
+bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
+                bool* help) {
     static struct optparse_long const long_options[] = {
         BAG_STATS_COMMON_LONG_OPTIONS,
         { "streams", OPT_STREAMS, OPTPARSE_REQUIRED },
+        { "leftovers", OPT_LEFTOVERS, OPTPARSE_NONE },
+        { "hll", OPT_HLL, OPTPARSE_NONE },
+        { "hyper-log-log", OPT_HLL, OPTPARSE_NONE },
+        { "kernel", OPT_KERNEL, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -70,10 +102,24 @@ bool parse_args(char* argv[], BagStatsArgs* out, int* streams, bool* help) {
         if (common == RankOption::PARSED) continue;
         switch (option) {
           case OPT_STREAMS:
-            if (!parse_count(options.optarg, "--streams", streams))
+            if (!parse_count(options.optarg, "--streams", &cuda->streams))
                 return false;
-            if (*streams == 0) {
+            if (cuda->streams == 0) {
                 report(PROGRAM, "--streams must be at least 1");
+                return false;
+            }
+            break;
+          case OPT_LEFTOVERS:
+            out->leftovers = true;
+            break;
+          case OPT_HLL:
+            cuda->hll = true;
+            break;
+          case OPT_KERNEL:
+            if (!parse_count(options.optarg, "--kernel", &cuda->kernel))
+                return false;
+            if (cuda->kernel != 1 && cuda->kernel != 2) {
+                report(PROGRAM, "--kernel takes 1 or 2");
                 return false;
             }
             break;
@@ -86,7 +132,27 @@ bool parse_args(char* argv[], BagStatsArgs* out, int* streams, bool* help) {
         }
     }
 
+    if (cuda->hll && !out->leftovers) {
+        report(PROGRAM, "--hll goes with --leftovers");
+        return false;
+    }
+    if (cuda->kernel != 0 && !out->leftovers) {
+        report(PROGRAM, "--kernel goes with --leftovers");
+        return false;
+    }
+    if (out->leftovers && !cuda->hll) {
+        report(PROGRAM, "--leftovers needs --hll");
+        return false;
+    }
     if (!check_common_args(PROGRAM, &options, out)) return false;
+    if (out->leftovers) {
+        if (out->search.pairs > GPU_MAX_PAIR_STEPS) {
+            report(PROGRAM, "--leftovers takes at most %d pb steps",
+                   GPU_MAX_PAIR_STEPS);
+            return false;
+        }
+        return true;
+    }
     if (out->search.pair_filter) {
         report(PROGRAM, "a last pf is bag-stats only");
         return false;
@@ -308,14 +374,72 @@ struct Walk : WalkBase {
     void after_score(std::vector<size_t> const&) const {}
 };
 
+// Progress hooks with nothing to add.
+struct LeftoverHooks {
+    template <typename Walker>
+    void finished(Walker*) {}
+
+    std::string text() const { return {}; }
+};
+
+struct LeftoverWalk : WalkBase {
+    LeftoverHooks progress_hooks() const { return {}; }
+};
+
+// The --leftovers output of `inputs` for `args` on `letters`, walked on the
+// GPU with `kernel`.
+int run_leftovers(BagStatsArgs const& args, std::string const& letters,
+                  BagStatsInputs const& inputs, int kernel) {
+    RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
+    if (index.total() == 0) {
+        report(PROGRAM, "the letters have too many sub-bags to number "
+               "leftovers");
+        return 1;
+    }
+    GpuLeftoverInputs gpu;
+    std::copy(inputs.bag.values.begin(), inputs.bag.values.end(), gpu.bag);
+    gpu.bag_number = index.number(inputs.bag);
+    for (PairBag const& pair_bag : inputs.pair_bags) {
+        gpu.pair_letters.insert(gpu.pair_letters.end(),
+                                pair_bag.counts.values.begin(),
+                                pair_bag.counts.values.end());
+        gpu.numbers.push_back(index.number(pair_bag.counts));
+        gpu.pairs.push_back(pair_bag.pairs);
+        gpu.lengths.push_back(uint8_t(letter_total(pair_bag.counts)));
+    }
+    gpu.steps = int(inputs.steps.size());
+    gpu.kernel = kernel;
+
+    LeftoverWalk const walk{{PROGRAM, inputs.steps, inputs.pair_bags,
+                             inputs.prospect_bags, inputs.bag,
+                             inputs.word_bags, args, 1, 1, {}}};
+    GpuLeftoverCounts counts;
+    {
+        Progress progress(walk, 1);
+        size_t reported = 0;
+        run_leftovers_gpu(PROGRAM, gpu, [&](size_t done) {
+            progress.finished(&walk, done - reported);
+            reported = done;
+        }, &counts);
+    }
+    size_t const lengths = counts.combinations.size();
+    LeftoverCounts total{std::move(counts.by_picks),
+                         std::move(counts.combinations),
+                         std::move(counts.rows),
+                         std::vector<uint64_t>(lengths, 0)};
+    LeftoverSketch const sketch(counts.registers);
+    return print_leftovers(args, letters, inputs.pair_bags.size(),
+                           std::move(total), &sketch);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
     BagStatsArgs args;
-    int streams = 1;
+    CudaOptions cuda;
     bool help = false;
     std::string letters;
-    if (!parse_args(argv, &args, &streams, &help) ||
+    if (!parse_args(argv, &args, &cuda, &help) ||
         (!help && !remaining_letters(args, &letters))) {
         usage(argv[0], stderr);
         return 2;
@@ -340,9 +464,13 @@ int main(int argc, char* argv[]) {
     }
     stage("loading inputs");
     if (!load_bag_stats_inputs(PROGRAM, args, &inputs, nullptr)) return 1;
+    if (args.leftovers) {
+        stage("walking");
+        return run_leftovers(args, letters, inputs, std::max(cuda.kernel, 1));
+    }
     stage("building GPU tables and pair-sum filter");
     GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args),
-                                size_t(streams));
+                                size_t(cuda.streams));
     if (args.progress != 0) {
         report(PROGRAM, "%s, %d-bit bag keys, %.1f MB of GPU memory",
                counter.device().c_str(), counter.key_bits(),
@@ -368,7 +496,7 @@ int main(int argc, char* argv[]) {
     if (args.progress != 0) report_rest_table(PROGRAM, rest_table);
     if (!one_row) stage("counting each unit's rows");
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
-                     inputs.bag, inputs.word_bags, args, size_t(streams),
+                     inputs.bag, inputs.word_bags, args, size_t(cuda.streams),
                      rankers.passes ? 2 : 1,
                      one_row ? unit_blocks(steps[0]->size())
                              : census_blocks(steps, args.search.pairs,

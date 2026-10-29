@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -24,6 +25,47 @@ inline constexpr int GPU_MAX_WORDS = 8;
 
 // The most letters a bag may have.
 inline constexpr int GPU_MAX_LETTERS = 126;
+
+// The HyperLogLog register bits, as LeftoverSketch has them.
+inline constexpr int GPU_HLL_BITS = 14;
+
+// The most pb steps the --leftovers walk takes.
+inline constexpr int GPU_MAX_PAIR_STEPS = 16;
+
+// What the --leftovers walk takes: the bag; its RemainderIndex number; the
+// pair bags, in PAIRS order, each one's letter counts, GPU_LETTERS_BYTES
+// apiece, number, PAIRS and letters; the pb steps; and the --kernel.
+struct GpuLeftoverInputs {
+    uint8_t bag[GPU_LETTERS_BYTES];
+    uint64_t bag_number;
+    std::vector<uint8_t> pair_letters;
+    std::vector<uint64_t> numbers;
+    std::vector<uint64_t> pairs;
+    std::vector<uint8_t> lengths;
+    int steps;
+    int kernel;
+};
+
+// What the --leftovers walk counts: combinations by how many picks they
+// make, with the last entry left 0; and by how many letters they leave,
+// their combinations, PAIRS rows and HyperLogLog registers, 2^GPU_HLL_BITS
+// a length.
+struct GpuLeftoverCounts {
+    std::vector<uint64_t> by_picks;
+    std::vector<uint64_t> combinations;
+    std::vector<uint64_t> rows;
+    std::vector<uint32_t> registers;
+};
+
+// Walks every combination of one pair bag per step, in increasing order,
+// that fits the bag, on the GPU, and writes what it counts to `out`. Calls
+// progress(units) about every 100 ms while the walk runs, `units` the first
+// picks finished so far. A CUDA call failing prints `program` and CUDA's
+// error on stderr and exits 1.
+void run_leftovers_gpu(std::string_view program,
+                       GpuLeftoverInputs const& inputs,
+                       std::function<void(size_t)> const& progress,
+                       GpuLeftoverCounts* out);
 
 // What the device holds for every row, as flat arrays.
 struct GpuInputs {

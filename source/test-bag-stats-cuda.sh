@@ -85,3 +85,19 @@ actual=$("$bag_stats_cuda" --streams 3 --min-pb-len 6 --ss pb,pb,wb,wb,p \
 alphabet=abcdefghijklmnopqrstuvwxyz
 run_both "$alphabet$alphabet$alphabet" "$test_dir/wide-pairs" \
   --min-pb-len 6 --min-wb-len 3
+
+letters=catdoglowanttan
+for x in c a t d o g l w n; do
+  for y in c a t d o g l w n; do echo "$x,$y"; done
+done > "$test_dir/letter-pairs"
+for ss in pb pb,pb pb,pb,pb; do
+  expected=$("$bag_stats" --leftovers --hll --min-pb-len 2 --ss $ss \
+    "$letters" "$test_dir/letter-pairs" "$test_dir/dict")
+  for kernel in 1 2; do
+    actual=$("$bag_stats_cuda" --leftovers --hll --kernel $kernel \
+      --min-pb-len 2 --ss $ss "$letters" "$test_dir/letter-pairs" \
+      "$test_dir/dict")
+    [[ $actual == "$expected" ]] ||
+      fail "--leftovers --ss $ss --kernel $kernel differs: $actual"$'\n'"bag-stats: $expected"
+  done
+done

@@ -1028,60 +1028,6 @@ class KeySet {
     std::atomic<uint64_t> size_{0};
 };
 
-// What one thread counts of the --leftovers walk: combinations by how many
-// picks they make, and those of every step, their PAIRS rows and their new
-// distinct leftovers by how many letters they leave.
-struct alignas(64) LeftoverPart {
-    std::vector<uint64_t> by_picks;
-    std::vector<uint64_t> combinations;
-    std::vector<uint64_t> rows;
-    std::vector<uint64_t> leftovers;
-};
-
-// HyperLogLog sketches of distinct leftovers, one per leftover length, each
-// of 2^HLL_BITS one-byte registers.
-class LeftoverSketch {
-  public:
-    static constexpr int HLL_BITS = 14;
-    static constexpr size_t REGISTERS = size_t(1) << HLL_BITS;
-
-    explicit LeftoverSketch(size_t lengths)
-        : registers_(lengths * REGISTERS, 0) {}
-
-    void add(size_t length, uint64_t key) {
-        uint64_t const mixed = mix_bits(key);
-        uint64_t const rest =
-            (mixed << HLL_BITS) | (uint64_t(1) << (HLL_BITS - 1));
-        uint8_t const rank = uint8_t(std::countl_zero(rest) + 1);
-        uint8_t& slot =
-            registers_[length * REGISTERS + (mixed >> (64 - HLL_BITS))];
-        slot = std::max(slot, rank);
-    }
-
-    void merge(LeftoverSketch const& other) {
-        for (size_t i = 0; i < registers_.size(); ++i)
-            registers_[i] = std::max(registers_[i], other.registers_[i]);
-    }
-
-    // The estimated distinct leftovers of `length` letters.
-    uint64_t estimate(size_t length) const {
-        double const m = double(REGISTERS);
-        double sum = 0;
-        size_t zeros = 0;
-        for (size_t i = 0; i < REGISTERS; ++i) {
-            uint8_t const value = registers_[length * REGISTERS + i];
-            sum += std::ldexp(1.0, -int(value));
-            zeros += value == 0;
-        }
-        double out = 0.7213 / (1 + 1.079 / m) * m * m / sum;
-        if (out <= 2.5 * m && zeros != 0) out = m * std::log(m / zeros);
-        return uint64_t(std::llround(out));
-    }
-
-  private:
-    std::vector<uint8_t> registers_;
-};
-
 // `keys`: null with --hll.
 struct LeftoverHooks {
     KeySet const* keys;
@@ -1116,10 +1062,10 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
                              inputs.word_bags, args, bag_stats_threads(args),
                              1, unit_blocks(walk_units(inputs.steps))},
                             hll ? nullptr : &keys};
-    std::vector<LeftoverPart> parts(walk.threads);
+    std::vector<LeftoverCounts> parts(walk.threads);
     std::vector<LeftoverSketch> sketches(hll ? walk.threads : 0,
                                          LeftoverSketch(length + 1));
-    for (LeftoverPart& part : parts) {
+    for (LeftoverCounts& part : parts) {
         part.by_picks.assign(steps, 0);
         part.combinations.assign(length + 1, 0);
         part.rows.assign(length + 1, 0);
@@ -1129,7 +1075,7 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
     {
         Progress progress(walk, 1);
         run_threads(walk.threads, [&](size_t t) {
-            LeftoverPart& part = parts[t];
+            LeftoverCounts& part = parts[t];
             PickWalk walker(walk.steps, args.search.pairs,
                             walk.pair_bags.size());
             auto const enter = [&](size_t step, PairsCounts const&) {
@@ -1151,11 +1097,11 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
         });
     }
 
-    LeftoverPart total{std::vector<uint64_t>(steps, 0),
-                       std::vector<uint64_t>(length + 1, 0),
-                       std::vector<uint64_t>(length + 1, 0),
-                       std::vector<uint64_t>(length + 1, 0)};
-    for (LeftoverPart const& part : parts) {
+    LeftoverCounts total{std::vector<uint64_t>(steps, 0),
+                         std::vector<uint64_t>(length + 1, 0),
+                         std::vector<uint64_t>(length + 1, 0),
+                         std::vector<uint64_t>(length + 1, 0)};
+    for (LeftoverCounts const& part : parts) {
         for (size_t j = 0; j < steps; ++j)
             total.by_picks[j] += part.by_picks[j];
         for (size_t n = 0; n <= length; ++n) {
@@ -1164,42 +1110,10 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
             total.leftovers[n] += part.leftovers[n];
         }
     }
-    if (hll) {
-        for (size_t t = 1; t < sketches.size(); ++t)
-            sketches[0].merge(sketches[t]);
-        for (size_t n = 0; n <= length; ++n)
-            total.leftovers[n] = sketches[0].estimate(n);
-    }
-    uint64_t all[3] = {0, 0, 0};
-    for (size_t n = 0; n <= length; ++n) {
-        all[0] += total.combinations[n];
-        all[1] += total.rows[n];
-        all[2] += total.leftovers[n];
-    }
-    total.by_picks[steps - 1] = all[0];
-
-    printf("letters %s\nmin-pb %d\nss %s\npairs %s\npair bags %zu\n",
-           letters.c_str(), args.min_pair_bag_length,
-           search_text(args.search).c_str(),
-           bag_stats_header_path(args.pairs_file).c_str(),
-           walk.pair_bags.size());
-    printf("\nPICKS,COMBINATIONS\n");
-    for (size_t j = 0; j < steps; ++j)
-        printf("%zu,%llu\n", j + 1,
-               static_cast<unsigned long long>(total.by_picks[j]));
-    printf("\nLEFT,COMBINATIONS,ROWS,%s\n",
-           hll ? "LEFTOVERS_HLL" : "LEFTOVERS");
-    for (size_t n = 0; n <= length; ++n) {
-        if (total.combinations[n] == 0) continue;
-        printf("%zu,%llu,%llu,%llu\n", n,
-               static_cast<unsigned long long>(total.combinations[n]),
-               static_cast<unsigned long long>(total.rows[n]),
-               static_cast<unsigned long long>(total.leftovers[n]));
-    }
-    printf("all,%llu,%llu,%llu\n", static_cast<unsigned long long>(all[0]),
-           static_cast<unsigned long long>(all[1]),
-           static_cast<unsigned long long>(all[2]));
-    return fflush(stdout) == 0 ? 0 : 1;
+    for (size_t t = 1; t < sketches.size(); ++t)
+        sketches[0].merge(sketches[t]);
+    return print_leftovers(args, letters, walk.pair_bags.size(),
+                           std::move(total), hll ? &sketches[0] : nullptr);
 }
 
 }  // namespace

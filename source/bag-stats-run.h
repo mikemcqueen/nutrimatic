@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -29,6 +30,7 @@
 #include "bag-stats-rank.h"
 #include "classified.h"
 #include "log.h"
+#include "mix-bits.h"
 #include "optparse.h"
 #include "pairs-impl.h"
 
@@ -269,6 +271,59 @@ class PickWalk {
     size_t pair_steps_;
     size_t pair_bags_;
 };
+
+// What the --leftovers walk counts: combinations by how many picks they
+// make, and those of every step, their PAIRS rows and their distinct
+// leftovers by how many letters they leave.
+struct alignas(64) LeftoverCounts {
+    std::vector<uint64_t> by_picks;
+    std::vector<uint64_t> combinations;
+    std::vector<uint64_t> rows;
+    std::vector<uint64_t> leftovers;
+};
+
+// HyperLogLog sketches of distinct leftovers, one per leftover length, each
+// of 2^HLL_BITS one-byte registers.
+class LeftoverSketch {
+  public:
+    static constexpr int HLL_BITS = 14;
+    static constexpr size_t REGISTERS = size_t(1) << HLL_BITS;
+
+    explicit LeftoverSketch(size_t lengths)
+        : registers_(lengths * REGISTERS, 0) {}
+
+    // From registers laid out as these are, each narrowed to a byte.
+    explicit LeftoverSketch(std::vector<uint32_t> const& registers)
+        : registers_(registers.begin(), registers.end()) {}
+
+    void add(size_t length, uint64_t key) {
+        uint64_t const mixed = mix_bits(key);
+        uint64_t const rest =
+            (mixed << HLL_BITS) | (uint64_t(1) << (HLL_BITS - 1));
+        uint8_t const rank = uint8_t(std::countl_zero(rest) + 1);
+        uint8_t& slot =
+            registers_[length * REGISTERS + (mixed >> (64 - HLL_BITS))];
+        slot = std::max(slot, rank);
+    }
+
+    void merge(LeftoverSketch const& other) {
+        for (size_t i = 0; i < registers_.size(); ++i)
+            registers_[i] = std::max(registers_[i], other.registers_[i]);
+    }
+
+    // The estimated distinct leftovers of `length` letters.
+    uint64_t estimate(size_t length) const;
+
+  private:
+    std::vector<uint8_t> registers_;
+};
+
+// Prints the --leftovers output of `counts` for `args` on `letters`, with
+// `pair_bags` PAIRS bags; with `hll`, its estimates are the leftovers.
+// Returns the exit status.
+int print_leftovers(BagStatsArgs const& args, std::string const& letters,
+                    size_t pair_bags, LeftoverCounts counts,
+                    LeftoverSketch const* hll);
 
 // How many units PickWalk walks over `steps`: the first step's picks, or 1
 // without steps, where nothing walks them.
