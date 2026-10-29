@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Letter counts take 32 bytes: the a-z counts, then zeros, as PairsCounts
@@ -32,9 +33,14 @@ inline constexpr int GPU_HLL_BITS = 14;
 // The most pb steps the --leftovers walk takes.
 inline constexpr int GPU_MAX_PAIR_STEPS = 16;
 
+// The most prefix letters the --leftovers walk indexes.
+inline constexpr int GPU_MAX_PREFIX_LETTERS = 16;
+
 // What the --leftovers walk takes: the bag; its RemainderIndex number; the
-// pair bags, in PAIRS order, each one's letter counts, GPU_LETTERS_BYTES
-// apiece, number, PAIRS and letters; the pb steps; and the --kernel.
+// pair bags, sorted by prefix cell, each one's letter counts,
+// GPU_LETTERS_BYTES apiece, number, PAIRS and letters; the prefix letters,
+// most significant first, each with its stride, and the first pair bag of
+// each prefix cell, then the pair bag count; and the pb steps.
 struct GpuLeftoverInputs {
     uint8_t bag[GPU_LETTERS_BYTES];
     uint64_t bag_number;
@@ -42,8 +48,9 @@ struct GpuLeftoverInputs {
     std::vector<uint64_t> numbers;
     std::vector<uint64_t> pairs;
     std::vector<uint8_t> lengths;
+    std::vector<std::pair<int, int>> prefix;
+    std::vector<int> offsets;
     int steps;
-    int kernel;
 };
 
 // What the --leftovers walk counts: combinations by how many picks they

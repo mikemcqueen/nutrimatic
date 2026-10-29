@@ -191,10 +191,10 @@ becomes `PRINT_WINDOW_BLOCKS_PER_THREAD = 4` blocks per walker instead of
 
 ## bag-stats --leftovers: the cache size
 
-This line may already exist: `plans/bag-stats-cuda-hll-gpu.md` adds it to
-`print_leftovers` in `bag-stats-run`. If it doesn't, `count_leftovers`
-prints, after `pair bags`, the `--cache-size` that holds every distinct
-leftover:
+This line may already exist: `plans/archive/bag-stats-cuda-hll-gpu.md`
+adds it to `print_leftovers` in `bag-stats-run`. If it doesn't,
+`count_leftovers` prints, after `pair bags`, the `--cache-size` that holds
+every distinct leftover:
 
 ```
 cache-size N

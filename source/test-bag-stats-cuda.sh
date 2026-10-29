@@ -93,11 +93,25 @@ done > "$test_dir/letter-pairs"
 for ss in pb pb,pb pb,pb,pb; do
   expected=$("$bag_stats" --leftovers --hll --min-pb-len 2 --ss $ss \
     "$letters" "$test_dir/letter-pairs" "$test_dir/dict")
-  for kernel in 1 2; do
-    actual=$("$bag_stats_cuda" --leftovers --hll --kernel $kernel \
-      --min-pb-len 2 --ss $ss "$letters" "$test_dir/letter-pairs" \
-      "$test_dir/dict")
+  actual=$("$bag_stats_cuda" --leftovers --hll --min-pb-len 2 --ss $ss \
+    "$letters" "$test_dir/letter-pairs" "$test_dir/dict")
+  [[ $actual == "$expected" ]] ||
+    fail "--leftovers --ss $ss differs: $actual"$'\n'"bag-stats: $expected"
+done
+
+for x in s t u v w x y z; do
+  for y in s t u v w x y z; do echo "$x,$y"; done
+done > "$test_dir/wide-letter-pairs"
+for test in "catdoglwncatdoglwncatdoglwn:letter-pairs" \
+  "$alphabet$alphabet$alphabet:wide-letter-pairs"; do
+  bag=${test%:*}
+  pairs=$test_dir/${test#*:}
+  for ss in pb,pb,pb pb,pb,pb,pb; do
+    expected=$("$bag_stats" --leftovers --hll --min-pb-len 2 --ss $ss \
+      "$bag" "$pairs" "$test_dir/dict")
+    actual=$("$bag_stats_cuda" --leftovers --hll --min-pb-len 2 --ss $ss \
+      "$bag" "$pairs" "$test_dir/dict")
     [[ $actual == "$expected" ]] ||
-      fail "--leftovers --ss $ss --kernel $kernel differs: $actual"$'\n'"bag-stats: $expected"
+      fail "--leftovers $bag --ss $ss differs: $actual"$'\n'"bag-stats: $expected"
   done
 done

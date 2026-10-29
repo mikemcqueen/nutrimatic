@@ -1062,7 +1062,6 @@ void GpuRowCounter::count(uint8_t const* rests, size_t rows,
 namespace {
 
 constexpr int WALK_THREADS = 256;
-constexpr int WALK_WARPS = WALK_THREADS / 32;
 
 template <typename BagKey>
 struct LeftoverParams {
@@ -1070,8 +1069,16 @@ struct LeftoverParams {
     uint64_t const* numbers;
     uint64_t const* pairs;
     uint8_t const* letters;
+    // The first pair bag of each prefix cell, then the pair bag count.
+    int const* offsets;
     int count;
     int steps;
+    // The prefix letters, most significant first: each one's key shift,
+    // count mask and cell stride.
+    int prefix;
+    int shifts[GPU_MAX_PREFIX_LETTERS];
+    int masks[GPU_MAX_PREFIX_LETTERS];
+    int strides[GPU_MAX_PREFIX_LETTERS];
     BagKey bag;
     BagKey bag_guards;
     uint64_t bag_number;
@@ -1098,15 +1105,29 @@ struct Picked {
     int index;
 };
 
-// A kernel 2 warp's stack entry for a step: what the picks through it leave;
-// and of its candidates, those from `base` that fit and aren't taken yet, as
-// bits, and the next to ballot.
-template <typename BagKey>
-struct BallotFrame {
-    Picked<BagKey> picked;
-    unsigned mask;
+// The prefix cells a pair bag fitting a rest can be in, numbered in mixed
+// radix over the rest's prefix counts: each prefix letter's radix, the
+// rest's count + 1; how many there are; and the first sorted position past
+// the rest's pick.
+struct Cells {
+    int radix[GPU_MAX_PREFIX_LETTERS];
+    int total;
+    int after;
+};
+
+// Where a warp's walk of a rest's candidates is: the first allowed cell of
+// the chunk of 32 it is in, and a position in the chunk's ranges.
+struct Cursor {
     int base;
+    int position;
+};
+
+// A lane's walk of a rest's candidates: the allowed cell, the next
+// sorted position in it, and its end.
+struct CellCursor {
+    int allowed;
     int next;
+    int end;
 };
 
 // A block's counts in shared memory.
@@ -1162,6 +1183,131 @@ __device__ inline bool pick(LeftoverParams<BagKey> const& p,
     return true;
 }
 
+template <typename BagKey>
+__device__ inline int prefix_count(LeftoverParams<BagKey> const& p, BagKey key,
+                                   int k) {
+    return int((key >> p.shifts[k]) & BagKey(p.masks[k]));
+}
+
+template <typename BagKey>
+__device__ inline Cells cells_of(LeftoverParams<BagKey> const& p,
+                                 Picked<BagKey> const& from) {
+    Cells out;
+    out.total = 1;
+    out.after = from.index + 1;
+#pragma unroll
+    for (int k = 0; k < GPU_MAX_PREFIX_LETTERS; ++k) {
+        if (k >= p.prefix) break;
+        out.radix[k] = prefix_count(p, from.rest, k) + 1;
+        out.total *= out.radix[k];
+    }
+    return out;
+}
+
+// The cell number of allowed cell `allowed`.
+template <typename BagKey>
+__device__ inline int decode(LeftoverParams<BagKey> const& p,
+                             Cells const& cells, int allowed) {
+    int cell = 0;
+#pragma unroll
+    for (int k = GPU_MAX_PREFIX_LETTERS - 1; k >= 0; --k) {
+        if (k >= p.prefix) continue;
+        cell += allowed % cells.radix[k] * p.strides[k];
+        allowed /= cells.radix[k];
+    }
+    return cell;
+}
+
+// The first allowed cell at or past the cell of `from`'s pick.
+template <typename BagKey>
+__device__ inline int first_allowed(LeftoverParams<BagKey> const& p,
+                                    Cells const& cells,
+                                    Picked<BagKey> const& from) {
+    BagKey const key = p.keys[from.index];
+    int out = 0;
+    int over = p.prefix;
+#pragma unroll
+    for (int k = 0; k < GPU_MAX_PREFIX_LETTERS; ++k) {
+        if (k >= p.prefix) break;
+        int const count = prefix_count(p, key, k);
+        if (count >= cells.radix[k]) {
+            over = k;
+            break;
+        }
+        out = out * cells.radix[k] + count;
+    }
+    if (over == p.prefix) return out;
+    ++out;
+#pragma unroll
+    for (int k = 0; k < GPU_MAX_PREFIX_LETTERS; ++k)
+        if (k >= over && k < p.prefix) out *= cells.radix[k];
+    return out;
+}
+
+// The sorted positions of allowed cell `allowed` past the rest's pick.
+template <typename BagKey>
+__device__ inline void cell_range(LeftoverParams<BagKey> const& p,
+                                  Cells const& cells, int allowed,
+                                  int* begin, int* end) {
+    int const cell = decode(p, cells, allowed);
+    *begin = max(p.offsets[cell], cells.after);
+    *end = p.offsets[cell + 1];
+}
+
+// Gives each lane the next candidate past `cursor`, or -1 when the cells
+// run out first, and moves `cursor` past them. The warp calls it with the
+// same `cells` and `cursor`.
+template <typename BagKey>
+__device__ int next_candidates(LeftoverParams<BagKey> const& p,
+                               Cells const& cells, Cursor* cursor) {
+    int const lane = threadIdx.x & 31;
+    int out = -1;
+    int filled = 0;
+    while (filled < 32 && cursor->base < cells.total) {
+        int const allowed = cursor->base + lane;
+        int begin = 0;
+        int end = 0;
+        if (allowed < cells.total)
+            cell_range(p, cells, allowed, &begin, &end);
+        int const length = end - begin;
+        int sum = length;
+        for (int offset = 1; offset < 32; offset <<= 1) {
+            int const below = __shfl_up_sync(~0u, sum, offset);
+            if (lane >= offset) sum += below;
+        }
+        int const total = __shfl_sync(~0u, sum, 31);
+        int const q = cursor->position + lane - filled;
+        int at = 0;
+        for (int step = 16; step > 0; step >>= 1)
+            if (__shfl_sync(~0u, sum, at + step - 1) <= q) at += step;
+        int const at_begin = __shfl_sync(~0u, begin, at);
+        int const at_start =
+            __shfl_sync(~0u, sum, at) - __shfl_sync(~0u, length, at);
+        if (lane >= filled && q < total) out = at_begin + q - at_start;
+        int const taken = min(total - cursor->position, 32 - filled);
+        filled += taken;
+        if (cursor->position + taken < total) {
+            cursor->position += taken;
+            break;
+        }
+        cursor->base += 32;
+        cursor->position = 0;
+    }
+    return out;
+}
+
+// Moves a lane's `cursor` to its next candidate; false when the
+// cells run out.
+template <typename BagKey>
+__device__ inline bool next_candidate(LeftoverParams<BagKey> const& p,
+                                      Cells const& cells, CellCursor* cursor) {
+    while (cursor->next >= cursor->end) {
+        if (++cursor->allowed >= cells.total) return false;
+        cell_range(p, cells, cursor->allowed, &cursor->next, &cursor->end);
+    }
+    return true;
+}
+
 // Adds the leftover numbered `number` to the register of `left` letters, as
 // LeftoverSketch::add does.
 template <typename BagKey>
@@ -1194,27 +1340,18 @@ __device__ inline void add_combination(LeftoverParams<BagKey> const& p,
     add_register(p, left, number);
 }
 
-// The last step's candidates past `from`'s pick, strided over the lanes;
-// GROUPED combines lanes leaving the same letters first.
-template <typename BagKey, bool GROUPED>
+// The last step's candidates past `from`'s pick, one per lane.
+template <typename BagKey>
 __device__ void last_step(LeftoverParams<BagKey> const& p, WalkCounts const& c,
                           Picked<BagKey> const& from) {
-    int const lane = threadIdx.x & 31;
+    Cells const cells = cells_of(p, from);
+    Cursor cursor{first_allowed(p, cells, from), 0};
     Picked<BagKey> next;
-    if constexpr (GROUPED) {
-        for (int base = from.index + 1; base < p.count; base += 32) {
-            int const i = base + lane;
-            bool const fit = i < p.count && pick(p, from, i, &next);
-            unsigned const fitting = __ballot_sync(~0u, fit);
-            if (!fit) continue;
-            add_combination(p, c, __match_any_sync(fitting, next.letters),
-                            next.letters, next.rows, next.number);
-        }
-    } else {
-        for (int i = from.index + 1 + lane; i < p.count; i += 32)
-            if (pick(p, from, i, &next))
-                add_combination(p, c, 1u << lane, next.letters, next.rows,
-                                next.number);
+    while (cursor.base < cells.total) {
+        int const i = next_candidates(p, cells, &cursor);
+        if (i >= 0 && pick(p, from, i, &next))
+            add_combination(p, c, 1u << (threadIdx.x & 31), next.letters,
+                            next.rows, next.number);
     }
 }
 
@@ -1251,105 +1388,44 @@ __device__ inline bool start_unit(LeftoverParams<BagKey> const& p,
 
 template <typename BagKey>
 __global__ void __launch_bounds__(WALK_THREADS)
-walk_leftovers_simple(LeftoverParams<BagKey> p) {
+walk_leftover_picks(LeftoverParams<BagKey> p) {
     extern __shared__ __align__(16) unsigned char shared_bytes[];
     WalkCounts const c = start_walk_counts(p, shared_bytes);
     int const lane = threadIdx.x & 31;
     int const last = p.steps - 1;
     Picked<BagKey> picked[GPU_MAX_PAIR_STEPS];
-    int next[GPU_MAX_PAIR_STEPS];
+    Cells cells[GPU_MAX_PAIR_STEPS];
+    CellCursor cursors[GPU_MAX_PAIR_STEPS];
+    auto const start = [&](int depth) {
+        Picked<BagKey> const& from = picked[depth - 1];
+        cells[depth] = cells_of(p, from);
+        cursors[depth] = {first_allowed(p, cells[depth], from) - 1, 0, 0};
+    };
     for (int unit; (unit = take_unit(p)) >= 0; finish_unit(p)) {
         if (!start_unit(p, c, unit, &picked[0])) continue;
         int depth = 1;
-        next[1] = unit + 1;
+        if (depth < last) start(depth);
         while (depth > 0) {
             if (depth == last) {
-                last_step<BagKey, false>(p, c, picked[depth - 1]);
+                last_step(p, c, picked[depth - 1]);
                 --depth;
                 continue;
             }
-            int i = next[depth];
-            while (i < p.count && !pick(p, picked[depth - 1], i,
-                                        &picked[depth]))
-                ++i;
-            if (i >= p.count) {
+            Picked<BagKey> const& from = picked[depth - 1];
+            CellCursor& cursor = cursors[depth];
+            bool found = false;
+            while (next_candidate(p, cells[depth], &cursor))
+                if (pick(p, from, cursor.next++, &picked[depth])) {
+                    found = true;
+                    break;
+                }
+            if (!found) {
                 --depth;
                 continue;
             }
-            next[depth] = i + 1;
             if (lane == 0) atomicAdd(&c.by_picks[depth], 1ULL);
             ++depth;
-            next[depth] = i + 1;
-        }
-    }
-    flush_walk_counts(p, c);
-}
-
-template <typename BagKey>
-__global__ void __launch_bounds__(WALK_THREADS)
-walk_leftovers_ballot(LeftoverParams<BagKey> p) {
-    extern __shared__ __align__(16) unsigned char shared_bytes[];
-    WalkCounts const c = start_walk_counts(p, shared_bytes);
-    int const lane = threadIdx.x & 31;
-    int const last = p.steps - 1;
-    BallotFrame<BagKey>* const frames =
-        reinterpret_cast<BallotFrame<BagKey>*>(
-            shared_bytes + walk_counts_bytes(p.bag_letters, p.steps)) +
-        (threadIdx.x >> 5) * GPU_MAX_PAIR_STEPS;
-    for (int unit; (unit = take_unit(p)) >= 0; finish_unit(p)) {
-        Picked<BagKey> first;
-        if (!start_unit(p, c, unit, &first)) continue;
-        __syncwarp();
-        if (lane == 0) {
-            frames[0].picked = first;
-            frames[1].mask = 0;
-            frames[1].next = unit + 1;
-        }
-        __syncwarp();
-        int depth = 1;
-        while (depth > 0) {
-            BallotFrame<BagKey>& frame = frames[depth];
-            Picked<BagKey> const from = frames[depth - 1].picked;
-            if (depth == last) {
-                last_step<BagKey, true>(p, c, from);
-                --depth;
-                continue;
-            }
-            unsigned const mask = frame.mask;
-            Picked<BagKey> picked;
-            if (mask == 0) {
-                int const base = frame.next;
-                if (base >= p.count) {
-                    --depth;
-                    continue;
-                }
-                int const i = base + lane;
-                unsigned const fitting =
-                    __ballot_sync(~0u, i < p.count && pick(p, from, i,
-                                                           &picked));
-                __syncwarp();
-                if (lane == 0) {
-                    frame.mask = fitting;
-                    frame.base = base;
-                    frame.next = base + 32;
-                    if (fitting != 0)
-                        atomicAdd(&c.by_picks[depth],
-                                  (unsigned long long)__popc(fitting));
-                }
-                __syncwarp();
-                continue;
-            }
-            int const i = frame.base + __ffs(int(mask)) - 1;
-            pick(p, from, i, &picked);
-            __syncwarp();
-            if (lane == 0) {
-                frame.mask = mask & (mask - 1);
-                frame.picked = picked;
-                frames[depth + 1].mask = 0;
-                frames[depth + 1].next = i + 1;
-            }
-            __syncwarp();
-            ++depth;
+            if (depth < last) start(depth);
         }
     }
     flush_walk_counts(p, c);
@@ -1406,8 +1482,18 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     p.numbers = d.upload(inputs.numbers);
     p.pairs = d.upload(inputs.pairs);
     p.letters = d.upload(inputs.lengths);
+    p.offsets = d.upload(inputs.offsets);
     p.count = count;
     p.steps = inputs.steps;
+    p.prefix = int(inputs.prefix.size());
+    for (int k = 0; k < p.prefix; ++k) {
+        auto const [letter, stride] = inputs.prefix[k];
+        int bits = 0;
+        while ((inputs.bag[letter] >> bits) != 0) ++bits;
+        p.shifts[k] = packing.shifts[letter];
+        p.masks[k] = (1 << bits) - 1;
+        p.strides[k] = stride;
+    }
     p.bag = packing.pack<BagKey>(inputs.bag);
     p.bag_guards = BagKey(packing.guards);
     p.bag_number = inputs.bag_number;
@@ -1423,12 +1509,7 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     *host_done = 0;
     check(cudaHostGetDevicePointer(&p.units_done, host_done, 0));
 
-    auto const kernel = inputs.kernel == 2 ? walk_leftovers_ballot<BagKey>
-                                           : walk_leftovers_simple<BagKey>;
-    size_t const shared = walk_counts_bytes(letters, inputs.steps) +
-        (inputs.kernel == 2
-             ? WALK_WARPS * GPU_MAX_PAIR_STEPS * sizeof(BallotFrame<BagKey>)
-             : 0);
+    size_t const shared = walk_counts_bytes(letters, inputs.steps);
     int device = 0;
     int sms = 0;
     int per_sm = 0;
@@ -1436,10 +1517,11 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     check(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount,
                                  device));
     check(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &per_sm, kernel, WALK_THREADS, shared));
+        &per_sm, walk_leftover_picks<BagKey>, WALK_THREADS, shared));
     cudaStream_t stream = nullptr;
     check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    kernel<<<sms * std::max(per_sm, 1), WALK_THREADS, shared, stream>>>(p);
+    walk_leftover_picks<<<sms * std::max(per_sm, 1), WALK_THREADS, shared,
+                          stream>>>(p);
     check(cudaGetLastError());
     size_t done = 0;
     while (true) {

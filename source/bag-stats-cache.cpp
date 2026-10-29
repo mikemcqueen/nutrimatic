@@ -18,6 +18,23 @@ RemainderIndex::RemainderIndex(PairsCounts const& bag, size_t bound) {
     }
 }
 
+RemainderIndex::RemainderIndex(PairsCounts const& bag,
+                               std::vector<size_t> const& letters,
+                               size_t bound) {
+    size_t used = 0;
+    for (; used < letters.size(); ++used) {
+        size_t const radix = bag.values[letters[used]] + 1;
+        if (total_ > bound / radix) break;
+        total_ *= radix;
+    }
+    digits_.resize(used);
+    size_t stride = total_;
+    for (size_t k = 0; k < used; ++k) {
+        stride /= bag.values[letters[k]] + 1;
+        digits_[k] = {letters[k], stride};
+    }
+}
+
 std::string SharedCacheCounts::text(std::string_view name) const {
     uint64_t const h = hits.load(std::memory_order_relaxed);
     uint64_t const l = lookups.load(std::memory_order_relaxed);

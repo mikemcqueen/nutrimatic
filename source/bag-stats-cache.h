@@ -25,8 +25,16 @@
 class RemainderIndex {
   public:
     RemainderIndex(PairsCounts const& bag, size_t bound);
+    // An index over the longest run of `letters` whose sub-bags number at
+    // most `bound`, most significant first.
+    RemainderIndex(PairsCounts const& bag, std::vector<size_t> const& letters,
+                   size_t bound);
 
     size_t total() const { return total_; }
+    // Each letter and its stride.
+    std::vector<std::pair<size_t, size_t>> const& digits() const {
+        return digits_;
+    }
     size_t number(PairsCounts const& bag) const {
         size_t out = 0;
         for (auto const& [letter, stride] : digits_)
