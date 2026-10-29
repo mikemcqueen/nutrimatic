@@ -1,20 +1,23 @@
 # rebuild a sentence's pair file
 #
-# usage: make -f rebuild.mk [universe|wiki|cluer|combine|all] S=N
+# usage: make -f rebuild.mk [universe|wiki|cluer|combine|subsets|all] S=N
 # requires: source ./setup.sh
 #
 # S may also be lowercase, and is read only from the command line, since
 # setup.sh sets it. The pair files depend on universe order-only, so removing
 # dictionary words never rebuilds them; after adding words, run
 # make -f rebuild.mk -B universe wiki cluer combine S=N. Add -B to rebuild
-# targets that are up to date.
+# targets that are up to date. subsets writes pairs.sN.NAME for each word
+# list words.sN.NAME, keeping the pairs of pairs.sN whose words are both in
+# it.
 
 SHELL := bash
 .SHELLFLAGS := -euo pipefail -c
 .DELETE_ON_ERROR:
 .DEFAULT_GOAL := all
 
-usage := usage: make -f rebuild.mk [universe|wiki|cluer|combine|all] S=N \
+usage := usage: make -f rebuild.mk \
+	[universe|wiki|cluer|combine|subsets|all] S=N \
 	(N is 1-9)
 
 # the value of $1, or else $2, counting only command-line values
@@ -58,13 +61,17 @@ idx_out := $(IDX_DIR)/idx.2.s$(n)
 cluer_out := $(IDX_DIR)/cluer.s$(n)
 pairs_out := $(IDX_DIR)/pairs.s$(n)
 extra_pairs := $(wildcard $(IDX_DIR)/s$(n).pairs)
+subset_words := $(wildcard $(IDX_DIR)/words.s$(n).*)
+subset_pairs := $(patsubst $(IDX_DIR)/words.%,$(IDX_DIR)/pairs.%,\
+	$(subset_words))
 
-.PHONY: all universe wiki cluer combine
-all: combine
+.PHONY: all universe wiki cluer combine subsets
+all: combine subsets
 universe: $(universe)
 wiki: $(idx_out)
 cluer: $(cluer_out)
 combine: $(pairs_out)
+subsets: $(subset_pairs)
 
 $(universe): $(IDX_DIR)/words $(BIG) $(DICT)
 	LC_ALL=C sort -u $^ | LC_ALL=C awk 'length >= 3 && length <= 13' \
@@ -87,6 +94,11 @@ $(cluer_out): $(tokens) | $(universe)
 $(pairs_out): $(cluer_out) $(idx_out) $(extra_pairs)
 	pcomm $(cluer_out) $(idx_out) \
 		$(if $(extra_pairs),| pcomm - $(extra_pairs)) | sort -u > $@.tmp
+	mv $@.tmp $@
+
+$(IDX_DIR)/pairs.s$(n).%: $(IDX_DIR)/words.s$(n).% $(pairs_out)
+	LC_ALL=C awk -F, 'NR == FNR { w[$$1]; next } ($$1 in w) && ($$2 in w)' \
+		$^ > $@.tmp
 	mv $@.tmp $@
 
 # the sentence seed dfs-anagrams -t sN resolves; not generated, so the

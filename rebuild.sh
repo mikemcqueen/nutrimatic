@@ -1,11 +1,14 @@
 #!/bin/bash
-# usage: rebuild.sh [-f|--force] [universe|wiki|cluer|combine|all]... sN|SN
+# usage: rebuild.sh [-f|--force] [universe|wiki|cluer|combine|subsets|all]...
+#        sN|SN
 # requires: source ./setup.sh
 #
 # rebuild.mk as a script: the same targets, files and commands. A target
 # builds the targets it depends on first; the pair files depend on universe
 # order-only, so universe is never a reason to rebuild one. -f rebuilds
-# every named target and what it depends on, as make -B does.
+# every named target and what it depends on, as make -B does. subsets
+# writes pairs.sN.NAME for each word list words.sN.NAME, keeping the pairs of
+# pairs.sN whose words are both in it.
 
 # braces make bash parse the whole script before running it, so editing the
 # file during a run doesn't change what the run does
@@ -18,7 +21,7 @@ die() {
 }
 
 usage() {
-    die "usage: $0 [-f|--force] [universe|wiki|cluer|combine|all]... sN|SN (N is 1-9)"
+    die "usage: $0 [-f|--force] [universe|wiki|cluer|combine|subsets|all]... sN|SN (N is 1-9)"
 }
 
 force=
@@ -28,7 +31,7 @@ for arg; do
     case $arg in
         -f|--force) force=1 ;;
         -*) usage ;;
-        universe|wiki|cluer|combine|all) targets+=("$arg") ;;
+        universe|wiki|cluer|combine|subsets|all) targets+=("$arg") ;;
         *) [ -z "$seed" ] || usage; seed=$arg ;;
     esac
 done
@@ -128,6 +131,13 @@ all_pairs() {
     fi | sort -u
 }
 
+# usage: subset_pairs WORDS
+# the pairs of pairs.sN whose words are both in WORDS
+subset_pairs() {
+    LC_ALL=C awk -F, 'NR == FNR { w[$1]; next } ($1 in w) && ($2 in w)' \
+        "$1" "$pairs_out"
+}
+
 declare -A built=()
 
 # builds target $1 once, after the targets it depends on
@@ -154,8 +164,19 @@ build() {
             [ ! -f "$extra_pairs" ] || srcs+=("$extra_pairs")
             run_to "combined pairs" "$pairs_out" "${srcs[@]}" -- all_pairs
             ;;
+        subsets)
+            build combine
+            local list
+            for list in "$IDX_DIR"/words.s"$snum".*; do
+                [ -f "$list" ] || continue
+                local out=$IDX_DIR/pairs.${list#"$IDX_DIR"/words.}
+                run_to "$(basename "$out")" "$out" "$list" "$pairs_out" -- \
+                    subset_pairs "$list"
+            done
+            ;;
         all)
             build combine
+            build subsets
             ;;
     esac
 }
