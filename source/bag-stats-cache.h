@@ -59,9 +59,19 @@ struct SharedCacheCounts {
     std::string text(std::string_view name) const;
 };
 
+// BagStatsCounts as the rest cache holds them, each count in 32 bits.
+struct CachedCounts {
+    uint32_t word_bags;
+    uint32_t with_pairs;
+    uint32_t total_pairs;
+    uint32_t max_pairs;
+    uint32_t solo;
+    uint32_t with_min_pairs;
+};
+
 // The bytes one rest cache entry takes.
 inline constexpr size_t REST_CACHE_ENTRY_BYTES =
-    sizeof(BagStatsCounts) + 2 * (sizeof(uint64_t) + sizeof(uint32_t));
+    sizeof(CachedCounts) + 2 * (sizeof(uint64_t) + sizeof(uint32_t));
 
 // The entries a rest cache of `megabytes` MB holds.
 inline size_t rest_cache_entries(size_t megabytes) {
@@ -93,7 +103,9 @@ class RestTable {
             uint32_t const row = std::atomic_ref<uint32_t>(rows_index_[i])
                 .load(std::memory_order_acquire);
             if (row == 0) return false;
-            *out = rows_[row - 1];
+            CachedCounts const& cached = rows_[row - 1];
+            *out = {cached.word_bags, cached.with_pairs, cached.total_pairs,
+                    cached.max_pairs, cached.solo, cached.with_min_pairs};
             return true;
         }
     }
@@ -114,7 +126,7 @@ class RestTable {
             if (row + 1 == capacity_ && report_)
                 report(program_, "cache full at %zu entries; later "
                        "remainders go uncached", capacity_);
-            rows_[row] = counts;
+            rows_[row] = narrow(counts);
             std::atomic_ref<uint32_t>(rows_index_[i])
                 .store(uint32_t(row + 1), std::memory_order_release);
             return;
@@ -125,6 +137,9 @@ class RestTable {
     struct Free {
         template <typename T> void operator()(T* p) const { std::free(p); }
     };
+
+    // `counts` in 32 bits; aborts when one doesn't fit.
+    CachedCounts narrow(BagStatsCounts const& counts) const;
 
     size_t home(uint64_t key) const {
         return size_t(__uint128_t(mix_bits(key)) * slots_ >> 64);
@@ -137,7 +152,7 @@ class RestTable {
     size_t slots_ = 0;
     std::unique_ptr<uint64_t[], Free> keys_;
     std::unique_ptr<uint32_t[], Free> rows_index_;
-    std::unique_ptr<BagStatsCounts[], Free> rows_;
+    std::unique_ptr<CachedCounts[], Free> rows_;
     mutable std::atomic<size_t> next_{0};
 };
 

@@ -63,13 +63,19 @@ bool check_common_args(std::string_view program, struct optparse* options,
     out->letters = letters;
     out->pairs_file = pairs;
     out->dictionary_file = dictionary;
-    if (!parse_search(program, out->search_text, &out->search)) return false;
+    if (out->leftovers && !out->search_text) {
+        report(program, "--leftovers needs --ss");
+        return false;
+    }
+    if (!parse_search(program, out->search_text.value_or(DEFAULT_SEARCH),
+                      &out->search, !out->leftovers))
+        return false;
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
         report(program, "-s doesn't go with --no-nopairs");
         return false;
     }
     RankArgs const& rank = out->rank;
-    if (out->search.prospects + out->search.pairs == 0) {
+    if (out->leftovers || out->search.prospects + out->search.pairs == 0) {
         std::string const sort =
             rank.sorts.empty() ? "" : std::string("--") +
                 rank.sorts[0]->option;
@@ -89,7 +95,9 @@ bool check_common_args(std::string_view program, struct optparse* options,
         };
         for (auto const& [given, option] : rank_options) {
             if (!given) continue;
-            report(program, "--ss without a ppb or pb step can't take %s",
+            report(program, out->leftovers
+                       ? "--leftovers can't take %s"
+                       : "--ss without a ppb or pb step can't take %s",
                    option);
             return false;
         }
@@ -278,7 +286,8 @@ bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
          !load_word_bags(program, args.dictionary_file, out->bag,
                          args.min_word_bag_length, &out->word_bags,
                          spellings)) ||
-        (!pair_filter && !load_inner_dictionary(program, &out->counter)))
+        (args.search.measured && !pair_filter &&
+         !load_inner_dictionary(program, &out->counter)))
         return false;
     out->steps.assign(args.search.pairs, &out->pair_bags);
     out->steps.insert(out->steps.end(), args.search.prospects,

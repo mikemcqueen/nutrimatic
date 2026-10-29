@@ -19,6 +19,7 @@ constexpr int OPT_PAIR_CACHE_SIZE = OPT_COMMON_END;
 constexpr int OPT_COMPLETIONS = OPT_COMMON_END + 1;
 constexpr int OPT_EXACT = OPT_COMMON_END + 2;
 constexpr int OPT_ALL = OPT_COMMON_END + 3;
+constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 4;
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
@@ -38,7 +39,11 @@ void usage(std::string_view program, FILE* out) {
             "       %.*s --ss [wb,...]p|pf [-u LETTERS]\n"
             "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
             "       [--exact] [--completions N | --all]\n"
-            "       LETTERS PAIRS DICT\n",
+            "       LETTERS PAIRS DICT\n"
+            "       %.*s --leftovers --ss pb[,pb...] [-u LETTERS]\n"
+            "       [-s N | --no-nopairs] [--min-pb-len N] [--threads N]\n"
+            "       [--progress N] LETTERS PAIRS DICT\n",
+            SV_ARG(program),
             SV_ARG(program),
             SV_ARG(program));
     if (out != stdout) return;
@@ -60,6 +65,11 @@ void usage(std::string_view program, FILE* out) {
                     "alone");
     dfs_help_option("--all",
                     "--completions of every completion with pairs, or SOLO");
+    dfs_help_option("--leftovers",
+                    "with --ss of pb steps alone, count the combinations "
+                    "that fit, by how many picks they make, and those of "
+                    "every pb step, their PAIRS rows and their distinct "
+                    "leftovers by how many letters they leave");
     dfs_help_option("--exact",
                     "with a last pf, count only the PAIRS rows that use all "
                     "of what's left, as wb and pb steps before it need; a "
@@ -74,6 +84,7 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         { "completions", OPT_COMPLETIONS, OPTPARSE_REQUIRED },
         { "exact", OPT_EXACT, OPTPARSE_NONE },
         { "all", OPT_ALL, OPTPARSE_NONE },
+        { "leftovers", OPT_LEFTOVERS, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -104,6 +115,9 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
           case OPT_ALL:
             out->all = true;
             break;
+          case OPT_LEFTOVERS:
+            out->common.leftovers = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -115,6 +129,18 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
 
     if (!check_common_args(PROGRAM, &options, &out->common)) return false;
     Search const& search = out->common.search;
+    if (out->common.leftovers) {
+        if (search.pairs == 0 || search.prospects + search.words > 0) {
+            report(PROGRAM, "--leftovers takes --ss of pb steps alone");
+            return false;
+        }
+        if (out->exact || out->all || out->completions > 0) {
+            report(PROGRAM, "--leftovers doesn't go with --exact, --all or "
+                   "--completions");
+            return false;
+        }
+        return true;
+    }
     if (search.pair_filter && search.words + search.pairs > 0 &&
         !out->exact) {
         report(PROGRAM, "--ss %s needs --exact", search_text(search).c_str());

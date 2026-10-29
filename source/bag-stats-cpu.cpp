@@ -14,6 +14,7 @@
 #include <cstring>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -973,6 +974,176 @@ int with_walk(BagStatsOptions const& options, std::string const& letters,
     return f(walk, &rankers);
 }
 
+// Distinct nonzero keys, shared by every thread: open addressing tables,
+// each behind its own lock, a key's table picked by its mixed bits.
+class KeySet {
+  public:
+    // Adds `key`; whether it wasn't there.
+    bool insert(uint64_t key) {
+        uint64_t const mixed = mix_bits(key);
+        Shard& shard = shards_[mixed % SHARDS];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        if (2 * (shard.size + 1) > shard.slots.size()) grow(&shard);
+        if (!place(&shard.slots, key, mixed)) return false;
+        ++shard.size;
+        size_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    uint64_t size() const { return size_.load(std::memory_order_relaxed); }
+
+  private:
+    static constexpr size_t SHARDS = 4096;
+
+    struct alignas(64) Shard {
+        std::mutex mutex;
+        std::vector<uint64_t> slots;
+        size_t size = 0;
+    };
+
+    // Puts `key` in `slots`, a power of two long; false when it's there.
+    static bool place(std::vector<uint64_t>* slots, uint64_t key,
+                      uint64_t mixed) {
+        size_t const mask = slots->size() - 1;
+        for (size_t i = (mixed / SHARDS) & mask;; i = (i + 1) & mask) {
+            uint64_t& slot = (*slots)[i];
+            if (slot == key) return false;
+            if (slot == 0) {
+                slot = key;
+                return true;
+            }
+        }
+    }
+
+    static void grow(Shard* shard) {
+        std::vector<uint64_t> slots(
+            std::max<size_t>(64, 2 * shard->slots.size()), 0);
+        for (uint64_t const key : shard->slots)
+            if (key != 0) place(&slots, key, mix_bits(key));
+        shard->slots = std::move(slots);
+    }
+
+    std::unique_ptr<Shard[]> shards_{new Shard[SHARDS]};
+    std::atomic<uint64_t> size_{0};
+};
+
+// What one thread counts of the --leftovers walk: combinations by how many
+// picks they make, and those of every step, their PAIRS rows and their new
+// distinct leftovers by how many letters they leave.
+struct alignas(64) LeftoverPart {
+    std::vector<uint64_t> by_picks;
+    std::vector<uint64_t> combinations;
+    std::vector<uint64_t> rows;
+    std::vector<uint64_t> leftovers;
+};
+
+struct LeftoverHooks {
+    KeySet const* keys;
+
+    void finished(PickWalk*) {}
+
+    std::string text() const {
+        return ", " + std::to_string(keys->size()) + " leftovers";
+    }
+};
+
+struct LeftoverWalk : WalkBase {
+    KeySet const* keys;
+
+    LeftoverHooks progress_hooks() const { return {keys}; }
+};
+
+int count_leftovers(BagStatsArgs const& args, std::string const& letters,
+                    BagStatsInputs const& inputs) {
+    RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
+    if (index.total() == 0) {
+        report(PROGRAM, "the letters have too many sub-bags to number "
+               "leftovers");
+        return 1;
+    }
+    size_t const steps = inputs.steps.size();
+    size_t const length = size_t(letter_total(inputs.bag));
+    KeySet keys;
+    LeftoverWalk const walk{{PROGRAM, inputs.steps, inputs.pair_bags,
+                             inputs.prospect_bags, inputs.bag,
+                             inputs.word_bags, args, bag_stats_threads(args),
+                             1, unit_blocks(walk_units(inputs.steps))},
+                            &keys};
+    std::vector<LeftoverPart> parts(walk.threads);
+    for (LeftoverPart& part : parts) {
+        part.by_picks.assign(steps, 0);
+        part.combinations.assign(length + 1, 0);
+        part.rows.assign(length + 1, 0);
+        part.leftovers.assign(length + 1, 0);
+    }
+    std::atomic<size_t> next{0};
+    {
+        Progress progress(walk, 1);
+        run_threads(walk.threads, [&](size_t t) {
+            LeftoverPart& part = parts[t];
+            PickWalk walker(walk.steps, args.search.pairs,
+                            walk.pair_bags.size());
+            auto const enter = [&](size_t step, PairsCounts const&) {
+                ++part.by_picks[step];
+            };
+            auto const leaf = [&](PairsCounts const& rest, int) {
+                size_t const left = size_t(letter_total(rest));
+                ++part.combinations[left];
+                part.rows[left] += walker.pairs();
+                if (keys.insert(index.number(rest) + 1))
+                    ++part.leftovers[left];
+            };
+            for (size_t unit; (unit = next.fetch_add(1)) < walk.units();) {
+                walker.walk(unit, walk.bag, enter, leaf);
+                progress.finished(&walker, 1);
+            }
+        });
+    }
+
+    LeftoverPart total{std::vector<uint64_t>(steps, 0),
+                       std::vector<uint64_t>(length + 1, 0),
+                       std::vector<uint64_t>(length + 1, 0),
+                       std::vector<uint64_t>(length + 1, 0)};
+    for (LeftoverPart const& part : parts) {
+        for (size_t j = 0; j < steps; ++j)
+            total.by_picks[j] += part.by_picks[j];
+        for (size_t n = 0; n <= length; ++n) {
+            total.combinations[n] += part.combinations[n];
+            total.rows[n] += part.rows[n];
+            total.leftovers[n] += part.leftovers[n];
+        }
+    }
+    uint64_t all[3] = {0, 0, 0};
+    for (size_t n = 0; n <= length; ++n) {
+        all[0] += total.combinations[n];
+        all[1] += total.rows[n];
+        all[2] += total.leftovers[n];
+    }
+    total.by_picks[steps - 1] = all[0];
+
+    printf("letters %s\nmin-pb %d\nss %s\npairs %s\npair bags %zu\n",
+           letters.c_str(), args.min_pair_bag_length,
+           search_text(args.search).c_str(),
+           bag_stats_header_path(args.pairs_file).c_str(),
+           walk.pair_bags.size());
+    printf("\nPICKS,COMBINATIONS\n");
+    for (size_t j = 0; j < steps; ++j)
+        printf("%zu,%llu\n", j + 1,
+               static_cast<unsigned long long>(total.by_picks[j]));
+    printf("\nLEFT,COMBINATIONS,ROWS,LEFTOVERS\n");
+    for (size_t n = 0; n <= length; ++n) {
+        if (total.combinations[n] == 0) continue;
+        printf("%zu,%llu,%llu,%llu\n", n,
+               static_cast<unsigned long long>(total.combinations[n]),
+               static_cast<unsigned long long>(total.rows[n]),
+               static_cast<unsigned long long>(total.leftovers[n]));
+    }
+    printf("all,%llu,%llu,%llu\n", static_cast<unsigned long long>(all[0]),
+           static_cast<unsigned long long>(all[1]),
+           static_cast<unsigned long long>(all[2]));
+    return fflush(stdout) == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 bool list_bag_stats(BagStatsOptions const& options,
@@ -1020,6 +1191,8 @@ int bag_stats(BagStatsOptions const& options, std::string const& letters) {
     if (!load_bag_stats_inputs(PROGRAM, common, &inputs,
                                listed ? &spellings : nullptr))
         return 1;
+    if (!common.search.measured)
+        return count_leftovers(common, letters, inputs);
     return with_walk(options, letters, inputs, spellings,
                      [&](Walk const& walk, BagStatsRankers* rankers) {
         if (!walk.steps.empty()) return run_bag_stats(walk, letters, rankers);

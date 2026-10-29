@@ -16,19 +16,28 @@
 #include "row-input.h"
 
 bool parse_search(std::string_view program, std::string_view text,
-                  Search* out) {
+                  Search* out, bool measured) {
     std::vector<std::string> steps(1);
     for (char const c : text) {
         if (c == ',') steps.emplace_back();
         else steps.back() += c;
     }
     Search search;
-    search.pair_filter = steps.back() == "pf";
-    if (steps.back() != "p" && !search.pair_filter) {
-        report(program, "--ss has to end with p or pf");
-        return false;
+    search.measured = measured;
+    bool const last_measures = steps.back() == "p" || steps.back() == "pf";
+    if (!measured) {
+        if (last_measures) {
+            report(program, "--leftovers takes --ss without a last p or pf");
+            return false;
+        }
+    } else {
+        search.pair_filter = steps.back() == "pf";
+        if (!last_measures) {
+            report(program, "--ss has to end with p or pf");
+            return false;
+        }
+        steps.pop_back();
     }
-    steps.pop_back();
 
     for (std::string const& step : steps) {
         if (step == "ppb") ++search.prospects;
@@ -49,6 +58,10 @@ std::string search_text(Search const& search) {
     for (int i = 0; i < search.prospects; ++i) out += "ppb,";
     for (int i = 0; i < search.pairs; ++i) out += "pb,";
     for (int i = 0; i < search.words; ++i) out += "wb,";
+    if (!search.measured) {
+        if (!out.empty()) out.pop_back();
+        return out;
+    }
     return out + (search.pair_filter ? "pf" : "p");
 }
 

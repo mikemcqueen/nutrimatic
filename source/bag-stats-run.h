@@ -51,7 +51,10 @@ struct BagStatsArgs {
     bool drop_no = true;
     int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
     int min_pair_bag_length = DEFAULT_MIN_PB_LENGTH;
-    std::string search_text = DEFAULT_SEARCH;
+    // Unset means DEFAULT_SEARCH, except --leftovers needs --ss.
+    std::optional<std::string> search_text;
+    // bag-stats --leftovers: --ss has no last p or pf.
+    bool leftovers = false;
     Search search;
     std::optional<std::filesystem::path> prospects_file;
     int threads = 0;
@@ -171,9 +174,10 @@ struct BagStatsInputs {
     std::vector<std::vector<PairBag> const*> steps;
 };
 
-// Loads `out` for `args`, DICT only with wb steps and PAIRS only with pb
-// steps or a last pf, with `spellings` as load_word_bags() takes it; with
-// `spellings` and a last pf, the final bags' rows too.
+// Loads `out` for `args`, DICT only with wb steps, PAIRS only with pb
+// steps or a last pf, and the inner dictionary only with a last p, with
+// `spellings` as load_word_bags() takes it; with `spellings` and a last pf,
+// the final bags' rows too.
 bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
                            BagStatsInputs* out,
                            std::vector<std::vector<std::string>>* spellings);

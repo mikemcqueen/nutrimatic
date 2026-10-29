@@ -1,6 +1,7 @@
 #include "bag-stats-cache.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <string_view>
 
 #include "log.h"
@@ -41,13 +42,28 @@ RestTable::RestTable(std::string_view program, PairsCounts const& bag,
         std::calloc(slots_, sizeof(uint64_t))));
     rows_index_.reset(static_cast<uint32_t*>(
         std::calloc(slots_, sizeof(uint32_t))));
-    rows_.reset(static_cast<BagStatsCounts*>(
-        std::calloc(capacity_, sizeof(BagStatsCounts))));
+    rows_.reset(static_cast<CachedCounts*>(
+        std::calloc(capacity_, sizeof(CachedCounts))));
     if (!keys_ || !rows_index_ || !rows_) {
         keys_.reset();
         rows_index_.reset();
         rows_.reset();
     }
+}
+
+CachedCounts RestTable::narrow(BagStatsCounts const& counts) const {
+    uint64_t const wide[] = {counts.word_bags, counts.with_pairs,
+                             counts.total_pairs, counts.max_pairs,
+                             counts.solo, counts.with_min_pairs};
+    for (uint64_t const count : wide) {
+        if (count <= UINT32_MAX) continue;
+        report(program_, "a cached count, %llu, doesn't fit 32 bits",
+               static_cast<unsigned long long>(count));
+        std::abort();
+    }
+    return {uint32_t(counts.word_bags), uint32_t(counts.with_pairs),
+            uint32_t(counts.total_pairs), uint32_t(counts.max_pairs),
+            uint32_t(counts.solo), uint32_t(counts.with_min_pairs)};
 }
 
 void report_rest_table(std::string_view program, RestTable const& table) {

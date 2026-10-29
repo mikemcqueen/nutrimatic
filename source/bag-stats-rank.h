@@ -26,18 +26,20 @@
 
 // How many picks of each kind a search sequence makes before its last step,
 // and which last step it is: p, counting DICT pairs, or pf, counting PAIRS
-// rows (pair_filter).
+// rows (pair_filter); or, not `measured`, picks alone, as bag-stats
+// --leftovers takes them.
 struct Search {
     int prospects = 0;
     int pairs = 0;
     int words = 0;
     bool pair_filter = false;
+    bool measured = true;
 };
 
-// Parses --ss STEPS into `out`. False, diagnosed prefixed by `program`, when
-// it isn't one.
+// Parses --ss STEPS into `out`, ending with p or pf when `measured`, else
+// without either. False, diagnosed prefixed by `program`, when it isn't one.
 bool parse_search(std::string_view program, std::string_view text,
-                  Search* out);
+                  Search* out, bool measured = true);
 
 // The steps of `search` in canonical order.
 std::string search_text(Search const& search);
