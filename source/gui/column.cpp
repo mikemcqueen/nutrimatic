@@ -8,6 +8,7 @@
 #include <climits>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <iterator>
 #include <optional>
 #include <span>
@@ -315,6 +316,12 @@ void Column::render() {
   } else {
     ImGui::TextDisabled("%zu", output()->size());
   }
+  Command const* const made = made_command();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(job_ || waiting || !made || !made->saveable() ||
+                       list_.shown_count() == 0);
+  if (ImGui::SmallButton("save")) save_shown();
+  ImGui::EndDisabled();
   char cv_text[32];
   std::snprintf(cv_text, sizeof cv_text, "CV %.2f", remaining_cv_);
   float const cv_width = ImGui::CalcTextSize(cv_text).x;
@@ -612,6 +619,21 @@ void Column::update_hidden() {
   else
     list_.step_off_hidden();
   if (list_.selected() != selected) ++version_;
+}
+
+void Column::save_shown() const {
+  std::filesystem::path const path =
+      std::filesystem::temp_directory_path() / "pgui.out";
+  FILE* const file = std::fopen(path.c_str(), "w");
+  if (!file) {
+    std::fprintf(stderr, "pgui: can't write \"%s\"\n", path.c_str());
+    return;
+  }
+  Lines const& items = *output();
+  for (int const i : list_.shown_items())
+    std::fprintf(file, "%s\n", items[i].c_str());
+  if (std::fclose(file) != 0)
+    std::fprintf(stderr, "pgui: can't write \"%s\"\n", path.c_str());
 }
 
 void Column::start(Key key) {

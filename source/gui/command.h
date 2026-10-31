@@ -76,7 +76,10 @@
 // button that cancels it; commands without it aren't. And it may have
 //   static constexpr char const* default_seed
 // the seed key choosing it sets its Column's source to, when it is one of
-// AppState::seed_bands; commands without it have none.
+// AppState::seed_bands; commands without it have none. And it may have
+//   static constexpr bool saveable
+// true when its Column offers a save button writing its shown items to a
+// file (see Column); commands without it don't.
 // Holds its value by copy.
 class Command {
  public:
@@ -134,6 +137,8 @@ class Command {
 
   bool uses_required_words() const { return self_->uses_required_words(); }
 
+  bool saveable() const { return self_->saveable(); }
+
   // Empty when it has none.
   std::string default_seed() const { return self_->default_seed(); }
 
@@ -158,6 +163,7 @@ class Command {
     virtual bool uses_dictionary() const = 0;
     virtual bool uses_big_dictionary() const = 0;
     virtual bool uses_required_words() const = 0;
+    virtual bool saveable() const = 0;
     virtual std::string default_seed() const = 0;
   };
 
@@ -258,6 +264,12 @@ class Command {
     bool uses_required_words() const override {
       if constexpr (requires { data.uses_required_words(); })
         return data.uses_required_words();
+      else
+        return false;
+    }
+    bool saveable() const override {
+      if constexpr (requires { T::saveable; })
+        return T::saveable;
       else
         return false;
     }

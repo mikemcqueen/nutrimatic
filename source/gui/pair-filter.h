@@ -27,11 +27,12 @@
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
 // Without cv, the kept lines are sorted. Its Column's shown pairs can be
-// reviewed.
+// reviewed, and saved.
 struct PairFilter {
   static constexpr bool reads_pairs = true;
   static constexpr bool reads_classified = true;
   static constexpr bool uses_dictionary = true;
+  static constexpr bool saveable = true;
 
   ReviewKind review_kind(InputSource const&) const { return ReviewKind::pairs; }
 

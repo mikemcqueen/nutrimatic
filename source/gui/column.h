@@ -64,7 +64,11 @@ void load_letter_count_font();
 // them all (see Command::apply_fields()), the filter field as regexes to the
 // ListBox (see ListBox::set_filter()); the X button beside a field clears it
 // and counts as Enter. The filter changes only what is shown, never output(), selected_item(), or
-// version(). Widget IDs are scoped to the Column, so any number can be
+// version(). After the status line's count, a "save" button, enabled when
+// output() is up to date, the command that made it is saveable (see
+// Command::saveable()), and the ListBox shows any items, overwrites
+// pgui.out in std::filesystem::temp_directory_path() with the shown items,
+// one per line, without their values. Widget IDs are scoped to the Column, so any number can be
 // rendered side by side in a Window. Both dropdowns offer only columns before
 // this one, so sources never form a cycle.
 class Column {
@@ -186,6 +190,8 @@ class Column {
   // Hides the ListBox items leaving letters judged bad, and deselects or
   // steps off a hidden selection; see the class comment.
   void update_hidden();
+  // Writes the shown items to pgui.out; see the class comment.
+  void save_shown() const;
   void start(Key key);
   void finish();
   void publish(Key key, bool ok, SharedLines output, SharedLines values);
