@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nutrimatic Pair Pipeline</title>
+<script>
+try {
+  var savedTheme = localStorage.getItem("theme");
+  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+} catch (e) {}
+</script>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column; a map, then each stage as "what goes in, which gates it passes", then pgui, then a summary grid. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --ink: #1b2230;
+  --muted: #5c6678;
+  --line: #d8dde5;
+  --spine: #1f6a73;
+
+  --len: #2c68ad;
+  --voc: #2b8253;
+  --let: #a8701a;
+  --evi: #7550ad;
+  --jud: #bb3546;
+
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151c; --surface: #19202a; --ink: #e5e9ef; --muted: #98a3b4;
+    --line: #2d3644; --spine: #5fb2bb;
+    --len: #7cafe8; --voc: #6cc792; --let: #e2ab58; --evi: #b398e6; --jud: #ee808d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151c; --surface: #19202a; --ink: #e5e9ef; --muted: #98a3b4;
+  --line: #2d3644; --spine: #5fb2bb;
+  --len: #7cafe8; --voc: #6cc792; --let: #e2ab58; --evi: #b398e6; --jud: #ee808d;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 var(--body);
+}
+.wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 56px;
+}
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
+h1 { font-size: 2.1rem; letter-spacing: -0.01em; line-height: 1.15; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.muted { color: var(--muted); }
+.eyebrow {
+  font: 600 0.72rem/1 var(--body);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--spine);
+}
+section { display: grid; gap: 18px; min-width: 0; }
+.intro { display: grid; gap: 12px; }
+
+/* legend */
+.legend {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.legend .key { display: inline-flex; align-items: center; gap: 8px; }
+.legend .families {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
+  flex: 1; min-width: 0;
+}
+.legend .modes { display: grid; gap: 6px; flex: none; }
+.swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--c); flex: none; }
+.swatch.opt { background: transparent; border: 1.5px dashed var(--muted); }
+.swatch.on { background: var(--muted); }
+.legend .sep { width: 1px; background: var(--line); align-self: stretch; }
+
+.len { --c: var(--len); }
+.voc { --c: var(--voc); }
+.let { --c: var(--let); }
+.evi { --c: var(--evi); }
+.jud { --c: var(--jud); }
+
+/* overview map */
+.map {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.map svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.map .node { fill: var(--bg); stroke: var(--line); stroke-width: 1.2; }
+.map .node.src { fill: var(--surface); stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 6 4; }
+.map .frame { fill: color-mix(in srgb, var(--spine) 6%, transparent); stroke: var(--spine); stroke-width: 1.2; stroke-dasharray: 2 4; }
+.map .t1 { fill: var(--ink); font: 600 14px var(--body); }
+.map .t2 { fill: var(--muted); font: 12px var(--mono); }
+.map .cap { fill: var(--muted); font: 13px var(--body); }
+.map .edge { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+.map .arrow { fill: var(--muted); }
+.map .dot { stroke: none; }
+.map .d-len { fill: var(--len); } .map .d-voc { fill: var(--voc); }
+.map .d-let { fill: var(--let); } .map .d-evi { fill: var(--evi); }
+.map .d-jud { fill: var(--jud); }
+
+/* stages */
+.stages { display: grid; gap: 0; position: relative; }
+.stage {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 0 16px;
+  padding-bottom: 28px;
+  position: relative;
+}
+.stage::before {
+  content: ""; position: absolute; left: 19px; top: 34px; bottom: 0;
+  width: 2px; background: var(--line);
+}
+.stage:last-child::before { display: none; }
+.num {
+  width: 40px; height: 34px; border-radius: 6px;
+  display: grid; place-items: center;
+  font: 700 0.95rem var(--display);
+  color: var(--spine);
+  background: var(--surface);
+  border: 1.5px solid var(--spine);
+  position: relative; z-index: 1;
+}
+.stage.side .num { border-style: dashed; color: var(--muted); border-color: var(--muted); }
+.body { display: grid; gap: 10px; min-width: 0; padding-top: 4px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.out {
+  font: 500 0.82rem var(--mono);
+  color: var(--muted);
+}
+.out::before { content: "→ "; }
+.cmd {
+  display: block;
+  font: 0.8rem/1.5 var(--mono);
+  color: var(--muted);
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border-left: 2px solid var(--line);
+}
+.gates { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.gate {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px 8px 0;
+  overflow: hidden;
+}
+.gate::before { content: ""; align-self: stretch; background: var(--c); margin: -8px 0; }
+.gate.opt { background: transparent; border-style: dashed; }
+.gate.opt::before {
+  background: repeating-linear-gradient(180deg, var(--c) 0 5px, transparent 5px 9px);
+}
+.gate .sw { font: 0.78rem var(--mono); color: var(--muted); text-align: right; }
+.none {
+  font-size: 0.9rem; color: var(--muted);
+  padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px;
+}
+.note { font-size: 0.88rem; color: var(--muted); }
+
+/* pgui */
+.bar {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 0.82rem var(--mono);
+}
+.field {
+  display: inline-flex; gap: 6px; align-items: center;
+  padding: 4px 8px; border-radius: 4px;
+  border: 1px solid var(--line); background: var(--bg);
+}
+.field b { font-weight: 500; color: var(--spine); }
+.fieldnotes {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 14px; font-size: 0.9rem; margin: 0;
+}
+.fieldnotes dt { font-family: var(--mono); font-size: 0.82rem; color: var(--spine); padding-top: 2px; }
+.fieldnotes dd { margin: 0; }
+
+.chain {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px; align-items: stretch;
+}
+.link {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; display: grid; gap: 6px; align-content: start; position: relative;
+}
+.link h3 { font-size: 0.95rem; }
+.link p { font-size: 0.88rem; }
+.link:not(:last-child)::after {
+  content: "→"; position: absolute; right: -12px; top: 50%; transform: translate(50%, -50%);
+  color: var(--muted); font-size: 1.1rem; background: var(--bg); line-height: 1;
+}
+.tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag {
+  font: 0.75rem var(--mono); padding: 2px 6px; border-radius: 3px;
+  border: 1px solid var(--line); color: var(--ink); background: var(--bg);
+}
+
+.cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.cmdcard {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px; display: grid; gap: 10px; align-content: start; min-width: 0;
+}
+.cmdcard .what { font-size: 0.9rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.8rem; padding: 3px 8px 3px 6px; border-radius: 4px;
+  background: color-mix(in srgb, var(--c) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+}
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--c); }
+.chip.opt { background: transparent; border-style: dashed; }
+.chip.plain { --c: var(--muted); }
+
+/* matrix */
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 0.86rem; }
+th, td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--line); }
+thead th {
+  font: 600 0.72rem var(--body); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); vertical-align: bottom;
+}
+tbody th { text-align: left; font-weight: 500; white-space: nowrap; }
+tbody th span { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--c); margin-right: 8px; }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+td .on, td .opt {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 0.76rem var(--mono); white-space: nowrap;
+}
+td .on::before, td .opt::before {
+  content: ""; width: 10px; height: 10px; border-radius: 50%; flex: none;
+}
+td .on::before { background: var(--c); }
+td .opt::before { border: 1.5px solid var(--c); }
+tr.grp td, tr.grp th { border-bottom-color: var(--line); }
+
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.theme-toggle {
+  font: 500 0.8rem var(--body);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.theme-toggle:hover { border-color: var(--spine); }
+.theme-toggle:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.88rem; }
+nav.toc a { color: var(--spine); text-decoration: none; border-bottom: 1px solid transparent; }
+nav.toc a:hover, nav.toc a:focus-visible { border-bottom-color: var(--spine); }
+a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
+
+@media (max-width: 680px) {
+  h1 { font-size: 1.7rem; }
+  .chain { grid-template-columns: minmax(0, 1fr); }
+  .link:not(:last-child)::after {
+    content: "↓"; right: 50%; top: auto; bottom: -12px; transform: translate(50%, 50%);
+  }
+  .cmds { grid-template-columns: minmax(0, 1fr); }
+  .gate { grid-template-columns: 4px minmax(0, 1fr); }
+  .gate .sw { grid-column: 2; text-align: left; margin-top: -4px; }
+  .fieldnotes { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .fieldnotes dd { margin-bottom: 8px; }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="intro">
+    <div class="top">
+      <div class="eyebrow">nutrimatic · sentence N</div>
+      <button type="button" class="theme-toggle" id="theme-toggle">Dark mode</button>
+    </div>
+    <h1>Nutrimatic Pair Pipeline</h1>
+    <p>How a sentence's word pairs are found in the two indexes, merged into one pair file, scored by phase 1, and narrowed down in seed-pairs, pfilter and pgui. Every coloured bar is a filter: a pair has to pass it to go on.</p>
+    <nav class="toc" aria-label="Sections">
+      <a href="#map">Map</a><a href="#stages">Stage by stage</a><a href="#pgui">pgui</a><a href="#summary">Where each filter applies</a>
+    </nav>
+  </header>
+
+  <div class="legend" aria-label="Legend">
+    <div class="families">
+      <span class="key len"><span class="swatch"></span>Length</span>
+      <span class="key voc"><span class="swatch"></span>Word list</span>
+      <span class="key let"><span class="swatch"></span>Letters</span>
+      <span class="key evi"><span class="swatch"></span>Corpus evidence</span>
+      <span class="key jud"><span class="swatch"></span>Verdicts (YES / NO / BAD)</span>
+    </div>
+    <span class="sep" aria-hidden="true"></span>
+    <div class="modes">
+      <span class="key"><span class="swatch on"></span>Always applied</span>
+      <span class="key"><span class="swatch opt"></span>Optional</span>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <section id="map">
+    <h2>Map</h2>
+    <p class="muted">Dashed boxes are inputs. The dots on a box show which kinds of filter it applies.</p>
+    <div class="map">
+      <svg viewBox="0 0 1000 671" role="img" aria-label="Flow, with the part rebuild.mk builds outlined, from the Wikipedia index, word lists and clue index through universe, query-index, cluer, pcomm, subsets and the seed view, with the DICT or BIG dictionary, to pgui's pfilter, pairs, freqsort and bag-stats columns">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path class="arrow" d="M0,0 L10,5 L0,10 z"/>
+          </marker>
+        </defs>
+
+        <!-- rebuild.mk zone -->
+        <path class="frame" d="M32,104 H968 Q976,104 976,112 V373 Q976,381 968,381 H308 Q300,381 300,373 V277 Q300,269 292,269 H32 Q24,269 24,261 V112 Q24,104 32,104 Z"/>
+        <text class="t1" x="40" y="125">rebuild.mk</text>
+        <text class="cap" x="40" y="141">or rebuild.sh</text>
+
+        <!-- edges -->
+        <path class="edge" d="M500,80 V118" marker-end="url(#ah)"/>
+        <path class="edge" d="M160,80 V193" marker-end="url(#ah)"/>
+        <path class="edge" d="M380,150 H240 V193" marker-end="url(#ah)"/>
+        <path class="edge" d="M620,150 H780 V193" marker-end="url(#ah)"/>
+        <path class="edge" d="M860,80 V193" marker-end="url(#ah)"/>
+        <path class="edge" d="M280,225 H330 V320 H378" marker-end="url(#ah)"/>
+        <path class="edge" d="M280,350 H378" marker-end="url(#ah)"/>
+        <path class="edge" d="M780,255 V280 H570 V303" marker-end="url(#ah)"/>
+        <path class="edge" d="M620,335 H718" marker-end="url(#ah)"/>
+        <path class="edge" d="M500,365 V413" marker-end="url(#ah)"/>
+        <path class="edge" d="M780,365 V390 H580 V413" marker-end="url(#ah)" stroke-dasharray="5 4"/>
+        <path class="edge" d="M720,445 H622" marker-end="url(#ah)"/>
+        <path class="edge" d="M280,445 H378" marker-end="url(#ah)"/>
+        <path class="edge" d="M500,475 V523" marker-end="url(#ah)"/>
+        <path class="edge" d="M840,475 V523" marker-end="url(#ah)"/>
+
+        <!-- inputs -->
+        <rect class="node src" x="40" y="20" width="240" height="60" rx="6"/>
+        <text class="t1" x="56" y="45">Wikipedia phrase index</text>
+        <text class="t2" x="56" y="66">wiki-merged.2.index</text>
+
+        <rect class="node src" x="380" y="20" width="240" height="60" rx="6"/>
+        <text class="t1" x="396" y="45">Word lists</text>
+        <text class="t2" x="396" y="66">idx/words · $BIG · $DICT</text>
+
+        <rect class="node src" x="720" y="20" width="240" height="60" rx="6"/>
+        <text class="t1" x="736" y="45">Crossword clue index</text>
+        <text class="t2" x="736" y="66">cluer/data/index</text>
+
+        <!-- universe -->
+        <rect class="node" x="380" y="120" width="240" height="60" rx="6"/>
+        <text class="t1" x="396" y="145">universe</text>
+        <text class="t2" x="396" y="166">idx/universe</text>
+        <circle class="dot d-len" cx="604" cy="136" r="5"/>
+
+        <!-- producers -->
+        <rect class="node" x="40" y="195" width="240" height="60" rx="6"/>
+        <text class="t1" x="56" y="220">query-index</text>
+        <text class="t2" x="56" y="241">idx/idx.2.sN</text>
+        <circle class="dot d-jud" cx="264" cy="211" r="5"/>
+        <circle class="dot d-evi" cx="251" cy="211" r="5"/>
+        <circle class="dot d-let" cx="238" cy="211" r="5"/>
+        <circle class="dot d-voc" cx="225" cy="211" r="5"/>
+        <circle class="dot d-len" cx="212" cy="211" r="5"/>
+
+        <rect class="node src" x="40" y="305" width="240" height="60" rx="6"/>
+        <text class="t1" x="56" y="330">Hand-added pairs</text>
+        <text class="t2" x="56" y="351">idx/sN.pairs</text>
+
+        <rect class="node" x="720" y="195" width="240" height="60" rx="6"/>
+        <text class="t1" x="736" y="220">pairs → cluer -j</text>
+        <text class="t2" x="736" y="241">idx/cluer.sN</text>
+        <circle class="dot d-evi" cx="944" cy="211" r="5"/>
+        <circle class="dot d-let" cx="931" cy="211" r="5"/>
+        <circle class="dot d-voc" cx="918" cy="211" r="5"/>
+        <circle class="dot d-len" cx="905" cy="211" r="5"/>
+
+        <!-- pair file -->
+        <rect class="node" x="380" y="305" width="240" height="60" rx="6"/>
+        <text class="t1" x="396" y="330">pcomm (union)</text>
+        <text class="t2" x="396" y="351">idx/pairs.sN</text>
+
+        <rect class="node" x="720" y="305" width="240" height="60" rx="6"/>
+        <text class="t1" x="736" y="330">subsets (optional)</text>
+        <text class="t2" x="736" y="351">idx/pairs.sN.NAME</text>
+        <circle class="dot d-voc" cx="944" cy="321" r="5"/>
+
+        <!-- p1 + seed view -->
+        <text class="cap" x="40" y="401">phase 1 verdicts, .wf/p1/done/out</text>
+        <rect class="node" x="40" y="415" width="240" height="60" rx="6"/>
+        <text class="t1" x="56" y="440">make-p1-index</text>
+        <text class="t2" x="56" y="461">idx/p1.idx</text>
+
+        <rect class="node" x="380" y="415" width="240" height="60" rx="6"/>
+        <text class="t1" x="396" y="440">seed view</text>
+        <text class="t2" x="396" y="461">seed-pairs · pgui source</text>
+        <circle class="dot d-len" cx="578" cy="431" r="5"/>
+        <circle class="dot d-voc" cx="591" cy="431" r="5"/>
+        <circle class="dot d-jud" cx="604" cy="431" r="5"/>
+
+        <rect class="node src" x="720" y="415" width="240" height="60" rx="6"/>
+        <text class="t1" x="736" y="440">D: dictionary</text>
+        <text class="t2" x="736" y="461">DICT · BIG</text>
+
+        <!-- pgui columns -->
+        <rect class="frame" x="40" y="525" width="920" height="136" rx="8"/>
+        <text class="t1" x="56" y="546">pgui columns</text>
+        <text class="cap" x="164" y="546">each reads the seed view, D:, or an earlier column · BAD applies to all</text>
+        <circle class="dot d-jud" cx="944" cy="541" r="5"/>
+
+        <rect class="node" x="58" y="557" width="200" height="76" rx="6"/>
+        <text class="t1" x="74" y="582">pfilter</text>
+        <text class="t2" x="74" y="603">also command line</text>
+        <circle class="dot d-len" cx="203" cy="573" r="5"/>
+        <circle class="dot d-voc" cx="216" cy="573" r="5"/>
+        <circle class="dot d-let" cx="229" cy="573" r="5"/>
+        <circle class="dot d-jud" cx="242" cy="573" r="5"/>
+
+        <rect class="node" x="286" y="557" width="200" height="76" rx="6"/>
+        <text class="t1" x="302" y="582">pairs</text>
+        <text class="t2" x="302" y="603">pairs that fit</text>
+        <circle class="dot d-len" cx="457" cy="573" r="5"/>
+        <circle class="dot d-let" cx="470" cy="573" r="5"/>
+
+        <rect class="node" x="514" y="557" width="200" height="76" rx="6"/>
+        <text class="t1" x="530" y="582">freqsort</text>
+        <text class="t2" x="530" y="603">rank by letters</text>
+        <circle class="dot d-len" cx="685" cy="573" r="5"/>
+        <circle class="dot d-let" cx="698" cy="573" r="5"/>
+
+        <rect class="node" x="742" y="557" width="200" height="76" rx="6"/>
+        <text class="t1" x="758" y="582">bag-stats</text>
+        <text class="t2" x="758" y="603">rank by leftovers</text>
+        <text class="cap" x="758" y="624">last p counts pairs in BIG</text>
+        <circle class="dot d-len" cx="913" cy="573" r="5"/>
+        <circle class="dot d-let" cx="926" cy="573" r="5"/>
+      </svg>
+    </div>
+  </section>
+
+  <!-- STAGES -->
+  <section id="stages">
+    <h2>Stage by stage</h2>
+    <div class="stages">
+
+      <article class="stage">
+        <div class="num">1</div>
+        <div class="body">
+          <div class="head"><h3>Universe dictionary</h3><span class="out">idx/universe</span></div>
+          <p>Every word any later stage may use: idx/words, $BIG (words.filtered) and $DICT (dict.filtered) merged together.</p>
+          <code class="cmd">rebuild.sh universe sN</code>
+          <ul class="gates">
+            <li class="gate len"><span>Each word is 3 to 13 letters</span><span class="sw">fixed</span></li>
+          </ul>
+          <p class="note">Removing a word from a dictionary doesn't rebuild anything below. The dictionary check in the seed view drops those pairs instead. Adding words needs a forced rebuild.</p>
+        </div>
+      </article>
+
+      <article class="stage">
+        <div class="num">2</div>
+        <div class="body">
+          <div class="head"><h3>Wikipedia pairs</h3><span class="out">idx/idx.2.sN</span></div>
+          <p>query-index lists every two-word entry in the Wikipedia phrase index that can be spelled from the sentence.</p>
+          <code class="cmd">query-index $SN --wf -w2 -n0 --csv -m3 --dict idx/universe</code>
+          <ul class="gates">
+            <li class="gate evi"><span>Appears as a two-word entry in the Wikipedia index</span><span class="sw">-w2</span></li>
+            <li class="gate voc"><span>Both words are in the universe</span><span class="sw">--dict</span></li>
+            <li class="gate len"><span>Each word is at least 3 letters</span><span class="sw">-m3</span></li>
+            <li class="gate let"><span>Fits within the sentence's letters</span><span class="sw">$SN</span></li>
+            <li class="gate jud"><span>Not a NO pair (global no.pairs)</span><span class="sw">--wf</span></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="stage">
+        <div class="num">3</div>
+        <div class="body">
+          <div class="head"><h3>Clue pairs</h3><span class="out">idx/cluer.sN</span></div>
+          <p>pairs makes every pair of clue-index words that fits the sentence. cluer then keeps the ones that appear side by side in a crossword clue. This step takes hours.</p>
+          <code class="cmd">comm -12 tokens.txt idx/universe | pairs $SN -d - -m3 | cluer/query_index.py -f - -j</code>
+          <ul class="gates">
+            <li class="gate voc"><span>Both words are in the universe and in the clue index's vocabulary</span><span class="sw">comm -12</span></li>
+            <li class="gate len"><span>Each word is at least 3 letters</span><span class="sw">-m3</span></li>
+            <li class="gate let"><span>Two different words that fit within the sentence's letters</span><span class="sw">pairs $SN</span></li>
+            <li class="gate evi"><span>The two words are adjacent, in either order, in at least one clue</span><span class="sw">-j</span></li>
+          </ul>
+          <p class="note">No NO-pair check happens here. pfilter drops NO pairs later.</p>
+        </div>
+      </article>
+
+      <article class="stage side">
+        <div class="num">4</div>
+        <div class="body">
+          <div class="head"><h3>Hand-added pairs</h3><span class="out">idx/sN.pairs</span></div>
+          <p>Pairs added by hand. They go into pairs.sN and are also forced into the seed view (stage 7).</p>
+          <div class="none">No filter. Keeping their words in the dictionaries is up to whoever adds them.</div>
+        </div>
+      </article>
+
+      <article class="stage">
+        <div class="num">5</div>
+        <div class="body">
+          <div class="head"><h3>The pair file</h3><span class="out">idx/pairs.sN</span></div>
+          <p>The Wikipedia, clue and hand-added pairs merged into one file per sentence.</p>
+          <code class="cmd">pcomm idx/cluer.sN idx/idx.2.sN | pcomm - idx/sN.pairs | sort -u</code>
+          <div class="none">A union, so nothing is dropped. <code>a,b</code> and <code>b,a</code> count as one pair.</div>
+        </div>
+      </article>
+
+      <article class="stage side">
+        <div class="num">6</div>
+        <div class="body">
+          <div class="head"><h3>Subset pair files (optional)</h3><span class="out">idx/pairs.sN.NAME</span></div>
+          <p>One per hand-made word list idx/words.sN.NAME. pgui can open one in place of pairs.sN.</p>
+          <code class="cmd">rebuild.sh subsets sN</code>
+          <ul class="gates">
+            <li class="gate voc"><span>Both words are in words.sN.NAME</span><span class="sw">fixed</span></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="stage">
+        <div class="num">7</div>
+        <div class="body">
+          <div class="head"><h3>Seed view</h3><span class="out">not a file</span></div>
+          <p>The pair file filtered as it is read, using the phase 1 YES for each pair from idx/p1.idx (built by make-p1-index). Each pair is printed in the word order with the higher YES.</p>
+          <code class="cmd">seed-pairs -s N [--pm .85] [-m 3] [-x 13] [-d FILE]</code>
+          <ul class="gates">
+            <li class="gate jud"><span>Phase 1 YES of the better word order is at least the band: .85 or .5. Pairs with no verdict are dropped.</span><span class="sw">--pm · pgui seed85 / seed50</span></li>
+            <li class="gate len"><span>Each word is m to x letters (3 to 13 by default)</span><span class="sw">-m -x · pgui m3/m4, x:</span></li>
+            <li class="gate voc opt"><span>Both words are in a dictionary. Always on in pgui.</span><span class="sw">-d · pgui D: DICT / BIG</span></li>
+          </ul>
+          <p class="note">Pairs from idx/sN.pairs skip the YES check, but still pass the length and dictionary checks. A forced word that isn't in the dictionary gets a warning. pgui's <code>all</code> source has no YES check at all.</p>
+        </div>
+      </article>
+
+      <article class="stage">
+        <div class="num">8</div>
+        <div class="body">
+          <div class="head"><h3>pfilter</h3><span class="out">stdout, or a pgui column</span></div>
+          <p>The working filter for a seed: pair length, dictionary, NO pairs, and optionally letters and required words.</p>
+          <code class="cmd">seed-pairs -s N | pfilter - -s N -l $SN [-u USED] [-d $DICT] [--rw FILE]</code>
+          <ul class="gates">
+            <li class="gate len"><span>The pair's two words together have 9 to 15 letters</span><span class="sw">-m -x</span></li>
+            <li class="gate voc"><span>Both words are in the dictionary ($BIG unless -d)</span><span class="sw">-d · --no-dict</span></li>
+            <li class="gate jud"><span>Not a NO pair: global, plus sentence N's with -s</span><span class="sw">-s N · --no-nopairs</span></li>
+            <li class="gate let opt"><span>Fits within the letters, less the used letters. With --exact, uses all of them.</span><span class="sw">-l -u --exact</span></li>
+            <li class="gate voc opt"><span>At least one word is a required word (idx/sN.required in pgui)</span><span class="sw">--rw · pgui rw</span></li>
+            <li class="gate jud opt"><span>Not already classified YES</span><span class="sw">-y</span></li>
+            <li class="gate evi opt"><span>"w1 w2" or "w2 w1" is in a Nutrimatic index</span><span class="sw">-i</span></li>
+          </ul>
+          <p class="note">--cv doesn't filter. It sorts pairs by the consonant/vowel ratio of the letters they leave. In pgui it is on by default, and pairs outside its range are hidden.</p>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- PGUI -->
+  <section id="pgui">
+    <h2>pgui</h2>
+    <p>A row of settings that every column uses, then a chain of columns. Each column takes a source, runs one command on it, and shows the result. A later column can use an earlier one as its source.</p>
+
+    <div class="bar" aria-label="pgui settings bar">
+      <span class="field"><b>seed:</b>idx/pairs.s1</span>
+      <span class="field"><b>x:</b>13</span>
+      <span class="field"><b>l:</b>letters</span>
+      <span class="field"><b>u:</b>used</span>
+      <span class="field"><b>☑</b>BAD</span>
+      <span class="field"><b>s:</b>S1 … S9</span>
+    </div>
+    <dl class="fieldnotes">
+      <dt>seed:</dt><dd>The pair file the seed views read: pairs.sN or a subset. Its <code>sN</code> picks the forced and BAD files.</dd>
+      <dt>x:</dt><dd>Longest word allowed in any seed view.</dd>
+      <dt>l: u:</dt><dd>Letters to fit, less those already used. Checked against sentence s:'s letters.</dd>
+      <dt>BAD</dt><dd>Hides items that would leave a judged-bad letter bag (judged-bad, bad.sN).</dd>
+      <dt>s:</dt><dd>The sentence for NO pairs, required words and letter checks.</dd>
+    </dl>
+
+    <div class="chain">
+      <div class="link">
+        <div class="eyebrow">source</div>
+        <h3>Where a column reads from</h3>
+        <div class="tags"><span class="tag">all</span><span class="tag">seed50m3</span><span class="tag">seed50m4</span><span class="tag">seed85m3</span><span class="tag">seed85m4</span></div>
+        <p>A seed view (stage 7), filtered by the column's D: dictionary, DICT or BIG. Or the dictionary itself, or an earlier column.</p>
+      </div>
+      <div class="link">
+        <div class="eyebrow">command</div>
+        <h3>One tool per column</h3>
+        <div class="tags"><span class="tag">pfilter</span><span class="tag">pairs</span><span class="tag">freqsort</span><span class="tag">bag-stats</span></div>
+        <p>Each command uses l:, u: and s: from the settings row, plus a few options of its own.</p>
+      </div>
+      <div class="link">
+        <div class="eyebrow">shown</div>
+        <h3>What you see</h3>
+        <p>The output, minus anything BAD hides and anything outside the column's cv range. Rows can be sent to review.</p>
+      </div>
+    </div>
+
+    <div class="cmds">
+      <div class="cmdcard">
+        <h3>pfilter</h3>
+        <p class="what">Stage 8 inside a column. It gets its dictionary from D: and its sentence from s:.</p>
+        <div class="chips">
+          <span class="chip len">pair 9–15 letters</span>
+          <span class="chip voc">in D: dictionary</span>
+          <span class="chip jud">not NO for s:</span>
+          <span class="chip let">fits l: − u:</span>
+          <span class="chip voc opt">rw</span>
+          <span class="chip let opt">ex</span>
+          <span class="chip plain">cv sort, range 0–10</span>
+        </div>
+      </div>
+      <div class="cmdcard">
+        <h3>pairs</h3>
+        <p class="what">Builds word pairs (or single words) from its source that fit the letters.</p>
+        <div class="chips">
+          <span class="chip let">fits l: − u:</span>
+          <span class="chip len">each word ≥ m: (3)</span>
+          <span class="chip let">ex: uses every letter (on)</span>
+          <span class="chip plain">1–2 words</span>
+        </div>
+      </div>
+      <div class="cmdcard">
+        <h3>freqsort</h3>
+        <p class="what">Ranks words by how much of the over-represented letters they use up.</p>
+        <div class="chips">
+          <span class="chip let">fits l: − u:</span>
+          <span class="chip len">≥ m: letters (4)</span>
+          <span class="chip plain">cv mode, hides below 1.00</span>
+        </div>
+      </div>
+      <div class="cmdcard">
+        <h3>bag-stats</h3>
+        <p class="what">Ranks pairs by what the leftover letters can still make. By default it reads seed50m3, and its wb: word list is the column before it.</p>
+        <div class="chips">
+          <span class="chip let">ex: exact (on)</span>
+          <span class="chip len">pair bag ≥ pb: (9)</span>
+          <span class="chip len">word bag ≥ wb: (5)</span>
+          <span class="chip plain">search ss: wb,p</span>
+          <span class="chip voc">last p counts pairs in BIG, whatever D: says</span>
+          <span class="chip jud opt">keeps NO pairs</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SUMMARY -->
+  <section id="summary">
+    <h2>Where each filter applies</h2>
+    <p class="muted">Filled dot: always applied. Ring: optional. Merging (stage 5) drops nothing, so it has no column.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col" style="text-align:left">Filter</th>
+            <th scope="col">1 universe</th>
+            <th scope="col">2 wiki</th>
+            <th scope="col">3 clue</th>
+            <th scope="col">6 subset</th>
+            <th scope="col">7 seed view</th>
+            <th scope="col">8 pfilter</th>
+            <th scope="col">pgui other</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="len">
+            <th scope="row"><span></span>Word length</th>
+            <td><i class="on">3–13</i></td><td><i class="on">≥3</i></td><td><i class="on">≥3</i></td><td></td>
+            <td><i class="on">m–x</i></td><td></td><td><i class="on">pairs m:</i></td>
+          </tr>
+          <tr class="len">
+            <th scope="row"><span></span>Pair length</th>
+            <td></td><td></td><td></td><td></td><td></td>
+            <td><i class="on">9–15</i></td><td><i class="on">bag-stats pb:</i></td>
+          </tr>
+          <tr class="voc">
+            <th scope="row"><span></span>In the universe</th>
+            <td></td><td><i class="on"></i></td><td><i class="on"></i></td><td></td><td></td><td></td><td></td>
+          </tr>
+          <tr class="voc">
+            <th scope="row"><span></span>In clue vocabulary</th>
+            <td></td><td></td><td><i class="on"></i></td><td></td><td></td><td></td><td></td>
+          </tr>
+          <tr class="voc">
+            <th scope="row"><span></span>In DICT / BIG</th>
+            <td></td><td></td><td></td><td></td>
+            <td><i class="opt">-d · pgui D:</i></td><td><i class="on">$BIG</i></td><td></td>
+          </tr>
+          <tr class="voc">
+            <th scope="row"><span></span>In a subset list</th>
+            <td></td><td></td><td></td><td><i class="on"></i></td><td></td><td></td><td></td>
+          </tr>
+          <tr class="voc">
+            <th scope="row"><span></span>Has a required word</th>
+            <td></td><td></td><td></td><td></td><td></td><td><i class="opt">--rw</i></td><td></td>
+          </tr>
+          <tr class="let">
+            <th scope="row"><span></span>Fits sentence letters</th>
+            <td></td><td><i class="on"></i></td><td><i class="on"></i></td><td></td><td></td><td></td><td></td>
+          </tr>
+          <tr class="let">
+            <th scope="row"><span></span>Fits letters − used</th>
+            <td></td><td></td><td></td><td></td><td></td>
+            <td><i class="opt">-l -u</i></td><td><i class="on">l: u:</i></td>
+          </tr>
+          <tr class="evi">
+            <th scope="row"><span></span>Wikipedia two-word entry</th>
+            <td></td><td><i class="on"></i></td><td></td><td></td><td></td><td><i class="opt">-i</i></td><td></td>
+          </tr>
+          <tr class="evi">
+            <th scope="row"><span></span>Adjacent in a clue</th>
+            <td></td><td></td><td><i class="on"></i></td><td></td><td></td><td></td><td></td>
+          </tr>
+          <tr class="jud">
+            <th scope="row"><span></span>Phase 1 YES ≥ band</th>
+            <td></td><td></td><td></td><td></td><td><i class="on">.85 / .5</i></td><td></td><td></td>
+          </tr>
+          <tr class="jud">
+            <th scope="row"><span></span>Not a NO pair</th>
+            <td></td><td><i class="on">global</i></td><td></td><td></td><td></td>
+            <td><i class="on">global + sN</i></td><td></td>
+          </tr>
+          <tr class="jud">
+            <th scope="row"><span></span>Not already YES</th>
+            <td></td><td></td><td></td><td></td><td></td><td><i class="opt">-y</i></td><td></td>
+          </tr>
+          <tr class="jud">
+            <th scope="row"><span></span>Leftover not judged bad</th>
+            <td></td><td></td><td></td><td></td><td></td><td></td><td><i class="opt">BAD</i></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+<script>
+(function () {
+  var root = document.documentElement;
+  var button = document.getElementById("theme-toggle");
+  var systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+  function current() {
+    return root.dataset.theme || (systemDark.matches ? "dark" : "light");
+  }
+  function update() {
+    var dark = current() === "dark";
+    button.textContent = dark ? "Light mode" : "Dark mode";
+    button.setAttribute("aria-pressed", String(dark));
+  }
+  button.addEventListener("click", function () {
+    var next = current() === "dark" ? "light" : "dark";
+    root.dataset.theme = next;
+    try { localStorage.setItem("theme", next); } catch (e) {}
+    update();
+  });
+  systemDark.addEventListener("change", update);
+  update();
+})();
+</script>
+</body>
+</html>
