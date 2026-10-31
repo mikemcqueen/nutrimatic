@@ -1,6 +1,7 @@
-// seed-pairs.cpp - Print a seed: the pairs of a pair file that pass a
-// length, dictionary and phase 1 YES filter, the forced pairs of
-// idx/sN.pairs skipping the YES filter.
+// seed-pairs.cpp - Print a seed: the pairs of a pair file (--pairs, or
+// idx/pairs.sN with -s N) that pass a length, dictionary and phase 1 YES
+// filter, and with -s N the forced pairs of idx/sN.pairs, which skip the
+// YES filter.
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
@@ -36,22 +37,26 @@ struct Args {
 };
 
 void usage(std::string_view program, FILE* out) {
-    fprintf(out, "usage: %.*s (-s N | --pairs PAIRS) [--p1 INDEX] [--pm P] "
+    fprintf(out, "usage: %.*s [-s N] [--pairs PAIRS] [--p1 INDEX] [--pm P] "
             "[-m N]\n       [-x N] [-d FILE] [--threads N]\n",
             SV_ARG(program));
     if (out != stdout) return;
 
-    fputs("  print each word,word line of PAIRS that passes the filter, in\n"
-          "  file order, written in the word order with the larger phase 1\n"
-          "  YES\n"
-          "\noptions:\n", stdout);
+    fprintf(stdout,
+            "  print each word,word line of the pair file that passes the\n"
+            "  filter, in file order, written in the word order with the\n"
+            "  larger phase 1 YES. with -s N, the pairs of %s/sN.pairs,\n"
+            "  when it exists, are forced in: they skip --pm, and those the\n"
+            "  pair file lacks print last, in its order\n"
+            "\noptions:\n", IDX_PATH);
+    dfs_help_description_column(30);
     dfs_help_option("-s, --sentence N",
-                    "read %s/pairs.sN, N from 1 to 9, and force in the "
-                    "pairs of %s/sN.pairs when it exists: they skip --pm, "
-                    "and those it lists that pairs.sN lacks print last, in "
-                    "its order",
+                    "sentence N, from 1 to 9: force in %s/sN.pairs; the "
+                    "pair file defaults to %s/pairs.sN",
                     IDX_PATH, IDX_PATH);
-    dfs_help_option("--pairs PAIRS", "read PAIRS");
+    dfs_help_option("--pairs PAIRS",
+                    "read PAIRS as the pair file, overriding the default "
+                    "of -s");
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
                     "(default: %s)", P1_INDEX_PATH);
@@ -131,8 +136,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         }
     }
     if (optparse_arg(&options) != NULL) return false;
-    if (out->sentence.has_value() == out->pairs.has_value()) {
-        report(PROGRAM, "needs one of -s or --pairs");
+    if (!out->sentence && !out->pairs) {
+        report(PROGRAM, "needs -s or --pairs");
         return false;
     }
     if (out->filter.min_len > out->filter.max_len) {
@@ -147,7 +152,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             report(PROGRAM, "-s %d isn't from 1 to 9", *out->sentence);
             return false;
         }
-        out->pairs = std::filesystem::path(IDX_PATH) / ("pairs." + sentence);
+        if (!out->pairs)
+            out->pairs =
+                std::filesystem::path(IDX_PATH) / ("pairs." + sentence);
         out->forced = forced_pairs_path(IDX_PATH, sentence);
     }
     return true;

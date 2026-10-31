@@ -7,8 +7,12 @@
 #include <stdio.h>
 #include <string.h>
 
-static size_t const HELP_DESCRIPTION_COLUMN = 38;
+static size_t help_description_column = 38;
 static size_t const HELP_LINE_WIDTH = 100;
+
+void dfs_help_description_column(size_t column) {
+  help_description_column = column;
+}
 
 static void help_spaces(size_t count) {
   while (count-- > 0) fputc(' ', stdout);
@@ -24,13 +28,13 @@ void dfs_help_option(char const* option, char const* format, ...) {
   fputs("  ", stdout);
   fputs(option, stdout);
   size_t column = 2 + strlen(option);
-  if (column >= HELP_DESCRIPTION_COLUMN) {
+  if (column >= help_description_column) {
     fputc('\n', stdout);
-    help_spaces(HELP_DESCRIPTION_COLUMN);
+    help_spaces(help_description_column);
   } else {
-    help_spaces(HELP_DESCRIPTION_COLUMN - column);
+    help_spaces(help_description_column - column);
   }
-  column = HELP_DESCRIPTION_COLUMN;
+  column = help_description_column;
 
   char const* p = description;
   while (*p != '\0') {
@@ -38,12 +42,12 @@ void dfs_help_option(char const* option, char const* format, ...) {
     char const* end = p;
     while (*end != '\0' && *end != ' ') ++end;
     size_t const word_length = size_t(end - p);
-    if (column > HELP_DESCRIPTION_COLUMN &&
+    if (column > help_description_column &&
         column + 1 + word_length > HELP_LINE_WIDTH) {
       fputc('\n', stdout);
-      help_spaces(HELP_DESCRIPTION_COLUMN);
-      column = HELP_DESCRIPTION_COLUMN;
-    } else if (column > HELP_DESCRIPTION_COLUMN) {
+      help_spaces(help_description_column);
+      column = help_description_column;
+    } else if (column > help_description_column) {
       fputc(' ', stdout);
       ++column;
     }

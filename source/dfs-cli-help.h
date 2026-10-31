@@ -1,8 +1,13 @@
 #ifndef NUTRIMATIC_DFS_CLI_HELP_H
 #define NUTRIMATIC_DFS_CLI_HELP_H
 
+#include <stddef.h>
+
 // Help formatting and descriptions shared by dfs-anagrams, query-index and
 // rerank-anagrams.
+
+// Sets the column option descriptions start at (default 38).
+void dfs_help_description_column(size_t column);
 void dfs_help_option(char const* option, char const* format, ...);
 void dfs_help_index(bool env_default = false);
 void dfs_help_used_letters();

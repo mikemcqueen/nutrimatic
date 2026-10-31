@@ -86,22 +86,29 @@ results take effect after it is rebuilt.
 
 ## Seed pairs
 
-not a file: a view of pairs.sN, filtered when it is read.
+not a file: a view of a pair file (pairs.sN by default), filtered when it
+is read.
 
-`seed-pairs (-s N | --pairs FILE) [--p1 INDEX] [--pm P] [-m N] [-x N] [-d FILE]`
+`seed-pairs [-s N] [--pairs PAIRS] [--p1 INDEX] [--pm P] [-m N] [-x N] [-d FILE]`
 
--s N reads idx/pairs.sN. keeps pairs whose larger-order YES in p1.idx
-is in [P, 1], whose words both have -m to -x letters (defaults 3 and 13),
-and, with -d, whose words are both in FILE, each written in the order with
-the larger YES. .85 (the default) and .5 are the usual bands. pgui offers
-the views all, seed50 and seed85, filtered by its D: dictionary and its m/x
+-s N (1 to 9) picks sentence N, which does two things: the pairs of
+idx/sN.pairs, when it exists, are forced in, and the pair file defaults to
+idx/pairs.sN. --pairs PAIRS overrides that default and reads PAIRS instead;
+idx/sN.pairs is still forced in. --pairs alone reads PAIRS with nothing
+forced in. one of -s or --pairs is needed.
+
+each pair of the pair file is kept when its larger-order YES in p1.idx is
+in [P, 1], its words both have -m to -x letters (defaults 3 and 13), and,
+with -d, its words are both in FILE, and is written in the order with the
+larger YES. .85 (the default) and .5 are the usual bands. pgui offers the
+views all, seed50 and seed85, filtered by its D: dictionary and its m/x
 lengths.
 
--s N (1 to 9) also forces in the pairs of idx/sN.pairs, when it exists: they skip
-the YES band, and those it lists that pairs.sN lacks (a subset's dropped
-pairs, say) print last, in its order. they still pass the length and -d
-checks, and each of their words not in FILE gets a red warning on stderr.
-pgui does the same for its seed's sN, warning once per dictionary load.
+forced pairs skip the YES band, and those the pair file lacks (a subset's
+dropped pairs, say) print last, in idx/sN.pairs order. they still pass the
+length and -d checks, and each of their words not in FILE gets a red
+warning on stderr. pgui does the same for its seed's sN, warning once per
+dictionary load.
 
 .wf/best/sN/seed.m3.85.pairs, the sentence seed dfs-anagrams -t sN loads,
 is still a file. rebuild.mk's commented-out seed target would write it
