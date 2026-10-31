@@ -48,10 +48,11 @@ std::string_view get_seed_sentence(std::string_view name) {
   return pieces.size() > 1 ? pieces[1] : std::string_view();
 }
 
-// Whether `sentence` is s followed by one digit.
-bool valid_seed_sentence(std::string_view sentence) {
-  return sentence.size() == 2 && sentence[0] == 's' &&
-         sentence[1] >= '0' && sentence[1] <= '9';
+// The forced pair file of the seed file `name` in `directory`; none when
+// its sN component isn't valid.
+std::filesystem::path seed_forced_pairs_path(
+    std::filesystem::path const& directory, std::string_view name) {
+  return forced_pairs_path(directory, get_seed_sentence(name));
 }
 
 // Adds each nonblank line of the file at `path` to `bags`, or, given
@@ -100,19 +101,25 @@ bool modified_since(std::filesystem::path const& path,
   return modification_time(path) > mtime;
 }
 
-// The pair file at `path`, read now, looking each pair up in `p1`, with
-// version `version`.
+// The pair file at `path`, read now, with the forced pairs of `forced`,
+// none when empty, looking each pair up in `p1`, with version `version`.
 AppState::SeedPairs read_seed_pairs_file(std::filesystem::path const& path,
+                                         std::filesystem::path const& forced,
                                          P1Index const* p1,
                                          unsigned version) {
   AppState::SeedPairs file;
   file.mtime = modification_time(path);
+  file.forced = forced;
+  file.forced_mtime = modification_time(forced);
   auto pairs = std::make_shared<std::vector<SeedPair>>();
   std::string error;
   file.readable =
       read_seed_pairs(path, p1, std::thread::hardware_concurrency(),
                       pairs.get(), &error);
   if (!file.readable) std::fprintf(stderr, "pgui: %s\n", error.c_str());
+  if (file.readable && !forced.empty() &&
+      !add_forced_pairs(forced, p1, pairs.get(), &error))
+    std::fprintf(stderr, "pgui: %s\n", error.c_str());
   file.pairs = std::move(pairs);
   file.version = version;
   return file;
@@ -207,9 +214,12 @@ void AppState::refresh_seed_files(std::vector<SeedViewKey> const& keys) {
                            open_p1_index(p1_path, &p1, &p1_mtime);
   if (p1_reopened) p1_open = true;
   if (seed_pairs_file &&
-      (p1_reopened || modified_since(path, seed_pairs_file->mtime)))
-    seed_pairs_file = read_seed_pairs_file(path, p1_open ? &p1 : nullptr,
-                                           ++seed_file_version);
+      (p1_reopened || modified_since(path, seed_pairs_file->mtime) ||
+       modification_time(seed_pairs_file->forced) !=
+           seed_pairs_file->forced_mtime))
+    seed_pairs_file = read_seed_pairs_file(
+        path, seed_forced_pairs_path(seed_directory, seed_name),
+        p1_open ? &p1 : nullptr, ++seed_file_version);
 }
 
 void AppState::load_seed_and_bad_bags(std::string name) {
@@ -240,6 +250,7 @@ AppState::SeedPairs const& AppState::seed_pairs() {
   if (!seed_pairs_file) {
     seed_pairs_file = read_seed_pairs_file(
         std::filesystem::path(seed_directory) / seed_name,
+        seed_forced_pairs_path(seed_directory, seed_name),
         p1_open ? &p1 : nullptr, ++seed_file_version);
   }
   return *seed_pairs_file;
@@ -262,6 +273,9 @@ AppState::SeedView const& AppState::seed_view(std::string const& band,
   auto lines = std::make_shared<Lines>();
   for (SeedPair const& pair : *pairs.pairs)
     if (seed_pair_passes(pair, filter)) lines->push_back(pair.line);
+  if (forced_warned.emplace(pairs.version, words.version).second)
+    warn_forced_words_missing("pgui", *pairs.pairs, pairs.forced,
+                              words.words->words, words.path);
   view = {std::move(lines), ++seed_file_version, pairs.version, words.version,
           seed_max_length_version};
   return view;

@@ -6,11 +6,13 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stop_token>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "bad-bag-bitmap.h"
@@ -85,9 +87,13 @@ struct AppState {
   // The pair file's pairs, each with its phase 1 YES from p1, none when it
   // can't be read, which is diagnosed, with its modification time when read,
   // the earliest time when it can't be stat'ed, and a version unique to this
-  // load.
+  // load. The forced pairs of seed_directory's sN.pairs, for the seed's sN
+  // component, are added as add_forced_pairs() adds them, with that file's
+  // path, none for an invalid component, and modification time.
   struct SeedPairs {
     std::filesystem::file_time_type mtime;
+    std::filesystem::path forced;
+    std::filesystem::file_time_type forced_mtime;
     std::shared_ptr<std::vector<SeedPair> const> pairs;
     bool readable = false;
     unsigned version = 0;
@@ -107,7 +113,8 @@ struct AppState {
   // Drops from seed_views those none of `keys` name, reopens p1 when p1_path
   // is newer than when it was opened, keeping it as it was when it can't be
   // reopened, which is diagnosed, and reads the pair file again when it's
-  // newer than when it was read or p1 was reopened.
+  // newer than when it was read, the forced pair file's modification time
+  // has changed, or p1 was reopened.
   void refresh_seed_files(std::vector<SeedViewKey> const& keys);
 
   // seed_name's pairs, read the first time they're asked for.
@@ -118,7 +125,9 @@ struct AppState {
   // and the dictionary under `dictionary` in dictionaries. Built the first
   // time it's asked for, and again, under a new seed_file_version, when the
   // pair file, that dictionary or seed_max_length have changed since. No
-  // lines and version 0 when no band in seed_bands has the key `band`.
+  // lines and version 0 when no band in seed_bands has the key `band`. The
+  // first view built from a pair file load and a dictionary load warns
+  // about each forced pair word not in that dictionary.
   SeedView const& seed_view(std::string const& band,
                             std::string const& dictionary);
 
@@ -207,6 +216,9 @@ struct AppState {
   std::optional<SeedPairs> seed_pairs_file;
   // The views built by seed_view().
   std::map<SeedViewKey, SeedView> seed_views;
+  // The pair file and dictionary versions seed_view() has warned about
+  // forced pair words under.
+  std::set<std::pair<unsigned, unsigned>> forced_warned;
   // The last SeedPairs or SeedView version given out.
   unsigned seed_file_version = 0;
   unsigned generation = 0;

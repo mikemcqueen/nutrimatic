@@ -58,6 +58,17 @@ if "$seed_pairs" -s3 --pairs pairs 2> /dev/null; then
   fail "ran with both -s and --pairs"
 fi
 
+printf '%s\n' dog,cat elk,fox fox,elk > idx/s3.pairs
+[[ $("$seed_pairs" -s3) == $'pound,writer\ncat,dog\nelk,fox' ]] ||
+  fail "-s3 did not force in idx/s3.pairs"
+forced=$("$seed_pairs" -s3 -d dict 2> "$test_dir/stderr") ||
+  fail "seed-pairs -s3 -d dict failed"
+[[ $forced == $'pound,writer\ncat,dog' ]] ||
+  fail "-s3 -d dict kept a forced pair outside dict: $forced"
+[[ $(grep -c 'forced pair word "\(elk\|fox\)"' "$test_dir/stderr") == 2 ]] ||
+  fail "-s3 -d dict did not warn about elk and fox"
+rm idx/s3.pairs
+
 echo '{"pair": "ant,bee", "seq": 3}' >> idx/a.jsonl
 stale=$("$seed_pairs" -s3 2>&1 > /dev/null) ||
   fail "a stale index failed the run"

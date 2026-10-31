@@ -1,11 +1,16 @@
 #include "seed-view.h"
 
+#include "log.h"
 #include "mapped-file.h"
 
 #include <algorithm>
+#include <bitset>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -14,6 +19,16 @@ bool word_passes(std::string_view word, SeedFilter const& filter) {
     if (len < filter.min_len || len > filter.max_len) return false;
     return !filter.dictionary ||
         filter.dictionary->count(std::string(word)) != 0;
+}
+
+using WordPair = std::pair<std::string_view, std::string_view>;
+
+// The words of `pair`, the smaller first.
+WordPair sorted_words(SeedPair const& pair) {
+    std::string_view const line = pair.line;
+    std::string_view const a = line.substr(0, pair.comma);
+    std::string_view const b = line.substr(pair.comma + 1);
+    return a < b ? WordPair{a, b} : WordPair{b, a};
 }
 
 size_t count_lines(char const* begin, char const* end) {
@@ -114,8 +129,80 @@ bool read_seed_pairs(std::filesystem::path const& pairs,
     return true;
 }
 
+bool add_forced_pairs(std::filesystem::path const& forced,
+                      P1Index const* p1, std::vector<SeedPair>* pairs,
+                      std::string* error) {
+    std::error_code code;
+    if (!std::filesystem::exists(forced, code)) return true;
+    std::vector<SeedPair> listed;
+    if (!read_seed_pairs(forced, p1, 1, &listed, error)) return false;
+    std::map<WordPair, bool> found;
+    std::vector<std::bitset<256>> starts;
+    auto const start =
+        [&](std::string_view word) -> std::bitset<256>::reference {
+        if (starts.size() <= word.size()) starts.resize(word.size() + 1);
+        return starts[word.size()][uint8_t(word[0])];
+    };
+    for (SeedPair const& pair : listed) {
+        WordPair const key = sorted_words(pair);
+        found.emplace(key, false);
+        start(key.first) = true;
+        start(key.second) = true;
+    }
+    for (SeedPair& pair : *pairs) {
+        if (pair.comma >= starts.size() ||
+            !starts[pair.comma][uint8_t(pair.line[0])])
+            continue;
+        auto const it = found.find(sorted_words(pair));
+        if (it == found.end()) continue;
+        pair.forced = true;
+        it->second = true;
+    }
+    pairs->reserve(pairs->size() + size_t(std::ranges::count(
+        found, false, &std::pair<WordPair const, bool>::second)));
+    for (SeedPair& pair : listed) {
+        bool& seen = found.find(sorted_words(pair))->second;
+        if (seen) continue;
+        seen = true;
+        pair.forced = true;
+        pairs->push_back(pair);
+    }
+    return true;
+}
+
+bool valid_seed_sentence(std::string_view sentence) {
+    return sentence.size() == 2 && sentence[0] == 's' &&
+        sentence[1] >= '1' && sentence[1] <= '9';
+}
+
+std::filesystem::path forced_pairs_path(std::filesystem::path const& directory,
+                                        std::string_view sentence) {
+    if (!valid_seed_sentence(sentence)) return {};
+    return directory / (std::string(sentence) + ".pairs");
+}
+
+void warn_forced_words_missing(std::string_view program,
+                               std::vector<SeedPair> const& pairs,
+                               std::filesystem::path const& forced,
+                               DfsDictionary const& dictionary,
+                               std::filesystem::path const& dictionary_path) {
+    std::set<std::string> missing;
+    for (SeedPair const& pair : pairs) {
+        if (!pair.forced) continue;
+        std::string_view const line = pair.line;
+        for (std::string_view const word :
+                 {line.substr(0, pair.comma), line.substr(pair.comma + 1)})
+            if (!dictionary.contains(std::string(word)))
+                missing.emplace(word);
+    }
+    for (std::string const& word : missing)
+        alert(program, "forced pair word \"%s\" of %s isn't in %s",
+              word.c_str(), forced.c_str(), dictionary_path.c_str());
+}
+
 bool seed_pair_passes(SeedPair const& pair, SeedFilter const& filter) {
-    if (filter.min_yes && (pair.yes < 0 || pair.yes < *filter.min_yes))
+    if (filter.min_yes && !pair.forced &&
+        (pair.yes < 0 || pair.yes < *filter.min_yes))
         return false;
     std::string_view const line = pair.line;
     return word_passes(line.substr(0, pair.comma), filter) &&

@@ -27,7 +27,9 @@ index finds for SN, words of 3 or more letters.
 
 idx/sN.pairs
 
-hand-added pairs for SN, optional. folded into pairs.sN when present.
+hand-added pairs for SN, optional. folded into pairs.sN when present, and
+forced into the seed views of pairs.sN (see Seed pairs). keeping their
+words in the dictionaries is up to whoever adds them.
 
 
 ## Required words
@@ -94,6 +96,12 @@ and, with -d, whose words are both in FILE, each written in the order with
 the larger YES. .85 (the default) and .5 are the usual bands. pgui offers
 the views all, seed50 and seed85, filtered by its D: dictionary and its m/x
 lengths.
+
+-s N (1 to 9) also forces in the pairs of idx/sN.pairs, when it exists: they skip
+the YES band, and those it lists that pairs.sN lacks (a subset's dropped
+pairs, say) print last, in its order. they still pass the length and -d
+checks, and each of their words not in FILE gets a red warning on stderr.
+pgui does the same for its seed's sN, warning once per dictionary load.
 
 .wf/best/sN/seed.m3.85.pairs, the sentence seed dfs-anagrams -t sN loads,
 is still a file. rebuild.mk's commented-out seed target would write it

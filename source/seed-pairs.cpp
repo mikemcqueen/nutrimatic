@@ -1,5 +1,6 @@
 // seed-pairs.cpp - Print a seed: the pairs of a pair file that pass a
-// length, dictionary and phase 1 YES filter.
+// length, dictionary and phase 1 YES filter, the forced pairs of
+// idx/sN.pairs skipping the YES filter.
 
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
@@ -30,6 +31,7 @@ struct Args {
     SeedFilter filter;
     int threads = 0;
     std::optional<std::filesystem::path> pairs;
+    std::optional<std::filesystem::path> forced;
     std::optional<int> sentence;
 };
 
@@ -44,7 +46,11 @@ void usage(std::string_view program, FILE* out) {
           "  YES\n"
           "\noptions:\n", stdout);
     dfs_help_option("-s, --sentence N",
-                    "read %s/pairs.sN", IDX_PATH);
+                    "read %s/pairs.sN, N from 1 to 9, and force in the "
+                    "pairs of %s/sN.pairs when it exists: they skip --pm, "
+                    "and those it lists that pairs.sN lacks print last, in "
+                    "its order",
+                    IDX_PATH, IDX_PATH);
     dfs_help_option("--pairs PAIRS", "read PAIRS");
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
@@ -57,7 +63,8 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("-x N", "keep pairs whose words both have at most N "
                     "letters (default 13)");
     dfs_help_option("-d, --dict FILE",
-                    "keep pairs whose words are both in FILE");
+                    "keep pairs whose words are both in FILE, warning "
+                    "about each word of a forced pair that isn't");
     dfs_help_option("--threads N",
                     "read PAIRS on N threads, 0 for all of them (default 0)");
     dfs_help_option("-h, --help", "show this help");
@@ -134,9 +141,15 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         return false;
     }
     if (!out->p1) out->p1 = P1_INDEX_PATH;
-    if (out->sentence)
-        out->pairs = std::filesystem::path(IDX_PATH) /
-            ("pairs.s" + std::to_string(*out->sentence));
+    if (out->sentence) {
+        std::string const sentence = "s" + std::to_string(*out->sentence);
+        if (!valid_seed_sentence(sentence)) {
+            report(PROGRAM, "-s %d isn't from 1 to 9", *out->sentence);
+            return false;
+        }
+        out->pairs = std::filesystem::path(IDX_PATH) / ("pairs." + sentence);
+        out->forced = forced_pairs_path(IDX_PATH, sentence);
+    }
     return true;
 }
 
@@ -175,6 +188,13 @@ int main(int argc, char* argv[]) {
         report(PROGRAM, "%s", error.c_str());
         return 1;
     }
+    if (args.forced && !add_forced_pairs(*args.forced, &p1, &pairs, &error)) {
+        report(PROGRAM, "%s", error.c_str());
+        return 1;
+    }
+    if (args.forced && args.dictionary)
+        warn_forced_words_missing(PROGRAM, pairs, *args.forced, dictionary,
+                                  *args.dictionary);
     for (SeedPair const& pair : pairs)
         if (seed_pair_passes(pair, args.filter)) puts(pair.line.c_str());
     return 0;

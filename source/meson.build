@@ -306,7 +306,7 @@ make_p1_index = executable('make-p1-index', 'make-p1-index.cpp',
   install: true)
 
 seed_view_lib = static_library('seed-view', 'seed-view.cpp',
-  link_with: [pair_evidence_lib, dfs_class_list_lib],
+  link_with: [pair_evidence_lib, dfs_class_list_lib, log_lib],
   dependencies: thread_dep)
 
 seed_pairs = executable('seed-pairs', 'seed-pairs.cpp',
