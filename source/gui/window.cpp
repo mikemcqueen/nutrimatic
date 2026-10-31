@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
@@ -31,10 +32,25 @@ Window::Window()
     : seed_max_length_(app_state().seed_max_length),
       sentence_(app_state().sentence) {
   AppState const& state = app_state();
-  std::snprintf(seed_, sizeof seed_, "%s", state.seed_name.c_str());
+  list_seeds();
   std::snprintf(letters_, sizeof letters_, "%s", state.visual_letters.c_str());
   std::snprintf(used_letters_, sizeof used_letters_, "%s",
                 state.used_letters.c_str());
+}
+
+void Window::list_seeds() {
+  seed_names_.clear();
+  if (sentence_ == CLASSIFIED_NO_SENTENCE) return;
+  std::string const prefix = "pairs.s" + std::to_string(sentence_);
+  std::error_code error;
+  for (std::filesystem::directory_iterator
+           it(app_state().seed_directory, error), end;
+       !error && it != end; it.increment(error)) {
+    std::string name = it->path().filename().string();
+    if (name == prefix || name.starts_with(prefix + "."))
+      seed_names_.push_back(std::move(name));
+  }
+  std::ranges::sort(seed_names_);
 }
 
 void Window::render() {
@@ -56,9 +72,19 @@ void Window::render() {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("seed:");
     ImGui::SameLine(0, 0);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    bool const seed_entered = ImGui::InputText(
-        "##seed", seed_, sizeof seed_, ImGuiInputTextFlags_EnterReturnsTrue);
+    float const spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + spacing));
+    std::optional<std::string> seed_chosen;
+    if (ImGui::BeginCombo("##seed", app_state().seed_name.c_str())) {
+      for (std::string const& name : seed_names_) {
+        bool const selected = name == app_state().seed_name;
+        if (ImGui::Selectable(name.c_str(), selected)) seed_chosen = name;
+        if (selected) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine(0, spacing);
+    bool const seed_refreshed = refresh_button("seed_refresh");
     ImGui::TableNextColumn();
     float const length_width = ImGui::CalcTextSize("00").x +
                                2 * ImGui::GetStyle().FramePadding.x;
@@ -106,22 +132,10 @@ void Window::render() {
       bool const selected = sentence_ == i;
       char label[4];
       std::snprintf(label, sizeof label, "S%d", i);
-      if (toggle_button(label, selected))
-        sentence_ = selected ? CLASSIFIED_NO_SENTENCE : i;
+      if (toggle_button(label, selected)) sentence_ = i;
     }
     ImGui::EndTable();
     AppState& state = app_state();
-    if (seed_entered) {
-      state.load_seed_and_bad_bags(seed_);
-      std::vector<SeedViewKey> keys;
-      for (Column const& column : columns_) {
-        if (std::optional<SeedViewKey> key = column.seed_view_key())
-          keys.push_back(std::move(*key));
-      }
-      state.refresh_seed_files(keys);
-      state.refresh_dictionaries();
-      state.refresh_required_words();
-    }
     if (max_length_entered) {
       seed_max_length_ = std::max(seed_max_length_, 0);
       if (seed_max_length_ != state.seed_max_length) {
@@ -145,6 +159,23 @@ void Window::render() {
       state.load_sentence_letters();
       state.refresh_required_words();
       ++state.generation;
+      list_seeds();
+      if (!seed_names_.empty()) seed_chosen = seed_names_.front();
+    }
+    if (seed_refreshed) {
+      list_seeds();
+      seed_chosen = state.seed_name;
+    }
+    if (seed_chosen) {
+      state.load_seed_and_bad_bags(std::move(*seed_chosen));
+      std::vector<SeedViewKey> keys;
+      for (Column const& column : columns_) {
+        if (std::optional<SeedViewKey> key = column.seed_view_key())
+          keys.push_back(std::move(*key));
+      }
+      state.refresh_seed_files(keys);
+      state.refresh_dictionaries();
+      state.refresh_required_words();
     }
   }
 

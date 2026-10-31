@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "column.h"
@@ -13,24 +14,28 @@
 // used-letters (u) fields splitting its width evenly, the seed field followed
 // by a per-word max length (x) field, then a BAD checkbox that
 // toggles app_state()'s judged_bad_filter and sentence buttons S1-S9 (s),
-// then the columns side by side. The seed field starts from app_state()'s
-// seed_name, and Enter in it loads the pair file from the name typed, with
-// its bad bags (see AppState::load_seed_and_bad_bags()), keeps only the seed
-// views the columns' seed sources name and reads the pair file again when
-// it's newer (see AppState::refresh_seed_files()), reloads the loaded
+// then the columns side by side. The seed field is a dropdown showing
+// app_state()'s seed_name and listing the selected sentence's pair files
+// (see list_seeds()), followed by a refresh button. Choosing a file loads
+// it, with its bad bags (see AppState::load_seed_and_bad_bags()), keeps only
+// the seed views the columns' seed sources name and reads the pair file again
+// when it's newer (see AppState::refresh_seed_files()), reloads the loaded
 // dictionaries whose files are newer (see AppState::refresh_dictionaries()),
-// and refreshes the required words (see AppState::refresh_required_words()).
+// and refreshes the required words (see AppState::refresh_required_words());
+// the refresh button lists the files again and does the same for seed_name.
 // The x: field starts from app_state()'s seed_max_length, and Enter in it
 // stores it there.
 // The letters fields start from app_state(), and Enter in either stores both
 // there and validates them (see AppState::validate_letters()); the l: field
 // is framed red while app_state()'s letters_valid is false. The buttons
-// start from app_state()'s sentence; clicking one selects it alone, or
-// deselects it when already selected, and stores the result there, loading
-// its letters (see AppState::load_sentence_letters()) and refreshing its
-// required words (see AppState::refresh_required_words()). Left and Right,
-// while a column's ListBox has keyboard focus, move it to the ListBox of the
-// nearest column that shows one on that side (see ListBox::focus()).
+// start from app_state()'s sentence; clicking one selects it alone, and
+// clicking the selected one leaves it selected, and the selection is stored
+// there, loading its letters (see AppState::load_sentence_letters()),
+// refreshing its required words (see AppState::refresh_required_words()),
+// listing its pair files, and choosing the first of them, if any.
+// Left and Right, while a column's ListBox has keyboard focus, move it to the
+// ListBox of the nearest column that shows one on that side (see
+// ListBox::focus()).
 // Shift+R, while a column's ListBox has keyboard focus, opens a Review of the
 // items it shows, when its command can review them from its source (see
 // Command::review_kind()), its output is up to date, and a sentence is
@@ -82,11 +87,16 @@ class Window {
   void stop();
 
  private:
+  // Sets seed_names_ to the sorted names of the files in app_state()'s
+  // seed_directory named pairs.sN or pairs.sN.*, N being sentence_; none
+  // without a sentence.
+  void list_seeds();
+
   // Opens a Review of column `id`; see the class comment.
   void open_review(ColumnIdentifier id);
 
   std::vector<Column> columns_;
-  char seed_[256] = {};
+  std::vector<std::string> seed_names_;
   int seed_max_length_;
   char letters_[256] = {};
   char used_letters_[256] = {};
