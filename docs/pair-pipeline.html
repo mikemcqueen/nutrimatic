@@ -342,7 +342,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
     <h2>Map</h2>
     <p class="muted">Dashed boxes are inputs. The dots on a box show which kinds of filter it applies.</p>
     <div class="map">
-      <svg viewBox="0 0 1000 671" role="img" aria-label="Flow, with the part rebuild.mk builds outlined, from the Wikipedia index, word lists and clue index through universe, query-index, cluer, pcomm, subsets and the seed view, with the DICT or BIG dictionary, to pgui's pfilter, pairs, freqsort and bag-stats columns">
+      <svg viewBox="0 0 1000 671" role="img" aria-label="Flow, with the part rebuild.mk builds outlined, from the Wikipedia index, word lists and clue index through universe, query-index, cluer, pcomm, subsets and the seed view, with the hand-added pairs feeding both pcomm and the seed view and the DICT or BIG dictionary, to pgui's pfilter, pairs, freqsort and bag-stats columns">
         <defs>
           <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path class="arrow" d="M0,0 L10,5 L0,10 z"/>
@@ -350,7 +350,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
         </defs>
 
         <!-- rebuild.mk zone -->
-        <path class="frame" d="M32,104 H968 Q976,104 976,112 V373 Q976,381 968,381 H308 Q300,381 300,373 V277 Q300,269 292,269 H32 Q24,269 24,261 V112 Q24,104 32,104 Z"/>
+        <path class="frame" d="M32,104 H968 Q976,104 976,112 V373 Q976,381 968,381 H644 Q636,381 636,373 V332 Q636,324 628,324 H308 Q300,324 300,316 V277 Q300,269 292,269 H32 Q24,269 24,261 V112 Q24,104 32,104 Z"/>
         <text class="t1" x="40" y="125">rebuild.mk</text>
         <text class="cap" x="40" y="141">or rebuild.sh</text>
 
@@ -360,11 +360,12 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
         <path class="edge" d="M380,150 H240 V193" marker-end="url(#ah)"/>
         <path class="edge" d="M620,150 H780 V193" marker-end="url(#ah)"/>
         <path class="edge" d="M860,80 V193" marker-end="url(#ah)"/>
-        <path class="edge" d="M280,225 H330 V320 H378" marker-end="url(#ah)"/>
-        <path class="edge" d="M280,350 H378" marker-end="url(#ah)"/>
-        <path class="edge" d="M780,255 V280 H570 V303" marker-end="url(#ah)"/>
-        <path class="edge" d="M620,335 H718" marker-end="url(#ah)"/>
-        <path class="edge" d="M500,365 V413" marker-end="url(#ah)"/>
+        <path class="edge" d="M280,225 H330 V280 H378" marker-end="url(#ah)"/>
+        <path class="edge" d="M280,337 H420 V312" marker-end="url(#ah)"/>
+        <path class="edge" d="M280,355 H450 V413" marker-end="url(#ah)"/>
+        <path class="edge" d="M780,255 V280 H622" marker-end="url(#ah)"/>
+        <path class="edge" d="M620,300 H668 V335 H718" marker-end="url(#ah)"/>
+        <path class="edge" d="M500,310 V413" marker-end="url(#ah)"/>
         <path class="edge" d="M780,365 V390 H580 V413" marker-end="url(#ah)" stroke-dasharray="5 4"/>
         <path class="edge" d="M720,445 H622" marker-end="url(#ah)"/>
         <path class="edge" d="M280,445 H378" marker-end="url(#ah)"/>
@@ -413,9 +414,9 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
         <circle class="dot d-len" cx="905" cy="211" r="5"/>
 
         <!-- pair file -->
-        <rect class="node" x="380" y="305" width="240" height="60" rx="6"/>
-        <text class="t1" x="396" y="330">pcomm (union)</text>
-        <text class="t2" x="396" y="351">idx/pairs.sN</text>
+        <rect class="node" x="380" y="250" width="240" height="60" rx="6"/>
+        <text class="t1" x="396" y="275">pcomm (union)</text>
+        <text class="t2" x="396" y="296">idx/pairs.sN</text>
 
         <rect class="node" x="720" y="305" width="240" height="60" rx="6"/>
         <text class="t1" x="736" y="330">subsets (optional)</text>
@@ -529,7 +530,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
         <div class="num">4</div>
         <div class="body">
           <div class="head"><h3>Hand-added pairs</h3><span class="out">idx/sN.pairs</span></div>
-          <p>Pairs added by hand. They go into pairs.sN and are also forced into the seed view (stage 7).</p>
+          <p>Pairs added by hand. They go into pairs.sN and are also forced into the seed view.</p>
           <div class="none">No filter. Keeping their words in the dictionaries is up to whoever adds them.</div>
         </div>
       </article>
@@ -619,7 +620,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
         <div class="eyebrow">source</div>
         <h3>Where a column reads from</h3>
         <div class="tags"><span class="tag">all</span><span class="tag">seed50m3</span><span class="tag">seed50m4</span><span class="tag">seed85m3</span><span class="tag">seed85m4</span></div>
-        <p>A seed view (stage 7), filtered by the column's D: dictionary, DICT or BIG. Or the dictionary itself, or an earlier column.</p>
+        <p>A seed view, filtered by the column's D: dictionary, DICT or BIG. Or the dictionary itself, or an earlier column.</p>
       </div>
       <div class="link">
         <div class="eyebrow">command</div>
@@ -637,7 +638,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
     <div class="cmds">
       <div class="cmdcard">
         <h3>pfilter</h3>
-        <p class="what">Stage 8 inside a column. It gets its dictionary from D: and its sentence from s:.</p>
+        <p class="what">The same filter as pfilter on the command line, with its dictionary from D: and its sentence from s:.</p>
         <div class="chips">
           <span class="chip len">pair 9–15 letters</span>
           <span class="chip voc">in D: dictionary</span>
@@ -669,7 +670,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
       </div>
       <div class="cmdcard">
         <h3>bag-stats</h3>
-        <p class="what">Ranks pairs by what the leftover letters can still make. By default it reads seed50m3, and its wb: word list is the column before it.</p>
+        <p class="what">Ranks pairs by what the leftover letters can still make.</p>
         <div class="chips">
           <span class="chip let">ex: exact (on)</span>
           <span class="chip len">pair bag ≥ pb: (9)</span>
@@ -685,7 +686,7 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
   <!-- SUMMARY -->
   <section id="summary">
     <h2>Where each filter applies</h2>
-    <p class="muted">Filled dot: always applied. Ring: optional. Merging (stage 5) drops nothing, so it has no column.</p>
+    <p class="muted">Filled dot: always applied. Ring: optional. Merging into pairs.sN drops nothing, so it has no column.</p>
     <div class="tablewrap">
       <table>
         <thead>
