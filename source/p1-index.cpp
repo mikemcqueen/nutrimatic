@@ -1,5 +1,7 @@
 #include "p1-index.h"
 
+#include "run-threads.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -169,10 +171,7 @@ bool build_p1_index(std::filesystem::path const& dir,
             return;
         }
     };
-    std::vector<std::thread> workers;
-    for (size_t t = 1; t < threads; ++t) workers.emplace_back(work, t);
-    work(0);
-    for (std::thread& worker : workers) worker.join();
+    run_threads(threads, work);
     if (!failure.empty()) {
         *error = failure;
         return false;

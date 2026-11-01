@@ -19,6 +19,7 @@
 #include "letter-bag.h"
 #include "log.h"
 #include "optparse.h"
+#include "run-threads.h"
 #include "sub-bag-index.h"
 #include "workflow-paths.h"
 
@@ -232,13 +233,10 @@ class BadBags {
     for (size_t target = min_length; target <= max_length; ++target) {
       std::atomic<size_t> next(0);
       std::vector<Walker> walkers(std::min(threads, tasks), Walker(*this));
-      std::vector<std::thread> pool;
-      for (Walker& walker : walkers)
-        pool.push_back(std::thread([&, target] {
-          for (size_t task; (task = next++) < tasks;)
-            walker.run_task(task, prefix, target);
-        }));
-      for (std::thread& thread : pool) thread.join();
+      run_threads(walkers.size(), [&](size_t t) {
+        for (size_t task; (task = next++) < tasks;)
+          walkers[t].run_task(task, prefix, target);
+      });
       for (Walker const& walker : walkers) decided += walker.decided;
     }
   }

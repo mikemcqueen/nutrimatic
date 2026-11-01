@@ -33,6 +33,7 @@
 #include "mix-bits.h"
 #include "optparse.h"
 #include "pairs-impl.h"
+#include "run-threads.h"
 
 inline constexpr int INNER_MIN_WORD_LENGTH = 3;
 inline constexpr int DEFAULT_MIN_WB_LENGTH = 5;
@@ -53,10 +54,13 @@ struct BagStatsArgs {
     bool drop_no = true;
     int min_word_bag_length = DEFAULT_MIN_WB_LENGTH;
     int min_pair_bag_length = DEFAULT_MIN_PB_LENGTH;
-    // Unset means DEFAULT_SEARCH, except --leftovers needs --ss.
+    // Unset means DEFAULT_SEARCH, except --leftovers and --unique need --ss.
     std::optional<std::string> search_text;
     // bag-stats --leftovers: --ss has no last p or pf.
     bool leftovers = false;
+    // bag-stats --unique without --leftovers: --ss has no last p or pf, and
+    // each PAIRS row's usage is counted.
+    bool pair_usage = false;
     Search search;
     std::optional<std::filesystem::path> prospects_file;
     int threads = 0;
@@ -171,6 +175,8 @@ struct BagStatsInputs {
     PairsExactCounter counter;
     std::vector<PairBag> final_bags;
     std::vector<std::vector<std::string>> final_rows;
+    // With pair_usage, the rows of each of pair_bags.
+    std::vector<std::vector<std::string>> pair_rows;
     bool has_prior = false;
     // Each pick step's list: the pb steps, then the ppb steps.
     std::vector<std::vector<PairBag> const*> steps;
@@ -186,15 +192,6 @@ bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
 
 // --threads, at most the hardware threads.
 size_t bag_stats_threads(BagStatsArgs const& args);
-
-// Runs work(thread) on `threads` threads, the calling thread 0.
-template <typename Work>
-void run_threads(size_t threads, Work const& work) {
-    std::vector<std::thread> workers;
-    for (size_t t = 1; t < threads; ++t) workers.emplace_back(work, t);
-    work(size_t(0));
-    for (std::thread& worker : workers) worker.join();
-}
 
 // "1h02m", "34m10s" or "12s".
 std::string format_duration(double seconds);
@@ -235,6 +232,11 @@ class PickWalk {
     // The current row's picks, one per pair step: a PAIRS bag's list index,
     // or a --pp bag's past every PAIRS bag.
     void picks(std::vector<uint32_t>* out) const;
+
+    // The current row's pick at pair step `j`, as picks() numbers it.
+    uint32_t pick(size_t j) const {
+        return uint32_t(chosen_[j] + (j < pair_steps_ ? 0 : pair_bags_));
+    }
 
     // The current row's PAIRS.
     uint64_t pairs() const;
@@ -318,12 +320,27 @@ class LeftoverSketch {
     std::vector<uint8_t> registers_;
 };
 
+// How many distinct PAIRS bags some combinations pick and how many PAIRS
+// rows those bags hold, one per group of them, then of every group.
+struct UniqueBags {
+    std::vector<uint64_t> bags;
+    std::vector<uint64_t> pairs;
+};
+
+// What --leftovers --unique adds: UniqueBags by how many picks the
+// combinations make, and by how many letters they leave.
+struct LeftoverUnique {
+    UniqueBags by_picks;
+    UniqueBags by_left;
+};
+
 // Prints the --leftovers output of `counts` for `args` on `letters`, with
-// `pair_bags` PAIRS bags; with `hll`, its estimates are the leftovers.
-// Returns the exit status.
+// `pair_bags` PAIRS bags; with `hll`, its estimates are the leftovers; with
+// `unique`, its columns too. Returns the exit status.
 int print_leftovers(BagStatsArgs const& args, std::string const& letters,
                     size_t pair_bags, LeftoverCounts counts,
-                    LeftoverSketch const* hll);
+                    LeftoverSketch const* hll,
+                    LeftoverUnique const* unique = nullptr);
 
 // How many units PickWalk walks over `steps`: the first step's picks, or 1
 // without steps, where nothing walks them.

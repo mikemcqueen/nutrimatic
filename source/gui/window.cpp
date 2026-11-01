@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "app-state.h"
+#include "log.h"
 #include "widgets.h"
 
 namespace {
@@ -246,17 +247,16 @@ void Window::open_review(ColumnIdentifier id) {
   ReviewKind const kind =
       command ? command->review_kind(column.source_) : ReviewKind::none;
   if (kind == ReviewKind::none) {
-    std::fputs("pgui: only pfilter columns, or freqsort columns on dict, can "
-               "be reviewed\n",
-               stderr);
+    report("pgui", "only pfilter columns, or freqsort columns on dict, can be "
+           "reviewed");
     return;
   }
   if (column.pending()) {
-    std::fputs("pgui: can't review a column that is running\n", stderr);
+    report("pgui", "can't review a column that is running");
     return;
   }
   if (sentence == CLASSIFIED_NO_SENTENCE) {
-    std::fputs("pgui: select a sentence to review\n", stderr);
+    report("pgui", "select a sentence to review");
     return;
   }
   review_ = Review::open(kind, column.output(), column.list_.values(),

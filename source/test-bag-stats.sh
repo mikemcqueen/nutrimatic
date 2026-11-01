@@ -188,11 +188,34 @@ actual=$("$bag_stats" --min-wb-len 3 --ss wb,p catdoglow "$test_dir/pairs" \
   "$test_dir/dict" 2>/dev/null | tail -n 1)
 [[ $actual == ',1,1,1,4,4,0,1' ]] || fail "--ss wb,p is wrong: $actual"
 
-exact=$("$bag_stats" --leftovers --min-pb-len 6 --ss pb,pb catdoglowanttan \
-  "$test_dir/pairs" "$test_dir/dict")
-hll=$("$bag_stats" --leftovers --hll --min-pb-len 6 --ss pb,pb \
+exact=$("$bag_stats" --leftovers --no-nopairs --min-pb-len 6 --ss pb,pb \
   catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
-[[ -n $exact && ${hll/LEFTOVERS_HLL/LEFTOVERS} == "$exact" ]] ||
+hll=$("$bag_stats" --leftovers --hll --no-nopairs --min-pb-len 6 --ss pb,pb \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ ${exact##*$'\n'} == 'all,1,2,1' &&
+   ${hll/LEFTOVERS_HLL/LEFTOVERS} == "$exact" ]] ||
   fail "--leftovers --hll differs: $hll"
+
+unique=$("$bag_stats" --leftovers --unique --no-nopairs --min-pb-len 6 \
+  --ss pb,pb catdoglowanttan "$test_dir/pairs" "$test_dir/dict" |
+  sed '1,/^$/d')
+[[ $unique == $'PICKS,COMBINATIONS,UNIQUE_BAGS,UNIQUE_PAIRS\n1,2,2,3\n2,1,2,3\n\nLEFT,COMBINATIONS,ROWS,LEFTOVERS,UNIQUE_BAGS,UNIQUE_PAIRS\n3,1,2,1,2,3\nall,1,2,1,2,3' ]] ||
+  fail "--leftovers --unique is wrong: $unique"
+
+usage=$("$bag_stats" --unique --no-nopairs --min-pb-len 6 --ss pb,pb \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ $usage == $'low,ant\nact,god\ncat,dog' ]] ||
+  fail "--unique is wrong: $usage"
+usage=$("$bag_stats" --unique -n 2 --no-nopairs --min-pb-len 6 --ss pb,pb \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ $usage == $'low,ant\nact,god' ]] || fail "--unique -n 2 is wrong: $usage"
+usage=$("$bag_stats" --unique --no-nopairs --min-pb-len 6 --ss pb \
+  catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ $usage == $'act,god\ncat,dog\nlow,ant' ]] ||
+  fail "--unique --ss pb is wrong: $usage"
+usage=$("$bag_stats" --unique --ts --no-nopairs --min-pb-len 6 \
+  --ss pb,pb catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
+[[ $usage == $'2 low ant\n1 act god\n1 cat dog' ]] ||
+  fail "--unique --top-segments is wrong: $usage"
 
 echo PASS

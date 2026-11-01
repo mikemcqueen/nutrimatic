@@ -10,12 +10,13 @@
 
 #include "dfs-cli-args.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "widgets.h"
 
 bool PairFilter::run(std::vector<SharedLines> const& inputs,
                      LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {
-    fprintf(stderr, "pgui: pfilter takes 1 input, not %zu\n", inputs.size());
+    report("pgui: pfilter", "takes 1 input, not %zu", inputs.size());
     return false;
   }
 
@@ -26,13 +27,13 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
       return false;
     options.bag = bag;
   } else if (!params.used_letters.empty()) {
-    fputs("pgui: pfilter used letters require letters\n", stderr);
+    report("pgui: pfilter", "used letters require letters");
     return false;
   } else if (cv) {
-    fputs("pgui: pfilter cv requires letters\n", stderr);
+    report("pgui: pfilter", "cv requires letters");
     return false;
   } else if (exact) {
-    fputs("pgui: pfilter ex requires letters\n", stderr);
+    report("pgui: pfilter", "ex requires letters");
     return false;
   }
   options.exact = exact;

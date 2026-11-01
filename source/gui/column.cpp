@@ -20,6 +20,7 @@
 #include "app-state.h"
 #include "lc-impl.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "widgets.h"
 #include "window.h"
 
@@ -192,13 +193,18 @@ void Column::render() {
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::BeginCombo("##choice", command_names[choice_])) {
       for (int i = 0; i < static_cast<int>(command_names.size()); ++i) {
-        if (id_ == 0 && std::string_view(command_names[i]) == "bag-stats")
+        if (id_ == 0 && (std::string_view(command_names[i]) == "bag-stats" ||
+                         (commands_[i] && commands_[i]->reads_columns_only())))
           continue;
         if (!ImGui::Selectable(command_names[i], choice_ == i) ||
             choice_ == i)
           continue;
         choice_ = i;
         if (has_word_bag_source() && id_ > 0) word_bag_column_ = id_ - 1;
+        if (commands_[choice_] && commands_[choice_]->reads_columns_only()) {
+          source_ = id_ - 1;
+          continue;
+        }
         if (commands_[choice_] &&
             commands_[choice_]->has_dictionary_in_src() &&
             !std::holds_alternative<Dict>(source_))
@@ -344,7 +350,7 @@ void load_letter_count_font() {
   letter_count_font =
       ImGui::GetIO().Fonts->AddFontFromFileTTF(LETTER_COUNT_FONT, 0.0f, &config);
   if (!letter_count_font)
-    std::fprintf(stderr, "pgui: can't load \"%s\"\n", LETTER_COUNT_FONT);
+    warn("pgui", "can't load \"%s\"", LETTER_COUNT_FONT);
 }
 
 void Column::render_letter_count(float x, float y) const {
@@ -367,19 +373,24 @@ void Column::render_letter_count(float x, float y) const {
 void Column::render_sources() {
   bool const has_dictionary_in_src =
       commands_[choice_] && commands_[choice_]->has_dictionary_in_src();
+  bool const columns_only =
+      commands_[choice_] && commands_[choice_]->reads_columns_only();
   std::string const label = source_label(source_);
   std::vector<char const*> widest = {label.c_str()};
-  for (SeedBand const& band : AppState::seed_bands)
-    widest.push_back(band.key);
+  if (!columns_only)
+    for (SeedBand const& band : AppState::seed_bands)
+      widest.push_back(band.key);
   if (has_dictionary_in_src) widest.push_back("dict");
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("src:");
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(combo_width(widest));
   if (ImGui::BeginCombo("##source", label.c_str())) {
-    for (SeedBand const& band : AppState::seed_bands) {
-      InputSource const choice = Seed{band.key};
-      if (ImGui::Selectable(band.key, source_ == choice)) source_ = choice;
+    if (!columns_only) {
+      for (SeedBand const& band : AppState::seed_bands) {
+        InputSource const choice = Seed{band.key};
+        if (ImGui::Selectable(band.key, source_ == choice)) source_ = choice;
+      }
     }
     if (has_dictionary_in_src) {
       InputSource const choice = Dict{};
@@ -543,6 +554,9 @@ Column::Key Column::wanted_key() const {
               : 0,
           commands_[choice_] && commands_[choice_]->uses_required_words()
               ? app_state().required_words.version
+              : 0,
+          commands_[choice_] && commands_[choice_]->uses_p1()
+              ? app_state().p1_version
               : 0};
 }
 
@@ -626,14 +640,14 @@ void Column::save_shown() const {
       std::filesystem::temp_directory_path() / "pgui.out";
   FILE* const file = std::fopen(path.c_str(), "w");
   if (!file) {
-    std::fprintf(stderr, "pgui: can't write \"%s\"\n", path.c_str());
+    report("pgui", "can't write \"%s\"", path.c_str());
     return;
   }
   Lines const& items = *output();
   for (int const i : list_.shown_items())
     std::fprintf(file, "%s\n", items[i].c_str());
   if (std::fclose(file) != 0)
-    std::fprintf(stderr, "pgui: can't write \"%s\"\n", path.c_str());
+    report("pgui", "can't write \"%s\"", path.c_str());
 }
 
 void Column::start(Key key) {
@@ -661,7 +675,7 @@ void Column::start(Key key) {
   if (auto const* id = std::get_if<ColumnIdentifier>(&source_)) {
     Column const* source = source_column();
     if (!source) {
-      fprintf(stderr, "pgui: no column %d\n", *id);
+      report("pgui", "no column %d", *id);
       publish(key, false, empty_lines(), empty_lines());
       return;
     }
@@ -679,7 +693,7 @@ void Column::start(Key key) {
                               std::move(dictionary_lines),
                               std::move(word_bag_lines),
                               state.dictionary("big_dict").words,
-                              state.required_words.words, {}};
+                              state.required_words.words, state.p1_path, {}};
   auto job = std::make_shared<Job>();
   job->key = key;
   job->cancellable = command->cancellable();

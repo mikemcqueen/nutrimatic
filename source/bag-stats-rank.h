@@ -88,6 +88,7 @@ enum {
     { NULL, 'n', OPTPARSE_REQUIRED }, \
     { "by-length", OPT_RANK_BY_LENGTH, OPTPARSE_NONE }, \
     { "top-segments", OPT_RANK_TOP_SEGMENTS, OPTPARSE_NONE }, \
+    { "ts", OPT_RANK_TOP_SEGMENTS, OPTPARSE_NONE }, \
     { "score", OPT_RANK_SCORE, OPTPARSE_REQUIRED }, \
     { "prior", OPT_RANK_PRIOR, OPTPARSE_REQUIRED }, \
     { "no-prior", OPT_RANK_NO_PRIOR, OPTPARSE_NONE }, \
@@ -193,7 +194,8 @@ class PairPickFilter {
 // before it returns. Unless `final_bags` is null, also every bag of PAIRS
 // into it, with `final_rows` as load_pair_bags() takes `rows`. `pair_bags`
 // may be null to skip it, and with `final_bags` null too PAIRS isn't read.
-// `has_prior`: whether the bags have priors.
+// `has_prior`: whether the bags have priors. Unless `pair_rows` is null,
+// with `final_bags` null, also each of `pair_bags`' rows into it.
 bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::optional<std::filesystem::path> const& prospects_file,
                     std::filesystem::path const& pairs_file,
@@ -202,7 +204,9 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::vector<PairBag>* pair_bags,
                     std::vector<PairBag>* final_bags,
                     std::vector<std::vector<std::string>>* final_rows,
-                    bool* has_prior);
+                    bool* has_prior,
+                    std::vector<std::vector<std::string>>* pair_rows =
+                        nullptr);
 
 struct LengthValueHash {
     size_t operator()(std::pair<size_t, double> const& key) const {

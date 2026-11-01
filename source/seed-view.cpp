@@ -2,6 +2,7 @@
 
 #include "log.h"
 #include "mapped-file.h"
+#include "run-threads.h"
 
 #include <algorithm>
 #include <bitset>
@@ -36,6 +37,30 @@ size_t count_lines(char const* begin, char const* end) {
     return size_t(std::count(begin, end, '\n')) + (end[-1] != '\n');
 }
 
+// Sets `*out` to `line` as two comma-separated words, oriented by `p1`.
+// False when it isn't two comma-separated words.
+bool parse_seed_line(std::string_view line, P1Index const* p1, SeedPair* out) {
+    size_t const comma = line.find(',');
+    if (comma == 0 || comma == std::string_view::npos ||
+        comma + 1 == line.size() ||
+        line.find(',', comma + 1) != std::string_view::npos)
+        return false;
+    std::string_view const a = line.substr(0, comma);
+    std::string_view const b = line.substr(comma + 1);
+    P1Yes yes;
+    if (!p1 || !p1->yes(a, b, &yes)) {
+        *out = {std::string(line), -1, uint16_t(comma)};
+    } else if (yes.ba > yes.ab) {
+        std::string swapped;
+        swapped.reserve(line.size());
+        swapped.append(b).append(1, ',').append(a);
+        *out = {std::move(swapped), float(yes.ba), uint16_t(b.size())};
+    } else {
+        *out = {std::string(line), float(yes.ab), uint16_t(comma)};
+    }
+    return true;
+}
+
 // Reads the lines of [begin, end) into `out`, one per element. False, with
 // `*bad` at the start of the first line that isn't two comma-separated
 // words.
@@ -45,26 +70,10 @@ bool read_chunk(char const* begin, char const* end, P1Index const* p1,
         char const* newline =
             static_cast<char const*>(memchr(start, '\n', size_t(end - start)));
         if (newline == nullptr) newline = end;
-        std::string_view const line(start, size_t(newline - start));
-        size_t const comma = line.find(',');
-        if (comma == 0 || comma == std::string_view::npos ||
-            comma + 1 == line.size() ||
-            line.find(',', comma + 1) != std::string_view::npos) {
+        if (!parse_seed_line(std::string_view(start, size_t(newline - start)),
+                             p1, out++)) {
             *bad = start;
             return false;
-        }
-        std::string_view const a = line.substr(0, comma);
-        std::string_view const b = line.substr(comma + 1);
-        P1Yes yes;
-        if (!p1 || !p1->yes(a, b, &yes)) {
-            *out++ = {std::string(line), -1, uint16_t(comma)};
-        } else if (yes.ba > yes.ab) {
-            std::string swapped;
-            swapped.reserve(line.size());
-            swapped.append(b).append(1, ',').append(a);
-            *out++ = {std::move(swapped), float(yes.ba), uint16_t(b.size())};
-        } else {
-            *out++ = {std::string(line), float(yes.ab), uint16_t(comma)};
         }
         start = newline + 1;
     }
@@ -99,14 +108,8 @@ bool read_seed_pairs(std::filesystem::path const& pairs,
     }
     bounds.push_back(data + size);
 
-    auto const run = [&](auto const& work) {
-        std::vector<std::thread> workers;
-        for (size_t t = 1; t < threads; ++t) workers.emplace_back(work, t);
-        work(0);
-        for (std::thread& worker : workers) worker.join();
-    };
     std::vector<size_t> starts(threads + 1, 0);
-    run([&](size_t t) {
+    run_threads(threads, [&](size_t t) {
         starts[t + 1] = count_lines(bounds[t], bounds[t + 1]);
     });
     for (size_t t = 0; t < threads; ++t) starts[t + 1] += starts[t];
@@ -114,7 +117,7 @@ bool read_seed_pairs(std::filesystem::path const& pairs,
     out->clear();
     out->resize(starts[threads]);
     std::vector<char const*> bad(threads, nullptr);
-    run([&](size_t t) {
+    run_threads(threads, [&](size_t t) {
         read_chunk(bounds[t], bounds[t + 1], p1, out->data() + starts[t],
                    &bad[t]);
     });
@@ -127,6 +130,31 @@ bool read_seed_pairs(std::filesystem::path const& pairs,
         return false;
     }
     return true;
+}
+
+bool read_seed_pairs(std::span<std::string const> lines,
+                     std::string_view name, P1Index const* p1,
+                     size_t threads, std::vector<SeedPair>* out,
+                     std::string* error) {
+    threads = std::clamp<size_t>(threads, 1, std::max<size_t>(1, lines.size()));
+    out->clear();
+    out->resize(lines.size());
+    std::vector<size_t> bad(threads, lines.size());
+    run_threads(threads, [&](size_t t) {
+        size_t const end = lines.size() * (t + 1) / threads;
+        for (size_t i = lines.size() * t / threads; i < end; ++i) {
+            if (!parse_seed_line(lines[i], p1, &(*out)[i])) {
+                bad[t] = i;
+                return;
+            }
+        }
+    });
+    size_t const first = std::ranges::min(bad);
+    if (first == lines.size()) return true;
+    *error = std::string(name) + " line " + std::to_string(first + 1) +
+        ": expected two comma-separated words";
+    out->clear();
+    return false;
 }
 
 bool add_forced_pairs(std::filesystem::path const& forced,

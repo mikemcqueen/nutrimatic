@@ -24,7 +24,8 @@ inline constexpr int BAG_STATS_DEFAULT_PAIR_CACHE_SIZE_MB = 1000;
 // (--completions), or whether to list every one with pairs, or SOLO (--all);
 // and with a last pf, whether it counts only the PAIRS rows that use all of
 // what's left (--exact); with --leftovers, whether distinct leftovers are
-// estimated by HyperLogLog (--hll).
+// estimated by HyperLogLog (--hll) and whether the distinct PAIRS bags
+// picked and their rows are counted (--unique).
 struct BagStatsOptions {
     BagStatsArgs common;
     int pair_cache_size_mb = BAG_STATS_DEFAULT_PAIR_CACHE_SIZE_MB;
@@ -32,6 +33,7 @@ struct BagStatsOptions {
     bool exact = false;
     bool all = false;
     bool hll = false;
+    bool unique = false;
 };
 
 // One combination of one word bag per word step that fits a remainder; with
@@ -56,6 +58,21 @@ struct BagStatsCompletion {
 bool list_bag_stats(BagStatsOptions const& options, std::string const& letters,
                     BagStatsInputs const& inputs, std::stop_token stop,
                     std::vector<BagStatsCompletion>* out);
+
+// A PAIRS row of a pb pick, and how many pick combinations it's in.
+struct BagStatsPairUsage {
+    std::string const* row;  // into the inputs' pair_rows
+    uint64_t combinations;
+};
+
+// What bag-stats --unique without --leftovers prints of `inputs`, loaded by
+// the caller with its pair_rows and steps set, for `args`, whose --ss is pb
+// steps alone: each row of a pick some combination makes, most combinations
+// first, ties by row, the first args.rank.top of them when it is set. Once
+// `stop` is requested, quits early, leaving the counts partial.
+void list_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs,
+                     std::stop_token stop,
+                     std::vector<BagStatsPairUsage>* out);
 
 // Runs bag-stats with `options` on `letters`, its LETTERS less its used
 // letters, printing to standard output. Returns the exit status; errors are

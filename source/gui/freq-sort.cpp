@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "dfs-cli-args.h"
+#include "log.h"
 #include "widgets.h"
 
 FreqSort::FreqSort() {
@@ -21,7 +22,7 @@ FreqSort::FreqSort() {
 bool FreqSort::run(std::vector<SharedLines> const& inputs,
                    LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {
-    fprintf(stderr, "pgui: freqsort takes 1 input, not %zu\n", inputs.size());
+    report("pgui: freqsort", "takes 1 input, not %zu", inputs.size());
     return false;
   }
 

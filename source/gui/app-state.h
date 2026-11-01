@@ -202,12 +202,14 @@ struct AppState {
   // seed_directory's p1.idx, opened from p1_path by load_app_state() and
   // reopened by refresh_seed_files(), with its modification time when
   // opened, the earliest time before; every pair has no verdict while it
-  // hasn't been.
+  // hasn't been. p1_version goes up each time refresh_seed_files() reopens
+  // it.
   std::filesystem::path p1_path;
   P1Index p1;
   std::filesystem::file_time_type p1_mtime =
       std::filesystem::file_time_type::min();
   bool p1_open = false;
+  unsigned p1_version = 0;
   // Each view's per-word max length, inclusive, and a version that goes up
   // when it changes.
   int seed_max_length = SeedFilter{}.max_len;
@@ -253,8 +255,9 @@ struct AppState {
 // letters, the dictionary its Column's D: dropdown names and that
 // dictionary's lines, and the lines of the dictionary or the output of the
 // column its wb: dropdown names, empty when it has none; the "big_dict"
-// dictionary, whatever D: names; app_state()'s required words; and the
-// token a command may check to quit early, its output then discarded.
+// dictionary, whatever D: names; app_state()'s required words and p1_path;
+// and the token a command may check to quit early, its output then
+// discarded.
 struct LetterToolsParams {
   std::string letters;
   std::string used_letters;
@@ -264,6 +267,7 @@ struct LetterToolsParams {
   SharedLines word_bag_lines;
   SharedDictionary big_dictionary;
   SharedDictionary required_words;
+  std::filesystem::path p1_path;
   std::stop_token stop;
 };
 

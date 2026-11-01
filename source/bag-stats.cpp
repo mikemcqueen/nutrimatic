@@ -21,6 +21,7 @@ constexpr int OPT_EXACT = OPT_COMMON_END + 2;
 constexpr int OPT_ALL = OPT_COMMON_END + 3;
 constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 4;
 constexpr int OPT_HLL = OPT_COMMON_END + 5;
+constexpr int OPT_UNIQUE = OPT_COMMON_END + 6;
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
@@ -42,9 +43,13 @@ void usage(std::string_view program, FILE* out) {
             "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
             "       [--exact] [--completions N | --all]\n"
             "       LETTERS PAIRS DICT\n"
-            "       %.*s --leftovers [--hll] --ss pb[,pb...] [-u LETTERS]\n"
-            "       [-s N | --no-nopairs] [--min-pb-len N] [--threads N]\n"
-            "       [--progress N] LETTERS PAIRS DICT\n",
+            "       %.*s --leftovers [--hll] [--unique] --ss pb[,pb...]\n"
+            "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
+            "       [--threads N] [--progress N] LETTERS PAIRS DICT\n"
+            "       %.*s --unique --ss pb[,pb...] [-n N] [--top-segments]\n"
+            "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
+            "       [--threads N] [--progress N] LETTERS PAIRS DICT\n",
+            SV_ARG(program),
             SV_ARG(program),
             SV_ARG(program),
             SV_ARG(program));
@@ -76,6 +81,17 @@ void usage(std::string_view program, FILE* out) {
                     "with --leftovers, estimate the distinct leftovers by "
                     "HyperLogLog, within about 1%%, in little memory, as "
                     "LEFTOVERS_HLL");
+    dfs_help_option("--unique",
+                    "with --leftovers, also count the distinct PAIRS bags "
+                    "the combinations pick, as UNIQUE_BAGS, and the PAIRS "
+                    "rows those bags hold, as UNIQUE_PAIRS, by how many "
+                    "picks they make, by how many letters they leave, and "
+                    "in the all row of any length; without it, with --ss "
+                    "of pb steps alone, print each PAIRS row the "
+                    "combinations use as left,right, by how many pair "
+                    "combinations it's in, most first, ties by pair, the "
+                    "first N with -n N, and with --top-segments as "
+                    "\"COUNT left right\"");
     dfs_help_option("--exact",
                     "with a last pf, count only the PAIRS rows that use all "
                     "of what's left, as wb and pb steps before it need; a "
@@ -93,6 +109,7 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         { "leftovers", OPT_LEFTOVERS, OPTPARSE_NONE },
         { "hll", OPT_HLL, OPTPARSE_NONE },
         { "hyper-log-log", OPT_HLL, OPTPARSE_NONE },
+        { "unique", OPT_UNIQUE, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -129,6 +146,9 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
           case OPT_HLL:
             out->hll = true;
             break;
+          case OPT_UNIQUE:
+            out->unique = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -142,12 +162,14 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         report(PROGRAM, "--hll goes with --leftovers");
         return false;
     }
+    out->common.pair_usage = out->unique && !out->common.leftovers;
     if (!check_common_args(PROGRAM, &options, &out->common)) return false;
     Search const& search = out->common.search;
-    if (out->common.leftovers) {
+    if (out->common.leftovers || out->common.pair_usage) {
         if (out->exact || out->all || out->completions > 0) {
-            report(PROGRAM, "--leftovers doesn't go with --exact, --all or "
-                   "--completions");
+            report(PROGRAM, "%s doesn't go with --exact, --all or "
+                   "--completions",
+                   out->common.leftovers ? "--leftovers" : "--unique");
             return false;
         }
         return true;

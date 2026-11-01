@@ -18,7 +18,8 @@
 void load_letter_count_font();
 
 // One top-level pane: a line of a source dropdown, offering app_state()'s
-// seed keys, "dict" when the command has it (see
+// seed keys unless the command reads columns only (see
+// Command::reads_columns_only()), "dict" when the command has it (see
 // Command::has_dictionary_in_src()), and the number, counting from 1, of each
 // column before this one, and a letter
 // source dropdown, offering "all" and those same numbers; a line of an "f:"
@@ -26,9 +27,11 @@ void load_letter_count_font();
 // starting at DICT, naming the dictionary in app_state()'s dictionaries the
 // command runs with, that "dict" names, and that a seed source is filtered
 // by (see AppState::seed_view()); then a dropdown of
-// command_names, less "bag-stats" in the first column, naming the command (see
-// make_command()), sized to the longest name, and setting the source to the
-// command's default seed when it has one
+// command_names, less "bag-stats" and the commands reading columns only in
+// the first column, naming the command (see make_command()), sized to the
+// longest name, and setting the source to the column just before when the
+// command reads columns only, or to the command's default seed when it has
+// one
 // (see Command::default_seed()), beside that command's option widgets, with
 // its display option widgets on the line below (see
 // Command::render_display_options()), followed, when the command has a word
@@ -42,7 +45,8 @@ void load_letter_count_font();
 // dictionary, the word bag source, app_state(), or the source, letters or
 // word bag column's output or selection has changed since it last ran, or
 // the seed view the source names or a dictionary file D: or wb: names has
-// been rebuilt or reloaded; it waits for a pending source, letters or word
+// been rebuilt or reloaded, or p1 has been reopened for a command that uses
+// it (see Command::uses_p1()); it waits for a pending source, letters or word
 // bag column to finish first. The letters column is the one letter_source
 // names, none for "all". The command runs with the used letters passed on by the letters
 // column (see output_used_letters()), or app_state()'s (the window's u:
@@ -138,6 +142,9 @@ class Column {
     // app_state()'s required_words version when the command uses it (see
     // Command::uses_required_words()), else 0.
     unsigned required_words_version;
+    // app_state()'s p1_version when the command uses p1 (see
+    // Command::uses_p1()), else 0.
+    unsigned p1_version;
     bool operator==(Key const&) const = default;
   };
 
@@ -216,10 +223,11 @@ class Column {
   std::vector<std::optional<Command>> commands_;
   int choice_ = 0;
   unsigned options_version_ = 0;
-  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0};
+  Key made_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0, 0};
   // The remaining letters status line, as of remaining_key_.
   std::string remaining_;
-  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0};
+  Key remaining_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0,
+                       0};
   // The consonant/vowel ratio of the remaining letters, as of remaining_key_.
   double remaining_cv_ = 0;
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
@@ -229,7 +237,7 @@ class Column {
   std::vector<std::string> letter_count_;
   // The made_key_, app_state()'s judged_bad_version, and display_version()
   // as of the last update_hidden().
-  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0};
+  Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0, 0};
   unsigned hidden_judged_version_ = 0;
   unsigned hidden_display_version_ = 0;
   unsigned version_ = 0;

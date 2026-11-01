@@ -33,10 +33,6 @@ bool toggle_button(std::string_view label, bool on) {
     ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32_WHITE);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
   }
-  float const side = ImGui::GetFrameHeight();
-  ImGui::PushID(label.data(), label.data() + label.size());
-  bool const clicked = ImGui::Button("##toggle", ImVec2(side, side));
-  ImGui::PopID();
   ImFontBaked* const font = ImGui::GetFontBaked();
   float left = FLT_MAX, right = -FLT_MAX, top = FLT_MAX, bottom = -FLT_MAX;
   float x = 0;
@@ -48,8 +44,14 @@ bool toggle_button(std::string_view label, bool on) {
     bottom = std::max(bottom, glyph->Y1);
     x += glyph->AdvanceX;
   }
+  float const side = ImGui::GetFrameHeight();
+  float const width = std::max(
+      side, std::ceil(right - left + 2 * ImGui::GetStyle().FramePadding.x));
+  ImGui::PushID(label.data(), label.data() + label.size());
+  bool const clicked = ImGui::Button("##toggle", ImVec2(width, side));
+  ImGui::PopID();
   ImVec2 const min = ImGui::GetItemRectMin();
-  ImVec2 const pos(std::floor(min.x + (side - left - right) / 2),
+  ImVec2 const pos(std::floor(min.x + (width - left - right) / 2),
                    std::floor(min.y + (side - top - bottom) / 2));
   ImGui::GetWindowDrawList()->AddText(pos, ImGui::GetColorU32(ImGuiCol_Text),
                                       label.data(),

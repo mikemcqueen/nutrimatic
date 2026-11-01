@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,6 +29,13 @@ struct SeedPair {
 bool read_seed_pairs(std::filesystem::path const& pairs,
                      P1Index const* p1, size_t threads,
                      std::vector<SeedPair>* out, std::string* error);
+
+// As read_seed_pairs() above, reading `lines`, one pair each, named `name`
+// in `*error`.
+bool read_seed_pairs(std::span<std::string const> lines,
+                     std::string_view name, P1Index const* p1,
+                     size_t threads, std::vector<SeedPair>* out,
+                     std::string* error);
 
 // Marks each pair of `*pairs` that `forced`, a pair file, lists, in either
 // order, as forced, then appends, as forced, the pairs it lists that

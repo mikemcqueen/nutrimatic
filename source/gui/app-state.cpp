@@ -21,6 +21,7 @@
 #include "dfs-cli-args.h"
 #include "input-source.h"
 #include "letter-bag.h"
+#include "log.h"
 #include "workflow-paths.h"
 
 namespace {
@@ -65,10 +66,9 @@ void load_bags(std::string const& path, std::unordered_set<std::string>& bags,
       std::fopen(path.c_str(), "rb"), std::fclose);
   if (!in) {
     if (errno == ENOENT)
-      std::fprintf(stderr, "pgui: skipping missing %s\n", path.c_str());
+      warn("pgui", "skipping missing %s", path.c_str());
     else
-      std::fprintf(stderr, "pgui: can't open %s: %s\n", path.c_str(),
-                   std::strerror(errno));
+      report("pgui", "can't open %s: %s", path.c_str(), std::strerror(errno));
     return;
   }
   std::string line;
@@ -81,7 +81,7 @@ void load_bags(std::string const& path, std::unordered_set<std::string>& bags,
     if (!line.empty()) bags.insert(line);
   } while (read_line(in.get(), &line));
   if (std::ferror(in.get()))
-    std::fprintf(stderr, "pgui: can't read %s\n", path.c_str());
+    report("pgui", "can't read %s", path.c_str());
 }
 
 // The modification time of the file at `path`, or the earliest time when it
@@ -116,10 +116,10 @@ AppState::SeedPairs read_seed_pairs_file(std::filesystem::path const& path,
   file.readable =
       read_seed_pairs(path, p1, std::thread::hardware_concurrency(),
                       pairs.get(), &error);
-  if (!file.readable) std::fprintf(stderr, "pgui: %s\n", error.c_str());
+  if (!file.readable) report("pgui", "%s", error.c_str());
   if (file.readable && !forced.empty() &&
       !add_forced_pairs(forced, p1, pairs.get(), &error))
-    std::fprintf(stderr, "pgui: %s\n", error.c_str());
+    report("pgui", "%s", error.c_str());
   file.pairs = std::move(pairs);
   file.version = version;
   return file;
@@ -136,10 +136,10 @@ bool open_p1_index(std::filesystem::path const& path, P1Index* index,
   std::string error;
   std::string stale;
   if (!opened.open(path, &error, &stale)) {
-    std::fprintf(stderr, "pgui: %s\n", error.c_str());
+    report("pgui", "%s", error.c_str());
     return false;
   }
-  if (!stale.empty()) std::fprintf(stderr, "pgui: %s\n", stale.c_str());
+  if (!stale.empty()) alert("pgui", "%s", stale.c_str());
   *index = std::move(opened);
   *mtime = modified;
   return true;
@@ -212,7 +212,10 @@ void AppState::refresh_seed_files(std::vector<SeedViewKey> const& keys) {
       std::filesystem::path(seed_directory) / seed_name;
   bool const p1_reopened = modified_since(p1_path, p1_mtime) &&
                            open_p1_index(p1_path, &p1, &p1_mtime);
-  if (p1_reopened) p1_open = true;
+  if (p1_reopened) {
+    p1_open = true;
+    ++p1_version;
+  }
   if (seed_pairs_file &&
       (p1_reopened || modified_since(path, seed_pairs_file->mtime) ||
        modification_time(seed_pairs_file->forced) !=
@@ -227,11 +230,10 @@ void AppState::load_seed_and_bad_bags(std::string name) {
   std::string const sentence(get_seed_sentence(seed_name));
   bool const valid = valid_seed_sentence(sentence);
   if (sentence.empty()) {
-    std::fprintf(stderr, "missing sentence in seed filename: %s\n",
-                 seed_name.c_str());
+    warn("pgui", "missing sentence in seed filename: %s", seed_name.c_str());
   } else if (!valid) {
-    std::fprintf(stderr, "invalid sentence '%s' in seed filename %s\n",
-                 sentence.c_str(), seed_name.c_str());
+    warn("pgui", "invalid sentence '%s' in seed filename %s",
+         sentence.c_str(), seed_name.c_str());
   }
   if (sentence == bad_bags_sentence) return;
   bad_bags_sentence = sentence;
@@ -321,8 +323,7 @@ void AppState::refresh_required_words() {
       refresh_dictionary(&required_words, &dictionary_version);
   if (!required_words.words || !required_words.words->words.empty()) return;
   if (readable)
-    std::fprintf(stderr, "pgui: \"%s\" has no words\n",
-                 required_words.path.c_str());
+    warn("pgui", "\"%s\" has no words", required_words.path.c_str());
   required_words.words = nullptr;
 }
 
@@ -339,7 +340,7 @@ void AppState::add_judged_bad(std::string letters) {
   std::ofstream file(path, std::ios::app);
   file << letters << '\n';
   file.close();
-  if (!file) std::fprintf(stderr, "pgui: can't append to %s\n", path.c_str());
+  if (!file) report("pgui", "can't append to %s", path.c_str());
 }
 
 void AppState::set_letters(std::string letters) {
@@ -359,14 +360,14 @@ void AppState::set_letters(std::string letters) {
   if (names == 0) {
     actual_letters = letters;
   } else if (names > 1) {
-    std::fputs("pgui: only one letters $ENV_VAR is allowed\n", stderr);
+    report("pgui", "only one letters $ENV_VAR is allowed");
     actual_letters.clear();
     letters_error = true;
   } else {
     std::string const variable(name);
     char const* const value = std::getenv(variable.c_str());
     if (!value || !*value) {
-      std::fprintf(stderr, "pgui: letters $%s is unset\n", variable.c_str());
+      report("pgui", "letters $%s is unset", variable.c_str());
       actual_letters.clear();
       letters_error = true;
     } else {
@@ -401,8 +402,7 @@ void AppState::validate_letters() {
     letters_valid = fits_letter_bag(LetterBag(*sentence_letters),
                                     bag_letters(actual_letters));
     if (!letters_valid)
-      std::fprintf(stderr, "pgui: letters don't fit within S%d's letters\n",
-                   sentence);
+      report("pgui", "letters don't fit within S%d's letters", sentence);
   }
 }
 

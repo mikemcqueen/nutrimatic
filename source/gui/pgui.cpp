@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "app-state.h"
+#include "log.h"
 #include "window.h"
 
 namespace {
@@ -131,7 +132,7 @@ int main(int, char**) {
 
   SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
-    std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+    report("pgui", "SDL_Init: %s", SDL_GetError());
     return 1;
   }
   WindowGeometry& geometry = window_geometry();
@@ -142,12 +143,12 @@ int main(int, char**) {
   SDL_Renderer* renderer = SDL_CreateRenderer(
       window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
   if (!window || !renderer) {
-    std::fprintf(stderr, "SDL window/renderer: %s\n", SDL_GetError());
+    report("pgui", "SDL window/renderer: %s", SDL_GetError());
     return 1;
   }
   SDL_RendererInfo info;
   if (SDL_GetRendererInfo(renderer, &info) == 0)
-    std::fprintf(stderr, "pgui: SDL renderer %s\n", info.name);
+    report("pgui", "SDL renderer %s", info.name);
 
   ImGui::StyleColorsDark();
   ImGui::GetIO().Fonts->AddFontDefaultVector();
@@ -203,7 +204,7 @@ int main(int, char**) {
   }
 
   if (top.running())
-    std::fputs("Exiting: waiting on running tasks...\n", stderr);
+    report("pgui", "exiting: waiting on running tasks...");
   top.stop();
 
   ImGui_ImplSDLRenderer2_Shutdown();
@@ -212,6 +213,6 @@ int main(int, char**) {
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
-  std::fputs("Exiting.\n", stderr);
+  report("pgui", "exiting");
   return 0;
 }

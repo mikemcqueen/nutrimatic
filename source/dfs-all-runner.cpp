@@ -11,6 +11,7 @@
 #include "dfs-all-runner.h"
 #include "dfs-diagnostic.h"
 #include "dfs-search-internal.h"
+#include "run-threads.h"
 
 namespace {
 
@@ -311,8 +312,6 @@ void DfsAllSolutionsRunner::run_parallel(
   size_t const worker_count = std::min(threads, tasks.size() - head);
   std::atomic<size_t> next_task(head);
   std::vector<Worker> workers(worker_count);
-  std::vector<std::thread> pool;
-  pool.reserve(worker_count - 1);
   for (size_t i = 0; i < worker_count; ++i) start_worker(&workers[i]);
   auto const body = [&](size_t index) {
     Worker& worker = workers[index];
@@ -342,13 +341,7 @@ void DfsAllSolutionsRunner::run_parallel(
           task.representative_log_score, sink);
     }
   };
-  try {
-    for (size_t i = 1; i < worker_count; ++i)
-      pool.push_back(std::thread(body, i));
-  } catch (...) {}
-  results->execution.search_threads = 1 + pool.size();
-  body(0);
-  for (std::thread& thread : pool) thread.join();
+  results->execution.search_threads = run_threads(worker_count, body);
   for (size_t i = 0; i < results->execution.search_threads; ++i) {
     results->all_solutions.add(workers[i].stats);
     results->certificate.counters.add(workers[i].certificate);

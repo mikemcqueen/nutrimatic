@@ -7,8 +7,7 @@
 #include "dfs-cli-help.h"
 #include "log.h"
 #include "optparse.h"
-#include "p1-index.h"
-#include "seed-view.h"
+#include "seed-pairs-impl.h"
 #include "workflow-paths.h"
 
 #include <cstdio>
@@ -27,12 +26,8 @@ constexpr int OPT_THREADS = 258;
 constexpr int OPT_PAIRS = 259;
 
 struct Args {
-    std::optional<std::filesystem::path> p1;
-    std::optional<std::filesystem::path> dictionary;
-    SeedFilter filter;
-    int threads = 0;
+    SeedPairsOptions options;
     std::optional<std::filesystem::path> pairs;
-    std::optional<std::filesystem::path> forced;
     std::optional<int> sentence;
 };
 
@@ -94,7 +89,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     int option;
     double prob_min;
     int sentence;
-    out->filter.min_yes = .85f;
+    SeedPairsOptions& opts = out->options;
     while ((option = optparse_long(&options, long_options, NULL)) != -1) {
         switch (option) {
           case 's':
@@ -105,26 +100,26 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             out->pairs = options.optarg;
             break;
           case OPT_P1:
-            out->p1 = options.optarg;
+            opts.p1 = options.optarg;
             break;
           case OPT_PROB_MIN:
             if (!parse_double(options.optarg, "--pm", &prob_min))
                 return false;
-            out->filter.min_yes = float(prob_min);
+            opts.filter.min_yes = float(prob_min);
             break;
           case 'm':
-            if (!parse_count(options.optarg, "-m", &out->filter.min_len))
+            if (!parse_count(options.optarg, "-m", &opts.filter.min_len))
                 return false;
             break;
           case 'x':
-            if (!parse_count(options.optarg, "-x", &out->filter.max_len))
+            if (!parse_count(options.optarg, "-x", &opts.filter.max_len))
                 return false;
             break;
           case 'd':
-            out->dictionary = options.optarg;
+            opts.dictionary_path = options.optarg;
             break;
           case OPT_THREADS:
-            if (!parse_count(options.optarg, "--threads", &out->threads))
+            if (!parse_count(options.optarg, "--threads", &opts.threads))
                 return false;
             break;
           case 'h':
@@ -140,12 +135,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         report(PROGRAM, "needs -s or --pairs");
         return false;
     }
-    if (out->filter.min_len > out->filter.max_len) {
-        report(PROGRAM, "-m %d is more than -x %d", out->filter.min_len,
-               out->filter.max_len);
+    if (opts.filter.min_len > opts.filter.max_len) {
+        report(PROGRAM, "-m %d is more than -x %d", opts.filter.min_len,
+               opts.filter.max_len);
         return false;
     }
-    if (!out->p1) out->p1 = P1_INDEX_PATH;
     if (out->sentence) {
         std::string const sentence = "s" + std::to_string(*out->sentence);
         if (!valid_seed_sentence(sentence)) {
@@ -155,7 +149,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         if (!out->pairs)
             out->pairs =
                 std::filesystem::path(IDX_PATH) / ("pairs." + sentence);
-        out->forced = forced_pairs_path(IDX_PATH, sentence);
+        opts.forced = forced_pairs_path(IDX_PATH, sentence);
     }
     return true;
 }
@@ -175,34 +169,16 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    std::string error;
-    std::string stale;
-    P1Index p1;
-    if (!p1.open(*args.p1, &error, &stale)) {
-        report(PROGRAM, "%s", error.c_str());
-        return 1;
-    }
-    if (!stale.empty()) alert(PROGRAM, "%s", stale.c_str());
     DfsDictionary dictionary;
-    if (args.dictionary) {
-        if (!load_dictionary(*args.dictionary, &dictionary)) return 1;
-        args.filter.dictionary = &dictionary;
+    if (!args.options.dictionary_path.empty()) {
+        if (!load_dictionary(args.options.dictionary_path, &dictionary))
+            return 1;
+        args.options.filter.dictionary = &dictionary;
     }
+    SeedPairs seed_pairs;
+    if (!seed_pairs.load(PROGRAM, args.options)) return 1;
     std::vector<SeedPair> pairs;
-    if (!read_seed_pairs(*args.pairs, &p1,
-                         resolve_search_threads(args.threads), &pairs,
-                         &error)) {
-        report(PROGRAM, "%s", error.c_str());
-        return 1;
-    }
-    if (args.forced && !add_forced_pairs(*args.forced, &p1, &pairs, &error)) {
-        report(PROGRAM, "%s", error.c_str());
-        return 1;
-    }
-    if (args.forced && args.dictionary)
-        warn_forced_words_missing(PROGRAM, pairs, *args.forced, dictionary,
-                                  *args.dictionary);
-    for (SeedPair const& pair : pairs)
-        if (seed_pair_passes(pair, args.filter)) puts(pair.line.c_str());
+    if (!seed_pairs.run(*args.pairs, &pairs)) return 1;
+    for (SeedPair const& pair : pairs) puts(pair.line.c_str());
     return 0;
 }

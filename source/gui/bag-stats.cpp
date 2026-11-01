@@ -3,17 +3,18 @@
 #include <imgui.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <utility>
 #include <string>
+#include <string_view>
 
 #include "bag-stats-cpu.h"
+#include "log.h"
 #include "widgets.h"
 
 bool BagStats::run(std::vector<SharedLines> const& inputs,
                    LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {
-    fprintf(stderr, "pgui: bag-stats takes 1 input, not %zu\n", inputs.size());
+    report("pgui: bag-stats", "takes 1 input, not %zu", inputs.size());
     return false;
   }
 
@@ -26,10 +27,13 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
   args.min_word_bag_length = min_word_bag_length;
   args.min_pair_bag_length = min_pair_bag_length;
   args.search = search;
+  bool const unique_run = !search.measured;
+  args.pair_usage = unique_run;
+  if (unique_run) args.rank.top = BagStats::unique_top;
   options.exact = exact;
   if (search.pair_filter && search.words + search.pairs > 0 && !exact) {
-    fprintf(stderr, "pgui: bag-stats --ss %s needs ex\n",
-            search_text(search).c_str());
+    report("pgui: bag-stats", "--ss %s needs ex",
+           search_text(search).c_str());
     return false;
   }
   std::string letters;
@@ -55,10 +59,24 @@ bool BagStats::run(std::vector<SharedLines> const& inputs,
     for (size_t i = 0; i < loaded.final_bags.size(); ++i) {
       if (filter.dropped(loaded.final_bags[i])) continue;
       loaded.pair_bags.push_back(loaded.final_bags[i]);
-      pick_rows.push_back(&loaded.final_rows[i]);
+      if (unique_run)
+        loaded.pair_rows.push_back(std::move(loaded.final_rows[i]));
+      else
+        pick_rows.push_back(&loaded.final_rows[i]);
     }
   }
   loaded.steps.assign(size_t(args.search.pairs), &loaded.pair_bags);
+  if (unique_run) {
+    std::vector<BagStatsPairUsage> used;
+    list_pair_usage(args, loaded, params.stop, &used);
+    if (params.stop.stop_requested()) return false;
+    Lines kept;
+    kept.reserve(used.size());
+    for (BagStatsPairUsage const& usage : used)
+      kept.push_back(*usage.row + " " + std::to_string(usage.combinations));
+    *output = std::move(kept);
+    return true;
+  }
 
   std::vector<std::vector<std::string>> spellings;
   WordBagLoader word_loader(bag, min_word_bag_length, &loaded.word_bags,
@@ -150,20 +168,33 @@ bool BagStats::render_display_options(bool* entered) {
   return false;
 }
 
+bool BagStats::apply_search() {
+  std::string_view const text = search_field;
+  std::string_view const last = text.substr(text.rfind(',') + 1);
+  bool const measured = last == "p" || last == "pf";
+  Search parsed;
+  if (!parse_search("pgui: bag-stats", text, &parsed, measured)) return false;
+  if (!measured && (parsed.prospects > 0 || parsed.words > 0 ||
+                    parsed.pairs == 0 || parsed.pairs > 2)) {
+    report("pgui: bag-stats", "--ss without p or pf takes one or two pb "
+           "steps alone");
+    return false;
+  }
+  if (measured &&
+      (parsed.prospects > 0 || parsed.pairs > 1 || parsed.words > 1)) {
+    report("pgui: bag-stats", "--ss takes at most one pb and one wb step");
+    return false;
+  }
+  bool const changed = search_text(parsed) != search_text(search);
+  search = parsed;
+  return changed;
+}
+
 bool BagStats::apply_fields() {
   bool const pair =
       apply_length(&min_pair_bag_length_field, &min_pair_bag_length);
   bool const word =
       apply_length(&min_word_bag_length_field, &min_word_bag_length);
-  Search parsed;
-  if (!parse_search("pgui: bag-stats", search_field, &parsed))
-    return pair || word;
-  if (parsed.prospects > 0 || parsed.pairs > 1 || parsed.words > 1) {
-    fprintf(stderr, "pgui: bag-stats --ss takes at most one pb and one wb "
-            "step\n");
-    return pair || word;
-  }
-  bool const steps = search_text(parsed) != search_text(search);
-  search = parsed;
+  bool const steps = apply_search();
   return pair || word || steps;
 }

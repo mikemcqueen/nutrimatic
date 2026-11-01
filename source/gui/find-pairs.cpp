@@ -3,8 +3,8 @@
 #include <imgui.h>
 
 #include <algorithm>
-#include <cstdio>
 
+#include "log.h"
 #include "widgets.h"
 
 FindPairs::FindPairs() {
@@ -20,7 +20,7 @@ FindPairs::FindPairs() {
 bool FindPairs::run(std::vector<SharedLines> const& inputs,
                     LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {
-    fprintf(stderr, "pgui: pairs takes 1 input, not %zu\n", inputs.size());
+    report("pgui: pairs", "takes 1 input, not %zu", inputs.size());
     return false;
   }
 

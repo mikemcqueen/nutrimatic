@@ -4,6 +4,7 @@
 #include "bag-stats-impl.h"
 #include "log.h"
 #include "mix-bits.h"
+#include "run-threads.h"
 #include "sub-bag-index.h"
 
 #include <algorithm>
@@ -171,10 +172,7 @@ class PairCountTable {
                 }
             }
         };
-        std::vector<std::thread> workers;
-        for (size_t t = 1; t < threads; ++t) workers.emplace_back(work);
-        work();
-        for (auto& worker : workers) worker.join();
+        run_threads(threads, [&](size_t) { work(); });
     }
 
     bool allocated() const { return counts_ != nullptr; }
@@ -1046,8 +1044,53 @@ struct LeftoverWalk : WalkBase {
     LeftoverHooks progress_hooks() const { return {keys}; }
 };
 
+// Which PAIRS bags some combinations pick, one bit per bag and group of
+// them.
+class PickedBags {
+  public:
+    PickedBags(size_t bags, size_t groups)
+        : bags_(bags), groups_(groups), words_((bags + 63) / 64),
+          bits_(words_ * groups, 0) {}
+
+    void add(size_t group, size_t bag) {
+        bits_[group * words_ + bag / 64] |= uint64_t(1) << (bag % 64);
+    }
+
+    void merge(PickedBags const& other) {
+        for (size_t i = 0; i < bits_.size(); ++i) bits_[i] |= other.bits_[i];
+    }
+
+    UniqueBags counts(std::vector<PairBag> const& pair_bags) const {
+        UniqueBags out{std::vector<uint64_t>(groups_ + 1, 0),
+                       std::vector<uint64_t>(groups_ + 1, 0)};
+        for (size_t bag = 0; bag < bags_; ++bag) {
+            bool any = false;
+            for (size_t n = 0; n < groups_; ++n) {
+                if (!picked(n, bag)) continue;
+                any = true;
+                ++out.bags[n];
+                out.pairs[n] += pair_bags[bag].pairs;
+            }
+            if (!any) continue;
+            ++out.bags[groups_];
+            out.pairs[groups_] += pair_bags[bag].pairs;
+        }
+        return out;
+    }
+
+  private:
+    bool picked(size_t group, size_t bag) const {
+        return bits_[group * words_ + bag / 64] >> (bag % 64) & 1;
+    }
+
+    size_t bags_;
+    size_t groups_;
+    size_t words_;
+    std::vector<uint64_t> bits_;
+};
+
 int count_leftovers(BagStatsArgs const& args, std::string const& letters,
-                    BagStatsInputs const& inputs, bool hll) {
+                    BagStatsInputs const& inputs, bool hll, bool unique) {
     RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
     if (index.total() == 0) {
         report(PROGRAM, "the letters have too many sub-bags to number "
@@ -1065,6 +1108,11 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
     std::vector<LeftoverCounts> parts(walk.threads);
     std::vector<LeftoverSketch> sketches(hll ? walk.threads : 0,
                                          LeftoverSketch(length + 1));
+    std::vector<PickedBags> picked_by_picks(
+        unique ? walk.threads : 0, PickedBags(walk.pair_bags.size(), steps));
+    std::vector<PickedBags> picked_by_left(
+        unique ? walk.threads : 0,
+        PickedBags(walk.pair_bags.size(), length + 1));
     for (LeftoverCounts& part : parts) {
         part.by_picks.assign(steps, 0);
         part.combinations.assign(length + 1, 0);
@@ -1078,9 +1126,13 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
             LeftoverCounts& part = parts[t];
             PickWalk walker(walk.steps, args.search.pairs,
                             walk.pair_bags.size());
+            std::vector<uint32_t> picks;
             auto const enter = [&](size_t step, PairsCounts const&) {
                 ++part.by_picks[step];
                 progress.tick();
+                if (!unique) return;
+                for (size_t j = 0; j <= step; ++j)
+                    picked_by_picks[t].add(step, walker.pick(j));
             };
             auto const leaf = [&](PairsCounts const& rest, int) {
                 size_t const left = size_t(letter_total(rest));
@@ -1089,6 +1141,12 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
                 uint64_t const key = index.number(rest) + 1;
                 if (hll) sketches[t].add(left, key);
                 else if (keys.insert(key)) ++part.leftovers[left];
+                if (!unique) return;
+                walker.picks(&picks);
+                for (uint32_t const bag : picks) {
+                    picked_by_picks[t].add(steps - 1, bag);
+                    picked_by_left[t].add(left, bag);
+                }
             };
             for (size_t unit; (unit = next.fetch_add(1)) < walk.units();) {
                 walker.walk(unit, walk.bag, enter, leaf);
@@ -1112,11 +1170,95 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
     }
     for (size_t t = 1; t < sketches.size(); ++t)
         sketches[0].merge(sketches[t]);
+    std::optional<LeftoverUnique> unique_counts;
+    if (unique) {
+        for (size_t t = 1; t < walk.threads; ++t) {
+            picked_by_picks[0].merge(picked_by_picks[t]);
+            picked_by_left[0].merge(picked_by_left[t]);
+        }
+        unique_counts = LeftoverUnique{
+            picked_by_picks[0].counts(walk.pair_bags),
+            picked_by_left[0].counts(walk.pair_bags)};
+    }
     return print_leftovers(args, letters, walk.pair_bags.size(),
-                           std::move(total), hll ? &sketches[0] : nullptr);
+                           std::move(total), hll ? &sketches[0] : nullptr,
+                           unique_counts ? &*unique_counts : nullptr);
+}
+
+int count_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs) {
+    std::vector<BagStatsPairUsage> used;
+    list_pair_usage(args, inputs, {}, &used);
+    for (BagStatsPairUsage const& usage : used) {
+        std::string pair = *usage.row;
+        if (!args.rank.top_segments) {
+            printf("%s\n", pair.c_str());
+            continue;
+        }
+        std::replace(pair.begin(), pair.end(), ',', ' ');
+        printf("%llu %s\n", static_cast<unsigned long long>(usage.combinations),
+               pair.c_str());
+    }
+    return fflush(stdout) == 0 ? 0 : 1;
 }
 
 }  // namespace
+
+void list_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs,
+                     std::stop_token stop,
+                     std::vector<BagStatsPairUsage>* out) {
+    std::vector<PairBag> const& bags = inputs.pair_bags;
+    LeftoverWalk const walk{{PROGRAM, inputs.steps, bags,
+                             inputs.prospect_bags, inputs.bag,
+                             inputs.word_bags, args, bag_stats_threads(args),
+                             1, unit_blocks(walk_units(inputs.steps))},
+                            nullptr};
+    std::vector<std::vector<uint64_t>> parts(
+        walk.threads, std::vector<uint64_t>(bags.size(), 0));
+    std::atomic<size_t> next{0};
+    {
+        Progress progress(walk, 1);
+        run_threads(walk.threads, [&](size_t t) {
+            std::vector<uint64_t>& part = parts[t];
+            PickWalk walker(walk.steps, args.search.pairs, bags.size());
+            std::vector<uint32_t> picks;
+            auto const enter = [&](size_t, PairsCounts const&) {
+                progress.tick();
+            };
+            auto const leaf = [&](PairsCounts const&, int) {
+                uint64_t const rows = walker.pairs();
+                walker.picks(&picks);
+                for (uint32_t const bag : picks)
+                    part[bag] += rows / bags[bag].pairs;
+            };
+            for (size_t unit; !stop.stop_requested() &&
+                              (unit = next.fetch_add(1)) < walk.units();) {
+                walker.walk(unit, walk.bag, enter, leaf);
+                progress.finished(&walker, 1);
+            }
+        });
+    }
+    for (size_t t = 1; t < parts.size(); ++t)
+        for (size_t bag = 0; bag < bags.size(); ++bag)
+            parts[0][bag] += parts[t][bag];
+
+    std::vector<BagStatsPairUsage>& used = *out;
+    used.clear();
+    for (size_t bag = 0; bag < bags.size(); ++bag) {
+        if (parts[0][bag] == 0) continue;
+        for (std::string const& row : inputs.pair_rows[bag])
+            used.push_back({&row, parts[0][bag]});
+    }
+    size_t const top = args.rank.top > 0
+        ? std::min(used.size(), size_t(args.rank.top)) : used.size();
+    std::partial_sort(used.begin(), used.begin() + top, used.end(),
+                      [](BagStatsPairUsage const& a,
+                         BagStatsPairUsage const& b) {
+        if (a.combinations != b.combinations)
+            return a.combinations > b.combinations;
+        return *a.row < *b.row;
+    });
+    used.resize(top);
+}
 
 bool list_bag_stats(BagStatsOptions const& options,
                     std::string const& letters, BagStatsInputs const& inputs,
@@ -1163,8 +1305,10 @@ int bag_stats(BagStatsOptions const& options, std::string const& letters) {
     if (!load_bag_stats_inputs(PROGRAM, common, &inputs,
                                listed ? &spellings : nullptr))
         return 1;
+    if (common.pair_usage) return count_pair_usage(common, inputs);
     if (!common.search.measured)
-        return count_leftovers(common, letters, inputs, options.hll);
+        return count_leftovers(common, letters, inputs, options.hll,
+                               options.unique);
     return with_walk(options, letters, inputs, spellings,
                      [&](Walk const& walk, BagStatsRankers* rankers) {
         if (!walk.steps.empty()) return run_bag_stats(walk, letters, rankers);

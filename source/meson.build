@@ -293,7 +293,7 @@ endif
 
 bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
   link_with: [bag_stats_rank_lib, bag_stats_lib, pairs_lib, pair_evidence_lib,
-              dfs_class_list_lib, optparse_lib],
+              dfs_class_list_lib, optparse_lib, log_lib],
   install: true)
 
 pair_prior = executable('pair-prior', 'pair-prior.cpp',
@@ -309,9 +309,13 @@ seed_view_lib = static_library('seed-view', 'seed-view.cpp',
   link_with: [pair_evidence_lib, dfs_class_list_lib, log_lib],
   dependencies: thread_dep)
 
+seed_pairs_lib = static_library('seed-pairs', 'seed-pairs-impl.cpp',
+  link_with: [seed_view_lib, pair_evidence_lib, dfs_class_list_lib, log_lib],
+  dependencies: thread_dep)
+
 seed_pairs = executable('seed-pairs', 'seed-pairs.cpp',
-  link_with: [seed_view_lib, pair_evidence_lib, dfs_class_list_lib,
-              optparse_lib],
+  link_with: [seed_pairs_lib, seed_view_lib, pair_evidence_lib,
+              dfs_class_list_lib, optparse_lib, log_lib],
   dependencies: thread_dep,
   install: true)
 
@@ -586,7 +590,7 @@ if sdl2_dep.found()
     include_directories: pgui_inc,
     link_with: [pfilter_lib, freqsort_lib, bag_stats_cpu_lib,
       bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib, pairs_lib,
-      seed_view_lib, pair_evidence_lib, lc_lib, dfs_class_list_lib,
-      optparse_lib],
+      seed_pairs_lib, seed_view_lib, pair_evidence_lib, lc_lib,
+      dfs_class_list_lib, optparse_lib, log_lib],
     dependencies: [imgui_backends_dep, thread_dep], install: true)
 endif

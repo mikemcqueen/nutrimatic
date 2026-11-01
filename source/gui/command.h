@@ -48,6 +48,11 @@
 //   static constexpr bool reads_pairs
 // true when it reads pairs, so choosing it moves its Column's source off a
 // dictionary; commands without it don't. And it may have
+//   static constexpr bool reads_columns_only
+// true when its Column's source dropdown offers only the columns before it,
+// so it isn't offered in the first column, and choosing it sets the source
+// to the column just before; commands without it read seeds too. And it may
+// have
 //   static constexpr bool reads_classified
 // true when its output depends on the classified pairs, so it reruns when
 // they're recorded (see AppState::classified_version); commands without it
@@ -68,6 +73,10 @@
 //   static constexpr bool uses_big_dictionary
 // true when run() reads its params' big_dictionary, so it reruns when
 // "big_dict" is reloaded; commands without it don't. And it may have
+//   static constexpr bool uses_p1
+// true when run() opens its params' p1_path, so it reruns when
+// AppState::refresh_seed_files() reopens p1; commands without it don't. And
+// it may have
 //   bool uses_required_words() const
 // true when run() reads its params' required_words, so it reruns when they
 // change; commands without it don't. And it may have
@@ -121,6 +130,8 @@ class Command {
 
   bool reads_pairs() const { return self_->reads_pairs(); }
 
+  bool reads_columns_only() const { return self_->reads_columns_only(); }
+
   bool reads_classified() const { return self_->reads_classified(); }
 
   ReviewKind review_kind(InputSource const& source) const {
@@ -134,6 +145,8 @@ class Command {
   bool uses_dictionary() const { return self_->uses_dictionary(); }
 
   bool uses_big_dictionary() const { return self_->uses_big_dictionary(); }
+
+  bool uses_p1() const { return self_->uses_p1(); }
 
   bool uses_required_words() const { return self_->uses_required_words(); }
 
@@ -156,12 +169,14 @@ class Command {
     virtual std::string used_letters() const = 0;
     virtual bool has_dictionary_in_src() const = 0;
     virtual bool reads_pairs() const = 0;
+    virtual bool reads_columns_only() const = 0;
     virtual bool reads_classified() const = 0;
     virtual ReviewKind review_kind(InputSource const& source) const = 0;
     virtual bool cancellable() const = 0;
     virtual bool has_word_bag_source() const = 0;
     virtual bool uses_dictionary() const = 0;
     virtual bool uses_big_dictionary() const = 0;
+    virtual bool uses_p1() const = 0;
     virtual bool uses_required_words() const = 0;
     virtual bool saveable() const = 0;
     virtual std::string default_seed() const = 0;
@@ -225,6 +240,12 @@ class Command {
       else
         return false;
     }
+    bool reads_columns_only() const override {
+      if constexpr (requires { T::reads_columns_only; })
+        return T::reads_columns_only;
+      else
+        return false;
+    }
     bool reads_classified() const override {
       if constexpr (requires { T::reads_classified; })
         return T::reads_classified;
@@ -261,6 +282,12 @@ class Command {
       else
         return false;
     }
+    bool uses_p1() const override {
+      if constexpr (requires { T::uses_p1; })
+        return T::uses_p1;
+      else
+        return false;
+    }
     bool uses_required_words() const override {
       if constexpr (requires { data.uses_required_words(); })
         return data.uses_required_words();
@@ -286,12 +313,12 @@ class Command {
 };
 
 // The names every Column's dropdown offers, in order; "" names no command.
-inline constexpr std::array<char const*, 5> command_names = {
-    "", "pfilter", "freqsort", "pairs", "bag-stats"};
+inline constexpr std::array<char const*, 6> command_names = {
+    "", "pfilter", "freqsort", "pairs", "bag-stats", "seed-pairs"};
 
 // The command a Column's dropdown names: PairFilter for "pfilter", FreqSort
-// for "freqsort", FindPairs for "pairs", BagStats for "bag-stats", none
-// otherwise.
+// for "freqsort", FindPairs for "pairs", BagStats for "bag-stats",
+// SeedPairsFilter for "seed-pairs", none otherwise.
 std::optional<Command> make_command(std::string const& name);
 
 #endif

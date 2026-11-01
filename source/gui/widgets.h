@@ -10,9 +10,10 @@
 bool clearable_input(std::string_view id, char* text, size_t size,
                      float reserve = 0);
 
-// A square button, a frame high, with `label` centered inside by the extent
-// of its glyphs, drawn pressed and outlined while `on`. Returns true when
-// clicked. `label` is ASCII and also serves as the button's ID.
+// A button a frame high, square unless `label` needs it wider, with `label`
+// centered inside by the extent of its glyphs, drawn pressed and outlined
+// while `on`. Returns true when clicked. `label` is ASCII and also serves as
+// the button's ID.
 bool toggle_button(std::string_view label, bool on);
 
 // A square button, a frame high, with a clockwise circular arrow drawn

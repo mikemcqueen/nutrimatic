@@ -2,6 +2,7 @@
 
 #include "dfs-diagnostic.h"
 #include "dfs-search-internal.h"
+#include "run-threads.h"
 
 #include <assert.h>
 #include <fenv.h>
@@ -936,28 +937,15 @@ bool ScoreBounds::compute_projected_score_bounds_bottom_up(
       worker->stats.add(local_stats);
     };
 
-    std::vector<std::thread> background;
-    try {
-      background.reserve(layer_workers - 1);
-      for (size_t i = 1; i < layer_workers; ++i)
-        background.emplace_back(work, i);
-    } catch (...) {
-      // The already-created workers remain useful; the main thread shares
-      // their dynamic queue and completes any unclaimed bags.
-    }
-    size_t const active_workers = background.size() + 1;
-    actual_workers = std::max(actual_workers, active_workers);
-    if (!announced_threads && progress != NULL &&
-        active_workers > 1) {
+    if (!announced_threads && progress != NULL && layer_workers > 1) {
       dfs_diagnostic(
           "phase 2: using up to %zu threads to calculate projected "
           "score bounds bottom-up\n",
           worker_count);
       announced_threads = true;
     }
-    work(0);
-    for (size_t i = 0; i < background.size(); ++i)
-      background[i].join();
+    actual_workers =
+        std::max(actual_workers, run_threads(layer_workers, work));
   }
 
   for (size_t i = 0; i < workers.size(); ++i) {
@@ -1215,27 +1203,15 @@ bool ScoreBounds::compute_exact_projected_score_bounds_bottom_up(
         worker->stats.add(local_stats);
       };
 
-      std::vector<std::thread> background;
-      try {
-        background.reserve(layer_workers - 1);
-        for (size_t i = 1; i < layer_workers; ++i)
-          background.emplace_back(work, i);
-      } catch (...) {
-        // The main thread and already-created workers share the remaining
-        // dynamic queue.
-      }
-      size_t const active_workers = background.size() + 1;
-      actual_workers = std::max(actual_workers, active_workers);
-      if (!announced_threads && progress != NULL && active_workers > 1) {
+      if (!announced_threads && progress != NULL && layer_workers > 1) {
         dfs_diagnostic(
             "phase 2: using up to %zu threads to calculate projected "
             "score bounds bottom-up\n",
             worker_count);
         announced_threads = true;
       }
-      work(0);
-      for (size_t i = 0; i < background.size(); ++i)
-        background[i].join();
+      actual_workers =
+          std::max(actual_workers, run_threads(layer_workers, work));
     }
   }
 
@@ -1349,12 +1325,6 @@ bool ScoreBounds::compute_projected_score_bounds_top_down(
       std::max(size_t(1), requested_threads),
       root_candidates.size());
   std::vector<TopDownWorker> workers(worker_count, root);
-  std::vector<std::thread> background;
-  try {
-    background.reserve(worker_count - 1);
-  } catch (...) {
-    return false;
-  }
   if (progress != NULL && worker_count > 1) {
     dfs_diagnostic(
         "phase 2: using %zu threads to calculate projected score bounds\n",
@@ -1375,21 +1345,11 @@ bool ScoreBounds::compute_projected_score_bounds_top_down(
     }
   };
 
-  for (size_t i = 1; i < worker_count; ++i) {
-    try {
-      background.emplace_back(work, i);
-    } catch (...) {
-      break;
-    }
-  }
-  work(0);
-  for (size_t i = 0; i < background.size(); ++i)
-    background[i].join();
+  size_t const active_workers = run_threads(worker_count, work);
 
   root.stats.candidate_tests = root_candidate_tests;
   double best = -HUGE_VAL;
   double max_rounding_error = 0.0;
-  size_t const active_workers = background.size() + 1;
   for (size_t i = 0; i < active_workers; ++i) {
     root.stats.add(workers[i].stats);
     best = std::max(best, workers[i].best);

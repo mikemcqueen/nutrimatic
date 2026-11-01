@@ -23,6 +23,7 @@
 #include "app-state.h"
 #include "classified.h"
 #include "dfs-cli-args.h"
+#include "log.h"
 #include "row-input.h"
 #include "workflow-paths.h"
 
@@ -174,7 +175,7 @@ std::unique_ptr<Review> Review::open(ReviewKind kind, SharedLines items,
                                      std::vector<int> rows, int sentence) {
   char const* const wf = std::getenv("WF");
   if (wf == nullptr || wf[0] == '\0') {
-    std::fputs("pgui: WF must be set to review\n", stderr);
+    report("pgui", "WF must be set to review");
     return nullptr;
   }
   std::filesystem::path const root = require_workflow_root("pgui");
@@ -213,8 +214,8 @@ std::unique_ptr<Review> Review::open(ReviewKind kind, SharedLines items,
       int const i = rows[n];
       std::string_view const word = row_word((*items)[i]);
       if (word.empty()) {
-        std::fprintf(stderr, "pgui: review: row %d: not a word: %s\n", i + 1,
-                     (*items)[i].c_str());
+        report("pgui: review", "row %d: not a word: %s", i + 1,
+               (*items)[i].c_str());
         return nullptr;
       }
       if (reviewed.contains(std::string(word))) lock(n);

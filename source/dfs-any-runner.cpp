@@ -3,6 +3,7 @@
 #include "dfs-diagnostic.h"
 #include "dfs-search-internal.h"
 #include "mix-bits.h"
+#include "run-threads.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -494,18 +495,7 @@ bool DfsAnySolutionRunner::run(
       else if (source == RESULT_SEARCH) ++worker.stats.exact_validations;
     }
   };
-  std::vector<std::thread> pool;
-  pool.reserve(worker_count - 1);
-  try {
-    for (size_t i = 1; i < worker_count; ++i)
-      pool.push_back(std::thread(body, i));
-  } catch (...) {
-    // Successfully launched workers and the caller share the class cursor, so
-    // they still finish the full batch if a later launch fails.
-  }
-  results->execution.search_threads = 1 + pool.size();
-  body(0);
-  for (size_t i = 0; i < pool.size(); ++i) pool[i].join();
+  results->execution.search_threads = run_threads(worker_count, body);
   for (size_t i = 0; i < classes.size(); ++i)
     (*completable)[i] = decided[i] != 0;
   for (size_t i = 0; i < results->execution.search_threads; ++i)

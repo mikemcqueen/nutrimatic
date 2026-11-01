@@ -64,17 +64,19 @@ bool check_common_args(std::string_view program, struct optparse* options,
     out->letters = letters;
     out->pairs_file = pairs;
     out->dictionary_file = dictionary;
-    if (out->leftovers && !out->search_text) {
-        report(program, "--leftovers needs --ss");
+    bool const pick_only = out->leftovers || out->pair_usage;
+    char const* const mode = out->leftovers ? "--leftovers" : "--unique";
+    if (pick_only && !out->search_text) {
+        report(program, "%s needs --ss", mode);
         return false;
     }
     if (!parse_search(program, out->search_text.value_or(DEFAULT_SEARCH),
-                      &out->search, !out->leftovers))
+                      &out->search, !pick_only))
         return false;
-    if (out->leftovers &&
+    if (pick_only &&
         (out->search.pairs == 0 ||
          out->search.prospects + out->search.words > 0)) {
-        report(program, "--leftovers takes --ss of pb steps alone");
+        report(program, "%s takes --ss of pb steps alone", mode);
         return false;
     }
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
@@ -82,12 +84,12 @@ bool check_common_args(std::string_view program, struct optparse* options,
         return false;
     }
     RankArgs const& rank = out->rank;
-    if (out->leftovers || out->search.prospects + out->search.pairs == 0) {
+    if (pick_only || out->search.prospects + out->search.pairs == 0) {
         std::string const sort =
             rank.sorts.empty() ? "" : std::string("--") +
                 rank.sorts[0]->option;
         std::pair<bool, char const*> const rank_options[] = {
-            {rank.top > 0, "-n"},
+            {rank.top > 0 && !out->pair_usage, "-n"},
             {!rank.sorts.empty(), sort.c_str()},
             {rank.by_length, "--by-length"},
             {rank.by_pick, "--by-pick"},
@@ -98,20 +100,20 @@ bool check_common_args(std::string_view program, struct optparse* options,
             {rank.evidence.p1.has_value(), "--p1"},
             {rank.evidence.clues.has_value(), "--clues"},
             {rank.prior_weights.has_value(), "--prior-weights"},
-            {rank.top_segments, "--top-segments"},
+            {rank.top_segments && !out->pair_usage, "--top-segments"},
             {rank.best_pairs != BestPairs::NONE, "--best-pairs"},
         };
         for (auto const& [given, option] : rank_options) {
             if (!given) continue;
-            report(program, out->leftovers
-                       ? "--leftovers can't take %s"
-                       : "--ss without a ppb or pb step can't take %s",
-                   option);
+            if (pick_only) report(program, "%s can't take %s", mode, option);
+            else
+                report(program, "--ss without a ppb or pb step can't take %s",
+                       option);
             return false;
         }
     }
     bool const ranked = rank.top > 0 || !rank.score.empty();
-    if (rank.top > 0 && rank.sorts.empty()) {
+    if (rank.top > 0 && rank.sorts.empty() && !out->pair_usage) {
         report(program, "-n needs a SORT option, such as --tp");
         return false;
     }
@@ -137,7 +139,7 @@ bool check_common_args(std::string_view program, struct optparse* options,
                "be -");
         return false;
     }
-    if (!out->leftovers && out->search.prospects + out->search.pairs > 0 &&
+    if (!pick_only && out->search.prospects + out->search.pairs > 0 &&
         !ranked) {
         alert(program, "no -n: printing EVERY row, unsorted, in walk order");
         alert(program, "that can be billions of rows and over 100 GB; -n N "
@@ -295,7 +297,8 @@ bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
                         pair_filter ? &out->final_bags : nullptr,
                         pair_filter && spellings && args.search.words == 0
                             ? &out->final_rows : nullptr,
-                        &out->has_prior) ||
+                        &out->has_prior,
+                        args.pair_usage ? &out->pair_rows : nullptr) ||
         (args.search.words > 0 &&
          !load_word_bags(program, args.dictionary_file, out->bag,
                          args.min_word_bag_length, &out->word_bags,
@@ -340,9 +343,7 @@ std::string PickWalk::pair() const {
 
 void PickWalk::picks(std::vector<uint32_t>* out) const {
     out->resize(steps_.size());
-    for (size_t j = 0; j < steps_.size(); ++j)
-        (*out)[j] = uint32_t(chosen_[j] +
-                             (j < pair_steps_ ? 0 : pair_bags_));
+    for (size_t j = 0; j < steps_.size(); ++j) (*out)[j] = pick(j);
 }
 
 uint64_t PickWalk::pairs() const {
@@ -376,7 +377,8 @@ uint64_t LeftoverSketch::estimate(size_t length) const {
 
 int print_leftovers(BagStatsArgs const& args, std::string const& letters,
                     size_t pair_bags, LeftoverCounts counts,
-                    LeftoverSketch const* hll) {
+                    LeftoverSketch const* hll,
+                    LeftoverUnique const* unique) {
     size_t const steps = counts.by_picks.size();
     size_t const lengths = counts.combinations.size();
     if (hll)
@@ -405,22 +407,37 @@ int print_leftovers(BagStatsArgs const& args, std::string const& letters,
                static_cast<unsigned long long>(needed));
     else
         printf("cache-size %llu\n", static_cast<unsigned long long>(needed));
-    printf("\nPICKS,COMBINATIONS\n");
-    for (size_t j = 0; j < steps; ++j)
-        printf("%zu,%llu\n", j + 1,
+    char const* const unique_columns =
+        unique ? ",UNIQUE_BAGS,UNIQUE_PAIRS" : "";
+    auto const end_line = [&](UniqueBags const* counts, size_t n) {
+        if (counts)
+            printf(",%llu,%llu",
+                   static_cast<unsigned long long>(counts->bags[n]),
+                   static_cast<unsigned long long>(counts->pairs[n]));
+        printf("\n");
+    };
+    UniqueBags const* const by_picks = unique ? &unique->by_picks : nullptr;
+    UniqueBags const* const by_left = unique ? &unique->by_left : nullptr;
+    printf("\nPICKS,COMBINATIONS%s\n", unique_columns);
+    for (size_t j = 0; j < steps; ++j) {
+        printf("%zu,%llu", j + 1,
                static_cast<unsigned long long>(counts.by_picks[j]));
-    printf("\nLEFT,COMBINATIONS,ROWS,%s\n",
-           hll ? "LEFTOVERS_HLL" : "LEFTOVERS");
+        end_line(by_picks, j);
+    }
+    printf("\nLEFT,COMBINATIONS,ROWS,%s%s\n",
+           hll ? "LEFTOVERS_HLL" : "LEFTOVERS", unique_columns);
     for (size_t n = 0; n < lengths; ++n) {
         if (counts.combinations[n] == 0) continue;
-        printf("%zu,%llu,%llu,%llu\n", n,
+        printf("%zu,%llu,%llu,%llu", n,
                static_cast<unsigned long long>(counts.combinations[n]),
                static_cast<unsigned long long>(counts.rows[n]),
                static_cast<unsigned long long>(counts.leftovers[n]));
+        end_line(by_left, n);
     }
-    printf("all,%llu,%llu,%llu\n", static_cast<unsigned long long>(all[0]),
+    printf("all,%llu,%llu,%llu", static_cast<unsigned long long>(all[0]),
            static_cast<unsigned long long>(all[1]),
            static_cast<unsigned long long>(all[2]));
+    end_line(by_left, lengths);
     return fflush(stdout) == 0 ? 0 : 1;
 }
 

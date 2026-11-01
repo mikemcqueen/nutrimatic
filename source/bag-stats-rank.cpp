@@ -28,7 +28,8 @@ bool parse_search(std::string_view program, std::string_view text,
     bool const last_measures = steps.back() == "p" || steps.back() == "pf";
     if (!measured) {
         if (last_measures) {
-            report(program, "--leftovers takes --ss without a last p or pf");
+            report(program, "--leftovers and --unique take --ss without a "
+                   "last p or pf");
             return false;
         }
     } else {
@@ -175,7 +176,7 @@ bool check_rank_args(std::string_view program, RankArgs const& args,
 }
 
 void help_rank_output_options() {
-    dfs_help_option("--top-segments",
+    dfs_help_option("--top-segments, --ts",
                     "print no header, and each row as \"0 PAIR,PAIR...\", "
                     "its pair picks, for top-segments; bag-stats-sort can't "
                     "read it");
@@ -329,7 +330,8 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::vector<PairBag>* pair_bags,
                     std::vector<PairBag>* final_bags,
                     std::vector<std::vector<std::string>>* final_rows,
-                    bool* has_prior) {
+                    bool* has_prior,
+                    std::vector<std::vector<std::string>>* pair_rows) {
     std::unordered_map<std::string, double> priors;
     PairEvidenceSource evidence;
     PriorWeights weights;
@@ -360,23 +362,36 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
     }
     *has_prior = bool(prior);
     std::vector<PairBag>* const loaded = final_bags ? final_bags : pair_bags;
+    std::vector<std::vector<std::string>>* const loaded_rows =
+        final_bags ? final_rows : pair_rows;
     if ((prospects_file &&
          !load_pair_bags(program, *prospects_file, bag, rejected, prior,
                          prospect_bags)) ||
         (loaded != nullptr &&
          !load_pair_bags(program, pairs_file, bag, rejected, prior, loaded,
-                         final_rows)))
+                         loaded_rows)))
         return false;
     if (pair_bags == nullptr) return true;
     PairPickFilter const filter(*prospect_bags, min_pair_length);
     auto const dropped = [&](PairBag const& pair_bag) {
         return filter.dropped(pair_bag);
     };
-    if (final_bags)
+    if (final_bags) {
         std::remove_copy_if(final_bags->begin(), final_bags->end(),
                             std::back_inserter(*pair_bags), dropped);
-    else
-        std::erase_if(*pair_bags, dropped);
+        return true;
+    }
+    size_t kept = 0;
+    for (size_t i = 0; i < pair_bags->size(); ++i) {
+        if (dropped((*pair_bags)[i])) continue;
+        if (kept != i) {
+            (*pair_bags)[kept] = std::move((*pair_bags)[i]);
+            if (pair_rows) (*pair_rows)[kept] = std::move((*pair_rows)[i]);
+        }
+        ++kept;
+    }
+    pair_bags->resize(kept);
+    if (pair_rows) pair_rows->resize(kept);
     return true;
 }
 
