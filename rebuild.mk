@@ -11,8 +11,8 @@
 # targets that are up to date. subsets writes pairs.sN.NAME for each word
 # list words.sN.NAME, keeping the pairs of pairs.sN whose words are both in
 # it. S=N,M, N less than M, is a combined sentence: the letters of $SN and
-# $SM, written to idx.2.sNsM, cluer.sNsM and pairs.sNsM, without the
-# hand-added pairs of sN.pairs or sM.pairs.
+# $SM, written to idx.2.sNsM, cluer.sNsM and pairs.sNsM, with the
+# hand-added pairs of sN.pairs and sM.pairs.
 
 SHELL := bash
 .SHELLFLAGS := -euo pipefail -c
@@ -77,7 +77,7 @@ universe := $(IDX_DIR)/universe
 idx_out := $(IDX_DIR)/idx.2.$(id)
 cluer_out := $(IDX_DIR)/cluer.$(id)
 pairs_out := $(IDX_DIR)/pairs.$(id)
-extra_pairs := $(if $(word 2,$(nums)),,$(wildcard $(IDX_DIR)/$(id).pairs))
+extra_pairs := $(wildcard $(foreach num,$(nums),$(IDX_DIR)/s$(num).pairs))
 subset_words := $(wildcard $(IDX_DIR)/words.$(id).*)
 subset_pairs := $(patsubst $(IDX_DIR)/words.%,$(IDX_DIR)/pairs.%,\
 	$(subset_words))
@@ -108,7 +108,7 @@ $(cluer_out): $(tokens) $(bigrams) | $(universe)
 
 $(pairs_out): $(cluer_out) $(idx_out) $(extra_pairs)
 	pcomm $(cluer_out) $(idx_out) \
-		$(if $(extra_pairs),| pcomm - $(extra_pairs)) | sort -u > $@.tmp
+		$(foreach file,$(extra_pairs),| pcomm - $(file)) | sort -u > $@.tmp
 	mv $@.tmp $@
 
 $(IDX_DIR)/pairs.$(id).%: $(IDX_DIR)/words.$(id).% $(pairs_out)

@@ -10,7 +10,7 @@
 # writes pairs.sN.NAME for each word list words.sN.NAME, keeping the pairs of
 # pairs.sN whose words are both in it. sNsM, N less than M, is a combined
 # sentence: the letters of $SN and $SM, written to idx.2.sNsM, cluer.sNsM and
-# pairs.sNsM, without the hand-added pairs of sN.pairs or sM.pairs.
+# pairs.sNsM, with the hand-added pairs of sN.pairs and sM.pairs.
 
 # braces make bash parse the whole script before running it, so editing the
 # file during a run doesn't change what the run does
@@ -69,8 +69,10 @@ universe=$IDX_DIR/universe
 idx_out=$IDX_DIR/idx.2.$id
 cluer_out=$IDX_DIR/cluer.$id
 pairs_out=$IDX_DIR/pairs.$id
-extra_pairs=
-[ ${#nums[@]} -gt 1 ] || extra_pairs=$IDX_DIR/$id.pairs
+extra_pairs=()
+for num in "${nums[@]}"; do
+    [ ! -f "$IDX_DIR/s$num.pairs" ] || extra_pairs+=("$IDX_DIR/s$num.pairs")
+done
 
 for tool in query-index pcomm python; do
     command -v "$tool" > /dev/null || die "$tool not found on PATH; source ./setup.sh"
@@ -135,13 +137,19 @@ cluer_pairs() {
     python "$cluer/query_index.py" --letters "$letters" --dict "$universe" -m3
 }
 
-# adds $extra_pairs when it exists
-all_pairs() {
-    if [ -f "$extra_pairs" ]; then
-        pcomm "$cluer_out" "$idx_out" | pcomm - "$extra_pairs"
+# usage: add_pairs FILE...
+# stdin's pairs with each FILE's folded in
+add_pairs() {
+    if [ $# -eq 0 ]; then
+        cat
     else
-        pcomm "$cluer_out" "$idx_out"
-    fi | sort -u
+        pcomm - "$1" | add_pairs "${@:2}"
+    fi
+}
+
+# adds $extra_pairs
+all_pairs() {
+    pcomm "$cluer_out" "$idx_out" | add_pairs "${extra_pairs[@]}" | sort -u
 }
 
 # usage: subset_pairs WORDS
@@ -175,7 +183,7 @@ build() {
             build wiki
             build cluer
             local srcs=("$cluer_out" "$idx_out")
-            [ ! -f "$extra_pairs" ] || srcs+=("$extra_pairs")
+            srcs+=("${extra_pairs[@]}")
             run_to "combined pairs" "$pairs_out" "${srcs[@]}" -- all_pairs
             ;;
         subsets)
