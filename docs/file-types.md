@@ -55,6 +55,18 @@ pairs when it is read. adding words to the dictionary, or changing SN's
 letters, needs a rebuild (`-B universe wiki cluer combine`, or `-f`).
 
 
+## Combined pair files
+
+idx/idx.2.sNsM, idx/cluer.sNsM, idx/pairs.sNsM
+
+the index, cluer and pair files for the letters of SN and SM together, N
+less than M, e.g. a benchmark bag joined from two solved sentences. written
+by `make -f rebuild.mk S=N,M` or `rebuild.sh sNsM`. sN.pairs and sM.pairs
+aren't folded in. the tools that take a sentence number (seed-pairs -s,
+pfilter -s, pgui) don't know sNsM; read the file with `seed-pairs --pairs
+idx/pairs.sNsM`.
+
+
 ## Subset word lists
 
 idx/words.sN.NAME

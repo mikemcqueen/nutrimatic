@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: rebuild.sh [-f|--force] [universe|wiki|cluer|combine|subsets|all]...
-#        sN|SN
+#        sN|SN|sNsM
 # requires: source ./setup.sh
 #
 # rebuild.mk as a script: the same targets, files and commands. A target
@@ -8,7 +8,9 @@
 # order-only, so universe is never a reason to rebuild one. -f rebuilds
 # every named target and what it depends on, as make -B does. subsets
 # writes pairs.sN.NAME for each word list words.sN.NAME, keeping the pairs of
-# pairs.sN whose words are both in it.
+# pairs.sN whose words are both in it. sNsM, N less than M, is a combined
+# sentence: the letters of $SN and $SM, written to idx.2.sNsM, cluer.sNsM and
+# pairs.sNsM, without the hand-added pairs of sN.pairs or sM.pairs.
 
 # braces make bash parse the whole script before running it, so editing the
 # file during a run doesn't change what the run does
@@ -21,7 +23,7 @@ die() {
 }
 
 usage() {
-    die "usage: $0 [-f|--force] [universe|wiki|cluer|combine|subsets|all]... sN|SN (N is 1-9)"
+    die "usage: $0 [-f|--force] [universe|wiki|cluer|combine|subsets|all]... sN|SN|sNsM (N and M are 1-9, N less than M)"
 }
 
 force=
@@ -35,12 +37,23 @@ for arg; do
         *) [ -z "$seed" ] || usage; seed=$arg ;;
     esac
 done
-[[ $seed =~ ^[sS]([1-9])$ ]] || usage
-snum=${BASH_REMATCH[1]}
+if [[ $seed =~ ^[sS]([1-9])$ ]]; then
+    nums=("${BASH_REMATCH[1]}")
+elif [[ $seed =~ ^[sS]([1-9])[sS]([1-9])$ ]]; then
+    nums=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+    [ "${nums[0]}" -lt "${nums[1]}" ] || usage
+else
+    usage
+fi
 [ ${#targets[@]} -gt 0 ] || targets=(all)
-S=S${snum}
-letters=${!S:-}
-[ -n "$letters" ] || die "\$$S is unset or empty; source ./setup.sh"
+id=
+letters=
+for num in "${nums[@]}"; do
+    S=S$num
+    [ -n "${!S:-}" ] || die "\$$S is unset or empty; source ./setup.sh"
+    id+=s$num
+    letters+=${!S}
+done
 [ -n "${IDX_DIR:-}" ] || die "\$IDX_DIR is unset; source ./setup.sh"
 [ -d "$IDX_DIR" ] || die "IDX_DIR $IDX_DIR is not a directory"
 [ -n "${BIG:-}" ] || die "\$BIG is unset; source ./setup.sh"
@@ -50,19 +63,21 @@ here=$(cd "$(dirname "$0")" && pwd)
 wf=$here/wf
 cluer=$(dirname "$(readlink -f "$wf")")/cluer
 tokens=$here/cluer/data/index/tokens.txt
+bigrams=$here/cluer/data/index/bigrams.npy
 words=$IDX_DIR/words
 universe=$IDX_DIR/universe
-idx_out=$IDX_DIR/idx.2.s${snum}
-cluer_out=$IDX_DIR/cluer.s${snum}
-pairs_out=$IDX_DIR/pairs.s${snum}
-extra_pairs=$IDX_DIR/s${snum}.pairs
+idx_out=$IDX_DIR/idx.2.$id
+cluer_out=$IDX_DIR/cluer.$id
+pairs_out=$IDX_DIR/pairs.$id
+extra_pairs=
+[ ${#nums[@]} -gt 1 ] || extra_pairs=$IDX_DIR/$id.pairs
 
-for tool in query-index pairs pcomm python; do
+for tool in query-index pcomm python; do
     command -v "$tool" > /dev/null || die "$tool not found on PATH; source ./setup.sh"
 done
 [ -x "$wf" ] || die "$wf not found"
 [ -f "$cluer/query_index.py" ] || die "$cluer/query_index.py not found"
-for file in "$tokens" "$words" "$BIG" "$DICT"; do
+for file in "$tokens" "$bigrams" "$words" "$BIG" "$DICT"; do
     [ -f "$file" ] || die "$file not found"
 done
 
@@ -86,7 +101,7 @@ up_to_date() {
 # usage: run_to WHAT OUT [SRC...] -- CMD...
 # skip if OUT is up to date with the SRC files and --force is not set;
 # otherwise print WHAT and write the stdout of CMD to OUT, only if CMD
-# succeeds; set slow=1 to warn that CMD takes a while
+# succeeds
 run_to() {
     local what=$1 out=$2
     local srcs=()
@@ -101,7 +116,7 @@ run_to() {
         msg "Skipping $what, $(basename "$out") is up to date"
         return
     fi
-    msg "Generating $what${slow:+, this might take a while...}"
+    msg "Generating $what"
     "$@" > "$out.tmp" || { rm -f "$out.tmp"; die "failed writing $out"; }
     mv "$out.tmp" "$out"
 }
@@ -115,11 +130,9 @@ idx_pairs() {
     query-index "$letters" --wf -w2 -n0 --csv -m3 --dict "$universe"
 }
 
-# cluer pairs, filtering out non-cluer-index dict words before sending to pairs
+# universe word pairs adjacent in some cluer clue that fit in the letters
 cluer_pairs() {
-    LC_ALL=C comm -12 "$tokens" "$universe" |
-        pairs "$letters" -d - -m3 |
-        python "$cluer/query_index.py" -f - -j --threads 2
+    python "$cluer/query_index.py" --letters "$letters" --dict "$universe" -m3
 }
 
 # adds $extra_pairs when it exists
@@ -155,7 +168,8 @@ build() {
             ;;
         cluer)
             build universe
-            slow=1 run_to "cluer pairs" "$cluer_out" "$tokens" -- cluer_pairs
+            run_to "cluer pairs" "$cluer_out" "$tokens" "$bigrams" -- \
+                cluer_pairs
             ;;
         combine)
             build wiki
@@ -167,7 +181,7 @@ build() {
         subsets)
             build combine
             local list
-            for list in "$IDX_DIR"/words.s"$snum".*; do
+            for list in "$IDX_DIR"/words."$id".*; do
                 [ -f "$list" ] || continue
                 local out=$IDX_DIR/pairs.${list#"$IDX_DIR"/words.}
                 run_to "$(basename "$out")" "$out" "$list" "$pairs_out" -- \

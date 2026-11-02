@@ -71,14 +71,23 @@ The details:
 
       wiki:    `query-index $S2 --wf -w2 -n0 --csv -m3 --dict idx/universe > idx/idx.2.s2`
 
-      # filter out non-cluer-index dict words before sending to pairs
-      cluer:   `LC_ALL=C comm -12 cluer/data/index/tokens.txt idx/universe | pairs $S2 -d - -m3 |
-                python cluer/query_index.py -f - -j --threads 2 > idx/cluer.s2`
+      cluer:   `python cluer/query_index.py --letters $S2 --dict idx/universe -m3 > idx/cluer.s2`
 
       combine: `pcomm idx/cluer.s2 idx/idx.2.s2 [| pcomm - idx/s2.pairs] | sort -u > idx/pairs.s2`
 
       `idx/s2.pairs`, hand-added pairs, is folded in when it exists; adding it
-      rebuilds only `pairs.s2`. The cluer step takes hours.
+      rebuilds only `pairs.s2`. The cluer step takes seconds.
+
+      Two sentences' letters together, e.g. a benchmark bag from two solved
+      sentences: `make -f rebuild.mk S=6,7` (or `./rebuild.sh s6s7`) writes
+      `idx/idx.2.s6s7`, `idx/cluer.s6s7` and `idx/pairs.s6s7`, without
+      `s6.pairs` or `s7.pairs`.
+
+      Previous steps:
+
+      cluer, which took hours:
+                `LC_ALL=C comm -12 cluer/data/index/tokens.txt idx/universe | pairs $S2 -d - -m3 |
+                python cluer/query_index.py -f - -j --threads 2 > idx/cluer.s2`
 
       The pair files depend on `universe` order-only, so removing words from
       `$BIG` or `$DICT` never rebuilds them: the seed filters drop those

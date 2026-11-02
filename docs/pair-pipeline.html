@@ -514,13 +514,13 @@ a:focus-visible { outline: 2px solid var(--spine); outline-offset: 2px; }
         <div class="num">3</div>
         <div class="body">
           <div class="head"><h3>Clue pairs</h3><span class="out">idx/cluer.sN</span></div>
-          <p>pairs makes every pair of clue-index words that fits the sentence. cluer then keeps the ones that appear side by side in a crossword clue. This step takes hours.</p>
-          <code class="cmd">comm -12 tokens.txt idx/universe | pairs $SN -d - -m3 | cluer/query_index.py -f - -j</code>
+          <p>cluer lists the word pairs that appear side by side in a crossword clue and keeps the ones that fit the sentence. This step takes seconds.</p>
+          <code class="cmd">cluer/query_index.py --letters $SN --dict idx/universe -m3</code>
           <ul class="gates">
-            <li class="gate voc"><span>Both words are in the universe and in the clue index's vocabulary</span><span class="sw">comm -12</span></li>
+            <li class="gate voc"><span>Both words are in the universe and in the clue index's vocabulary</span><span class="sw">--dict</span></li>
             <li class="gate len"><span>Each word is at least 3 letters</span><span class="sw">-m3</span></li>
-            <li class="gate let"><span>Two different words that fit within the sentence's letters</span><span class="sw">pairs $SN</span></li>
-            <li class="gate evi"><span>The two words are adjacent, in either order, in at least one clue</span><span class="sw">-j</span></li>
+            <li class="gate let"><span>Two different words that fit within the sentence's letters</span><span class="sw">--letters $SN</span></li>
+            <li class="gate evi"><span>The two words are adjacent, in either order, in at least one clue</span><span class="sw">bigrams.npy</span></li>
           </ul>
           <p class="note">No NO-pair check happens here. pfilter drops NO pairs later.</p>
         </div>
