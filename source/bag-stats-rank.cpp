@@ -291,12 +291,6 @@ void PairBagLoader::add(DfsPairRow const& row) {
         pair_bag.prior = std::max(pair_bag.prior, score);
 }
 
-int letter_total(PairsCounts const& counts) {
-    int total = 0;
-    for (uint8_t value : counts.values) total += value;
-    return total;
-}
-
 bool load_pair_bags(std::string_view program,
                     std::filesystem::path const& path,
                     PairsCounts const& bag, DfsPairSet const& rejected,

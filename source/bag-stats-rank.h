@@ -164,8 +164,6 @@ class PairBagLoader {
     std::unordered_map<PairsCounts, size_t, PairsCountsHash> indices_;
 };
 
-int letter_total(PairsCounts const& counts);
-
 // Appends to `out` the bags of the rows of `path` that fit `bag` and aren't
 // `rejected`, as PairBagLoader collects them, with `rows`.
 bool load_pair_bags(std::string_view program,

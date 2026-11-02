@@ -6,6 +6,7 @@ tmp/
 /setup.sh
 /results/
 /idx/
+/private/
 
 # Python
 *.pyc

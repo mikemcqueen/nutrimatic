@@ -448,33 +448,15 @@ uint64_t PackedPairsCounter<Key>::count(
   size_t const end = first_position(count, [&](size_t i) {
     return 2 * lengths_[groups.numbers[i]] <= length;
   });
-  if (scratch->remainders.size() < end) {
-    scratch->remainders.resize(end);
-    scratch->positions.resize(end);
-  }
-  Key* const remainders = scratch->remainders.data();
-  uint32_t* const positions = scratch->positions.data();
-  Key const pool = pack(bag) | guards_;
-  size_t n = 0;
-  for (size_t i = 0; i < end; ++i) {
-    Key const remaining = pool - groups.keys[i];
-    remainders[n] = remaining & ~guards_;
-    positions[n] = uint32_t(i);
-    n += (remaining & guards_) == guards_;
-  }
   uint64_t total = 0;
-  for (size_t j = 0; j < n; ++j) {
-    size_t const i = positions[j];
-    uint32_t const a = groups.numbers[i];
-    uint64_t const size = sizes_[a];
-    if (i >= half && remainders[j] == groups.keys[i]) {
-      total += size * (size - 1) / 2;
-      continue;
-    }
-    uint32_t const b = hashed.find(remainders[j]);
-    if (b != PairsExactCounter::NO_GROUP && (i < half || b > a))
-      total += size * sizes_[b];
-  }
+  packed_pairs_scan(
+      groups.keys.data(), groups.numbers.data(), half, end,
+      pack(bag) | guards_, guards_, hashed, scratch,
+      [&](size_t i, uint32_t b) {
+        uint64_t const size = sizes_[groups.numbers[i]];
+        total += b == groups.numbers[i] ? size * (size - 1) / 2
+                                        : size * sizes_[b];
+      });
   return total;
 }
 

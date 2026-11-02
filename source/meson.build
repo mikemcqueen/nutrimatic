@@ -296,6 +296,16 @@ bag_stats_sort = executable('bag-stats-sort', 'bag-stats-sort.cpp',
               dfs_class_list_lib, optparse_lib, log_lib],
   install: true)
 
+anagram_sampler_lib = static_library('anagram-sampler',
+  'anagram-sampler-impl.cpp',
+  link_with: [pairs_lib, dfs_class_list_lib])
+
+anagram_sampler = executable('anagram-sampler', 'anagram-sampler.cpp',
+  link_with: [anagram_sampler_lib, pairs_lib, dfs_class_list_lib,
+              optparse_lib],
+  dependencies: thread_dep,
+  install: true)
+
 pair_prior = executable('pair-prior', 'pair-prior.cpp',
   link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
   install: true)
@@ -493,6 +503,11 @@ test(
   'pairs',
   bash,
   args: [files('test-pairs.sh'), pairs],
+)
+test(
+  'anagram-sampler',
+  bash,
+  args: [files('test-anagram-sampler.sh'), anagram_sampler],
 )
 test_pairs_packed = executable('test-pairs-packed', 'test-pairs-packed.cpp',
   link_with: [pairs_lib, dfs_class_list_lib], install: false)

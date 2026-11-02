@@ -45,6 +45,13 @@ struct PairsCountsHash {
 // ignored.
 PairsCounts pairs_letter_counts(std::string_view s);
 
+// The number of letters in `counts`.
+inline int letter_total(PairsCounts const& counts) {
+  int total = 0;
+  for (uint8_t const value : counts.values) total += value;
+  return total;
+}
+
 // Lanes where `word` has more of a letter than `pool`, nonzero when `word`
 // doesn't fit.
 inline __m128i pairs_excess(__m128i p0, __m128i p1, __m128i w0, __m128i w1) {
@@ -75,6 +82,18 @@ inline bool pairs_subtract(PairsCounts const& pool, PairsCounts const& word,
   _mm_store_si128(result, _mm_sub_epi8(p0, w0));
   _mm_store_si128(result + 1, _mm_sub_epi8(p1, w1));
   return true;
+}
+
+// The letter counts of `a` and `b` together.
+inline PairsCounts pairs_add(PairsCounts const& a, PairsCounts const& b) {
+  __m128i const* x = reinterpret_cast<__m128i const*>(a.values.data());
+  __m128i const* y = reinterpret_cast<__m128i const*>(b.values.data());
+  PairsCounts sum;
+  __m128i* result = reinterpret_cast<__m128i*>(sum.values.data());
+  _mm_store_si128(result, _mm_add_epi8(_mm_load_si128(x), _mm_load_si128(y)));
+  _mm_store_si128(result + 1,
+                  _mm_add_epi8(_mm_load_si128(x + 1), _mm_load_si128(y + 1)));
+  return sum;
 }
 
 // Word pairs found under PairsOptions among the words added, each written
@@ -277,6 +296,49 @@ class PackedRemainderGroups {
   std::vector<uint32_t> numbers_;
 };
 
+// Fitting groups' remainders and positions, reused across scans.
+template <typename Key>
+struct PackedPairsScratch {
+  std::vector<Key> remainders;
+  std::vector<uint32_t> positions;
+};
+
+// Calls `each(i, b)` for every pair of groups whose letters add up to the
+// packed bag `pool` (with `guards` set): `i` the position in `keys`
+// (shortest first) of the shorter group, `b` the number `hashed` finds for
+// the other. `half` is the first position of a group at least half as long
+// as the bag, `end` the first one longer than half. Groups as long as each
+// other come once, with numbers[i] < b; a group making up both halves comes
+// as numbers[i] == b.
+template <typename Key, typename Hashed, typename Each>
+void packed_pairs_scan(Key const* keys, uint32_t const* numbers, size_t half,
+                       size_t end, Key pool, Key guards, Hashed const& hashed,
+                       PackedPairsScratch<Key>* scratch, Each const& each) {
+  if (scratch->remainders.size() < end) {
+    scratch->remainders.resize(end);
+    scratch->positions.resize(end);
+  }
+  Key* const remainders = scratch->remainders.data();
+  uint32_t* const positions = scratch->positions.data();
+  size_t n = 0;
+  for (size_t i = 0; i < end; ++i) {
+    Key const remaining = pool - keys[i];
+    remainders[n] = remaining & ~guards;
+    positions[n] = uint32_t(i);
+    n += (remaining & guards) == guards;
+  }
+  for (size_t j = 0; j < n; ++j) {
+    size_t const i = positions[j];
+    uint32_t const a = numbers[i];
+    if (i >= half && remainders[j] == keys[i]) {
+      each(i, a);
+      continue;
+    }
+    uint32_t const b = hashed.find(remainders[j]);
+    if (b != PairsExactCounter::NO_GROUP && (i < half || b > a)) each(i, b);
+  }
+}
+
 // PairsExactCounter's count(bag, groups, hashed) over packed letters, for
 // a bag whose PairsPacking fits `Key`.
 template <typename Key>
@@ -285,11 +347,7 @@ class PackedPairsCounter {
   // From `counter` after its finish(); shares nothing with it.
   explicit PackedPairsCounter(PairsExactCounter const& counter);
 
-  // Fitting groups' remainders and positions, reused across count()s.
-  struct Scratch {
-    std::vector<Key> remainders;
-    std::vector<uint32_t> positions;
-  };
+  using Scratch = PackedPairsScratch<Key>;
 
   // `counts`, which must fit the counter's bag, packed.
   Key pack(PairsCounts const& counts) const {
