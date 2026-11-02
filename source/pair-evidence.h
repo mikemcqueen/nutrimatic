@@ -27,10 +27,12 @@ class PairEvidenceSource {
   public:
     // Opens a make-p1-index file, `p1`, and the clue index beside
     // `cluedata`; either may be absent. False, with `*error` set and
-    // `*failed` the index, when one can't be opened.
+    // `*failed` the index, when one can't be opened. Given `stale`, an out
+    // of date `p1` opens anyway with `*stale` set to why, as P1Index::open().
     bool open(std::optional<std::filesystem::path> const& p1,
               std::optional<std::filesystem::path> const& cluedata,
-              std::string* error, PriorIndex* failed = nullptr);
+              std::string* error, PriorIndex* failed = nullptr,
+              std::string* stale = nullptr);
 
     PairEvidence lookup(std::string_view a, std::string_view b) const;
 
@@ -62,12 +64,14 @@ double prior_score(PairEvidence const& evidence, PriorWeights const& weights);
 // not given, into `weights`, and opens in `source` the indexes among `p1`
 // and `cluedata` that its terms read (both with `all`). False, with
 // `*error` set, on a bad SPEC, a weighted term whose index isn't given, or
-// an index that can't be opened, then `*failed` that index.
+// an index that can't be opened, then `*failed` that index. `stale` is as
+// in PairEvidenceSource::open().
 bool open_prior(std::optional<std::filesystem::path> const& p1,
                 std::optional<std::filesystem::path> const& cluedata,
                 std::optional<std::string> const& spec, bool all,
                 PriorWeights* weights, PairEvidenceSource* source,
-                std::string* error, PriorIndex* failed = nullptr);
+                std::string* error, PriorIndex* failed = nullptr,
+                std::string* stale = nullptr);
 
 // The indexes a prior reads: --p1 and --clues, each given or its default.
 struct PriorPaths {
@@ -83,7 +87,8 @@ struct PriorPaths {
 void default_prior_paths(PriorPaths* paths);
 
 // open_prior() of `paths`, except that a default index that can't be opened
-// is dropped from `paths` with a warning prefixed by `program`. False,
+// is dropped from `paths` with a warning prefixed by `program`, and an out of
+// date p1 index is used with an alert prefixed by `program`. False,
 // diagnosed prefixed by `program`, naming any dropped index, when
 // open_prior() fails otherwise.
 bool open_default_prior(std::string_view program, PriorPaths* paths,

@@ -14,13 +14,13 @@
 bool PairEvidenceSource::open(
         std::optional<std::filesystem::path> const& p1,
         std::optional<std::filesystem::path> const& cluedata,
-        std::string* error, PriorIndex* failed) {
+        std::string* error, PriorIndex* failed, std::string* stale) {
     PriorIndex unused;
     if (failed == nullptr) failed = &unused;
     *failed = PriorIndex::none;
     if (p1) {
         p1_ = std::make_unique<P1Index>();
-        if (!p1_->open(*p1, error)) {
+        if (!p1_->open(*p1, error, stale)) {
             *failed = PriorIndex::p1;
             return false;
         }
@@ -146,7 +146,7 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
                 std::optional<std::filesystem::path> const& cluedata,
                 std::optional<std::string> const& spec, bool all,
                 PriorWeights* weights, PairEvidenceSource* source,
-                std::string* error, PriorIndex* failed) {
+                std::string* error, PriorIndex* failed, std::string* stale) {
     if (failed != nullptr) *failed = PriorIndex::none;
     if (!parse_prior_weights(spec.value_or(PRIOR_WEIGHTS_DEFAULT), weights,
                              error)) {
@@ -170,7 +170,8 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
         }
     }
     return source->open(use_p1 ? p1 : std::nullopt,
-                        use_clues ? cluedata : std::nullopt, error, failed);
+                        use_clues ? cluedata : std::nullopt, error, failed,
+                        stale);
 }
 
 void default_prior_paths(PriorPaths* paths) {
@@ -190,9 +191,10 @@ bool open_default_prior(std::string_view program, PriorPaths* paths,
                         PriorWeights* weights, PairEvidenceSource* source) {
     std::string error;
     std::string skipped;
+    std::string stale;
     PriorIndex failed;
     while (!open_prior(paths->p1, paths->clues, spec, all, weights, source,
-                       &error, &failed)) {
+                       &error, &failed, &stale)) {
         std::optional<std::filesystem::path>* path;
         if (failed == PriorIndex::p1 && paths->p1_default) {
             path = &paths->p1;
@@ -214,6 +216,7 @@ bool open_default_prior(std::string_view program, PriorPaths* paths,
         path->reset();
         *source = PairEvidenceSource();
     }
+    if (!stale.empty()) alert(program, "%s", stale.c_str());
     return true;
 }
 
