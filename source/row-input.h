@@ -40,4 +40,9 @@ bool print_kept_rows(
     std::string_view what, bool allow_single_words,
     std::function<bool(DfsPairRow const&)> const& keep);
 
+// Appends `segments` to `out` as a top-segments row: "0 ", then `segments`
+// with each `separator` written as a comma, then a newline.
+void append_top_segments_row(std::string* out, std::string_view segments,
+                             std::string_view separator);
+
 #endif

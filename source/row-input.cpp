@@ -67,3 +67,15 @@ bool print_kept_rows(
         return true;
       });
 }
+
+void append_top_segments_row(std::string* out, std::string_view segments,
+                             std::string_view separator) {
+  *out += "0 ";
+  for (size_t at; (at = segments.find(separator)) != std::string_view::npos;) {
+    *out += segments.substr(0, at);
+    *out += ',';
+    segments.remove_prefix(at + separator.size());
+  }
+  *out += segments;
+  *out += '\n';
+}

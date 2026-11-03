@@ -686,16 +686,7 @@ void append_row(std::string* out, BagStatsRow const& row, bool top_segments) {
         append_bag_stats_row(out, row);
         return;
     }
-    *out += "0 ";
-    for (size_t i = 0; i < row.pair.size();) {
-        if (row.pair.compare(i, 3, " + ") == 0) {
-            *out += ',';
-            i += 3;
-        } else {
-            *out += row.pair[i++];
-        }
-    }
-    *out += '\n';
+    append_top_segments_row(out, row.pair, " + ");
 }
 
 void print_score_rank(BagStatsRow const& row, ScoreRank const& rank) {
