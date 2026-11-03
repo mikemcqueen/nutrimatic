@@ -1,8 +1,9 @@
 // Queries aggregate index entries in three modes. By default, prints the
 // highest-corpus-frequency words/phrases makeable from a subset of a letter
 // bag. --require-completable adds shared phase-2 feasibility filtering.
-// --score scores an exact query, while --near finds phrases with supplied
-// endpoints and at least one complete intervening word.
+// --score scores an exact query, --filter prints input lines whose scores
+// fall within bounds, and --near finds phrases with supplied endpoints and at
+// least one complete intervening word.
 
 #include "dfs-class-list.h"
 #include "dfs-class-list-build.h"
@@ -28,6 +29,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -51,6 +53,12 @@ struct Args {
   bool min_words_given;
   bool require_completable;
   bool score;
+  bool filter;
+  bool invert;
+  double min_score;
+  double max_score;
+  std::string_view filter_only_option;
+  std::string_view filter_incompatible_option;
   bool near;
   bool sd;
   bool ptm;
@@ -62,8 +70,10 @@ static void usage(std::string_view program, FILE* out) {
   fprintf(out,
       "usage: %.*s [-i INDEX] [options] letters\n"
       "       %.*s [-i INDEX] [options] query|- --score\n"
+      "       %.*s [-i INDEX] [options] FILE|- --filter "
+      "[--min-score S] [--max-score S] [-v]\n"
       "       %.*s [-i INDEX] input --near WORD [-n N]\n",
-      SV_ARG(program), SV_ARG(program),
+      SV_ARG(program), SV_ARG(program), SV_ARG(program),
       SV_ARG(program));
   if (out != stdout) return;
 
@@ -142,8 +152,22 @@ static void usage(std::string_view program, FILE* out) {
       "dictionary or exclusion filtering applies; query - "
       "reads one comma-separated value per stdin line, each as one "
       "space-separated index entry, and sorts by score; a two-word value "
-      "uses its higher-scoring orientation and is omitted if neither is in "
-      "the index");
+      "uses its higher-scoring orientation, and any value absent from the "
+      "index is omitted");
+  dfs_help_option("--filter",
+      "read FILE, or stdin for -, in the --score stdin line format and "
+      "print, in input order and as given, each line whose raw aggregate "
+      "index count (the higher orientation for a two-word value) passes "
+      "--min-score and --max-score; a line absent from the index never "
+      "passes; takes no scoring, workflow, or listing options");
+  dfs_help_option("--min-score S",
+      "with --filter, require a score of at least S (default: 0, no "
+      "minimum)");
+  dfs_help_option("--max-score S",
+      "with --filter, require a score of at most S (default: 0, no "
+      "maximum; when both are set, must be at least --min-score)");
+  dfs_help_option("-v, --invert-match",
+      "with --filter, print only the lines that do not pass");
   dfs_help_option("--sd",
       "with stdin --score, print the geometric mean first, in score units, "
       "with one standard deviation as a multiplicative factor, then add "
@@ -175,6 +199,9 @@ static int const OPT_NEAR = 259;
 static int const OPT_NO_PTM = 260;
 static int const OPT_MIN_WORDS = 261;
 static int const OPT_SD = 262;
+static int const OPT_FILTER = 263;
+static int const OPT_MIN_SCORE = 264;
+static int const OPT_MAX_SCORE = 265;
 
 static struct optparse_long const long_options[] = {
   DFS_COMMON_LONG_OPTIONS,
@@ -184,6 +211,10 @@ static struct optparse_long const long_options[] = {
   { "min-words", OPT_MIN_WORDS, OPTPARSE_REQUIRED },
   { "score", 's', OPTPARSE_NONE },
   { "sd", OPT_SD, OPTPARSE_NONE },
+  { "filter", OPT_FILTER, OPTPARSE_NONE },
+  { "min-score", OPT_MIN_SCORE, OPTPARSE_REQUIRED },
+  { "max-score", OPT_MAX_SCORE, OPTPARSE_REQUIRED },
+  { "invert-match", 'v', OPTPARSE_NONE },
   { "no-ptm", OPT_NO_PTM, OPTPARSE_NONE },
   { "near", OPT_NEAR, OPTPARSE_REQUIRED },
   { "require-completable", OPT_REQUIRE_COMPLETABLE, OPTPARSE_NONE },
@@ -194,6 +225,11 @@ static struct optparse_long const long_options[] = {
 static void mark_score_incompatible(Args* args, std::string_view option) {
   if (args->score_incompatible_option.empty())
     args->score_incompatible_option = option;
+}
+
+static void mark_filter_incompatible(Args* args, std::string_view option) {
+  if (args->filter_incompatible_option.empty())
+    args->filter_incompatible_option = option;
 }
 
 static void mark_near_incompatible(Args* args, std::string_view option) {
@@ -250,6 +286,12 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
   out->min_words_given = false;
   out->require_completable = false;
   out->score = false;
+  out->filter = false;
+  out->invert = false;
+  out->min_score = 0.0;
+  out->max_score = 0.0;
+  out->filter_only_option = {};
+  out->filter_incompatible_option = {};
   out->near = false;
   out->sd = false;
   out->ptm = true;
@@ -268,6 +310,7 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
       case DFS_OPTION_HANDLED:
         if (which.score_incompatible)
           mark_score_incompatible(out, which.name);
+        mark_filter_incompatible(out, which.name);
         if (opt != 'n' && opt != DFS_OPT_NO_SCORE)
           mark_near_incompatible(out, which.name);
         continue;
@@ -286,6 +329,7 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
           return false;
         }
         mark_score_incompatible(out, "--num-words");
+        mark_filter_incompatible(out, "--num-words");
         mark_near_incompatible(out, "--num-words");
         break;
       case OPT_MIN_WORDS:
@@ -293,18 +337,43 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
           return false;
         out->min_words_given = true;
         mark_score_incompatible(out, "--min-words");
+        mark_filter_incompatible(out, "--min-words");
         mark_near_incompatible(out, "--min-words");
         break;
       case 's':
         out->score = true;
+        mark_filter_incompatible(out, "--score");
         mark_near_incompatible(out, "--score");
+        break;
+      case OPT_FILTER:
+        out->filter = true;
+        mark_near_incompatible(out, "--filter");
+        break;
+      case OPT_MIN_SCORE:
+        if (!parse_double(options.optarg, "--min-score", &out->min_score))
+          return false;
+        if (out->filter_only_option.empty())
+          out->filter_only_option = "--min-score";
+        break;
+      case OPT_MAX_SCORE:
+        if (!parse_double(options.optarg, "--max-score", &out->max_score))
+          return false;
+        if (out->filter_only_option.empty())
+          out->filter_only_option = "--max-score";
+        break;
+      case 'v':
+        out->invert = true;
+        if (out->filter_only_option.empty())
+          out->filter_only_option = "-v";
         break;
       case OPT_SD:
         out->sd = true;
+        mark_filter_incompatible(out, "--sd");
         mark_near_incompatible(out, "--sd");
         break;
       case OPT_NO_PTM:
         out->ptm = false;
+        mark_filter_incompatible(out, "--no-ptm");
         break;
       case OPT_NEAR:
         out->near = true;
@@ -314,6 +383,7 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
       case OPT_REQUIRE_COMPLETABLE:
         out->require_completable = true;
         mark_score_incompatible(out, "--require-completable");
+        mark_filter_incompatible(out, "--require-completable");
         mark_near_incompatible(out, "--require-completable");
         break;
       case 'h':
@@ -328,7 +398,8 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
   char const* letters = optparse_arg(&options);
   if (letters == NULL) {
     fprintf(stderr, "error: missing %s argument\n",
-            out->near ? "input" : (out->score ? "query" : "letters"));
+            out->near ? "input" :
+                (out->filter ? "file" : (out->score ? "query" : "letters")));
     usage(argv[0], stderr);
     return false;
   }
@@ -336,6 +407,11 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
   if (extra != NULL) {
     fprintf(stderr, "error: unexpected argument \"%s\"\n", extra);
     usage(argv[0], stderr);
+    return false;
+  }
+  if (!out->filter && !out->filter_only_option.empty()) {
+    fprintf(stderr, "error: %.*s requires --filter\n",
+            SV_ARG(out->filter_only_option));
     return false;
   }
   if (out->near) {
@@ -350,6 +426,28 @@ static bool parse_args(char* argv[], Args* out, bool* help) {
     out->near_input = letters;
     return validate_literal_entry(out->near_input) &&
         validate_literal_entry(out->near_target);
+  }
+
+  if (out->filter) {
+    if (!out->filter_incompatible_option.empty()) {
+      fprintf(stderr, "error: %.*s cannot be used with --filter\n",
+              SV_ARG(out->filter_incompatible_option));
+      return false;
+    }
+    if (out->min_score < 0.0 || out->max_score < 0.0) {
+      fputs("error: --min-score and --max-score must be non-negative\n",
+            stderr);
+      return false;
+    }
+    if (out->max_score != 0.0 && out->max_score < out->min_score) {
+      fputs("error: --max-score must be at least --min-score\n", stderr);
+      return false;
+    }
+    if (!out->index_file &&
+        !index_from_env(argv[0], "-i INDEX", &out->index_file))
+      return false;
+    out->score_sequence = letters;
+    return true;
   }
 
   if (!finalize_dfs_common_args(
@@ -510,14 +608,8 @@ static bool parse_positional_score_value(
   return true;
 }
 
-static bool parse_score_values(
-    std::vector<ScoreValue>* values) {
-  std::string line;
-  size_t line_number = 0;
-  while (std::getline(std::cin, line)) {
-    ++line_number;
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-
+static bool parse_score_line(
+    std::string const& line, size_t line_number, ScoreValue* out) {
     std::string value;
     std::vector<std::string> words;
     size_t start = 0;
@@ -557,19 +649,71 @@ static bool parse_score_values(
         entry += words[i];
       }
     }
-    ScoreValue const value_entry = {
+    *out = {
       std::move(value),
       std::move(entry),
       std::move(reverse_entry),
       words.size() == 2,
     };
-    values->push_back(value_entry);
+    return true;
+}
+
+static bool parse_score_values(
+    std::vector<ScoreValue>* values) {
+  std::string line;
+  size_t line_number = 0;
+  while (std::getline(std::cin, line)) {
+    ++line_number;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    ScoreValue value;
+    if (!parse_score_line(line, line_number, &value)) return false;
+    values->push_back(std::move(value));
   }
   if (std::cin.bad()) {
     fputs("error: can't read stdin\n", stderr);
     return false;
   }
   return true;
+}
+
+static int filter_value_list(IndexReader const& reader, Args const& args) {
+  std::ifstream file;
+  bool const from_stdin = args.score_sequence == "-";
+  if (!from_stdin) {
+    file.open(args.score_sequence);
+    if (!file) {
+      fprintf(stderr, "error: can't open \"%s\"\n",
+              args.score_sequence.c_str());
+      return 1;
+    }
+  }
+  std::istream& in = from_stdin ? std::cin : file;
+
+  std::string line;
+  size_t line_number = 0;
+  while (std::getline(in, line)) {
+    ++line_number;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    ScoreValue value;
+    if (!parse_score_line(line, line_number, &value)) return 2;
+
+    int64_t count = 0;
+    int64_t reverse_count = 0;
+    bool const found =
+        reader.aggregate_entry_count(value.entry, &count) |
+        (!value.reverse_entry.empty() &&
+         reader.aggregate_entry_count(value.reverse_entry, &reverse_count));
+    double const score = (double) std::max(count, reverse_count);
+    bool const pass = found &&
+        (args.min_score == 0.0 || score >= args.min_score) &&
+        (args.max_score == 0.0 || score <= args.max_score);
+    if (pass != args.invert) puts(line.c_str());
+  }
+  if (in.bad()) {
+    fputs("error: can't read input\n", stderr);
+    return 2;
+  }
+  return 0;
 }
 
 struct NearResult {
@@ -891,7 +1035,7 @@ static std::string format_mapped_score(
 
 static bool score_value(
     IndexReader const& reader, DfsPreparedClassList const& prepared,
-    ScoreValue const& value, double* log_score,
+    ScoreValue const& value, bool omit_missing, double* log_score,
     bool* bonus_applied = NULL) {
   DfsEntryTerms forward;
   DfsEntryTerms reverse;
@@ -909,7 +1053,7 @@ static bool score_value(
     chosen = &value.entry;
   else if (has_reverse)
     chosen = &value.reverse_entry;
-  else if (!value.pair) {
+  else if (!value.pair && !omit_missing) {
     fprintf(stderr, "error: index has no entry \"%s\"\n",
             value.entry.c_str());
     return false;
@@ -941,7 +1085,8 @@ static int score_value_list(IndexReader& reader, Args const& args) {
     double log_score;
     bool entry_bonus = false;
     if (!score_value(
-            reader, prepared, values[i], &log_score, &entry_bonus))
+            reader, prepared, values[i], /*omit_missing=*/true,
+            &log_score, &entry_bonus))
       return 2;
     if (!isfinite(log_score)) continue;
     if (entry_bonus) bonus_applied = true;
@@ -1061,7 +1206,7 @@ int main(int argc, char* argv[]) {
     warn(argv[0],
         "no target supplied; only dictionary and classified-no filtering "
         "are active");
-  if (!args.score && !args.near)
+  if (!args.score && !args.filter && !args.near)
     dfs_diagnostic_letter_bag(args.letters);
 
   ScoreValue positional_score_value;
@@ -1079,6 +1224,7 @@ int main(int argc, char* argv[]) {
   IndexReader reader(fp);
 
   if (args.near) return run_near_query(reader, args);
+  if (args.filter) return filter_value_list(reader, args);
 
   if (args.score) {
     if (score_stdin) return score_value_list(reader, args);
@@ -1091,7 +1237,8 @@ int main(int argc, char* argv[]) {
 
     double log_score;
     if (!score_value(
-            reader, prepared, positional_score_value, &log_score))
+            reader, prepared, positional_score_value,
+            /*omit_missing=*/false, &log_score))
       return 2;
     if (!isfinite(log_score)) return 0;
     if (args.common.show_score)

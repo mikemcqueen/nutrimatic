@@ -186,7 +186,7 @@ grep -q -- '--sd cannot be used with --csv' \
   "$test_dir/sd-with-csv.stderr" ||
   fail "--sd should be rejected with --csv"
 
-printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\nmissing\n' |
   "$query_index" -i "$synthetic_index" - --score --no-ptm \
     > "$test_dir/stdin-score.stdout" \
     2> "$test_dir/stdin-score.stderr"
@@ -211,6 +211,18 @@ assert_close "$(awk '$2 == "ij,gh" { print $1 }' \
   "stdin scoring did not fall back to the indexed pair orientation"
 [[ -z $(awk '$2 == "missing,pair"' "$test_dir/stdin-score.stdout") ]] ||
   fail "stdin scoring printed a pair absent in both orientations"
+[[ -z $(awk '$2 == "missing"' "$test_dir/stdin-score.stdout") ]] ||
+  fail "stdin scoring printed a single-word value absent from the index"
+
+printf 'ab\ncd\nij,gh\nab,cd\nmissing\n' > "$test_dir/filter.txt"
+[[ "$("$query_index" -i "$synthetic_index" --filter \
+      --min-score 6 --max-score 75 "$test_dir/filter.txt")" == \
+   $'cd\nab,cd' ]] ||
+  fail "--filter did not keep lines within the raw count bounds"
+[[ "$("$query_index" -i "$synthetic_index" --filter -v \
+      --min-score 6 --max-score 75 - < "$test_dir/filter.txt")" == \
+   $'ab\nij,gh\nmissing' ]] ||
+  fail "--filter -v did not print the failing lines in input order"
 
 printf 'gh,ij\nab\nmissing,pair\n' |
   "$query_index" -i "$synthetic_index" - --score --csv \
@@ -220,7 +232,7 @@ printf 'gh,ij\nab\nmissing,pair\n' |
    $'ab\ngh,ij' ]] ||
   fail "stdin --score --csv printed a missing pair"
 
-printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\nmissing\n' |
   "$query_index" -i "$synthetic_index" - --score --sd --no-ptm \
     > "$test_dir/stdin-score-sd.stdout" \
     2> "$test_dir/stdin-score-sd.stderr"
@@ -243,7 +255,7 @@ mean_score=$(awk 'NR == 1 { print $2 }' "$test_dir/stdin-score-sd.stdout")
      "$test_dir/stdin-score-sd.stdout")" == 1 ]] ||
   fail "the highest-scoring value was not above the mean"
 
-printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\nmissing\n' |
   "$query_index" -i "$synthetic_index" - --score --sd \
     > "$test_dir/stdin-score-ptm.stdout" \
     2> "$test_dir/stdin-score-ptm.stderr"
@@ -270,7 +282,7 @@ ptm_line_pattern+='  tail rate: [0-9]+\.[0-9][0-9][0-9]$'
      "$test_dir/stdin-score-ptm.stdout")" == 0 ]] ||
   fail "mapped scores did not follow the score order"
 
-printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\n' |
+printf 'gh,ij\nij,gh\nab,cd\nf,gh,ij\nab\nqr,st\nmissing,pair\nmissing\n' |
   "$query_index" -i "$synthetic_index" - --score \
     > "$test_dir/stdin-score-ptm-no-sd.stdout" \
     2> "$test_dir/stdin-score-ptm-no-sd.stderr"
