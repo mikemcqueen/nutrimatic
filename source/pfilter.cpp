@@ -28,7 +28,6 @@ int const OPT_CSV = 258;
 int const OPT_EXACT = 259;
 int const OPT_NO_NOPAIRS = 260;
 int const OPT_REQUIRED_WORDS = 261;
-int const OPT_TOP_SEGMENTS = 262;
 
 struct Args {
   PfilterOptions options;
@@ -37,7 +36,6 @@ struct Args {
   bool no_dict = false;
   bool cv = false;
   bool csv = false;
-  bool top_segments = false;
   std::filesystem::path source;
 };
 
@@ -45,7 +43,7 @@ void usage(FILE* out) {
   fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [--exact]] [-m N] [-x N] "
         "[-s N] [--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] "
         "[--rw FILE] "
-        "[--cv [--csv] | --top-segments] PAIRS-FILE|-\n", out);
+        "[--cv [--csv]] PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
   fputs("  print pairs whose two words are in the dictionary\n"
@@ -85,8 +83,6 @@ void usage(FILE* out) {
       "first. Requires -l");
   dfs_help_option("--csv",
       "with --cv, sort as --cv does but print only the pairs");
-  dfs_help_option("--top-segments, --ts",
-      "print each pair as \"0 WORD WORD\", for top-segments");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -107,8 +103,6 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "required-words", OPT_REQUIRED_WORDS, OPTPARSE_REQUIRED },
     { "cv", OPT_CV, OPTPARSE_NONE },
     { "csv", OPT_CSV, OPTPARSE_NONE },
-    { "top-segments", OPT_TOP_SEGMENTS, OPTPARSE_NONE },
-    { "ts", OPT_TOP_SEGMENTS, OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -174,9 +168,6 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case OPT_CSV:
         out->csv = true;
         break;
-      case OPT_TOP_SEGMENTS:
-        out->top_segments = true;
-        break;
       case 'h':
         *help = true;
         return true;
@@ -213,11 +204,6 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   if (out->csv && !out->cv) {
     report(PROGRAM, "--csv requires --cv");
-    return false;
-  }
-
-  if (out->top_segments && out->cv) {
-    report(PROGRAM, "--top-segments and --cv can't be combined");
     return false;
   }
 
@@ -310,24 +296,9 @@ int main(int argc, char* argv[]) {
   if (args.cv)
     return print_kept_rows_with_cv(args.source, filter, *args.options.bag,
                args.csv) ? 0 : 1;
-  if (args.top_segments) {
-    std::string line;
-    if (!read_rows(PROGRAM, args.source, "pair list", false,
-            [&](DfsPairRow const& row, std::string const&) {
-              if (!filter.keep(row)) return true;
-              line.clear();
-              append_top_segments_row(&line, row.entry(), ",");
-              if (!(std::cout << line)) {
-                report(PROGRAM, "can't write output");
-                return false;
-              }
-              return true;
-            }))
-      return 1;
-  } else if (!print_kept_rows(PROGRAM, args.source, "pair list", false,
-                 [&](DfsPairRow const& row) { return filter.keep(row); })) {
+  if (!print_kept_rows(PROGRAM, args.source, "pair list", false,
+          [&](DfsPairRow const& row) { return filter.keep(row); }))
     return 1;
-  }
   if (!(std::cout << std::flush)) {
     report(PROGRAM, "can't write output");
     return 1;

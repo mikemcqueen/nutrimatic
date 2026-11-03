@@ -520,7 +520,7 @@ test(
 test(
   'pfilter',
   bash,
-  args: [files('test-pfilter.sh'), pfilter, top_segments],
+  args: [files('test-pfilter.sh'), pfilter],
 )
 test(
   'pair-prior',

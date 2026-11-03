@@ -38,11 +38,11 @@ trap 'rm -rf "$tmp"' EXIT
 
 pairs() {
   seed-pairs -s "$sentence" "${seed_args[@]}" |
-    pfilter -s "$sentence" -d "$DICT" -m 0 -x 0 -l "$1" --ts -
+    pfilter -s "$sentence" -d "$DICT" -m 0 -x 0 -l "$1" -
 }
 
 words() {
-  grep "$1.* .*$1" "$2" | top-segments --nc --pair-words -n0 2>/dev/null |
+  grep "$1.*,.*$1" "$2" | top-segments --nc --pair-words -n0 |
     sort -u || true
 }
 

@@ -45,6 +45,7 @@ bool segment_counts_read(
     std::istream* input, std::string_view name, PairFilters const& filters,
     SegmentCountsOptions const& options, SegmentCountsData* data) {
   SegmentRowReader reader = {input, name, data->program};
+  reader.accept_pairs = true;
   SegmentRow row;
   while (segment_rows_next(&reader, &row)) {
     if (options.used_letters && !data->remaining_letters) {

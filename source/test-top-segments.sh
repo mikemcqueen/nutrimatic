@@ -665,4 +665,14 @@ cp "$target2/dfs.seed" "$results/dfs.s2.m4.x2.g5.1000000.u-abc"
 grep -q "TARGET resolved to s2/u-abc/m4/g5" "$inferred_diagnostics" ||
   fail "target was not inferred from a results file name: $(cat "$inferred_diagnostics")"
 
+printf 'cat,dog\nact,god\n5 cat dog\n' > "$test_dir/pairs"
+actual=$("$top_segments" --pair-words --nc -n0 "$test_dir/pairs" | sort)
+[[ $actual == $'act\ncat\ndog\ngod' ]] || fail "pairs input is wrong: $actual"
+
+for bad in ' cat,dog' 'cat dog' 'cat,,dog' '-1 cat,dog'; do
+  printf '%s\n' "$bad" > "$test_dir/bad"
+  "$top_segments" "$test_dir/bad" 2>/dev/null &&
+    fail "accepts malformed row \"$bad\""
+done
+
 echo PASS

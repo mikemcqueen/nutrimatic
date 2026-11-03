@@ -2,7 +2,6 @@
 set -euo pipefail
 
 pfilter=$1
-top_segments=$2
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/nutrimatic-pfilter.XXXXXX")
 
 cleanup() {
@@ -40,10 +39,6 @@ actual=$("$pfilter" --no-dict -m 0 --no-nopairs --exact -l catdog \
 
 actual=$("$pfilter" --no-dict --no-nopairs -m 7 -l catdogx "$test_dir/pairs")
 [[ -z $actual ]] || fail "-m keeps a short pair: $actual"
-
-actual=$("$pfilter" --no-dict -m 0 --no-nopairs --ts -l catdogx \
-  "$test_dir/pairs" | "$top_segments" --nc --pair-words -n0 2>/dev/null)
-[[ $actual == $'act\ncat\ndog\ngod' ]] || fail "--ts is wrong: $actual"
 
 printf 'Dog\nlow\n' > "$test_dir/required"
 actual=$("$pfilter" --no-dict -m 0 --no-nopairs --rw "$test_dir/required" \

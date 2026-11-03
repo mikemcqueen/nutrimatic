@@ -35,6 +35,12 @@ struct SegmentRowReader {
   bool infer_letters = false;
   bool infer_segments = false;
 
+  // Read a line starting with a letter and holding a comma as one segment,
+  // its comma-separated words joined by spaces; a line must then start with
+  // a digit or be such a pair line. Pair lines skip the row-shape checks
+  // above.
+  bool accept_pairs = false;
+
   uint64_t line_number = 0;    // lines consumed, counting skipped blank ones
   bool failed = false;         // a row was malformed, or the stream went bad
 };

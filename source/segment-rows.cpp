@@ -19,8 +19,60 @@ static bool reject_row(SegmentRowReader* reader) {
   return false;
 }
 
+// Checks one segment's characters and spacing, appending its letters to
+// *letters when non-NULL.
+static bool check_segment(SegmentRowReader* reader, std::string const& segment,
+                          std::string* letters) {
+  bool after_space = true;
+  for (size_t i = 0; i < segment.size(); ++i) {
+    char const ch = segment[i];
+    if (ch == ' ') {
+      if (after_space || i + 1 == segment.size()) {
+        report(reader->program, "%.*s:%" PRIu64
+               ": malformed spacing in segment \"%s\"",
+               SV_ARG(reader->name),
+               reader->line_number, segment.c_str());
+        return reject_row(reader);
+      }
+      after_space = true;
+    } else if (segment_char(ch)) {
+      if (letters != NULL) letters->push_back(ch);
+      after_space = false;
+    } else {
+      report(reader->program, "%.*s:%" PRIu64
+             ": bad character '%c' in segment",
+             SV_ARG(reader->name),
+             reader->line_number, ch);
+      return reject_row(reader);
+    }
+  }
+  return true;
+}
+
+// Reads a "word,word[,word ...]" line as one segment of space-separated words.
+static bool parse_pair_line(SegmentRowReader* reader, SegmentRow* out) {
+  out->segments_start = 0;
+  out->segments.assign(1, out->line);
+  std::string& segment = out->segments.back();
+  std::replace(segment.begin(), segment.end(), ',', ' ');
+  return check_segment(reader, segment, NULL);
+}
+
 static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
   std::string const& line = out->line;
+  if (reader->accept_pairs) {
+    char const first = line[0];
+    if (first >= 'a' && first <= 'z' &&
+        line.find(',') != std::string::npos)
+      return parse_pair_line(reader, out);
+    if (first < '0' || first > '9') {
+      report(reader->program, "%.*s:%" PRIu64
+             ": expected \"score segment[,segment ...]\" or "
+             "\"word,word[,word ...]\"",
+             SV_ARG(reader->name), reader->line_number);
+      return reject_row(reader);
+    }
+  }
   char* score_end;
   double const score = strtod(line.c_str(), &score_end);
   if (score_end == line.c_str() || *score_end != ' ' ||
@@ -71,29 +123,9 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
                     segment_char))
       segment.erase(partner);
 
-    bool after_space = true;
-    for (size_t i = 0; i < segment.size(); ++i) {
-      char const ch = segment[i];
-      if (ch == ' ') {
-        if (after_space || i + 1 == segment.size()) {
-          report(reader->program, "%.*s:%" PRIu64
-                 ": malformed spacing in segment \"%s\"",
-                 SV_ARG(reader->name),
-                 reader->line_number, segment.c_str());
-          return reject_row(reader);
-        }
-        after_space = true;
-      } else if (segment_char(ch)) {
-        if (check_letters || infer_letters) row_letters.push_back(ch);
-        after_space = false;
-      } else {
-        report(reader->program, "%.*s:%" PRIu64
-               ": bad character '%c' in segment",
-               SV_ARG(reader->name),
-               reader->line_number, ch);
-        return reject_row(reader);
-      }
-    }
+    if (!check_segment(reader, segment,
+            check_letters || infer_letters ? &row_letters : NULL))
+      return false;
 
     if (end == std::string::npos) break;
     start = end + 1;
