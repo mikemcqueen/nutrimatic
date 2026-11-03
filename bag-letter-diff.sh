@@ -5,7 +5,7 @@
 # For each letter, counts the seed pairs (and their words) that fit NEW-BAG
 # but not OLD-BAG and hold the letter in both words. LETTERS may be given as
 # one argument ("hwdy", "h w d y") or several (h w d y). Prints
-# "LTR DWC DPC" rows: the letter, its new words, its new pairs. --pm P is
+# "LTR WORDS PAIRS" rows: the letter, its new words, its new pairs. --pm P is
 # seed-pairs' p1 YES band, [P, 1] (default: seed-pairs' own).
 
 set -euo pipefail
@@ -57,7 +57,7 @@ awk -F, -v letters="$letters" '
   END {
     for (k in new_pair) if (!(k in old_pair)) { split(k, p, SUBSEP); pairs[p[1]]++ }
     for (k in new_word) if (!(k in old_word)) { split(k, p, SUBSEP); words[p[1]]++ }
-    printf "%-3s %6s %6s\n", "LTR", "DWC", "DPC"
+    printf "%-3s %6s %6s\n", "LTR", "WORDS", "PAIRS"
     for (i = 1; i <= length(letters); i++) {
       l = substr(letters, i, 1)
       printf "%-3s %6d %6d\n", l, words[l], pairs[l]
