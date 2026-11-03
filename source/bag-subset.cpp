@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -155,40 +156,36 @@ bool line_fits(
   return true;
 }
 
-// The entries each subset matches, as the indexes of `numbers`; a subset's
-// matches are a subset of its parent's, so each depth filters the one above.
+typedef std::vector<uint64_t> Bits;
+
+// The entries each subset matches, one bit per entry; masks[i][j - 1] holds
+// the entries that match with j of letter i chosen, and a subset's matches
+// are its parent's ANDed with the mask of the letter it adds.
 struct SubsetSearch {
   std::vector<char> const& letters;
   Counts const& bag;
-  std::vector<std::vector<uint16_t>> const& columns;
-  std::vector<size_t> const& numbers;
+  std::vector<std::vector<Bits>> const& masks;
   int length;
-  bool reverse;
   Counts subset;
   std::string text;
-  std::vector<std::vector<uint32_t>> matches;
+  std::vector<Bits> matches;
   std::vector<SubsetCount> results;
 };
 
 void each_subset(SubsetSearch* search, size_t index) {
   size_t const depth = search->text.size();
   if (int(depth) == search->length) return;
-  std::vector<uint32_t> const& parent = search->matches[depth];
-  std::vector<uint32_t>& child = search->matches[depth + 1];
+  uint64_t const* const parent = search->matches[depth].data();
+  uint64_t* const child = search->matches[depth + 1].data();
+  size_t const words = search->matches[depth].size();
   for (size_t i = index; i < search->letters.size(); ++i) {
-    int const bag = search->bag[i];
-    if (search->subset[i] == bag) continue;
+    if (search->subset[i] == search->bag[i]) continue;
     int const chosen = ++search->subset[i];
-    uint16_t const* const column = search->columns[i].data();
-    uint16_t const limit = uint16_t(search->reverse ? bag - chosen : chosen);
-    child.clear();
+    uint64_t const* const mask = search->masks[i][size_t(chosen - 1)].data();
     size_t count = 0;
-    for (uint32_t const g : parent) {
-      uint16_t const need = column[g];
-      if (search->reverse ? need <= limit : need >= limit) {
-        child.push_back(g);
-        count += search->numbers[g];
-      }
+    for (size_t w = 0; w < words; ++w) {
+      child[w] = parent[w] & mask[w];
+      count += size_t(std::popcount(child[w]));
     }
     if (count != 0) {
       search->text.push_back(search->letters[i]);
@@ -269,19 +266,28 @@ int main(int argc, char* argv[]) {
           }))
     return 1;
 
-  std::vector<std::vector<uint16_t>> columns(letters.size());
-  std::vector<size_t> numbers;
+  size_t total = 0;
+  for (auto const& entry : entries) total += entry.second;
+  size_t const words = (total + 63) / 64;
+
+  std::vector<std::vector<Bits>> masks(letters.size());
+  for (size_t i = 0; i < letters.size(); ++i)
+    masks[i].assign(size_t(bag[i]), Bits(words, 0));
+  size_t bit = 0;
   for (auto const& [counts, number] : entries) {
     for (size_t i = 0; i < counts.size(); ++i)
-      columns[i].push_back(uint16_t(counts[i]));
-    numbers.push_back(number);
+      for (int j = 1; j <= bag[i]; ++j)
+        if (args.reverse ? counts[i] <= bag[i] - j : counts[i] >= j)
+          for (size_t b = bit; b < bit + number; ++b)
+            masks[i][size_t(j - 1)][b / 64] |= uint64_t(1) << (b % 64);
+    bit += number;
   }
 
-  SubsetSearch search = { letters, bag, columns, numbers, args.length,
-      args.reverse, Counts(letters.size(), 0), "",
-      std::vector<std::vector<uint32_t>>(size_t(args.length) + 1), {} };
-  for (uint32_t g = 0; g < numbers.size(); ++g)
-    search.matches[0].push_back(g);
+  SubsetSearch search = { letters, bag, masks, args.length,
+      Counts(letters.size(), 0), "",
+      std::vector<Bits>(size_t(args.length) + 1, Bits(words, 0)), {} };
+  for (size_t b = 0; b < total; ++b)
+    search.matches[0][b / 64] |= uint64_t(1) << (b % 64);
   each_subset(&search, 0);
   std::vector<SubsetCount>& results = search.results;
 
