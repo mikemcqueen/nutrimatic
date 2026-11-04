@@ -28,6 +28,7 @@ old way:
 new way:
 
 letter-pair-words.sh -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
+letter-pair-words.sh -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
 
 For each letter, it lists the words from seed pairs that fit NEW-BAG but not OLD-BAG, where
 both words in the pair contain that letter. That's the same as:
