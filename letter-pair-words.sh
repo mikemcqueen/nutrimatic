@@ -5,9 +5,10 @@
 # requires: source ./setup.sh
 #
 # For each letter, lists the words of seed pairs that fit NEW-BAG but not
-# OLD-BAG and hold the letter in both words. With -l, OLD-BAG is BAG less
-# USED and NEW-BAG is BAG less NEW_USED; a USED or NEW_USED that doesn't fit
-# BAG, or uses all of it, is an error. LETTERS may be given as one argument
+# OLD-BAG and hold the letter in both words, less words with a workflow
+# verdict (see filter-words). With -l, OLD-BAG is BAG less USED and NEW-BAG
+# is BAG less NEW_USED; a USED or NEW_USED that doesn't fit BAG, or uses all
+# of it, is an error. LETTERS may be given as one argument
 # ("hwdy", "h w d y") or several (h w d y). With more than one letter, each
 # letter's words follow a "== L ==" header. --pm P is seed-pairs' p1 YES
 # band, [P, 1] (default: seed-pairs' own).
@@ -62,8 +63,7 @@ pairs() {
 }
 
 words() {
-  grep "$1.*,.*$1" "$2" | top-segments --nc --pair-words -n0 |
-    sort -u || true
+  grep "$1.*,.*$1" "$2" | tr , '\n' | sort -u || true
 }
 
 pairs "$old_bag" "$used" > "$tmp/old"
@@ -72,5 +72,6 @@ pairs "$new_bag" "$new_used" > "$tmp/new"
 for ((i = 0; i < ${#letters}; i++)); do
   l=${letters:i:1}
   [[ ${#letters} -eq 1 ]] || echo "== $l =="
-  comm -13 <(words "$l" "$tmp/old") <(words "$l" "$tmp/new")
+  comm -13 <(words "$l" "$tmp/old") <(words "$l" "$tmp/new") |
+    filter-words -m 0 -
 done

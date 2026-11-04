@@ -13,17 +13,17 @@ letter-pair-words.sh -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
 letter-pair-words.sh -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
 
 For each letter, it lists the words from seed pairs that fit NEW-BAG but not OLD-BAG, where
-both words in the pair contain that letter. That's the same as:
+both words in the pair contain that letter, less words that already have a verdict (YES/NO
+words, or in a YES pair). That's the same as:
 
-  `seed-pairs | pfilter | grep | top-segments --pair-words | sort -u` pipeline as in pw, followed by comm.
+  `seed-pairs | pfilter | grep | tr , '\n' | sort -u` pipeline, followed by
+  comm and `filter-words -m 0`.
 
 Example:
 
 `./letter-pair-words.sh -s 1 $S1MIN4 $S1MIN5 h`
 
-NOTE: i should probably convert this to c++.  one of the things that is *not* doing is filtering
-      out YES words. since ultimately these words are being sent to wf review words, it'd be nice
-      to just get the YES words filtered beforehand.
+NOTE: i should probably convert this to c++.
 
 
 ---------
