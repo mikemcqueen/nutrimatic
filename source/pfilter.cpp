@@ -28,6 +28,7 @@ int const OPT_CSV = 258;
 int const OPT_EXACT = 259;
 int const OPT_NO_NOPAIRS = 260;
 int const OPT_REQUIRED_WORDS = 261;
+int const OPT_KEEP_YES = 262;
 
 struct Args {
   PfilterOptions options;
@@ -40,7 +41,8 @@ struct Args {
 };
 
 void usage(FILE* out) {
-  fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [--exact]] [-m N] [-x N] "
+  fputs("usage: pfilter [-l LETTERS [-u LETTERS]... [-U LETTERS]... "
+        "[--keep-yes] [--exact]] [-m N] [-x N] "
         "[-s N] [--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] "
         "[--rw FILE] "
         "[--cv [--csv]] PAIRS-FILE|-\n", out);
@@ -53,7 +55,14 @@ void usage(FILE* out) {
   dfs_help_option("-l, --letters LETTERS",
       "print only pairs that fit within LETTERS; may be given once");
   dfs_help_option("-u, --used-letters LETTERS",
-      "subtract letters already used from the -l letters; may be repeated");
+      "subtract letters already used from the -l letters; with -U, the "
+      "baseline bag; may be repeated");
+  dfs_help_option("-U, --u-new LETTERS",
+      "print only pairs that fit the -l letters less LETTERS but not the -l "
+      "letters less the -u letters; may be repeated");
+  dfs_help_option("--keep-yes",
+      "with -U, also print pairs classified YES (globally, and with -s N "
+      "for sentence N) that fit the -u bag");
   dfs_help_option("--exact",
       "print only pairs that use all of the -l letters; requires -l");
   dfs_help_option("-m, --min-letters N",
@@ -90,6 +99,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   static struct optparse_long const long_options[] = {
     { "letters", 'l', OPTPARSE_REQUIRED },
     { "used-letters", 'u', OPTPARSE_REQUIRED },
+    { "u-new", 'U', OPTPARSE_REQUIRED },
+    { "keep-yes", OPT_KEEP_YES, OPTPARSE_NONE },
     { "exact", OPT_EXACT, OPTPARSE_NONE },
     { "min-letters", 'm', OPTPARSE_REQUIRED },
     { "max-letters", 'x', OPTPARSE_REQUIRED },
@@ -113,6 +124,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   char const* letters = NULL;
   std::string used_letters;
   bool have_used_letters = false;
+  std::string new_used_letters;
+  bool have_new_used_letters = false;
   int option;
   while ((option = optparse_long(&options, long_options, NULL)) != -1) {
     switch (option) {
@@ -126,6 +139,13 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case 'u':
         used_letters += options.optarg;
         have_used_letters = true;
+        break;
+      case 'U':
+        new_used_letters += options.optarg;
+        have_new_used_letters = true;
+        break;
+      case OPT_KEEP_YES:
+        out->options.keep_yes = true;
         break;
       case OPT_EXACT:
         out->options.exact = true;
@@ -186,9 +206,31 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
+  if (have_new_used_letters) {
+    if (letters == NULL) {
+      report(PROGRAM, "--u-new requires --letters");
+      return false;
+    }
+    LetterBag bag;
+    if (!make_letter_bag(letters, new_used_letters, &bag)) return false;
+    out->options.old_bag = out->options.bag;
+    out->options.bag = bag;
+  }
+
+  if (out->options.keep_yes && !have_new_used_letters) {
+    report(PROGRAM, "--keep-yes requires --u-new");
+    return false;
+  }
+
+  if (out->options.keep_yes && out->options.drop_yes) {
+    report(PROGRAM, "--keep-yes and --yes can't be combined");
+    return false;
+  }
+
   if (!out->options.drop_no && !out->options.drop_yes &&
+      !out->options.keep_yes &&
       out->options.sentence != CLASSIFIED_NO_SENTENCE) {
-    report(PROGRAM, "-s goes with -y when given --no-nopairs");
+    report(PROGRAM, "-s goes with -y or --keep-yes when given --no-nopairs");
     return false;
   }
 
@@ -212,6 +254,12 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
+  if (have_new_used_letters &&
+      fits_letter_bag(*out->options.old_bag, *out->options.bag))
+    warn(PROGRAM, out->options.keep_yes
+        ? "only YES pairs can be new: the -U bag fits inside the -u bag"
+        : "no pair can be new: the -U bag fits inside the -u bag");
+
   char const* const source = optparse_arg(&options);
   if (source == NULL || optparse_arg(&options) != NULL) return false;
   out->source = source;
@@ -228,7 +276,7 @@ bool print_kept_rows_with_cv(std::filesystem::path const& source,
   size_t width = 0;
   if (!read_rows(PROGRAM, source, "pair list", false,
           [&](DfsPairRow const& row, std::string const& line) {
-            if (!filter.keep(row)) return true;
+            if (!filter.keep(row) || !filter.is_new(row)) return true;
             kept.emplace_back(line,
                 remaining_cv_ratio(bag, row.left + row.right));
             width = std::max(width, line.size());
@@ -266,7 +314,8 @@ int main(int argc, char* argv[]) {
   }
 
   if (args.options.sentence == CLASSIFIED_NO_SENTENCE &&
-      (args.options.drop_no || args.options.drop_yes))
+      (args.options.drop_no || args.options.drop_yes ||
+          args.options.keep_yes))
     alert(PROGRAM, "--sentence not supplied");
 
   DfsDictionary dictionary;
@@ -297,7 +346,9 @@ int main(int argc, char* argv[]) {
     return print_kept_rows_with_cv(args.source, filter, *args.options.bag,
                args.csv) ? 0 : 1;
   if (!print_kept_rows(PROGRAM, args.source, "pair list", false,
-          [&](DfsPairRow const& row) { return filter.keep(row); }))
+          [&](DfsPairRow const& row) {
+            return filter.keep(row) && filter.is_new(row);
+          }))
     return 1;
   if (!(std::cout << std::flush)) {
     report(PROGRAM, "can't write output");

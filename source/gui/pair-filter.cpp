@@ -40,7 +40,6 @@ bool PairFilter::run(std::vector<SharedLines> const& inputs,
   options.min_letters = min_letters;
   options.max_letters = max_letters;
   options.sentence = params.sentence;
-  options.drop_yes = yes;
   if (required && params.required_words)
     options.required_words = std::cref(params.required_words->words);
   options.dictionary = std::cref(params.dictionary->words);

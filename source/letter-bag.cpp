@@ -113,6 +113,13 @@ bool fits_letter_bag(LetterBag const& bag, std::string const& text) {
   return true;
 }
 
+bool fits_letter_bag(LetterBag const& bag, LetterBag const& inner) {
+  for (int i = 0; i <= UCHAR_MAX; ++i) {
+    if (inner.counts[i] > bag.counts[i]) return false;
+  }
+  return true;
+}
+
 double cv_ratio(LetterCounts const& counts) {
   int vowels = 0;
   int consonants = 0;

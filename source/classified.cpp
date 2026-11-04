@@ -34,7 +34,7 @@ bool parse_classified_sentence(std::string_view arg, int* sentence) {
 
 bool classified_pair_file(
     std::string_view program, std::filesystem::path const& root,
-    int sentence, std::string_view kind, std::string* path) {
+    int sentence, std::string_view kind, std::string* path, bool missing_ok) {
   std::filesystem::path dir = root / WORKFLOW_CLASSIFIED_PATH;
   if (sentence != CLASSIFIED_NO_SENTENCE)
     dir /= "s" + std::to_string(sentence);
@@ -48,6 +48,8 @@ bool classified_pair_file(
           file.c_str());
       return true;
     }
+  } else if (missing_ok && !std::filesystem::exists(file, error) && !error) {
+    return true;
   } else if (!std::filesystem::is_regular_file(file, error)) {
     report(program, "\"%s\" is not a file", file.c_str());
     return false;
@@ -58,9 +60,9 @@ bool classified_pair_file(
 
 bool load_classified_pairs(
     std::string_view program, std::filesystem::path const& root,
-    int sentence, std::string_view kind, DfsPairSet* pairs) {
+    int sentence, std::string_view kind, DfsPairSet* pairs, bool missing_ok) {
   std::string path;
-  if (!classified_pair_file(program, root, sentence, kind, &path))
+  if (!classified_pair_file(program, root, sentence, kind, &path, missing_ok))
     return false;
   return path.empty() ||
       load_pair_file(path, "classified pair list", pairs, true, true);
@@ -77,9 +79,9 @@ bool load_no_pairs(
 
 std::shared_ptr<DfsPairSet const> ClassifiedPairCache::get(
     std::string_view program, std::filesystem::path const& root,
-    int sentence, std::string_view kind) {
+    int sentence, std::string_view kind, bool missing_ok) {
   std::string path;
-  if (!classified_pair_file(program, root, sentence, kind, &path))
+  if (!classified_pair_file(program, root, sentence, kind, &path, missing_ok))
     return nullptr;
   if (path.empty()) return std::make_shared<DfsPairSet const>();
 

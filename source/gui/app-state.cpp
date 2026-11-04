@@ -1,6 +1,7 @@
 #include "app-state.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -404,6 +405,46 @@ void AppState::validate_letters() {
     if (!letters_valid)
       report("pgui", "letters don't fit within S%d's letters", sentence);
   }
+  used_valid = true;
+  new_used_valid = true;
+  std::string const letters = bag_letters(actual_letters);
+  if (letters.empty()) return;
+  LetterBag const bag(letters);
+  auto const check = [&](std::string const& used, std::string_view field) {
+    std::string const text = bag_letters(used);
+    if (!fits_letter_bag(bag, text)) {
+      report("pgui", "%.*s letters don't fit within l:",
+             static_cast<int>(field.size()), field.data());
+      return false;
+    }
+    if (text.size() == bag.size) {
+      report("pgui", "%.*s uses all of l:", static_cast<int>(field.size()),
+             field.data());
+      return false;
+    }
+    return true;
+  };
+  used_valid = check(used_letters, "u:");
+  new_used_valid = check(new_used_letters, "u_new:");
+}
+
+AppState::KeepYesPairs const& AppState::keep_yes_pairs() {
+  std::array<unsigned, 3> const key = {generation, baseline_version,
+                                       classified_version};
+  if (keep_yes_pairs_key_ == key) return keep_yes_pairs_;
+  keep_yes_pairs_key_ = key;
+  keep_yes_pairs_ = {};
+  std::filesystem::path const root = require_workflow_root("pgui");
+  if (root.empty()) return keep_yes_pairs_;
+  std::shared_ptr<DfsPairSet const> global =
+      classified_pairs.get("pgui", root, CLASSIFIED_NO_SENTENCE, "yes");
+  std::shared_ptr<DfsPairSet const> sentence_pairs =
+      sentence == CLASSIFIED_NO_SENTENCE
+          ? std::make_shared<DfsPairSet const>()
+          : classified_pairs.get("pgui", root, sentence, "yes", true);
+  if (global != nullptr && sentence_pairs != nullptr)
+    keep_yes_pairs_ = {std::move(global), std::move(sentence_pairs)};
+  return keep_yes_pairs_;
 }
 
 AppState& app_state() {

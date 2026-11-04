@@ -59,22 +59,29 @@ void load_letter_count_font();
 // while app_state()'s judged_bad_filter is on, hidden from the ListBox (see
 // ListBox::set_hidden()), once output() is up to date, as are those the
 // command that made output() hides by their values (see
-// Command::display_hides()). A selected item
-// hidden this way is deselected
-// when it was kept across a rerun, or stepped off (see
-// ListBox::step_off_hidden()) when judged_bad_version or the command's
-// display_version() went up. Pressing Enter
-// in any field of the column, the filter field's or the command's, applies
-// them all (see Command::apply_fields()), the filter field as regexes to the
-// ListBox (see ListBox::set_filter()); the X button beside a field clears it
-// and counts as Enter. The filter changes only what is shown, never output(), selected_item(), or
-// version(). After the status line's count, a "save" button, enabled when
-// output() is up to date, the command that made it is saveable (see
-// Command::saveable()), and the ListBox shows any items, overwrites
-// pgui.out in std::filesystem::temp_directory_path() with the shown items,
-// one per line, without their values. Widget IDs are scoped to the Column, so any number can be
-// rendered side by side in a Window. Both dropdowns offer only columns before
-// this one, so sources never form a cycle.
+// Command::display_hides()). While app_state()'s new_only, a column whose
+// command hides_old_pairs() also hides the old pairs: those that fit the
+// letters left once used_letters(true), the used letters with the window's u:
+// as the baseline, are removed, unless new_keep_yes and the pair is in
+// app_state()'s keep_yes_pairs(); nothing is old when those letters don't fit
+// or use all of app_state()'s letters. The status line's count then ends with
+// ", K old", K being the pairs hidden as old. Hidden items stay in output(), so
+// the columns reading this one see every pair. A selected item hidden this way
+// is deselected when it was kept across a rerun, or stepped off (see
+// ListBox::step_off_hidden()) when judged_bad_version, baseline_version, or the
+// command's display_version() went up; stepping off changes selected_item() and
+// version(), so the columns reading this one rerun. Pressing Enter in any field
+// of the column, the filter field's or the command's, applies them all (see
+// Command::apply_fields()), the filter field as regexes to the ListBox (see
+// ListBox::set_filter()); the X button beside a field clears it and counts as
+// Enter. The filter changes only what is shown, never output(),
+// selected_item(), or version(). After the status line's count, a "save"
+// button, enabled when output() is up to date, the command that made it is
+// saveable (see Command::saveable()), and the ListBox shows any items,
+// overwrites pgui.out in std::filesystem::temp_directory_path() with the shown
+// items, one per line, without their values. Widget IDs are scoped to the
+// Column, so any number can be rendered side by side in a Window. Both
+// dropdowns offer only columns before this one, so sources never form a cycle.
 class Column {
  public:
   Column(InputSource source, LetterSource letter_source);
@@ -94,8 +101,10 @@ class Column {
   std::string selected_item() const;
 
   // The used letters passed on to the columns reading this one: those the
-  // command runs with, plus the letters of selected_item().
-  std::string output_used_letters() const;
+  // command runs with, plus the letters of selected_item(); with `baseline`,
+  // those it would run with were app_state()'s used_letters the window's,
+  // whatever its new_only (see used_letters()).
+  std::string output_used_letters(bool baseline = false) const;
 
   // Goes up each time output() is replaced or the selection changes.
   unsigned version() const { return version_; }
@@ -188,14 +197,17 @@ class Column {
   Key wanted_key() const;
   // The used letters the command runs with: the letters column's
   // output_used_letters(), or app_state()'s when there is none, plus the
-  // command's own.
-  std::string used_letters() const;
+  // command's own. app_state()'s are its new_used_letters while new_only,
+  // else its used_letters, and its used_letters always with `baseline`,
+  // which is passed up to the letters column.
+  std::string used_letters(bool baseline = false) const;
   // The command that made output(), or null when there is none.
   Command const* made_command() const;
   // made_command()'s display_version(), or 0 when there is none.
   unsigned display_version() const;
-  // Hides the ListBox items leaving letters judged bad, and deselects or
-  // steps off a hidden selection; see the class comment.
+  // Hides the ListBox items leaving letters judged bad, and in a pfilter
+  // column the old pairs, and deselects or steps off a hidden selection; see
+  // the class comment.
   void update_hidden();
   // Writes the shown items to pgui.out; see the class comment.
   void save_shown() const;
@@ -233,12 +245,20 @@ class Column {
   // The remaining a-z letters, lowercase and sorted, as of remaining_key_, or
   // empty when some used letters weren't in app_state()'s letters.
   std::string remaining_sorted_;
+  // The a-z letters left once used_letters(true) are removed, as
+  // remaining_sorted_ is, as of remaining_key_ and remaining_baseline_version_,
+  // or empty unless app_state()'s new_only.
+  std::string old_remaining_sorted_;
+  unsigned remaining_baseline_version_ = 0;
   // lc's output, as of the last press on the remaining letters status line.
   std::vector<std::string> letter_count_;
-  // The made_key_, app_state()'s judged_bad_version, and display_version()
-  // as of the last update_hidden().
+  // The made_key_, app_state()'s judged_bad_version and baseline_version, and
+  // display_version() as of the last update_hidden(), and the number of pairs
+  // it hid as old.
   Key hidden_key_ = {-1, 0, 0, 0, 0, {}, 0, 0, {}, 0, 0, 0, {}, 0, 0, 0, 0};
   unsigned hidden_judged_version_ = 0;
+  unsigned hidden_baseline_version_ = 0;
+  size_t old_hidden_count_ = 0;
   unsigned hidden_display_version_ = 0;
   unsigned version_ = 0;
   bool failed_ = false;

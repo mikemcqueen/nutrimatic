@@ -46,8 +46,9 @@ using SeedViewKey = std::pair<std::string, std::string>;
 // options every command runs with. visual_letters is the letters as typed and
 // actual_letters what commands use; set_letters() sets both. sentence is 1
 // through 9, or CLASSIFIED_NO_SENTENCE for none. generation goes up whenever
-// letters, used_letters, or sentence change. seed_name is a word,word pair
-// file in seed_directory, pairs.sN, whose seeds are views of it (see
+// letters, sentence, new_only, or the used letters the runs read change:
+// new_used_letters while new_only, else used_letters. seed_name is a word,word
+// pair file in seed_directory, pairs.sN, whose seeds are views of it (see
 // seed_view()).
 struct AppState {
   // Sets visual_letters to `letters`, and actual_letters to `letters` itself
@@ -67,8 +68,23 @@ struct AppState {
   // Sets letters_valid to whether actual_letters fit within sentence_letters,
   // diagnosing letters that don't. Without a sentence they always do; with a
   // sentence whose letters weren't loaded, or after letters_error, they never
-  // do.
+  // do. Sets used_valid and new_used_valid to whether the bag_letters() of
+  // used_letters and of new_used_letters fit within those of actual_letters
+  // and leave at least one, diagnosing each that doesn't; both are valid
+  // when actual_letters is empty.
   void validate_letters();
+
+  // The YES pairs pfilter columns keep while new_only and new_keep_yes: the
+  // global ones and sentence's, both null when either can't be loaded.
+  struct KeepYesPairs {
+    std::shared_ptr<DfsPairSet const> global;
+    std::shared_ptr<DfsPairSet const> sentence;
+  };
+  // The KeepYesPairs, loaded through classified_pairs from $WFROOT when
+  // first asked for after generation, baseline_version, or
+  // classified_version went up, so the columns share one load and its
+  // diagnostics.
+  KeepYesPairs const& keep_yes_pairs();
 
   // Sets seed_name to `name`, dropping the pair file read for another name.
   // Reads no pair file; see seed_pairs() and refresh_seed_files().
@@ -179,12 +195,25 @@ struct AppState {
   std::string visual_letters;
   std::string actual_letters;
   std::string used_letters;
+  // The window's u_new: field. While new_only, the runs read it in place of
+  // used_letters, which becomes the baseline, and pfilter columns hide the
+  // pairs that fit the letters the baseline leaves, unless new_keep_yes and
+  // they are classified YES.
+  std::string new_used_letters;
+  bool new_only = false;
+  bool new_keep_yes = false;
+  // Goes up when which pairs count as old changes without any column's run
+  // changing: u: while new_only, or new_keep_yes.
+  unsigned baseline_version = 0;
   int sentence = 1;
   std::optional<std::string> sentence_letters;
   // Whether set_letters() failed; see set_letters().
   bool letters_error = false;
   // Whether commands may run; see validate_letters().
   bool letters_valid = true;
+  // Whether used_letters and new_used_letters fit; see validate_letters().
+  bool used_valid = true;
+  bool new_used_valid = true;
   std::string seed_directory;
   std::string seed_name;
   // The bands of seed_view(), in source dropdown order.
@@ -246,6 +275,10 @@ struct AppState {
   ClassifiedPairCache classified_pairs;
   // Goes up whenever a Review of pairs records verdicts.
   unsigned classified_version = 0;
+  // keep_yes_pairs() and the generation, baseline_version, and
+  // classified_version it was loaded as of.
+  KeepYesPairs keep_yes_pairs_;
+  std::optional<std::array<unsigned, 3>> keep_yes_pairs_key_;
   // The required words pfilter runs share, set by refresh_required_words().
   Dictionary required_words;
 };

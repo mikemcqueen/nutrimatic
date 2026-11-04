@@ -10,25 +10,31 @@
 #include "input-source.h"
 #include "review.h"
 
-// The top-level pane filling the viewport: a line of seed, letters (l), and
-// used-letters (u) fields splitting its width evenly, the seed field followed
-// by a per-word max length (x) field, then a BAD checkbox that
-// toggles app_state()'s judged_bad_filter and sentence buttons S1-S9 (s),
-// then the columns side by side. The seed field is a dropdown showing
-// app_state()'s seed_name and listing the selected sentence's pair files
-// (see list_seeds()), followed by a refresh button. Choosing a file loads
-// it, with its bad bags (see AppState::load_seed_and_bad_bags()), keeps only
-// the seed views the columns' seed sources name and reads the pair file again
-// when it's newer (see AppState::refresh_seed_files()), reloads the loaded
-// dictionaries whose files are newer (see AppState::refresh_dictionaries()),
-// and refreshes the required words (see AppState::refresh_required_words());
-// the refresh button lists the files again and does the same for seed_name.
-// The x: field starts from app_state()'s seed_max_length, and Enter in it
-// stores it there.
-// The letters fields start from app_state(), and Enter in either stores both
-// there and validates them (see AppState::validate_letters()); the l: field
-// is framed red while app_state()'s letters_valid is false. The buttons
-// start from app_state()'s sentence; clicking one selects it alone, and
+// The top-level pane filling the viewport: a line of seed, letters (l),
+// used-letters (u), and new used-letters (u_new) fields splitting its width
+// evenly, the seed field followed by a per-word max length (x) field, then
+// "new" and "YES" checkboxes setting app_state()'s new_only and new_keep_yes,
+// "YES" greyed out unless "new" is checked, then a BAD checkbox that toggles
+// app_state()'s judged_bad_filter and sentence buttons S1-S9 (s), then the
+// columns side by side. The seed field is a dropdown showing app_state()'s
+// seed_name and listing the selected sentence's pair files (see list_seeds()),
+// followed by a refresh button. Choosing a file loads it, with its bad bags
+// (see AppState::load_seed_and_bad_bags()), keeps only the seed views the
+// columns' seed sources name and reads the pair file again when it's newer (see
+// AppState::refresh_seed_files()), reloads the loaded dictionaries whose files
+// are newer (see AppState::refresh_dictionaries()), and refreshes the required
+// words (see AppState::refresh_required_words()); the refresh button lists the
+// files again and does the same for seed_name. The x: field starts from
+// app_state()'s seed_max_length, and Enter in it stores it there.
+// The letters fields start from app_state(), and Enter in any of them, or
+// toggling "new", stores all three and "new" there and validates them (see
+// AppState::validate_letters()), bumping app_state()'s generation when what the
+// runs read changed, or its baseline_version when only u: did while "new" is
+// checked; then, while "new" is checked, it warns when u_new: holds all of u:,
+// as no pair but a YES one can then be new. Toggling "YES" bumps
+// baseline_version. The l:, u:, and u_new: fields are framed red while
+// app_state()'s letters_valid, used_valid, and new_used_valid are false. The
+// buttons start from app_state()'s sentence; clicking one selects it alone, and
 // clicking the selected one leaves it selected, and the selection is stored
 // there, loading its letters (see AppState::load_sentence_letters()),
 // refreshing its required words (see AppState::refresh_required_words()),
@@ -100,6 +106,7 @@ class Window {
   int seed_max_length_;
   char letters_[256] = {};
   char used_letters_[256] = {};
+  char new_used_letters_[256] = {};
   int sentence_;
   std::optional<ColumnIdentifier> judge_;
   // When the judge stops flashing, in ImGui::GetTime() seconds.

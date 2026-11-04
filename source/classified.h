@@ -35,17 +35,21 @@ bool parse_classified_sentence(std::string_view arg, int* sentence);
 // classified directory: .wf/classified/sN for `sentence`, or .wf/classified
 // itself for CLASSIFIED_NO_SENTENCE. A sentence's file must exist. A workflow
 // need not have classified anything globally yet, so an absent global file is
-// warned about and leaves `path` empty. Errors are diagnosed, prefixed by
+// warned about and leaves `path` empty. With `missing_ok`, an absent sentence
+// file also leaves `path` empty, silently. Errors are diagnosed, prefixed by
 // `program`.
 bool classified_pair_file(
     std::string_view program, std::filesystem::path const& root,
-    int sentence, std::string_view kind, std::string* path);
+    int sentence, std::string_view kind, std::string* path,
+    bool missing_ok = false);
 
 // Loads the classified_pair_file() for `sentence` and `kind` into `pairs`,
-// both word orders; an absent global file loads nothing.
+// both word orders; an absent global file, or with `missing_ok` an absent
+// sentence file, loads nothing.
 bool load_classified_pairs(
     std::string_view program, std::filesystem::path const& root,
-    int sentence, std::string_view kind, DfsPairSet* pairs);
+    int sentence, std::string_view kind, DfsPairSet* pairs,
+    bool missing_ok = false);
 
 // load_classified_pairs() of the global NO pairs, and of `sentence`'s NO
 // pairs unless it is CLASSIFIED_NO_SENTENCE.
@@ -58,11 +62,12 @@ bool load_no_pairs(
 // last loaded. Safe to share between threads.
 class ClassifiedPairCache {
  public:
-  // The pairs load_classified_pairs() would load for `sentence` and `kind`,
-  // or null on an error, which is diagnosed, prefixed by `program`.
+  // The pairs load_classified_pairs() would load for `sentence`, `kind` and
+  // `missing_ok`, or null on an error, which is diagnosed, prefixed by
+  // `program`.
   std::shared_ptr<DfsPairSet const> get(
       std::string_view program, std::filesystem::path const& root,
-      int sentence, std::string_view kind);
+      int sentence, std::string_view kind, bool missing_ok = false);
 
  private:
   struct Entry {

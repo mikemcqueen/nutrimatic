@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app-state.h"
+#include "dfs-cli-args.h"
 #include "lc-impl.h"
 #include "letter-bag.h"
 #include "log.h"
@@ -151,6 +152,17 @@ std::string letter_source_label(LetterSource const& source) {
   return source ? std::to_string(*source + 1) : "all";
 }
 
+// Takes the letters of `item` out of `counts`, skipping characters other than
+// letters; false when one isn't there to take.
+bool take_letters(std::string_view item, LetterCounts* counts) {
+  for (char const c : item) {
+    if (!std::isalpha(static_cast<unsigned char>(c))) continue;
+    if (--(*counts)[std::tolower(static_cast<unsigned char>(c)) - 'a'] < 0)
+      return false;
+  }
+  return true;
+}
+
 void wake_main_loop() {
   SDL_Event event = {};
   event.type = SDL_USEREVENT;
@@ -265,14 +277,25 @@ void Column::render() {
   if (job_ && job_->cancellable && job_->key != want) worker_.request_stop();
   if (!job_ && want != made_key_ && !waiting) start(want);
 
-  if (want != remaining_key_) {
-    remaining_ = remaining_letters(app_state().actual_letters, used_letters(),
-                                   &remaining_cv_, &remaining_sorted_);
+  if (want != remaining_key_ ||
+      app_state().baseline_version != remaining_baseline_version_) {
+    if (want != remaining_key_)
+      remaining_ = remaining_letters(app_state().actual_letters,
+                                     used_letters(), &remaining_cv_,
+                                     &remaining_sorted_);
+    old_remaining_sorted_.clear();
+    if (app_state().new_only) {
+      double cv;
+      remaining_letters(app_state().actual_letters, used_letters(true), &cv,
+                        &old_remaining_sorted_);
+    }
     remaining_key_ = want;
+    remaining_baseline_version_ = app_state().baseline_version;
   }
   if (made_key_ == remaining_key_ &&
       (made_key_ != hidden_key_ ||
        app_state().judged_bad_version != hidden_judged_version_ ||
+       app_state().baseline_version != hidden_baseline_version_ ||
        display_version() != hidden_display_version_))
     update_hidden();
   ImVec2 const status_min = ImGui::GetCursorScreenPos();
@@ -317,8 +340,12 @@ void Column::render() {
   } else if (bad_filter_) {
     ImGui::TextDisabled("%zu, bad filter", output()->size());
   } else if (list_.shown_count() != output()->size()) {
-    ImGui::TextDisabled("%zu of %zu", list_.shown_count(),
-                        output()->size());
+    if (old_hidden_count_ != 0)
+      ImGui::TextDisabled("%zu of %zu, %zu old", list_.shown_count(),
+                          output()->size(), old_hidden_count_);
+    else
+      ImGui::TextDisabled("%zu of %zu", list_.shown_count(),
+                          output()->size());
   } else {
     ImGui::TextDisabled("%zu", output()->size());
   }
@@ -560,16 +587,18 @@ Column::Key Column::wanted_key() const {
               : 0};
 }
 
-std::string Column::used_letters() const {
+std::string Column::used_letters(bool baseline) const {
   Column const* letters = letters_column();
-  std::string used =
-      letters ? letters->output_used_letters() : app_state().used_letters;
+  AppState const& state = app_state();
+  std::string used = letters ? letters->output_used_letters(baseline)
+                     : baseline || !state.new_only ? state.used_letters
+                                                   : state.new_used_letters;
   if (commands_[choice_]) used += commands_[choice_]->used_letters();
   return used;
 }
 
-std::string Column::output_used_letters() const {
-  std::string used = used_letters();
+std::string Column::output_used_letters(bool baseline) const {
+  std::string used = used_letters(baseline);
   for (char const c : selected_item()) {
     if (std::isalpha(static_cast<unsigned char>(c))) used += c;
   }
@@ -591,26 +620,19 @@ void Column::update_hidden() {
   hidden_key_ = made_key_;
   AppState const& state = app_state();
   hidden_judged_version_ = state.judged_bad_version;
+  hidden_baseline_version_ = state.baseline_version;
   hidden_display_version_ = display_version();
   std::vector<char> hidden;
+  Lines const& items = *output();
   if (state.judged_bad_filter &&
       (!state.judged_bad.empty() || state.bad_bags_bitmap) &&
       !remaining_sorted_.empty()) {
     LetterCounts left = {};
     for (char const c : remaining_sorted_) ++left[c - 'a'];
-    Lines const& items = *output();
     std::string key;
     for (size_t i = 0; i < items.size(); ++i) {
       LetterCounts counts = left;
-      bool fits = true;
-      for (char const c : items[i]) {
-        if (!std::isalpha(static_cast<unsigned char>(c))) continue;
-        if (--counts[std::tolower(static_cast<unsigned char>(c)) - 'a'] < 0) {
-          fits = false;
-          break;
-        }
-      }
-      if (!fits) continue;
+      if (!take_letters(items[i], &counts)) continue;
       key.clear();
       for (int j = 0; j < 26; ++j) key.append(counts[j], 'a' + j);
       if (!state.is_judged_bad(key, counts)) continue;
@@ -618,7 +640,33 @@ void Column::update_hidden() {
       hidden[i] = 1;
     }
   }
-  if (Command const* const command = made_command()) {
+  old_hidden_count_ = 0;
+  Command const* const made = made_command();
+  if (state.new_only && !old_remaining_sorted_.empty() && made &&
+      made->hides_old_pairs()) {
+    LetterCounts left = {};
+    for (char const c : old_remaining_sorted_) ++left[c - 'a'];
+    AppState::KeepYesPairs const yes = state.new_keep_yes
+        ? app_state().keep_yes_pairs()
+        : AppState::KeepYesPairs{};
+    bool const keep_yes = yes.global != nullptr;
+    for (size_t i = 0; i < items.size(); ++i) {
+      LetterCounts counts = left;
+      if (!take_letters(items[i], &counts)) continue;
+      if (keep_yes) {
+        DfsPairRow row;
+        if (parse_pair_row(items[i], "pair list", "pgui", i + 1, false,
+                           &row) &&
+            (yes.global->contains(row.entry()) ||
+             yes.sentence->contains(row.entry())))
+          continue;
+      }
+      ++old_hidden_count_;
+      if (hidden.empty()) hidden.resize(items.size());
+      hidden[i] = 1;
+    }
+  }
+  if (Command const* const command = made) {
     Lines const& values = *list_.values();
     for (size_t i = 0; i < values.size(); ++i) {
       if (!command->display_hides(values[i])) continue;

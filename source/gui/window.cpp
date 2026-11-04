@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "app-state.h"
+#include "letter-bag.h"
 #include "log.h"
 #include "widgets.h"
 
@@ -27,6 +28,21 @@ Uint32 end_judge_flash(Uint32, void*) {
   return 0;
 }
 
+// Calls `draw` with a red frame border around its widgets while `invalid`.
+template <typename F>
+bool framed_red(bool invalid, F draw) {
+  if (invalid) {
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(255, 96, 96, 255));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+  }
+  bool const result = draw();
+  if (invalid) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+  }
+  return result;
+}
+
 }  // namespace
 
 Window::Window()
@@ -37,6 +53,8 @@ Window::Window()
   std::snprintf(letters_, sizeof letters_, "%s", state.visual_letters.c_str());
   std::snprintf(used_letters_, sizeof used_letters_, "%s",
                 state.used_letters.c_str());
+  std::snprintf(new_used_letters_, sizeof new_used_letters_, "%s",
+                state.new_used_letters.c_str());
 }
 
 void Window::list_seeds() {
@@ -62,9 +80,9 @@ void Window::render() {
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
   ImGui::SetKeyOwner(ImGuiMod_Alt, ImGui::GetID("alt"));
 
-  if (ImGui::BeginTable("fields", 6)) {
-    for (int i = 0; i < 6; ++i) {
-      ImGui::TableSetupColumn("", i == 0 || i == 2 || i == 3
+  if (ImGui::BeginTable("fields", 8)) {
+    for (int i = 0; i < 8; ++i) {
+      ImGui::TableSetupColumn("", i == 0 || i == 2 || i == 3 || i == 4
                                       ? ImGuiTableColumnFlags_WidthStretch
                                       : ImGuiTableColumnFlags_WidthFixed);
     }
@@ -105,22 +123,33 @@ void Window::render() {
     ImGui::TextUnformatted("l:");
     ImGui::SameLine(0, 0);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    bool const letters_invalid = !app_state().letters_valid;
-    if (letters_invalid) {
-      ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(255, 96, 96, 255));
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-    }
-    bool entered = ImGui::InputText("##letters", letters_, sizeof letters_,
-                                    ImGuiInputTextFlags_EnterReturnsTrue);
-    if (letters_invalid) {
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor();
-    }
+    bool entered = framed_red(!app_state().letters_valid, [&] {
+      return ImGui::InputText("##letters", letters_, sizeof letters_,
+                              ImGuiInputTextFlags_EnterReturnsTrue);
+    });
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("u:");
     ImGui::SameLine(0, 0);
-    entered |= clearable_input("used", used_letters_, sizeof used_letters_);
+    entered |= framed_red(!app_state().used_valid, [&] {
+      return clearable_input("used", used_letters_, sizeof used_letters_);
+    });
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("u_new:");
+    ImGui::SameLine(0, 0);
+    entered |= framed_red(!app_state().new_used_valid, [&] {
+      return clearable_input("new_used", new_used_letters_,
+                             sizeof new_used_letters_);
+    });
+    ImGui::TableNextColumn();
+    bool new_only = app_state().new_only;
+    bool const new_only_toggled = ImGui::Checkbox("new", &new_only);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!app_state().new_only);
+    bool new_keep_yes = app_state().new_keep_yes;
+    bool const new_keep_yes_toggled = ImGui::Checkbox("YES", &new_keep_yes);
+    ImGui::EndDisabled();
     ImGui::TableNextColumn();
     bool judged_bad_filter = app_state().judged_bad_filter;
     bool const judged_bad_filter_toggled =
@@ -144,12 +173,33 @@ void Window::render() {
         ++state.seed_max_length_version;
       }
     }
-    if (entered && (state.visual_letters != letters_ ||
-                    state.used_letters != used_letters_)) {
+    bool const letters_changed = state.visual_letters != letters_;
+    bool const used_changed = state.used_letters != used_letters_;
+    bool const new_used_changed = state.new_used_letters != new_used_letters_;
+    if ((entered && (letters_changed || used_changed || new_used_changed)) ||
+        new_only_toggled) {
       state.set_letters(letters_);
       state.used_letters = used_letters_;
+      state.new_used_letters = new_used_letters_;
+      state.new_only = new_only;
       state.validate_letters();
-      ++state.generation;
+      if (letters_changed || new_only_toggled ||
+          (new_only ? new_used_changed : used_changed))
+        ++state.generation;
+      else if (new_only && used_changed)
+        ++state.baseline_version;
+      if (new_only && state.letters_valid && state.used_valid &&
+          state.new_used_valid &&
+          fits_letter_bag(LetterBag(bag_letters(state.new_used_letters)),
+                          LetterBag(bag_letters(state.used_letters))))
+        warn("pgui", state.new_keep_yes
+            ? "only YES pairs can be new: the u_new: bag fits inside the u: "
+              "bag"
+            : "no pair can be new: the u_new: bag fits inside the u: bag");
+    }
+    if (new_keep_yes_toggled) {
+      state.new_keep_yes = new_keep_yes;
+      ++state.baseline_version;
     }
     if (judged_bad_filter_toggled) {
       state.judged_bad_filter = judged_bad_filter;

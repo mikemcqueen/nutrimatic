@@ -1,9 +1,12 @@
 #!/bin/bash
 # usage: letter-pair-diff.sh -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
+#        letter-pair-diff.sh -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
 # requires: source ./setup.sh
 #
 # For each letter, counts the seed pairs (and their words) that fit NEW-BAG
-# but not OLD-BAG and hold the letter in both words. LETTERS may be given as
+# but not OLD-BAG and hold the letter in both words. With -l, OLD-BAG is BAG
+# less USED and NEW-BAG is BAG less NEW_USED; a USED or NEW_USED that doesn't
+# fit BAG, or uses all of it, is an error. LETTERS may be given as
 # one argument ("hwdy", "h w d y") or several (h w d y). Prints
 # "LTR WORDS PAIRS" rows: the letter, its new words, its new pairs, then an
 # "ALL" row of distinct words and pairs across the letters (not the column
@@ -13,32 +16,51 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $(basename "$0") -s N [--pm P] OLD-BAG NEW-BAG LETTERS..." >&2
+  local name
+  name=$(basename "$0")
+  echo "usage: $name -s N [--pm P] OLD-BAG NEW-BAG LETTERS..." >&2
+  echo "       $name -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS..." >&2
   exit 2
 }
 
 sentence=
 seed_args=()
+unset bag used new_used
 while [[ ${1-} == -* ]]; do
   [[ $# -ge 2 ]] || usage
   case $1 in
     -s) sentence=$2 ;;
     --pm) seed_args+=(--pm "$2") ;;
+    -l) bag=$2 ;;
+    -u) used=$2 ;;
+    -U) new_used=$2 ;;
     *) usage ;;
   esac
   shift 2
 done
-[[ -n $sentence && $# -ge 3 ]] || usage
-old_bag=$1
-new_bag=$2
-shift 2
+[[ -n $sentence ]] || usage
+if [[ -n ${bag+x} ]]; then
+  [[ -n ${used+x} && -n ${new_used+x} && $# -ge 1 ]] || usage
+  old_bag=$bag
+  new_bag=$bag
+else
+  [[ -z ${used+x} && -z ${new_used+x} && $# -ge 3 ]] || usage
+  old_bag=$1
+  new_bag=$2
+  used=
+  new_used=
+  shift 2
+fi
 letters=$(echo "$*" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 [[ $letters =~ ^[a-z]+$ ]] || usage
 
 pairs() {
   seed-pairs -s "$sentence" "${seed_args[@]}" |
-    pfilter -s "$sentence" -d "$DICT" -m 0 -x 0 -l "$1" -
+    pfilter -s "$sentence" -d "$DICT" -m 0 -x 0 -l "$1" -u "$2" -
 }
+
+old=$(pairs "$old_bag" "$used")
+new=$(pairs "$new_bag" "$new_used")
 
 awk -F, -v letters="$letters" '
   {
@@ -75,4 +97,4 @@ awk -F, -v letters="$letters" '
     print rule
     printf "%-3s %6d %6d\n", "ALL", nw, np
   }
-' <(pairs "$old_bag") <(pairs "$new_bag")
+' <(printf '%s\n' "$old") <(printf '%s\n' "$new")

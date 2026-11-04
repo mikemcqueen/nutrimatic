@@ -88,7 +88,10 @@
 // AppState::seed_bands; commands without it have none. And it may have
 //   static constexpr bool saveable
 // true when its Column offers a save button writing its shown items to a
-// file (see Column); commands without it don't.
+// file (see Column); commands without it don't. And it may have
+//   static constexpr bool hides_old_pairs
+// true when its output is pairs its Column hides as old while
+// AppState::new_only (see Column); commands without it don't.
 // Holds its value by copy.
 class Command {
  public:
@@ -152,6 +155,8 @@ class Command {
 
   bool saveable() const { return self_->saveable(); }
 
+  bool hides_old_pairs() const { return self_->hides_old_pairs(); }
+
   // Empty when it has none.
   std::string default_seed() const { return self_->default_seed(); }
 
@@ -179,6 +184,7 @@ class Command {
     virtual bool uses_p1() const = 0;
     virtual bool uses_required_words() const = 0;
     virtual bool saveable() const = 0;
+    virtual bool hides_old_pairs() const = 0;
     virtual std::string default_seed() const = 0;
   };
 
@@ -297,6 +303,12 @@ class Command {
     bool saveable() const override {
       if constexpr (requires { T::saveable; })
         return T::saveable;
+      else
+        return false;
+    }
+    bool hides_old_pairs() const override {
+      if constexpr (requires { T::hides_old_pairs; })
+        return T::hides_old_pairs;
       else
         return false;
     }

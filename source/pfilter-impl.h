@@ -25,9 +25,13 @@ inline constexpr int PFILTER_DEFAULT_MAX_LETTERS = 15;
 // that are in index_file when not empty, and that hold at least one word of
 // required_words when given. Pairs classified NO globally, or for sentence
 // when given, are dropped when drop_no, as are pairs classified YES the same
-// way when drop_yes.
+// way when drop_yes. old_bag is a baseline: is_new() tells whether a pair
+// doesn't fit it, and bag is then the new bag. With keep_yes, pairs
+// classified YES globally, or for sentence when given, count as new too.
 struct PfilterOptions {
   std::optional<LetterBag> bag;
+  std::optional<LetterBag> old_bag;
+  bool keep_yes = false;
   bool exact = false;
   int min_letters = PFILTER_DEFAULT_MIN_LETTERS;
   int max_letters = PFILTER_DEFAULT_MAX_LETTERS;
@@ -51,9 +55,15 @@ class Pfilter {
   // Whether `row` is kept. Only valid after load() succeeds.
   bool keep(DfsPairRow const& row) const;
 
+  // Whether `row` is new: old_bag isn't given, or `row` doesn't fit it, or
+  // keep_yes and `row` is classified YES globally or for sentence. Only valid
+  // after load() succeeds.
+  bool is_new(DfsPairRow const& row) const;
+
  private:
   PfilterOptions options_;
   std::vector<std::shared_ptr<DfsPairSet const>> rejected_;
+  std::vector<std::shared_ptr<DfsPairSet const>> yes_;
   std::unique_ptr<IndexReader> index_;
 };
 

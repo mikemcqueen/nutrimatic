@@ -22,24 +22,36 @@ bool Pfilter::load(std::string_view program, PfilterOptions const& options,
                    ClassifiedPairCache& cache) {
   options_ = options;
   rejected_.clear();
+  yes_.clear();
   index_.reset();
 
-  auto const add = [&](int sentence, std::string_view kind) {
+  auto const add = [&](std::vector<std::shared_ptr<DfsPairSet const>>& to,
+                       int sentence, std::string_view kind, bool missing_ok) {
     std::filesystem::path const root = require_workflow_root(program);
     if (root.empty()) return false;
     std::shared_ptr<DfsPairSet const> pairs =
-        cache.get(program, root, sentence, kind);
+        cache.get(program, root, sentence, kind, missing_ok);
     if (pairs == nullptr) return false;
-    rejected_.push_back(std::move(pairs));
+    to.push_back(std::move(pairs));
     return true;
   };
-  if (options_.drop_no && !add(CLASSIFIED_NO_SENTENCE, "no")) return false;
-  if (options_.drop_no && options_.sentence != CLASSIFIED_NO_SENTENCE &&
-      !add(options_.sentence, "no"))
+  bool const sentence = options_.sentence != CLASSIFIED_NO_SENTENCE;
+  if (options_.drop_no &&
+      !add(rejected_, CLASSIFIED_NO_SENTENCE, "no", false))
     return false;
-  if (options_.drop_yes && !add(CLASSIFIED_NO_SENTENCE, "yes")) return false;
-  if (options_.drop_yes && options_.sentence != CLASSIFIED_NO_SENTENCE &&
-      !add(options_.sentence, "yes"))
+  if (options_.drop_no && sentence &&
+      !add(rejected_, options_.sentence, "no", false))
+    return false;
+  if (options_.drop_yes &&
+      !add(rejected_, CLASSIFIED_NO_SENTENCE, "yes", false))
+    return false;
+  if (options_.drop_yes && sentence &&
+      !add(rejected_, options_.sentence, "yes", false))
+    return false;
+  bool const keep_yes = options_.keep_yes && options_.old_bag;
+  if (keep_yes && !add(yes_, CLASSIFIED_NO_SENTENCE, "yes", false))
+    return false;
+  if (keep_yes && sentence && !add(yes_, options_.sentence, "yes", true))
     return false;
 
   if (!options_.index_file.empty()) {
@@ -72,4 +84,12 @@ bool Pfilter::keep(DfsPairRow const& row) const {
           options_.required_words->get().contains(row.left) ||
           options_.required_words->get().contains(row.right)) &&
       (index_ == nullptr || in_index(*index_, row));
+}
+
+bool Pfilter::is_new(DfsPairRow const& row) const {
+  return !options_.old_bag ||
+      !fits_letter_bag(*options_.old_bag, row.left + row.right) ||
+      std::ranges::any_of(yes_, [entry = row.entry()](auto const& pairs) {
+        return pairs->contains(entry);
+      });
 }

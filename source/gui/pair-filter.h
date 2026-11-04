@@ -27,12 +27,13 @@
 // the consonant/vowel ratio of the letters its pair leaves (see
 // remaining_cv_ratio()), lowest ratio first, as pfilter --cv prints them.
 // Without cv, the kept lines are sorted. Its Column's shown pairs can be
-// reviewed, and saved.
+// reviewed, and saved, and its Column hides the old pairs (see Column).
 struct PairFilter {
   static constexpr bool reads_pairs = true;
   static constexpr bool reads_classified = true;
   static constexpr bool uses_dictionary = true;
   static constexpr bool saveable = true;
+  static constexpr bool hides_old_pairs = true;
 
   ReviewKind review_kind(InputSource const&) const { return ReviewKind::pairs; }
 
@@ -46,7 +47,6 @@ struct PairFilter {
   std::string used_letters() const { return used; }
   bool uses_required_words() const { return required; }
 
-  bool yes = false;  // -y
   bool exact = false;  // --exact
   bool required = false;  // --rw sN.required
   bool cv = true;   // --cv
