@@ -26,12 +26,11 @@ printf '%s\n' Apple bread cherry donut eagle fig "Gra'pe" hazel ox \
 
 actual=$(WFROOT=$test_dir "$filter_words" "$test_dir/words" 2>/dev/null) ||
   fail "filter-words failed"
-[[ $actual == $'grape\nhazel' ]] || fail "default: $actual"
+[[ $actual == $'grape\nhazel\nabcdefghijklmn' ]] || fail "default: $actual"
 
-actual=$(WFROOT=$test_dir "$filter_words" -m 2 -x 14 - < "$test_dir/words" \
-  2>/dev/null) || fail "filter-words -m 2 -x 14 failed"
-[[ $actual == $'grape\nhazel\nox\nabcdefghijklmn' ]] ||
-  fail "-m 2 -x 14: $actual"
+actual=$(WFROOT=$test_dir "$filter_words" -m 2 -x 13 - < "$test_dir/words" \
+  2>/dev/null) || fail "filter-words -m 2 -x 13 failed"
+[[ $actual == $'grape\nhazel\nox' ]] || fail "-m 2 -x 13: $actual"
 
 rm "$wf/dict/done/no.words"
 if WFROOT=$test_dir "$filter_words" "$test_dir/words" >/dev/null 2>&1; then

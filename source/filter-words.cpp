@@ -24,7 +24,7 @@ constexpr char PROGRAM[] = "filter-words";
 
 struct Args {
   int min_len = SEED_DEFAULT_MIN_WORD_LEN;
-  int max_len = SEED_DEFAULT_MAX_WORD_LEN;
+  int max_len = 0;
   std::string path = "-";
 };
 
@@ -45,8 +45,8 @@ void usage(std::string_view program, FILE* out) {
   dfs_help_description_column(20);
   dfs_help_option("-m, --min N", "keep words of at least N letters "
                   "(default %d)", SEED_DEFAULT_MIN_WORD_LEN);
-  dfs_help_option("-x, --max N", "keep words of at most N letters "
-                  "(default %d)", SEED_DEFAULT_MAX_WORD_LEN);
+  dfs_help_option("-x, --max N", "keep words of at most N letters; 0 for "
+                  "no limit (default: 0)");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -81,7 +81,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     report(PROGRAM, "unexpected argument \"%s\"", extra);
     return false;
   }
-  if (out->min_len > out->max_len) {
+  if (out->max_len != 0 && out->min_len > out->max_len) {
     report(PROGRAM, "-m %d is more than -x %d", out->min_len, out->max_len);
     return false;
   }
@@ -150,7 +150,8 @@ int main(int argc, char* argv[]) {
   if (!read_lines(PROGRAM, args.path, [&](std::string const& line, size_t) {
         if (!clean_dictionary_line(line, &word)) return true;
         int const length = int(word.size());
-        if (length < args.min_len || length > args.max_len ||
+        if (length < args.min_len ||
+            (args.max_len != 0 && length > args.max_len) ||
             excluded.contains(word))
           return true;
         fwrite(word.data(), 1, word.size(), stdout);
