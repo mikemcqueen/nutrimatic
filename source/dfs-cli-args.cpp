@@ -383,6 +383,13 @@ size_t resolve_search_threads(int requested) {
   return available == 0 ? 1 : size_t(available);
 }
 
+bool clean_dictionary_line(std::string_view line, std::string* word) {
+  word->clear();
+  if (line.find('-') != std::string_view::npos) return false;
+  clean_word(line.data(), line.data() + line.size(), word);
+  return !word->empty();
+}
+
 bool load_dictionary(fs::path const& path, DfsDictionary* dictionary) {
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
@@ -391,12 +398,9 @@ bool load_dictionary(fs::path const& path, DfsDictionary* dictionary) {
   }
 
   std::string line;
+  std::string word;
   while (std::getline(input, line)) {
-    if (line.find('-') != std::string::npos) continue;
-
-    std::string word;
-    clean_word(line.data(), line.data() + line.size(), &word);
-    if (!word.empty()) dictionary->insert(word);
+    if (clean_dictionary_line(line, &word)) dictionary->insert(word);
   }
 
   if (!input.eof()) {

@@ -3,6 +3,7 @@
 #include "log.h"
 #include "mapped-file.h"
 #include "run-threads.h"
+#include "workflow-paths.h"
 
 #include <algorithm>
 #include <bitset>
@@ -200,7 +201,7 @@ bool add_forced_pairs(std::filesystem::path const& forced,
 
 bool valid_seed_sentence(std::string_view sentence) {
     return sentence.size() == 2 && sentence[0] == 's' &&
-        sentence[1] >= '1' && sentence[1] <= '9';
+        sentence[1] >= '1' && sentence[1] <= '0' + WORKFLOW_SENTENCES;
 }
 
 std::filesystem::path forced_pairs_path(std::filesystem::path const& directory,

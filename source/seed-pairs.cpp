@@ -46,9 +46,9 @@ void usage(std::string_view program, FILE* out) {
             "\noptions:\n", IDX_PATH);
     dfs_help_description_column(30);
     dfs_help_option("-s, --sentence N",
-                    "sentence N, from 1 to 9: force in %s/sN.pairs; the "
+                    "sentence N, from 1 to %d: force in %s/sN.pairs; the "
                     "pair file defaults to %s/pairs.sN",
-                    IDX_PATH, IDX_PATH);
+                    WORKFLOW_SENTENCES, IDX_PATH, IDX_PATH);
     dfs_help_option("--pairs PAIRS",
                     "read PAIRS as the pair file, overriding the default "
                     "of -s");
@@ -59,9 +59,9 @@ void usage(std::string_view program, FILE* out) {
                     "keep pairs whose larger YES is in [P, 1]; pairs "
                     "without a verdict are dropped (default .85)");
     dfs_help_option("-m N", "keep pairs whose words both have at least N "
-                    "letters (default 3)");
+                    "letters (default %d)", SEED_DEFAULT_MIN_WORD_LEN);
     dfs_help_option("-x N", "keep pairs whose words both have at most N "
-                    "letters (default 13)");
+                    "letters (default %d)", SEED_DEFAULT_MAX_WORD_LEN);
     dfs_help_option("-d, --dict FILE",
                     "keep pairs whose words are both in FILE, warning "
                     "about each word of a forced pair that isn't");
@@ -143,7 +143,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     if (out->sentence) {
         std::string const sentence = "s" + std::to_string(*out->sentence);
         if (!valid_seed_sentence(sentence)) {
-            report(PROGRAM, "-s %d isn't from 1 to 9", *out->sentence);
+            report(PROGRAM, "-s %d isn't from 1 to %d", *out->sentence,
+                   WORKFLOW_SENTENCES);
             return false;
         }
         if (!out->pairs)

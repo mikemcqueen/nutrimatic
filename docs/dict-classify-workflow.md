@@ -9,24 +9,6 @@ given a list of pairs, find the un-indexed words in the cluer index:
 
 -------
 
-This method isn't as important anymore now that I have best-subsets.sh, which
-changes how i choose bag subsets entirely, making all of this subset-comparison
-perhaps less important. although it may still have some value when i choose to
-"upgrade" from one subset to the next, which I may wish to base on the *relative*
-difference of pair count from OLD to NEW set.
-
-old way:
-
-# note that pfilter --ts doesn't exist anymore.  top-segments auto-dectets and accepts "comma-separated pairs" as input.
-
-# pw() { seed-pairs -s "$1" | pfilter -s "$1" -d "$DICT" -m 0 -x 0 -l "$2" --ts - | grep "${3}.* .*${3}" | top-segments --nc --pair-words -n0 2>/dev/null | sort -u; }
-
-# calling it, e.g:
-
-# for a in h ; do comm -23 <(pw 1 "$S1MIN5" "${a}") <(pw 1 "$S1MIN4" "${a}") | less; done
-
-new way:
-
 letter-pair-words.sh -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
 letter-pair-words.sh -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
 
@@ -38,6 +20,10 @@ both words in the pair contain that letter. That's the same as:
 Example:
 
 `./letter-pair-words.sh -s 1 $S1MIN4 $S1MIN5 h`
+
+NOTE: i should probably convert this to c++.  one of the things that is *not* doing is filtering
+      out YES words. since ultimately these words are being sent to wf review words, it'd be nice
+      to just get the YES words filtered beforehand.
 
 
 ---------
@@ -57,6 +43,10 @@ see remaining pair counts (mabye letter-pair-diff does this), e.g.:
 
 
 -----------
+
+this was an attempt at taking the words from the aggregate of 'dd' 'mm' 'nnn', 'rrr', etc., pairs
+using $S1 -u gllpu, comm | sort -u'ing them, and then wf reviewing the words with a query-index score
+below 1500.
 
 query-index --score --max-score 1500 on a "diff" of $S1,$S1-gllpu i think
 

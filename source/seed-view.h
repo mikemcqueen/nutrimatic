@@ -64,9 +64,13 @@ void warn_forced_words_missing(std::string_view program,
                                DfsDictionary const& dictionary,
                                std::filesystem::path const& dictionary_path);
 
+// Default inclusive word length bounds of seed-pairs and filter-words.
+inline constexpr int SEED_DEFAULT_MIN_WORD_LEN = 3;
+inline constexpr int SEED_DEFAULT_MAX_WORD_LEN = 13;
+
 struct SeedFilter {
-    int min_len = 3;                            // each word, inclusive
-    int max_len = 13;                           // each word, inclusive
+    int min_len = SEED_DEFAULT_MIN_WORD_LEN;    // each word, inclusive
+    int max_len = SEED_DEFAULT_MAX_WORD_LEN;    // each word, inclusive
     std::optional<float> min_yes;               // none keeps every pair
     DfsDictionary const* dictionary = nullptr;  // null keeps every word
 };

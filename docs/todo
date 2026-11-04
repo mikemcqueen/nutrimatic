@@ -92,3 +92,12 @@
   the same loaded data
 
 * pairs --mx M,X: allow X > 2 (PAIRS_MAX_WORDS caps it at 2 today).
+
+* pairs (main) and bag-stats (load_inner_dictionary) each read their word
+  list with their own near-identical fgets loop: no '-' skip, no
+  lowercasing or stripping, so the stored and printed word is the raw line
+  and the length check counts punctuation; lines over 4096 bytes are split.
+  give them one shared loader that cleans each line with
+  clean_dictionary_line() (dfs-cli-args.h), as load_dictionary() does, and
+  reads through read_lines() (row-input.h) like load_word_bags() just above
+  load_inner_dictionary() in bag-stats-run.cpp; filter-words already does

@@ -204,9 +204,13 @@ size_t resolve_preprocess_threads(int requested, size_t letter_count);
 // thread when the implementation cannot report it.
 size_t resolve_search_threads(int requested);
 
-// Loads a newline-delimited word list, lowercased, skipping lines containing
-// '-' and stripping characters outside a-z/0-9. Prints an error and returns
-// false if the file can't be opened or read.
+// Sets `word` to `line` lowercased, with characters outside a-z/0-9 stripped.
+// False, leaving `word` empty, when `line` contains '-' or nothing survives.
+bool clean_dictionary_line(std::string_view line, std::string* word);
+
+// Loads a newline-delimited word list, each line cleaned by
+// clean_dictionary_line() and skipped when that returns false. Prints an
+// error and returns false if the file can't be opened or read.
 bool load_dictionary(std::filesystem::path const& path,
                      DfsDictionary* dictionary);
 

@@ -27,7 +27,12 @@ inline constexpr char WORKFLOW_DICT_PATH[] = ".wf/dict/words.filtered";
 inline constexpr char WORKFLOW_SMALL_DICT_PATH[] = ".wf/dict/dict.filtered";
 inline constexpr char WORKFLOW_REVIEWED_WORDS_PATH[] =
     ".wf/dict/done/reviewed.words";
+inline constexpr char WORKFLOW_YES_WORDS_PATH[] = ".wf/dict/done/yes.words";
+inline constexpr char WORKFLOW_NO_WORDS_PATH[] = ".wf/dict/done/no.words";
 inline constexpr char WORKFLOW_P1_OUT_PATH[] = ".wf/p1/done/out";
+
+// Workflow sentences are s1 through sWORKFLOW_SENTENCES.
+inline constexpr int WORKFLOW_SENTENCES = 9;
 
 // Paths relative to the working directory: the directory of the sentence
 // pair files and p1.idx, and the cluer clue data.

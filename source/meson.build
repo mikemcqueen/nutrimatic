@@ -338,6 +338,11 @@ first_segments = executable('first-segments', 'first-segments.cpp',
   dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
   install: true)
 
+filter_words = executable('filter-words', 'filter-words.cpp',
+  link_with: [dfs_class_list_lib, optparse_lib, log_lib],
+  dependencies: thread_dep,
+  install: true)
+
 filter_segments = executable('filter-segments', 'filter-segments.cpp',
   dependencies: [pair_exclusions_dep, segment_output_dep, segment_rows_dep],
   install: true)
@@ -573,6 +578,11 @@ test(
   'first-segments',
   bash,
   args: [files('test-first-segments.sh'), first_segments],
+)
+test(
+  'filter-words',
+  bash,
+  args: [files('test-filter-words.sh'), filter_words],
 )
 test(
   'filter-segments',
