@@ -18,8 +18,15 @@ set -euo pipefail
 usage() {
   local name
   name=$(basename "$0")
-  echo "usage: $name -s N [--pm P] OLD-BAG NEW-BAG LETTERS..." >&2
-  echo "       $name -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS..." >&2
+  cat >&2 <<EOF
+usage: $name -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
+       $name -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
+  -s N         sentence number (required)
+  --pm P       seed-pairs' p1 YES band [P, 1] (default: seed-pairs', .85)
+  -l BAG       letter bag
+  -u USED      letters used from BAG for OLD-BAG
+  -U NEW_USED  letters used from BAG for NEW-BAG
+EOF
   exit 2
 }
 

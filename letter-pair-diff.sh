@@ -1,6 +1,7 @@
 #!/bin/bash
 # usage: letter-pair-diff.sh -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
 #        letter-pair-diff.sh -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
+#        letter-pair-diff.sh -s N [--pm P] -l BAG [-u USED] LETTERS...
 # requires: source ./setup.sh
 #
 # For each letter, counts the seed pairs (and their words) that fit NEW-BAG
@@ -19,8 +20,17 @@ set -euo pipefail
 usage() {
   local name
   name=$(basename "$0")
-  echo "usage: $name -s N [--pm P] OLD-BAG NEW-BAG LETTERS..." >&2
-  echo "       $name -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS..." >&2
+  cat >&2 <<EOF
+usage: $name -s N [--pm P] OLD-BAG NEW-BAG LETTERS...
+       $name -s N [--pm P] -l BAG -u USED -U NEW_USED LETTERS...
+       $name -s N [--pm P] -l BAG [-u USED] LETTERS...
+  -s N         sentence number (required)
+  --pm P       seed-pairs' p1 YES band [P, 1] (default: seed-pairs', .85)
+  -l BAG       letter bag
+  -u USED      with -U: letters used from BAG for OLD-BAG; without -U:
+               for NEW-BAG, with no OLD-BAG (default: none)
+  -U NEW_USED  letters used from BAG for NEW-BAG
+EOF
   exit 2
 }
 
@@ -40,8 +50,13 @@ while [[ ${1-} == -* ]]; do
   shift 2
 done
 [[ -n $sentence ]] || usage
-if [[ -n ${bag+x} ]]; then
-  [[ -n ${used+x} && -n ${new_used+x} && $# -ge 1 ]] || usage
+if [[ -n ${bag+x} && -z ${new_used+x} ]]; then
+  [[ $# -ge 1 ]] || usage
+  old_bag=
+  new_bag=$bag
+  new_used=${used-}
+elif [[ -n ${bag+x} ]]; then
+  [[ -n ${used+x} && $# -ge 1 ]] || usage
   old_bag=$bag
   new_bag=$bag
 else
@@ -60,7 +75,8 @@ pairs() {
     pfilter -s "$sentence" -d "$DICT" -m 0 -x 0 -l "$1" -u "$2" -
 }
 
-old=$(pairs "$old_bag" "$used")
+old=
+[[ -z $old_bag ]] || old=$(pairs "$old_bag" "$used")
 new=$(pairs "$new_bag" "$new_used")
 
 awk -F, -v letters="$letters" '
