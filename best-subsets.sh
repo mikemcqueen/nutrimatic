@@ -6,7 +6,8 @@
 # removals (default 3) that leave the fewest sentence-N seed pairs fitting
 # BAG, with the share of the full-BAG count left and the per-letter factor
 # (left/base)^(1/k), which compares removals of different sizes. -w skips
-# removals holding any of LETTERS. --only prints k = K alone.
+# removals holding, for some letter, at least as many copies as LETTERS
+# does: -w l skips any l, -w ll two or more. --only prints k = K alone.
 
 set -euo pipefail
 
@@ -16,7 +17,8 @@ usage: $(basename "$0") -s N [-l K] [-n TOP] [-w LETTERS] [--only] BAG
   -s N        sentence number (required)
   -l K        remove up to K letters (default 6)
   -n TOP      removals shown per size (default 3)
-  -w LETTERS  skip removals holding any of LETTERS (default: none)
+  -w LETTERS  skip removals holding as many copies of a letter as LETTERS
+              (-w l: any l; -w ll: two or more) (default: none)
   --only      show only size K
 EOF
   exit 2
@@ -59,8 +61,15 @@ echo "base: $base pairs"
 
 bag-subset -r -s "$sentence" -l "$length" -d "$dict" "$bag" "$pairs" |
   awk -v base="$base" -v top="$top" -v first=$((only ? length : 1)) -v width=$((length > 7 ? length : 7)) -v without="$without" '
-    length($1) >= first && (without == "" || $1 !~ "[" without "]") &&
-        seen[length($1)]++ < top {
+    BEGIN { n = split(without, c, ""); for (i = 1; i <= n; i++) cap[c[i]]++ }
+    function skip(s,  l, t) {
+      for (l in cap) {
+        t = s
+        if (gsub(l, "", t) >= cap[l]) return 1
+      }
+      return 0
+    }
+    length($1) >= first && !skip($1) && seen[length($1)]++ < top {
       k = length($1)
       rows[k] = rows[k] sprintf("%2d  %-*s  %7d  %5.1f%%  %.3f\n",
           k, width, $1, $2, 100 * $2 / base, exp(log($2 / base) / k))

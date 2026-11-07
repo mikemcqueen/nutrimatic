@@ -1,3 +1,21 @@
+learnings:
+
+* a lot of 'm' and 'c' words are valid.  minimal reduction in pairs,
+  only marginally better than 1:1, maybe 1:2.
+
+
+-----
+
+given a list of pairs, (typically saved from pgui), convert to list of words, filter out all dict-classified
+YES and NO words (this only exists at global), *then* filter out all words in both globally and sentence-
+specific classified YES-pairs.  the result is the list of words that is least likely to require any filtering
+by the workflow tool, since it ostensibly does exactly the same thing (but without using the filter-words tool).
+
+  `cat pairs.hh.dict | top-segments --nc --pair-words -n0 | filter-words |sort -u > words.s1.glllpu.diff.hh`
+
+-----
+
+
 given a list of pairs, find the least common words in the wiki index:
 
   `cat tmp/s1/glllpu/1/all.pairs | top-segments  -n0 --pair-words --nc - | query-index - --filter --max-score 1500 | wc -l`
