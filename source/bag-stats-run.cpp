@@ -1,6 +1,8 @@
 #include "bag-stats-run.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string_view>
@@ -521,3 +523,42 @@ BagStatsRankers::BagStatsRankers(BagStatsArgs const& args,
                              inputs.has_prior)),
       passes((args.rank.top != 0 || !args.rank.score.empty()) &&
              (args.rank.by_pick || ranker.needs_counts())) {}
+
+void rank_pair_usage(BagStatsArgs const& args,
+                     std::vector<std::vector<std::string>> const& pair_rows,
+                     std::vector<uint64_t> const& counts,
+                     std::vector<BagStatsPairUsage>* out) {
+    std::vector<BagStatsPairUsage>& used = *out;
+    used.clear();
+    for (size_t bag = 0; bag < counts.size(); ++bag) {
+        if (counts[bag] == 0) continue;
+        for (std::string const& row : pair_rows[bag])
+            used.push_back({&row, counts[bag]});
+    }
+    size_t const top = args.rank.top > 0
+        ? std::min(used.size(), size_t(args.rank.top)) : used.size();
+    std::partial_sort(used.begin(), used.begin() + top, used.end(),
+                      [](BagStatsPairUsage const& a,
+                         BagStatsPairUsage const& b) {
+        if (a.combinations != b.combinations)
+            return a.combinations > b.combinations;
+        return *a.row < *b.row;
+    });
+    used.resize(top);
+}
+
+int print_pair_usage(BagStatsArgs const& args,
+                     std::vector<BagStatsPairUsage> const& used) {
+    for (BagStatsPairUsage const& usage : used) {
+        std::string pair = *usage.row;
+        if (!args.rank.top_segments) {
+            printf("%s\n", pair.c_str());
+            continue;
+        }
+        std::replace(pair.begin(), pair.end(), ',', ' ');
+        printf("%llu %s\n",
+               static_cast<unsigned long long>(usage.combinations),
+               pair.c_str());
+    }
+    return fflush(stdout) == 0 ? 0 : 1;
+}

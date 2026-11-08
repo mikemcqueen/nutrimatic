@@ -59,12 +59,6 @@ bool list_bag_stats(BagStatsOptions const& options, std::string const& letters,
                     BagStatsInputs const& inputs, std::stop_token stop,
                     std::vector<BagStatsCompletion>* out);
 
-// A PAIRS row of a pb pick, and how many pick combinations it's in.
-struct BagStatsPairUsage {
-    std::string const* row;  // into the inputs' pair_rows
-    uint64_t combinations;
-};
-
 // What bag-stats --unique without --leftovers prints of `inputs`, loaded by
 // the caller with its pair_rows and steps set, for `args`, whose --ss is pb
 // steps alone: each row of a pick some combination makes, most combinations

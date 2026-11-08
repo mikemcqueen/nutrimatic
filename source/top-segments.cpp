@@ -35,7 +35,7 @@ static void usage(std::string_view program) {
   fprintf(stdout,
       "usage: %.*s [--pairs | --solo-words | --all-words |\n"
       "          --pair-words [--unique]]\n"
-      "          [-c | --no-counts] [-l | --elim] [-n N]\n"
+      "          [-c | --no-counts] [-l | --elim] [--by-count] [-n N]\n"
       "          [--segments N[,N...]]\n"
       "          [-u LETTERS | --used-letters LETTERS]...\n"
       "          [-i FILE | --ignore FILE]...\n"
@@ -62,6 +62,9 @@ static void usage(std::string_view program) {
       "  --elim              sort by guaranteed result-line elimination and\n"
       "                      print \"DECISION REQUIRE REJECT COUNT SEGMENT\"\n"
       "                      rows\n"
+      "  --by-count          read each row's leading number as its count\n"
+      "                      and add it in place of 1, as in \"COUNT WORD\n"
+      "                      WORD\" rows; a word,word line counts 1\n"
       "  -n N                print at most N rows; 0 prints all; defaults to "
       "%" PRIu64 "\n"
       "  --segments N[,N...]\n"
@@ -124,6 +127,7 @@ static bool parse_args(
   bool force_counts = false;
   bool suppress_counts = false;
   bool elimination = false;
+  bool by_count = false;
   std::optional<std::string> used_letters;
   std::vector<size_t> segments;
   SegmentOutputOptions output_options;
@@ -140,6 +144,10 @@ static bool parse_args(
       }
       if (strcmp(argv[i], "--elim") == 0) {
         elimination = true;
+        continue;
+      }
+      if (strcmp(argv[i], "--by-count") == 0) {
+        by_count = true;
         continue;
       }
 
@@ -228,6 +236,11 @@ static bool parse_args(
     usage(argv[0]);
     return false;
   }
+  if (elimination && by_count) {
+    report(PROGRAM, "--elim and --by-count are mutually exclusive");
+    usage(argv[0]);
+    return false;
+  }
   if (elimination && output_options.by_length) {
     report(PROGRAM, "--elim and --by-length are mutually exclusive");
     usage(argv[0]);
@@ -245,6 +258,7 @@ static bool parse_args(
   out->filter_options = std::move(filter_options);
   out->options.output = output_options;
   out->options.elimination = elimination;
+  out->options.by_count = by_count;
   out->options.show_counts = show_counts;
   out->options.used_letters = std::move(used_letters);
   out->options.segments = std::move(segments);

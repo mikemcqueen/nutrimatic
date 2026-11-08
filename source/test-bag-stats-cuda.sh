@@ -115,3 +115,17 @@ for test in "catdoglwncatdoglwncatdoglwn:letter-pairs" \
       fail "--leftovers $bag --ss $ss differs: $actual"$'\n'"bag-stats: $expected"
   done
 done
+
+unique() {
+  "$bag_stats_cuda" --unique --ts --no-nopairs "$@" "$test_dir/dict"
+}
+usage=$(unique --min-pb-len 6 --ss pb catdoglowanttan "$test_dir/pairs")
+[[ $usage == $'1 act god\n1 cat dog\n1 low ant' ]] ||
+  fail "--unique --ss pb is wrong: $usage"
+usage=$(unique --min-pb-len 6 --ss pb,pb catdoglowanttan "$test_dir/pairs")
+[[ $usage == $'2 low ant\n1 act god\n1 cat dog' ]] ||
+  fail "--unique --ss pb,pb is wrong: $usage"
+printf '%s\n' a,b c,de d,ce f,gh g,fh i,jk j,ik k,ij > "$test_dir/bag-pairs"
+usage=$(unique --min-pb-len 2 --ss pb,pb,pb abcdefghijk "$test_dir/bag-pairs")
+[[ $usage == $'16 a b\n11 c de\n11 d ce\n11 f gh\n11 g fh\n8 i jk\n8 j ik\n8 k ij' ]] ||
+  fail "--unique --ss pb,pb,pb is wrong: $usage"

@@ -2,6 +2,7 @@
 #include "dfs-cli-args.h"
 #include "letter-bag.h"
 #include "log.h"
+#include "parse-number.h"
 #include "segment-rows.h"
 
 #include <inttypes.h>
@@ -48,6 +49,15 @@ bool segment_counts_read(
   reader.accept_pairs = true;
   SegmentRow row;
   while (segment_rows_next(&reader, &row)) {
+    uint64_t row_count = 1;
+    if (options.by_count && row.line[0] >= '0' && row.line[0] <= '9' &&
+        !parse_number(std::string_view(row.line).substr(0, row.line.find(' ')),
+            &row_count)) {
+      report(data->program, "%.*s:%" PRIu64
+             ": --by-count requires a nonnegative integer count",
+             SV_ARG(name), reader.line_number);
+      return false;
+    }
     if (options.used_letters && !data->remaining_letters) {
       std::string bag;
       for (std::string const& segment : row.segments)
@@ -122,11 +132,12 @@ bool segment_counts_read(
           stats.length = segment_nonspace_length(segment);
           entry = data->segments.emplace(segment, stats).first;
         }
-        if (entry->second.count == std::numeric_limits<uint64_t>::max()) {
+        if (entry->second.count >
+            std::numeric_limits<uint64_t>::max() - row_count) {
           report(data->program, "segment count overflow");
           return false;
         }
-        ++entry->second.count;
+        entry->second.count += row_count;
         continue;
       }
       if (!is_selected_segment(options.output.selection, segment)) continue;

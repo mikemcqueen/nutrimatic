@@ -1188,17 +1188,7 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
 int count_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs) {
     std::vector<BagStatsPairUsage> used;
     list_pair_usage(args, inputs, {}, &used);
-    for (BagStatsPairUsage const& usage : used) {
-        std::string pair = *usage.row;
-        if (!args.rank.top_segments) {
-            printf("%s\n", pair.c_str());
-            continue;
-        }
-        std::replace(pair.begin(), pair.end(), ',', ' ');
-        printf("%llu %s\n", static_cast<unsigned long long>(usage.combinations),
-               pair.c_str());
-    }
-    return fflush(stdout) == 0 ? 0 : 1;
+    return print_pair_usage(args, used);
 }
 
 }  // namespace
@@ -1240,24 +1230,7 @@ void list_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs,
     for (size_t t = 1; t < parts.size(); ++t)
         for (size_t bag = 0; bag < bags.size(); ++bag)
             parts[0][bag] += parts[t][bag];
-
-    std::vector<BagStatsPairUsage>& used = *out;
-    used.clear();
-    for (size_t bag = 0; bag < bags.size(); ++bag) {
-        if (parts[0][bag] == 0) continue;
-        for (std::string const& row : inputs.pair_rows[bag])
-            used.push_back({&row, parts[0][bag]});
-    }
-    size_t const top = args.rank.top > 0
-        ? std::min(used.size(), size_t(args.rank.top)) : used.size();
-    std::partial_sort(used.begin(), used.begin() + top, used.end(),
-                      [](BagStatsPairUsage const& a,
-                         BagStatsPairUsage const& b) {
-        if (a.combinations != b.combinations)
-            return a.combinations > b.combinations;
-        return *a.row < *b.row;
-    });
-    used.resize(top);
+    rank_pair_usage(args, inputs.pair_rows, parts[0], out);
 }
 
 bool list_bag_stats(BagStatsOptions const& options,

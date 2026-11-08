@@ -38,12 +38,13 @@ inline constexpr int GPU_MAX_PREFIX_LETTERS = 16;
 
 // What the --leftovers walk takes: the bag; its RemainderIndex number; the
 // pair bags, sorted by prefix cell, each one's letter counts,
-// GPU_LETTERS_BYTES apiece, number, PAIRS and letters; the prefix letters,
-// most significant first, each with its stride, and the first pair bag of
-// each prefix cell, then the pair bag count; and the pb steps.
+// GPU_LETTERS_BYTES apiece, number (none for run_pair_usage_gpu), PAIRS and
+// letters; the prefix letters, most significant first, each with its
+// stride, and the first pair bag of each prefix cell, then the pair bag
+// count; and the pb steps.
 struct GpuLeftoverInputs {
     uint8_t bag[GPU_LETTERS_BYTES];
-    uint64_t bag_number;
+    uint64_t bag_number = 0;
     std::vector<uint8_t> pair_letters;
     std::vector<uint64_t> numbers;
     std::vector<uint64_t> pairs;
@@ -73,6 +74,16 @@ void run_leftovers_gpu(std::string_view program,
                        GpuLeftoverInputs const& inputs,
                        std::function<void(size_t)> const& progress,
                        GpuLeftoverCounts* out);
+
+// Walks the combinations run_leftovers_gpu walks and writes to `out`, one
+// per pair bag in `inputs` order, how many PAIRS rows of them each of the
+// bag's rows is in. Calls progress(units) as run_leftovers_gpu does. A
+// CUDA call failing prints `program` and CUDA's error on stderr and exits
+// 1.
+void run_pair_usage_gpu(std::string_view program,
+                        GpuLeftoverInputs const& inputs,
+                        std::function<void(size_t)> const& progress,
+                        std::vector<uint64_t>* out);
 
 // What the device holds for every row, as flat arrays.
 struct GpuInputs {

@@ -342,6 +342,24 @@ int print_leftovers(BagStatsArgs const& args, std::string const& letters,
                     LeftoverSketch const* hll,
                     LeftoverUnique const* unique = nullptr);
 
+// A PAIRS row of a pb pick, and how many pick combinations it's in.
+struct BagStatsPairUsage {
+    std::string const* row;  // into the inputs' pair_rows
+    uint64_t combinations;
+};
+
+// Each row of `pair_rows` whose bag has a nonzero count in `counts`, one per
+// pair bag, with that count: most first, ties by row, the first
+// args.rank.top when it is set.
+void rank_pair_usage(BagStatsArgs const& args,
+                     std::vector<std::vector<std::string>> const& pair_rows,
+                     std::vector<uint64_t> const& counts,
+                     std::vector<BagStatsPairUsage>* out);
+
+// Prints `used` as bag-stats --unique does. Returns the exit status.
+int print_pair_usage(BagStatsArgs const& args,
+                     std::vector<BagStatsPairUsage> const& used);
+
 // How many units PickWalk walks over `steps`: the first step's picks, or 1
 // without steps, where nothing walks them.
 inline size_t walk_units(

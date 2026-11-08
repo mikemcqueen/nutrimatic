@@ -45,6 +45,9 @@ struct SegmentCountsOptions {
   SegmentOutputOptions output;
   bool elimination = false;  // --elim: rank by decision impact, not count
   bool show_counts = false;  // print the count column
+  // --by-count: a row's leading number is its count, added to each of its
+  // segments in place of 1; a word,word pair line counts 1.
+  bool by_count = false;
   // -u: cleaned letters to remove from the first row's letter bag; only
   // segments that fit in what remains are printed.
   std::optional<std::string> used_letters;

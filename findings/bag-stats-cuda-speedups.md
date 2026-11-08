@@ -243,16 +243,27 @@ only if 3 is deferred.
 
 Rows grow as (pair bags)^k / k! times the fraction that fit, but distinct
 rests grow much more slowly once the rests are short, because short
-sub-bags of the bag are few. Measured (`--leftovers --hll`) and projected:
+sub-bags of the bag are few. Measured (`--leftovers --hll`) and projected;
+rows here are pick combinations (`COMBINATIONS`), not the PAIRS-weighted
+`ROWS`:
 
 | Run | 2 pb rows | 2 pb distinct rests | 3 pb rows | 3 pb distinct rests | 4 pb rows |
 |---|---|---|---|---|---|
 | S9, 20.8k bags | 20M | 14.3M (71%) | 687M (GPU walk 1.4s) | 64.1M (9.3%) | ~10^10 |
-| S1 −bglllmmpu, 28.7k bags | 302M | 205M (68%) | 9.79×10^11 (GPU walk 80s) | 28.5G (2.9%), 17–54 letters, peak 44 | ~10^16 |
-| S1 −glllpu, 68.2k bags | 1.6G | 1.07G (66%) | ~2×10^13 | | ~10^17 |
+| S1 −bglllmmpu, 28.7k bags | 302M | 205M (68%) | 9.79×10^11 (GPU walk 80s) | 28.5G (2.9%), 17–54 letters, peak 44 | ~10^15 |
+| S1 −glllpu, 68.2k bags | 1.6G | 1.07G (66%) | 1.18×10^13 (GPU walk ~16m) | 204G (1.7%), 16–57 letters, peak 47 | 2–4×10^16 |
 
-With 1–3 built, each row costs a GPU walk step (~0.5–4G rows/s measured
-on the pb walks) and each distinct rest a fit scan plus, once rests are
+The 3-pb S1 runs walk at 12.2–12.3G combinations/s. About a third of the
+third picks fit (0.34 and 0.32), so the 4-pb column assumes 10–20% of the
+fourth picks fit, as the rests are shorter: (3-pb combinations) × (pair
+bags / 4) × 0.1–0.2. On S1 −glllpu, 2.83×10^12 of the 3-pb combinations
+(24%) and ~75G of the distinct rests are 43 letters or fewer, the longest
+sum for that bag; 1.8×10^10 combinations and 3.4G distinct rests are 33
+or fewer.
+
+
+With 1–3 built, each row costs a GPU walk step (~12G rows/s measured
+on the 3-pb walks) and each distinct rest a fit scan plus, once rests are
 short enough to have pairs, a probe per fitting word bag (hundreds, at
 ~3G/s). So:
 
@@ -271,9 +282,10 @@ short enough to have pairs, a probe per fitting word bag (hundreds, at
   and can't have pairs at all; more `-u` letters or shorter lists move
   the whole distribution.
 - **4 pb on these lists** is out of reach for any design that visits rows
-  or distinct rests. A 4-pb run in today's 2-pb budget (tens of seconds
+  or distinct rests: walking alone is about a day on S1 −bglllmmpu and
+  20–40 days on S1 −glllpu. A 4-pb run in today's 2-pb budget (tens of seconds
   after 1–3) needs pair lists of 1–2k bags: 1k^4/24 × fit ≈ 10^10 rows,
-  ~5s to walk, ~10^12 probes, a few minutes. The levers are the pick
+  ~1s to walk, ~10^12 probes, a few minutes. The levers are the pick
   lists (-s subsets, `pb2.top2k`-style word subsets, a higher `--pm`),
   a `ppb` prospects step, or `-u`.
 - A non-enumerative route (subset-sum DP over distinct rests) costs the

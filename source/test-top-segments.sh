@@ -669,6 +669,14 @@ printf 'cat,dog\nact,god\n5 cat dog\n' > "$test_dir/pairs"
 actual=$("$top_segments" --pair-words --nc -n0 "$test_dir/pairs" | sort)
 [[ $actual == $'act\ncat\ndog\ngod' ]] || fail "pairs input is wrong: $actual"
 
+printf '5 cat dog\n3 cat dog\ncat,dog\n2 act god\n' > "$test_dir/counted"
+actual=$("$top_segments" --by-count "$test_dir/counted" 2>/dev/null)
+[[ $actual == $'9 cat dog\n2 act god' ]] ||
+  fail "--by-count is wrong: $actual"
+printf '1.5 cat dog\n' > "$test_dir/bad"
+"$top_segments" --by-count "$test_dir/bad" 2>/dev/null &&
+  fail "--by-count accepts a fractional count"
+
 for bad in ' cat,dog' 'cat dog' 'cat,,dog' '-1 cat,dog'; do
   printf '%s\n' "$bad" > "$test_dir/bad"
   "$top_segments" "$test_dir/bad" 2>/dev/null &&

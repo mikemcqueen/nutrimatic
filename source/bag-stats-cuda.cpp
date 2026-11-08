@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <functional>
 #include <numeric>
 #include <random>
 #include <string>
@@ -27,6 +28,7 @@ constexpr char PROGRAM[] = "bag-stats-cuda";
 constexpr int OPT_STREAMS = OPT_COMMON_END;
 constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 1;
 constexpr int OPT_HLL = OPT_COMMON_END + 2;
+constexpr int OPT_UNIQUE = OPT_COMMON_END + 3;
 constexpr size_t PREFIX_CELLS = size_t(1) << 16;
 constexpr size_t PREFIX_RESTS = 1000;
 constexpr size_t PREFIX_DRAWS = 1000000;
@@ -37,10 +39,11 @@ static_assert(GPU_HLL_BITS == LeftoverSketch::HLL_BITS);
 static_assert(size_t(1) << GPU_MAX_PREFIX_LETTERS >= PREFIX_CELLS);
 
 // What the command line asks for beyond BagStatsArgs: --streams; with
-// --leftovers, --hll.
+// --leftovers, --hll; --unique.
 struct CudaOptions {
     int streams = 1;
     bool hll = false;
+    bool unique = false;
 };
 
 void usage(std::string_view program, FILE* out) {
@@ -59,8 +62,11 @@ void usage(std::string_view program, FILE* out) {
             "       LETTERS PAIRS DICT\n"
             "       %.*s --leftovers --hll --ss pb[,pb...]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
+            "       [--progress N] LETTERS PAIRS DICT\n"
+            "       %.*s --unique --ss pb[,pb...] [-n N] [--top-segments]\n"
+            "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
             "       [--progress N] LETTERS PAIRS DICT\n",
-            SV_ARG(program), SV_ARG(program));
+            SV_ARG(program), SV_ARG(program), SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  bag-stats, counting every row on the GPU\n\n", stdout);
@@ -77,6 +83,12 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("--hll, --hyper-log-log",
                     "with --leftovers, estimate the distinct leftovers by "
                     "HyperLogLog, within about 1%%, as LEFTOVERS_HLL");
+    dfs_help_option("--unique",
+                    "with --ss of pb steps alone, print each PAIRS row the "
+                    "combinations use as left,right, by how many pair "
+                    "combinations it's in, most first, ties by pair, the "
+                    "first N with -n N, and with --top-segments as "
+                    "\"COUNT left right\", all on the GPU");
     help_common_tail();
 }
 
@@ -88,6 +100,7 @@ bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
         { "leftovers", OPT_LEFTOVERS, OPTPARSE_NONE },
         { "hll", OPT_HLL, OPTPARSE_NONE },
         { "hyper-log-log", OPT_HLL, OPTPARSE_NONE },
+        { "unique", OPT_UNIQUE, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -116,6 +129,9 @@ bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
           case OPT_HLL:
             cuda->hll = true;
             break;
+          case OPT_UNIQUE:
+            cuda->unique = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -133,10 +149,16 @@ bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
         report(PROGRAM, "--leftovers needs --hll");
         return false;
     }
+    if (cuda->unique && out->leftovers) {
+        report(PROGRAM, "--unique doesn't go with --leftovers");
+        return false;
+    }
+    out->pair_usage = cuda->unique;
     if (!check_common_args(PROGRAM, &options, out)) return false;
-    if (out->leftovers) {
+    if (out->leftovers || out->pair_usage) {
         if (out->search.pairs > GPU_MAX_PAIR_STEPS) {
-            report(PROGRAM, "--leftovers takes at most %d pb steps",
+            report(PROGRAM, "%s takes at most %d pb steps",
+                   out->leftovers ? "--leftovers" : "--unique",
                    GPU_MAX_PAIR_STEPS);
             return false;
         }
@@ -422,16 +444,11 @@ std::vector<size_t> prefix_order(BagStatsInputs const& inputs, size_t picks) {
     return letters;
 }
 
-// The --leftovers output of `inputs` for `args` on `letters`, walked on the
-// GPU.
-int run_leftovers(BagStatsArgs const& args, std::string const& letters,
-                  BagStatsInputs const& inputs) {
-    RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
-    if (index.total() == 0) {
-        report(PROGRAM, "the letters have too many sub-bags to number "
-               "leftovers");
-        return 1;
-    }
+// Writes the walk inputs of `inputs` to `gpu`, leaving the numbers empty and
+// the bag's 0, and to `sorted` the pair bag at each of their sorted
+// positions.
+void leftover_inputs(BagStatsInputs const& inputs, GpuLeftoverInputs* out,
+                     std::vector<size_t>* sorted_out) {
     std::vector<PairBag> const& bags = inputs.pair_bags;
     size_t const steps = inputs.steps.size();
     RemainderIndex const cells(
@@ -441,15 +458,15 @@ int run_leftovers(BagStatsArgs const& args, std::string const& letters,
     std::vector<size_t> numbers(bags.size());
     for (size_t i = 0; i < bags.size(); ++i)
         numbers[i] = cells.number(bags[i].counts);
-    std::vector<size_t> sorted(bags.size());
+    std::vector<size_t>& sorted = *sorted_out;
+    sorted.resize(bags.size());
     std::iota(sorted.begin(), sorted.end(), size_t(0));
     std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) {
         return numbers[a] < numbers[b];
     });
 
-    GpuLeftoverInputs gpu;
+    GpuLeftoverInputs& gpu = *out;
     std::copy(inputs.bag.values.begin(), inputs.bag.values.end(), gpu.bag);
-    gpu.bag_number = index.number(inputs.bag);
     for (auto const& [letter, stride] : cells.digits())
         gpu.prefix.push_back({int(letter), int(stride)});
     gpu.offsets.assign(cells.total() + 1, 0);
@@ -461,24 +478,49 @@ int run_leftovers(BagStatsArgs const& args, std::string const& letters,
         gpu.pair_letters.insert(gpu.pair_letters.end(),
                                 pair_bag.counts.values.begin(),
                                 pair_bag.counts.values.end());
-        gpu.numbers.push_back(index.number(pair_bag.counts));
         gpu.pairs.push_back(pair_bag.pairs);
         gpu.lengths.push_back(uint8_t(letter_total(pair_bag.counts)));
     }
     gpu.steps = int(inputs.steps.size());
+}
 
+// Calls run(progress) with the progress(units) a GPU walk of `inputs` for
+// `args` reports to.
+template <typename Run>
+void with_walk_progress(BagStatsArgs const& args, BagStatsInputs const& inputs,
+                        Run const& run) {
     LeftoverWalk const walk{{PROGRAM, inputs.steps, inputs.pair_bags,
                              inputs.prospect_bags, inputs.bag,
                              inputs.word_bags, args, 1, 1, {}}};
-    GpuLeftoverCounts counts;
-    {
-        Progress progress(walk, 1);
-        size_t reported = 0;
-        run_leftovers_gpu(PROGRAM, gpu, [&](size_t done) {
-            progress.finished(&walk, done - reported);
-            reported = done;
-        }, &counts);
+    Progress progress(walk, 1);
+    size_t reported = 0;
+    run([&](size_t done) {
+        progress.finished(&walk, done - reported);
+        reported = done;
+    });
+}
+
+// The --leftovers output of `inputs` for `args` on `letters`, walked on the
+// GPU.
+int run_leftovers(BagStatsArgs const& args, std::string const& letters,
+                  BagStatsInputs const& inputs) {
+    RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
+    if (index.total() == 0) {
+        report(PROGRAM, "the letters have too many sub-bags to number "
+               "leftovers");
+        return 1;
     }
+    GpuLeftoverInputs gpu;
+    std::vector<size_t> sorted;
+    leftover_inputs(inputs, &gpu, &sorted);
+    gpu.bag_number = index.number(inputs.bag);
+    for (size_t const i : sorted)
+        gpu.numbers.push_back(index.number(inputs.pair_bags[i].counts));
+    GpuLeftoverCounts counts;
+    with_walk_progress(args, inputs,
+                       [&](std::function<void(size_t)> const& progress) {
+        run_leftovers_gpu(PROGRAM, gpu, progress, &counts);
+    });
     size_t const lengths = counts.combinations.size();
     LeftoverCounts total{std::move(counts.by_picks),
                          std::move(counts.combinations),
@@ -487,6 +529,24 @@ int run_leftovers(BagStatsArgs const& args, std::string const& letters,
     LeftoverSketch const sketch(counts.registers);
     return print_leftovers(args, letters, inputs.pair_bags.size(),
                            std::move(total), &sketch);
+}
+
+// The --unique output of `inputs` for `args`, walked on the GPU.
+int run_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs) {
+    GpuLeftoverInputs gpu;
+    std::vector<size_t> sorted;
+    leftover_inputs(inputs, &gpu, &sorted);
+    std::vector<uint64_t> by_position;
+    with_walk_progress(args, inputs,
+                       [&](std::function<void(size_t)> const& progress) {
+        run_pair_usage_gpu(PROGRAM, gpu, progress, &by_position);
+    });
+    std::vector<uint64_t> counts(sorted.size(), 0);
+    for (size_t position = 0; position < sorted.size(); ++position)
+        counts[sorted[position]] = by_position[position];
+    std::vector<BagStatsPairUsage> used;
+    rank_pair_usage(args, inputs.pair_rows, counts, &used);
+    return print_pair_usage(args, used);
 }
 
 }  // namespace
@@ -524,6 +584,10 @@ int main(int argc, char* argv[]) {
     if (args.leftovers) {
         stage("walking");
         return run_leftovers(args, letters, inputs);
+    }
+    if (args.pair_usage) {
+        stage("walking");
+        return run_pair_usage(args, inputs);
     }
     stage("building GPU tables and pair-sum filter");
     GpuRowCounter const counter(PROGRAM, gpu_inputs(inputs, args),
