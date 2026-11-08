@@ -618,9 +618,9 @@ int main(int argc, char* argv[]) {
                double(counter.bytes()) / (1024 * 1024));
         GpuFilterInfo const filter = counter.filter_info();
         report(PROGRAM,
-               "pair-sum filter: %llu group pairs, %.1f MB (%.1f bits per "
-               "pair), built in %.1fs",
-               (unsigned long long)filter.pairs,
+               "pair-sum filter: %llu group pairs, longest sum %d letters, "
+               "%.1f MB (%.1f bits per pair), built in %.1fs",
+               (unsigned long long)filter.pairs, filter.longest_sum,
                double(filter.bytes) / (1024 * 1024),
                filter.pairs == 0 ? 0.0
                                  : double(filter.bytes) * 8 / filter.pairs,

@@ -124,10 +124,12 @@ struct GpuCounts {
     uint64_t with_min_pairs;
 };
 
-// The pair-sum filter: the group pairs it was sized for, its device bytes
-// and the seconds its two kernels took.
+// The pair-sum filter: the group pairs it was sized for, the letters in the
+// longest of their sums, its device bytes and the seconds its two kernels
+// took.
 struct GpuFilterInfo {
     uint64_t pairs;
+    int longest_sum;
     size_t bytes;
     double seconds;
 };

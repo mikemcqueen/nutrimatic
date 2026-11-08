@@ -1,9 +1,9 @@
 # bag-stats-cuda: where the time goes, and what would make it fast
 
 An analysis of three `pb,pb,wb,p` runs, with the measurements behind it,
-and the changes that would turn minutes into seconds. Nothing here is
-built; every projected time is an estimate from the measurements, marked
-as such.
+and the changes that would turn minutes into seconds. Only change 1 is
+built (S1 −bglllmmpu: 409.9s to 213.9s, output identical; S9 unchanged);
+every projected time is an estimate from the measurements, marked as such.
 
 The three runs (`seed` = `seed-pairs -s N -m 4`, `--threads 0 -n 5000000
 --wbfrac-min --mp --wbwp-min --ss pb,pb,wb,p --cache-size 5000`):

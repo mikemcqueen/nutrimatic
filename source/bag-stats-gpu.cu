@@ -128,6 +128,7 @@ struct Params {
     Key bag_guards;
     uint8_t bag_shifts[26];
     int min_group_length;
+    int longest_sum;
     int words;
     unsigned long long min_pairs;
     uint8_t const* rests;
@@ -160,6 +161,7 @@ struct PairSumParams {
     uint32_t* filter;
     size_t filter_blocks;
     unsigned long long* pairs;
+    int* longest_sum;
 };
 
 // Whether `key` fits `pool`, which carries its guard bits; writes what is
@@ -206,7 +208,8 @@ __device__ inline bool passes(Params<Key> const& p, Key key) {
 }
 
 // One warp per group `a`: counts the groups `b` from `a` on whose sum with
-// `a` fits the bag, or sets that sum's bits in the filter.
+// `a` fits the bag and finds the longest such sum, or sets those sums' bits
+// in the filter.
 template <typename BagKey, bool INSERT>
 __global__ void pair_sums(PairSumParams<BagKey> p) {
     int const a = int((size_t(blockIdx.x) * blockDim.x + threadIdx.x) >> 5);
@@ -219,6 +222,7 @@ __global__ void pair_sums(PairSumParams<BagKey> p) {
     int const end = p.lenstart[p.bag_length - p.group_lengths[a] + 1];
     bool const twice = p.group_sizes[a] >= 2;
     unsigned long long pairs = 0;
+    int longest = 0;
     for (int b = a + lane; b < end; b += 32) {
         if (b == a && !twice) continue;
         BagKey rest;
@@ -226,10 +230,14 @@ __global__ void pair_sums(PairSumParams<BagKey> p) {
         if constexpr (INSERT)
             filter_insert(p.filter, p.filter_blocks,
                           mix_key(key + p.group_keys[b]));
-        else
+        else {
             ++pairs;
+            longest = max(longest, int(p.group_lengths[b]));
+        }
     }
     if constexpr (!INSERT) {
+        if (longest != 0)
+            atomicMax(p.longest_sum, int(p.group_lengths[a]) + longest);
         pairs = warp_sum(pairs);
         if (lane == 0 && pairs != 0) atomicAdd(p.pairs, pairs);
     }
@@ -443,7 +451,8 @@ count_leftovers(Params<Key> p) {
                 ++solo;
                 continue;
             }
-            if (length < 2 * p.min_group_length) continue;
+            if (length < 2 * p.min_group_length || length > p.longest_sum)
+                continue;
             ++leftovers;
             if (!passes(p, key)) continue;
             ++scanned;
@@ -633,7 +642,7 @@ count_pairs(Params<Key> p) {
                 int length;
                 more = walk.step(&valid, &key, &length);
                 if (more && valid && length >= 2 * p.min_group_length &&
-                    passes(p, key)) {
+                    length <= p.longest_sum && passes(p, key)) {
                     int const c = atomicAdd(&s.candidate_count, 1);
                     s.candidate_keys[c] = key;
                     s.candidate_lengths[c] = uint8_t(length);
@@ -834,12 +843,17 @@ struct GpuRowCounter::Impl {
         p.bag_length = letters;
         p.pairs = allocate<unsigned long long>(1);
         check(cudaMemset(p.pairs, 0, sizeof(unsigned long long)));
+        p.longest_sum = allocate<int>(1);
+        check(cudaMemset(p.longest_sum, 0, sizeof(int)));
         int const grid = (group_count + BUILD_THREADS / 32 - 1) /
             (BUILD_THREADS / 32);
         if (grid > 0) pair_sums<Key, false><<<grid, BUILD_THREADS>>>(p);
         check(cudaGetLastError());
         unsigned long long pairs = 0;
+        int longest_sum = 0;
         check(cudaMemcpy(&pairs, p.pairs, sizeof pairs,
+                         cudaMemcpyDeviceToHost));
+        check(cudaMemcpy(&longest_sum, p.longest_sum, sizeof longest_sum,
                          cudaMemcpyDeviceToHost));
 
         size_t free = 0;
@@ -862,7 +876,7 @@ struct GpuRowCounter::Impl {
         check(cudaGetLastError());
         check(cudaDeviceSynchronize());
         filter_info = {
-            pairs, filter_bytes,
+            pairs, longest_sum, filter_bytes,
             std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                           start)
                 .count()};
@@ -883,6 +897,7 @@ struct GpuRowCounter::Impl {
         p.bag_guards = Key(bag_guards);
         memcpy(p.bag_shifts, bag_shifts, sizeof bag_shifts);
         p.min_group_length = min_group_length;
+        p.longest_sum = filter_info.longest_sum;
         p.words = words;
         p.min_pairs = min_pairs;
         p.rests = stream->rests;
