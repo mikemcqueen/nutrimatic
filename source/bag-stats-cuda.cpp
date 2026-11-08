@@ -20,6 +20,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -29,6 +30,8 @@ constexpr int OPT_STREAMS = OPT_COMMON_END;
 constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 1;
 constexpr int OPT_HLL = OPT_COMMON_END + 2;
 constexpr int OPT_UNIQUE = OPT_COMMON_END + 3;
+constexpr int OPT_COUNT = OPT_COMMON_END + 4;
+constexpr int OPT_UNIQUE_COUNT = OPT_COMMON_END + 5;
 constexpr size_t PREFIX_CELLS = size_t(1) << 16;
 constexpr size_t PREFIX_RESTS = 1000;
 constexpr size_t PREFIX_DRAWS = 1000000;
@@ -63,7 +66,7 @@ void usage(std::string_view program, FILE* out) {
             "       %.*s --leftovers --hll --ss pb[,pb...]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
             "       [--progress N] LETTERS PAIRS DICT\n"
-            "       %.*s --unique --ss pb[,pb...] [-n N] [--top-segments]\n"
+            "       %.*s --unique [--count] --ss pb[,pb...] [-n N]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
             "       [--progress N] LETTERS PAIRS DICT\n",
             SV_ARG(program), SV_ARG(program), SV_ARG(program));
@@ -87,8 +90,11 @@ void usage(std::string_view program, FILE* out) {
                     "with --ss of pb steps alone, print each PAIRS row the "
                     "combinations use as left,right, by how many pair "
                     "combinations it's in, most first, ties by pair, the "
-                    "first N with -n N, and with --top-segments as "
-                    "\"COUNT left right\", all on the GPU");
+                    "first N with -n N, all on the GPU");
+    dfs_help_option("--count",
+                    "with --unique, print each row as \"COUNT left right\", "
+                    "COUNT the pair combinations it's in");
+    dfs_help_option("--uc, --unique-count", "--unique --count");
     help_common_tail();
 }
 
@@ -101,6 +107,9 @@ bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
         { "hll", OPT_HLL, OPTPARSE_NONE },
         { "hyper-log-log", OPT_HLL, OPTPARSE_NONE },
         { "unique", OPT_UNIQUE, OPTPARSE_NONE },
+        { "count", OPT_COUNT, OPTPARSE_NONE },
+        { "uc", OPT_UNIQUE_COUNT, OPTPARSE_NONE },
+        { "unique-count", OPT_UNIQUE_COUNT, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -132,6 +141,13 @@ bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
           case OPT_UNIQUE:
             cuda->unique = true;
             break;
+          case OPT_COUNT:
+            out->pair_counts = true;
+            break;
+          case OPT_UNIQUE_COUNT:
+            cuda->unique = true;
+            out->pair_counts = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -151,6 +167,10 @@ bool parse_args(char* argv[], BagStatsArgs* out, CudaOptions* cuda,
     }
     if (cuda->unique && out->leftovers) {
         report(PROGRAM, "--unique doesn't go with --leftovers");
+        return false;
+    }
+    if (out->pair_counts && !cuda->unique) {
+        report(PROGRAM, "--count goes with --unique");
         return false;
     }
     out->pair_usage = cuda->unique;
@@ -484,20 +504,22 @@ void leftover_inputs(BagStatsInputs const& inputs, GpuLeftoverInputs* out,
     gpu.steps = int(inputs.steps.size());
 }
 
-// Calls run(progress) with the progress(units) a GPU walk of `inputs` for
-// `args` reports to.
+// Calls run(progress) with the progress a GPU walk of `inputs` for `args`
+// reports to.
 template <typename Run>
 void with_walk_progress(BagStatsArgs const& args, BagStatsInputs const& inputs,
                         Run const& run) {
     LeftoverWalk const walk{{PROGRAM, inputs.steps, inputs.pair_bags,
                              inputs.prospect_bags, inputs.bag,
-                             inputs.word_bags, args, 1, 1, {}}};
+                             inputs.word_bags, args, 1, 1, {}, {}}};
     Progress progress(walk, 1);
     size_t reported = 0;
-    run([&](size_t done) {
+    run(GpuWalkProgress{[&] { return progress.due(); },
+                        [&](size_t done, double share) {
+        progress.measured(share);
         progress.finished(&walk, done - reported);
         reported = done;
-    });
+    }});
 }
 
 // The --leftovers output of `inputs` for `args` on `letters`, walked on the
@@ -517,8 +539,7 @@ int run_leftovers(BagStatsArgs const& args, std::string const& letters,
     for (size_t const i : sorted)
         gpu.numbers.push_back(index.number(inputs.pair_bags[i].counts));
     GpuLeftoverCounts counts;
-    with_walk_progress(args, inputs,
-                       [&](std::function<void(size_t)> const& progress) {
+    with_walk_progress(args, inputs, [&](GpuWalkProgress const& progress) {
         run_leftovers_gpu(PROGRAM, gpu, progress, &counts);
     });
     size_t const lengths = counts.combinations.size();
@@ -537,8 +558,7 @@ int run_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs) {
     std::vector<size_t> sorted;
     leftover_inputs(inputs, &gpu, &sorted);
     std::vector<uint64_t> by_position;
-    with_walk_progress(args, inputs,
-                       [&](std::function<void(size_t)> const& progress) {
+    with_walk_progress(args, inputs, [&](GpuWalkProgress const& progress) {
         run_pair_usage_gpu(PROGRAM, gpu, progress, &by_position);
     });
     std::vector<uint64_t> counts(sorted.size(), 0);
@@ -616,13 +636,15 @@ int main(int argc, char* argv[]) {
                                args.progress != 0);
     if (args.progress != 0) report_rest_table(PROGRAM, rest_table);
     if (!one_row) stage("counting each unit's rows");
+    std::vector<uint64_t> unit_work;
+    std::vector<size_t> blocks =
+        one_row ? unit_blocks(steps[0]->size())
+                : census_blocks(steps, args.search.pairs, inputs.bag, threads,
+                                GPU_BATCH_ROWS, &unit_work);
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
                      inputs.bag, inputs.word_bags, args, size_t(cuda.streams),
-                     rankers.passes ? 2 : 1,
-                     one_row ? unit_blocks(steps[0]->size())
-                             : census_blocks(steps, args.search.pairs,
-                                             inputs.bag, threads,
-                                             GPU_BATCH_ROWS)},
+                     rankers.passes ? 2 : 1, std::move(blocks),
+                     std::move(unit_work)},
                     counter, rest_table};
     stage("walking");
     int const status = run_bag_stats(walk, letters, &rankers);

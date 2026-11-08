@@ -22,6 +22,8 @@ constexpr int OPT_ALL = OPT_COMMON_END + 3;
 constexpr int OPT_LEFTOVERS = OPT_COMMON_END + 4;
 constexpr int OPT_HLL = OPT_COMMON_END + 5;
 constexpr int OPT_UNIQUE = OPT_COMMON_END + 6;
+constexpr int OPT_COUNT = OPT_COMMON_END + 7;
+constexpr int OPT_UNIQUE_COUNT = OPT_COMMON_END + 8;
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
@@ -46,7 +48,7 @@ void usage(std::string_view program, FILE* out) {
             "       %.*s --leftovers [--hll] [--unique] --ss pb[,pb...]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
             "       [--threads N] [--progress N] LETTERS PAIRS DICT\n"
-            "       %.*s --unique --ss pb[,pb...] [-n N] [--top-segments]\n"
+            "       %.*s --unique [--count] --ss pb[,pb...] [-n N]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
             "       [--threads N] [--progress N] LETTERS PAIRS DICT\n",
             SV_ARG(program),
@@ -90,8 +92,12 @@ void usage(std::string_view program, FILE* out) {
                     "of pb steps alone, print each PAIRS row the "
                     "combinations use as left,right, by how many pair "
                     "combinations it's in, most first, ties by pair, the "
-                    "first N with -n N, and with --top-segments as "
-                    "\"COUNT left right\"");
+                    "first N with -n N");
+    dfs_help_option("--count",
+                    "with --unique and without --leftovers, print each row "
+                    "as \"COUNT left right\", COUNT the pair combinations "
+                    "it's in");
+    dfs_help_option("--uc, --unique-count", "--unique --count");
     dfs_help_option("--exact",
                     "with a last pf, count only the PAIRS rows that use all "
                     "of what's left, as wb and pb steps before it need; a "
@@ -110,6 +116,9 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         { "hll", OPT_HLL, OPTPARSE_NONE },
         { "hyper-log-log", OPT_HLL, OPTPARSE_NONE },
         { "unique", OPT_UNIQUE, OPTPARSE_NONE },
+        { "count", OPT_COUNT, OPTPARSE_NONE },
+        { "uc", OPT_UNIQUE_COUNT, OPTPARSE_NONE },
+        { "unique-count", OPT_UNIQUE_COUNT, OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -149,6 +158,13 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
           case OPT_UNIQUE:
             out->unique = true;
             break;
+          case OPT_COUNT:
+            out->common.pair_counts = true;
+            break;
+          case OPT_UNIQUE_COUNT:
+            out->unique = true;
+            out->common.pair_counts = true;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -163,6 +179,10 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
         return false;
     }
     out->common.pair_usage = out->unique && !out->common.leftovers;
+    if (out->common.pair_counts && !out->common.pair_usage) {
+        report(PROGRAM, "--count goes with --unique, without --leftovers");
+        return false;
+    }
     if (!check_common_args(PROGRAM, &options, &out->common)) return false;
     Search const& search = out->common.search;
     if (out->common.leftovers || out->common.pair_usage) {

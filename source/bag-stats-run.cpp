@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <numeric>
 #include <string_view>
 #include <unordered_map>
 
@@ -102,7 +103,7 @@ bool check_common_args(std::string_view program, struct optparse* options,
             {rank.evidence.p1.has_value(), "--p1"},
             {rank.evidence.clues.has_value(), "--clues"},
             {rank.prior_weights.has_value(), "--prior-weights"},
-            {rank.top_segments && !out->pair_usage, "--top-segments"},
+            {rank.top_segments, "--top-segments"},
             {rank.best_pairs != BestPairs::NONE, "--best-pairs"},
         };
         for (auto const& [given, option] : rank_options) {
@@ -451,9 +452,11 @@ std::vector<size_t> unit_blocks(size_t units) {
 
 std::vector<size_t> census_blocks(
         std::vector<std::vector<PairBag> const*> const& steps, int pair_steps,
-        PairsCounts const& bag, size_t threads, uint64_t rows) {
+        PairsCounts const& bag, size_t threads, uint64_t rows,
+        std::vector<uint64_t>* unit_work) {
     size_t const units = walk_units(steps);
-    std::vector<uint64_t> unit_rows(units);
+    std::vector<uint64_t>& work = *unit_work;
+    work.assign(units + 1, 0);
     std::atomic<size_t> next{0};
     run_threads(threads, [&](size_t) {
         PickWalk walk(steps, pair_steps, 0);
@@ -462,19 +465,20 @@ std::vector<size_t> census_blocks(
             uint64_t count = 0;
             walk.walk(unit, bag, enter,
                       [&](PairsCounts const&, int) { ++count; });
-            unit_rows[unit] = count;
+            work[unit + 1] = count;
         }
     });
     std::vector<size_t> out{0};
     uint64_t block_rows = 0;
     for (size_t unit = 0; unit < units; ++unit) {
-        if (block_rows > 0 && block_rows + unit_rows[unit] > rows) {
+        if (block_rows > 0 && block_rows + work[unit + 1] > rows) {
             out.push_back(unit);
             block_rows = 0;
         }
-        block_rows += unit_rows[unit];
+        block_rows += work[unit + 1];
     }
     if (out.back() != units) out.push_back(units);
+    std::partial_sum(work.begin(), work.end(), work.begin());
     return out;
 }
 
@@ -551,7 +555,7 @@ int print_pair_usage(BagStatsArgs const& args,
                      std::vector<BagStatsPairUsage> const& used) {
     for (BagStatsPairUsage const& usage : used) {
         std::string pair = *usage.row;
-        if (!args.rank.top_segments) {
+        if (!args.pair_counts) {
             printf("%s\n", pair.c_str());
             continue;
         }

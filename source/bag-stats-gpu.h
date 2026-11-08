@@ -65,24 +65,32 @@ struct GpuLeftoverCounts {
     std::vector<uint32_t> registers;
 };
 
+// What a GPU pick walk reports to while it runs: about every 100 ms it asks
+// due(), and when true, calls report(units, share), `units` the first picks
+// finished so far and `share` its estimate of the share of its work
+// finished, from the candidates finished units scanned; exact with 2
+// steps, negative when it has none.
+struct GpuWalkProgress {
+    std::function<bool()> due;
+    std::function<void(size_t, double)> report;
+};
+
 // Walks every combination of one pair bag per step, in increasing order,
-// that fits the bag, on the GPU, and writes what it counts to `out`. Calls
-// progress(units) about every 100 ms while the walk runs, `units` the first
-// picks finished so far. A CUDA call failing prints `program` and CUDA's
+// that fits the bag, on the GPU, and writes what it counts to `out`,
+// reporting to `progress`. A CUDA call failing prints `program` and CUDA's
 // error on stderr and exits 1.
 void run_leftovers_gpu(std::string_view program,
                        GpuLeftoverInputs const& inputs,
-                       std::function<void(size_t)> const& progress,
+                       GpuWalkProgress const& progress,
                        GpuLeftoverCounts* out);
 
 // Walks the combinations run_leftovers_gpu walks and writes to `out`, one
 // per pair bag in `inputs` order, how many PAIRS rows of them each of the
-// bag's rows is in. Calls progress(units) as run_leftovers_gpu does. A
-// CUDA call failing prints `program` and CUDA's error on stderr and exits
-// 1.
+// bag's rows is in, reporting to `progress`. A CUDA call failing prints
+// `program` and CUDA's error on stderr and exits 1.
 void run_pair_usage_gpu(std::string_view program,
                         GpuLeftoverInputs const& inputs,
-                        std::function<void(size_t)> const& progress,
+                        GpuWalkProgress const& progress,
                         std::vector<uint64_t>* out);
 
 // What the device holds for every row, as flat arrays.

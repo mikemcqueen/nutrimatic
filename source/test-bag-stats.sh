@@ -213,9 +213,9 @@ usage=$("$bag_stats" --unique --no-nopairs --min-pb-len 6 --ss pb \
   catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
 [[ $usage == $'act,god\ncat,dog\nlow,ant' ]] ||
   fail "--unique --ss pb is wrong: $usage"
-usage=$("$bag_stats" --unique --ts --no-nopairs --min-pb-len 6 \
+usage=$("$bag_stats" --uc --no-nopairs --min-pb-len 6 \
   --ss pb,pb catdoglowanttan "$test_dir/pairs" "$test_dir/dict")
 [[ $usage == $'2 low ant\n1 act god\n1 cat dog' ]] ||
-  fail "--unique --top-segments is wrong: $usage"
+  fail "--unique --count is wrong: $usage"
 
 echo PASS

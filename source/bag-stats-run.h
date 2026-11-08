@@ -61,6 +61,8 @@ struct BagStatsArgs {
     // bag-stats --unique without --leftovers: --ss has no last p or pf, and
     // each PAIRS row's usage is counted.
     bool pair_usage = false;
+    // With pair_usage, --count: print each row's count before it.
+    bool pair_counts = false;
     Search search;
     std::optional<std::filesystem::path> prospects_file;
     int threads = 0;
@@ -372,13 +374,18 @@ std::vector<size_t> unit_blocks(size_t units);
 
 // Block boundaries from a census of each unit's rows, on `threads` threads:
 // consecutive units of about `rows` rows a block. Block b is units
-// [out[b], out[b + 1]).
+// [out[b], out[b + 1]). Writes the census's running row sums to
+// `unit_work`, as WalkBase::unit_work has them.
 std::vector<size_t> census_blocks(
     std::vector<std::vector<PairBag> const*> const& steps, int pair_steps,
-    PairsCounts const& bag, size_t threads, uint64_t rows);
+    PairsCounts const& bag, size_t threads, uint64_t rows,
+    std::vector<uint64_t>* unit_work);
 
 // Reports pass `pass` of `walk`'s finished units to stderr every
-// --progress seconds, 0 for never, and when it ends, its time. The hooks
+// --progress seconds, 0 for never, and when it ends, its time. The share
+// done, and from it the time left, is the share measured() last gave;
+// before that, the finished blocks' share of walk.unit_work, or without
+// it, the finished units' share of all units. The hooks
 // from walk.progress_hooks() collect a walker's stats with
 // finished(walker), called from any thread, and give the line's trailing
 // text with text().
@@ -391,7 +398,9 @@ class Progress {
         : program_(walk.program),
           interval_(std::chrono::seconds(walk.args.progress)), pass_(pass),
           passes_(walk.passes), units_(walk.units()),
-          hooks_(walk.progress_hooks()), start_(Clock::now()),
+          blocks_(walk.blocks), unit_work_(walk.unit_work),
+          hooks_(walk.progress_hooks()),
+          start_(Clock::now()),
           next_report_(walk.args.progress > 0
                            ? (start_ + interval_).time_since_epoch().count()
                            : INT64_MAX) {}
@@ -411,6 +420,29 @@ class Progress {
         tick();
     }
 
+    // Counts block `block` of the walk finished, and hands `walker` to the
+    // hooks.
+    template <typename Walker>
+    void finished_block(Walker* walker, size_t block) {
+        if (!unit_work_.empty())
+            work_done_.fetch_add(unit_work_[blocks_[block + 1]] -
+                                     unit_work_[blocks_[block]],
+                                 std::memory_order_relaxed);
+        finished(walker, blocks_[block + 1] - blocks_[block]);
+    }
+
+    // Takes `share` as the share of the work done, ignoring a negative one.
+    void measured(double share) {
+        if (share >= 0) share_.store(share, std::memory_order_relaxed);
+    }
+
+    // Whether the interval has passed.
+    bool due() const {
+        return interval_.count() != 0 &&
+               Clock::now().time_since_epoch().count() >=
+                   next_report_.load(std::memory_order_relaxed);
+    }
+
     // Reports when the interval has passed, whether or not a unit finished.
     void tick() {
         if (interval_.count() == 0) return;
@@ -423,13 +455,13 @@ class Progress {
             return;
         size_t const done = done_.load(std::memory_order_relaxed);
         double const elapsed = seconds_since_start(now);
-        std::string const left = done == 0
+        double const share = finished_share(done);
+        std::string const left = share <= 0
             ? std::string()
-            : ", ~" + format_duration(elapsed * double(units_ - done) /
-                                      double(done)) + " left";
+            : ", ~" + format_duration(elapsed * (1 - share) / share) +
+                  " left";
         report(program_, "pass %d/%d: %zu/%zu pair bags (%.1f%%), %s%s%s",
-               pass_, passes_, done, units_,
-               100.0 * double(done) / double(units_),
+               pass_, passes_, done, units_, 100.0 * share,
                format_duration(elapsed).c_str(), left.c_str(),
                hooks_.text().c_str());
     }
@@ -439,14 +471,28 @@ class Progress {
         return std::chrono::duration<double>(now - start_).count();
     }
 
+    // The share of the work done, `done` units finished.
+    double finished_share(size_t done) const {
+        double const share = share_.load(std::memory_order_relaxed);
+        if (share >= 0) return share;
+        if (unit_work_.empty() || unit_work_.back() == 0)
+            return double(done) / double(units_);
+        return double(work_done_.load(std::memory_order_relaxed)) /
+               double(unit_work_.back());
+    }
+
     std::string program_;
     Clock::duration const interval_;
     int const pass_;
     int const passes_;
     size_t const units_;
+    std::vector<size_t> const& blocks_;
+    std::vector<uint64_t> const& unit_work_;
     decltype(std::declval<Walk const&>().progress_hooks()) hooks_;
     Clock::time_point const start_;
     std::atomic<size_t> done_{0};
+    std::atomic<uint64_t> work_done_{0};
+    std::atomic<double> share_{-1};
     std::atomic<int64_t> next_report_;
 };
 
@@ -466,12 +512,12 @@ struct WalkBase {
     int passes;
     // Block b is units [blocks[b], blocks[b + 1]).
     std::vector<size_t> blocks;
+    // The rows of the units before each unit, units() + 1 running sums
+    // from 0; empty when units weigh alike.
+    std::vector<uint64_t> unit_work;
 
     size_t units() const { return walk_units(steps); }
     size_t block_count() const { return blocks.size() - 1; }
-    size_t block_units(size_t block) const {
-        return blocks[block + 1] - blocks[block];
-    }
 };
 
 // What the picks `picks`, list indices in walk step order, leave of
@@ -527,7 +573,7 @@ void print_rows(Walk const& walk) {
                 done[block] = 1;
             }
             changed.notify_all();
-            progress.finished(&walker, walk.block_units(block));
+            progress.finished_block(&walker, block);
         }
     };
     std::vector<std::thread> workers;
@@ -568,7 +614,7 @@ void count_sort_values(Walk const& walk, R* ranker) {
                     if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
                     ranker->add(&parts[t], row, length, picks);
                 });
-                progress.finished(&walker, walk.block_units(block));
+                progress.finished_block(&walker, block);
             }
         });
     }
@@ -617,7 +663,7 @@ std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
                 heap.push_back(std::move(ranked));
                 std::push_heap(heap.begin(), heap.end(), ranks_before);
             });
-            progress.finished(&walker, walk.block_units(block));
+            progress.finished_block(&walker, block);
         }
     });
     std::vector<RankedRow> out;
@@ -680,7 +726,7 @@ ScoreRank score_rank(Walk const& walk, R const& ranker,
                                        seq++, {}, {}};
                 add_score_rank(ranked, target, &part);
             });
-            progress.finished(&walker, walk.block_units(block));
+            progress.finished_block(&walker, block);
         }
     });
     ScoreRank out;

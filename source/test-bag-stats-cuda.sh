@@ -117,7 +117,7 @@ for test in "catdoglwncatdoglwncatdoglwn:letter-pairs" \
 done
 
 unique() {
-  "$bag_stats_cuda" --unique --ts --no-nopairs "$@" "$test_dir/dict"
+  "$bag_stats_cuda" --unique --count --no-nopairs "$@" "$test_dir/dict"
 }
 usage=$(unique --min-pb-len 6 --ss pb catdoglowanttan "$test_dir/pairs")
 [[ $usage == $'1 act god\n1 cat dog\n1 low ant' ]] ||

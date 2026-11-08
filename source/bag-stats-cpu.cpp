@@ -965,7 +965,7 @@ int with_walk(BagStatsOptions const& options, std::string const& letters,
     }
     Walk const walk{{PROGRAM, steps, inputs.pair_bags, inputs.prospect_bags,
                      bag, inputs.word_bags, common, threads, passes ? 2 : 1,
-                     unit_blocks(walk_units(steps))},
+                     unit_blocks(walk_units(steps)), {}},
                     inner, table ? &*table : nullptr,
                     final_bags ? &*final_bags : nullptr, rest_table,
                     spellings, inputs.final_rows, options.completions,
@@ -1103,7 +1103,7 @@ int count_leftovers(BagStatsArgs const& args, std::string const& letters,
     LeftoverWalk const walk{{PROGRAM, inputs.steps, inputs.pair_bags,
                              inputs.prospect_bags, inputs.bag,
                              inputs.word_bags, args, bag_stats_threads(args),
-                             1, unit_blocks(walk_units(inputs.steps))},
+                             1, unit_blocks(walk_units(inputs.steps)), {}},
                             hll ? nullptr : &keys};
     std::vector<LeftoverCounts> parts(walk.threads);
     std::vector<LeftoverSketch> sketches(hll ? walk.threads : 0,
@@ -1200,7 +1200,7 @@ void list_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs,
     LeftoverWalk const walk{{PROGRAM, inputs.steps, bags,
                              inputs.prospect_bags, inputs.bag,
                              inputs.word_bags, args, bag_stats_threads(args),
-                             1, unit_blocks(walk_units(inputs.steps))},
+                             1, unit_blocks(walk_units(inputs.steps)), {}},
                             nullptr};
     std::vector<std::vector<uint64_t>> parts(
         walk.threads, std::vector<uint64_t>(bags.size(), 0));

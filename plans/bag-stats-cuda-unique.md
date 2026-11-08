@@ -5,11 +5,11 @@
 `bag-stats-cuda` takes `--unique` with `--ss` of pb steps alone, as
 `bag-stats` does without `--leftovers`: it prints each PAIRS row the
 combinations use, by how many pair combinations it's in, most first, ties
-by row; the first N with `-n N`; with `--top-segments` as `COUNT left
-right`.
+by row; the first N with `-n N`; with `--count` (`--uc` for both) as
+`COUNT left right`.
 
 ```
-bag-stats-cuda --unique --ss pb[,pb...] [-n N] [--top-segments]
+bag-stats-cuda --uc --ss pb[,pb...] [-n N]
     [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N] [--progress N]
     LETTERS PAIRS DICT
 ```
@@ -20,7 +20,7 @@ should take about a second of GPU time, where the `--leftovers --hll` walk
 of the same combinations takes 0.7s; `pb,pb,pb` runs at about the
 `--leftovers` walk's 12G combinations/s.
 
-The output has the same rows, order and `--top-segments` format as
+The output has the same rows, order and `--count` format as
 `bag-stats --unique`: both print through `print_pair_usage` (below), and the
 count and the sort are the same until a product of pair counts passes 2^64,
 where `bag-stats` divides the wrapped product. The tests use that.
@@ -114,7 +114,9 @@ void run_pair_usage_gpu(std::string_view program,
 
 - `OPT_UNIQUE` and `--unique`. `parse_args` sets `pair_usage` when
   `--unique` is given without `--leftovers`, before `check_common_args`,
-  which already checks `--ss` and allows `-n` and `--top-segments` for it.
+  which already checks `--ss` and allows `-n` for it and rejects
+  `--top-segments` ("--unique can't take --top-segments"). `--count` sets
+  `pair_counts` and needs `--unique` ("--count goes with --unique").
   `--unique` with `--leftovers`: "--unique doesn't go with --leftovers".
   The `--leftovers` branch after `check_common_args` becomes `if
   (out->leftovers || out->pair_usage)`: it checks `GPU_MAX_PAIR_STEPS`,
@@ -158,14 +160,14 @@ int print_pair_usage(BagStatsArgs const& args,
 
 `test-bag-stats-cuda.sh`:
 
-Each check reaches one more depth of the walk and prints counts (`--ts`).
+Each check reaches one more depth of the walk and prints counts (`--uc`).
 
-- One step: `--unique --ts --no-nopairs --min-pb-len 6 --ss pb` on
+- One step: `--uc --no-nopairs --min-pb-len 6 --ss pb` on
   `catdoglowanttan` with the test's `pairs`, as `test-bag-stats.sh`'s `--ss
   pb` check: `1 act god`, `1 cat dog`, `1 low ant`.
-- The last step: `test-bag-stats.sh`'s `--unique --ts --ss pb,pb` check,
+- The last step: `test-bag-stats.sh`'s `--uc --ss pb,pb` check,
   with the same expected output: `2 low ant`, `1 act god`, `1 cat dog`.
-- The middle steps' sums: `--unique --ts --no-nopairs --min-pb-len 2 --ss
+- The middle steps' sums: `--uc --no-nopairs --min-pb-len 2 --ss
   pb,pb,pb` on `abcdefghijk` with these pairs, four disjoint bags of 1, 2,
   2 and 3 pairs:
 

@@ -1063,6 +1063,24 @@ namespace {
 
 constexpr int WALK_THREADS = 256;
 
+// The work groups the walk's progress estimate puts units in.
+constexpr int WORK_GROUPS = 64;
+
+// The work group of a unit scanning `candidates` below its first pick:
+// their bit length.
+__device__ inline int work_group(unsigned long long candidates) {
+    return min(64 - __clzll((long long)candidates), WORK_GROUPS - 1);
+}
+
+// The walk's progress: its finished units, and with 2 or more steps, by
+// work group, the candidates they scanned below their first pick and in
+// all.
+struct WalkProgress {
+    unsigned long long done;
+    unsigned long long first[WORK_GROUPS];
+    unsigned long long work[WORK_GROUPS];
+};
+
 // What walk_leftover_picks counts: the --leftovers counts, or each pair
 // bag's PAIRS rows of the combinations.
 enum class WalkCountType { LEFTOVERS, PAIR_USAGE };
@@ -1087,11 +1105,10 @@ struct LeftoverParams {
     BagKey bag_guards;
     uint64_t bag_number;
     int bag_letters;
-    // The next unit, the finished units, and their count as the host reads
-    // it, in mapped memory.
     unsigned long long* next_unit;
-    unsigned long long* finished;
-    unsigned long long* units_done;
+    WalkProgress* progress;
+    // With 2 or more steps, each unit's work group.
+    uint8_t* groups;
     unsigned long long* by_picks;
     unsigned long long* combinations;
     unsigned long long* rows;
@@ -1349,18 +1366,21 @@ __device__ inline void add_combination(LeftoverParams<BagKey> const& p,
     add_register(p, left, number);
 }
 
-// The last step's candidates past `from`'s pick, one per lane. With
-// PAIR_USAGE, returns to every lane the sum of their PAIRS, w of `from`.
+// The last step's candidates past `from`'s pick, one per lane, adding
+// how many to every lane's `scanned`. With PAIR_USAGE, returns to every
+// lane the sum of their PAIRS, w of `from`.
 template <WalkCountType COUNT_TYPE, typename BagKey>
 __device__ unsigned long long last_step(LeftoverParams<BagKey> const& p,
                                         WalkCounts const& c,
-                                        Picked<BagKey> const& from) {
+                                        Picked<BagKey> const& from,
+                                        unsigned long long* scanned) {
     Cells const cells = cells_of(p, from);
     Cursor cursor{first_allowed(p, cells, from), 0};
     Picked<BagKey> next;
     unsigned long long w = 0;
     while (cursor.base < cells.total) {
         int const i = next_candidates(p, cells, &cursor);
+        *scanned += unsigned(__popc(__ballot_sync(~0u, i >= 0)));
         if (i < 0 || !pick<COUNT_TYPE>(p, from, i, &next)) continue;
         if constexpr (COUNT_TYPE == WalkCountType::LEFTOVERS) {
             add_combination(p, c, 1u << (threadIdx.x & 31), next.letters,
@@ -1385,11 +1405,23 @@ __device__ inline int take_unit(LeftoverParams<BagKey> const& p) {
     return unit < (unsigned long long)p.count ? int(unit) : -1;
 }
 
+// Counts unit `unit` finished, and adds the candidates the warp scanned in
+// it, `first` of them below its first pick, to its work group; zeroes
+// both. The warp calls it.
 template <typename BagKey>
-__device__ inline void finish_unit(LeftoverParams<BagKey> const& p) {
-    if ((threadIdx.x & 31) != 0) return;
-    unsigned long long const done = atomicAdd(p.finished, 1ULL) + 1;
-    *static_cast<unsigned long long volatile*>(p.units_done) = done;
+__device__ inline void finish_unit(LeftoverParams<BagKey> const& p, int unit,
+                                   unsigned long long* first,
+                                   unsigned long long* work) {
+    if ((threadIdx.x & 31) == 0) {
+        atomicAdd(&p.progress->done, 1ULL);
+        if (*work != 0) {
+            int const group = p.groups[unit];
+            atomicAdd(&p.progress->first[group], *first);
+            atomicAdd(&p.progress->work[group], *work);
+        }
+    }
+    *first = 0;
+    *work = 0;
 }
 
 // Picks the warp's unit, counting it; true when it fits and there are steps
@@ -1438,15 +1470,23 @@ walk_leftover_picks(LeftoverParams<BagKey> p) {
         if (lane == 0) atomicAdd(&p.usage[index], above * w);
         if (depth > 0) below[depth - 1] += p.pairs[index] * w;
     };
-    for (int unit; (unit = take_unit(p)) >= 0; finish_unit(p)) {
+    // The candidates the warp scanned in its unit: below its first pick,
+    // and in all.
+    unsigned long long first = 0;
+    unsigned long long work = 0;
+    for (int unit; (unit = take_unit(p)) >= 0;
+         finish_unit(p, unit, &first, &work)) {
         if (!start_unit<COUNT_TYPE>(p, c, unit, &picked[0])) continue;
         if constexpr (!LEFTOVERS) below[0] = 0;
         int depth = 1;
         if (depth < last) start(depth);
         while (depth > 0) {
             if (depth == last) {
-                unsigned long long const w =
-                    last_step<COUNT_TYPE>(p, c, picked[depth - 1]);
+                unsigned long long scanned = 0;
+                unsigned long long const w = last_step<COUNT_TYPE>(
+                    p, c, picked[depth - 1], &scanned);
+                work += scanned;
+                if (depth == 1) first += scanned;
                 --depth;
                 if constexpr (!LEFTOVERS) finish(depth, w);
                 continue;
@@ -1454,12 +1494,15 @@ walk_leftover_picks(LeftoverParams<BagKey> p) {
             Picked<BagKey> const& from = picked[depth - 1];
             CellCursor& cursor = cursors[depth];
             bool found = false;
-            while (next_candidate(p, cells[depth], &cursor))
+            while (next_candidate(p, cells[depth], &cursor)) {
+                ++work;
+                if (depth == 1) ++first;
                 if (pick<COUNT_TYPE>(p, from, cursor.next++,
                                      &picked[depth])) {
                     found = true;
                     break;
                 }
+            }
             if (!found) {
                 --depth;
                 if constexpr (!LEFTOVERS) finish(depth, below[depth]);
@@ -1475,6 +1518,63 @@ walk_leftover_picks(LeftoverParams<BagKey> p) {
         }
     }
     if constexpr (LEFTOVERS) flush_walk_counts(p, c);
+}
+
+// Counts the candidates the walk scans below each unit's first pick, a
+// warp a unit: writes the unit's work group to p.groups, and adds its
+// count to totals[group].
+template <typename BagKey>
+__global__ void __launch_bounds__(WALK_THREADS)
+count_first_candidates(LeftoverParams<BagKey> p, unsigned long long* totals) {
+    int const lane = threadIdx.x & 31;
+    int const warps = int(gridDim.x * blockDim.x / 32);
+    Picked<BagKey> const root{p.bag, p.bag_number, 1, p.bag_letters, -1};
+    for (int unit = int((blockIdx.x * blockDim.x + threadIdx.x) / 32);
+         unit < p.count; unit += warps) {
+        Picked<BagKey> first;
+        unsigned long long candidates = 0;
+        if (pick<WalkCountType::PAIR_USAGE>(p, root, unit, &first)) {
+            Cells const cells = cells_of(p, first);
+            for (int allowed = first_allowed(p, cells, first) + lane;
+                 allowed < cells.total; allowed += 32) {
+                int begin = 0;
+                int end = 0;
+                cell_range(p, cells, allowed, &begin, &end);
+                candidates += (unsigned long long)max(end - begin, 0);
+            }
+        }
+        candidates = warp_sum(candidates);
+        if (lane != 0) continue;
+        int const group = work_group(candidates);
+        p.groups[unit] = uint8_t(group);
+        atomicAdd(&totals[group], candidates);
+    }
+}
+
+// The device blocks a kernel of WALK_THREADS threads and `shared` bytes
+// fills the GPU with.
+template <typename Kernel>
+int walk_grid(Kernel kernel, size_t shared) {
+    int device = 0;
+    int sms = 0;
+    int per_sm = 0;
+    check(cudaGetDevice(&device));
+    check(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount,
+                                 device));
+    check(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &per_sm, kernel, WALK_THREADS, shared));
+    return sms * std::max(per_sm, 1);
+}
+
+// The pair bags of `inputs`, packed by `packing`.
+template <typename BagKey>
+std::vector<BagKey> pair_keys(GpuLeftoverInputs const& inputs,
+                              Packing const& packing) {
+    std::vector<BagKey> keys(inputs.pairs.size());
+    for (size_t i = 0; i < keys.size(); ++i)
+        keys[i] = packing.pack<BagKey>(
+            &inputs.pair_letters[i * GPU_LETTERS_BYTES]);
+    return keys;
 }
 
 // Device buffers, zeroed, freed with it.
@@ -1510,23 +1610,48 @@ struct DeviceBuffers {
     }
 };
 
+// The share of a walk's work finished: by work group, `totals` candidates
+// below every unit's first pick, and `now`'s. A group's unfinished units
+// scan as many in all for each below their first pick as its finished
+// units did, or the nearest group's with finished units. Negative before
+// any unit finishes.
+double finished_share(std::vector<unsigned long long> const& totals,
+                      WalkProgress const& now) {
+    unsigned long long const* const first = now.first;
+    unsigned long long const* const work = now.work;
+    double finished = 0;
+    double total = 0;
+    for (int g = 0; g < WORK_GROUPS; ++g) {
+        finished += double(work[g]);
+        total += double(work[g]);
+        if (totals[g] <= first[g]) continue;
+        int near = -1;
+        for (int d = 0; d < WORK_GROUPS && near < 0; ++d) {
+            if (g >= d && first[g - d] != 0)
+                near = g - d;
+            else if (g + d < WORK_GROUPS && first[g + d] != 0)
+                near = g + d;
+        }
+        if (near < 0) return -1;
+        total += double(totals[g] - first[g]) * double(work[near]) /
+                 double(first[near]);
+    }
+    return total > 0 ? finished / total : -1;
+}
+
 // Walks `inputs` counting COUNT_TYPE's counts into `out`: GpuLeftoverCounts
 // for LEFTOVERS, one count per pair bag for PAIR_USAGE.
 template <WalkCountType COUNT_TYPE, typename BagKey, typename Out>
 void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
-                    std::function<void(size_t)> const& progress, Out* out) {
+                    GpuWalkProgress const& progress, Out* out) {
     constexpr bool LEFTOVERS = COUNT_TYPE == WalkCountType::LEFTOVERS;
     int const count = int(inputs.pairs.size());
     int const letters = rest_length(inputs.bag);
     size_t const lengths = size_t(letters) + 1;
     size_t const steps = size_t(inputs.steps);
     DeviceBuffers d;
-    std::vector<BagKey> keys(count);
-    for (int i = 0; i < count; ++i)
-        keys[i] = packing.pack<BagKey>(
-            &inputs.pair_letters[size_t(i) * GPU_LETTERS_BYTES]);
     LeftoverParams<BagKey> p{};
-    p.keys = d.upload(keys);
+    p.keys = d.upload(pair_keys<BagKey>(inputs, packing));
     if constexpr (LEFTOVERS) p.numbers = d.upload(inputs.numbers);
     p.pairs = d.upload(inputs.pairs);
     p.letters = d.upload(inputs.lengths);
@@ -1547,7 +1672,6 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     p.bag_number = inputs.bag_number;
     p.bag_letters = letters;
     p.next_unit = d.allocate<unsigned long long>(1);
-    p.finished = d.allocate<unsigned long long>(1);
     if constexpr (LEFTOVERS) {
         p.by_picks = d.allocate<unsigned long long>(steps);
         p.combinations = d.allocate<unsigned long long>(lengths);
@@ -1556,38 +1680,46 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     } else {
         p.usage = d.allocate<unsigned long long>(size_t(count));
     }
-    unsigned long long* host_done = nullptr;
-    check(cudaHostAlloc(&host_done, sizeof *host_done, cudaHostAllocMapped));
-    *host_done = 0;
-    check(cudaHostGetDevicePointer(&p.units_done, host_done, 0));
-
     size_t const shared =
         LEFTOVERS ? walk_counts_bytes(letters, inputs.steps) : 0;
-    int device = 0;
-    int sms = 0;
-    int per_sm = 0;
-    check(cudaGetDevice(&device));
-    check(cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount,
-                                 device));
-    check(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &per_sm, walk_leftover_picks<COUNT_TYPE, BagKey>, WALK_THREADS,
-        shared));
+    int const grid =
+        walk_grid(walk_leftover_picks<COUNT_TYPE, BagKey>, shared);
+    p.progress = d.allocate<WalkProgress>(1);
+    std::vector<unsigned long long> totals(WORK_GROUPS);
+    if (inputs.steps > 1) {
+        p.groups = d.allocate<uint8_t>(size_t(count));
+        unsigned long long* const group_totals =
+            d.allocate<unsigned long long>(WORK_GROUPS);
+        count_first_candidates<BagKey>
+            <<<walk_grid(count_first_candidates<BagKey>, 0), WALK_THREADS>>>(
+                p, group_totals);
+        check(cudaGetLastError());
+        d.download(group_totals, &totals);
+    }
+
     cudaStream_t stream = nullptr;
     check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     walk_leftover_picks<COUNT_TYPE, BagKey>
-        <<<sms * std::max(per_sm, 1), WALK_THREADS, shared, stream>>>(p);
+        <<<grid, WALK_THREADS, shared, stream>>>(p);
     check(cudaGetLastError());
-    size_t done = 0;
+    cudaStream_t poll = nullptr;
+    check(cudaStreamCreateWithFlags(&poll, cudaStreamNonBlocking));
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         cudaError_t const status = cudaStreamQuery(stream);
-        done = std::max(done, size_t(*static_cast<unsigned long long volatile*>(
-                                  host_done)));
-        progress(done);
-        if (status == cudaErrorNotReady) continue;
-        check(status);
-        break;
+        if (status != cudaErrorNotReady) {
+            check(status);
+            break;
+        }
+        if (!progress.due()) continue;
+        WalkProgress now;
+        check(cudaMemcpyAsync(&now, p.progress, sizeof now,
+                              cudaMemcpyDeviceToHost, poll));
+        check(cudaStreamSynchronize(poll));
+        progress.report(size_t(now.done),
+                        inputs.steps > 1 ? finished_share(totals, now) : -1);
     }
+    check(cudaStreamDestroy(poll));
     check(cudaStreamSynchronize(stream));
     check(cudaGetLastError());
     if constexpr (LEFTOVERS) {
@@ -1611,14 +1743,13 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
                          cudaMemcpyDeviceToHost));
     }
     check(cudaStreamDestroy(stream));
-    check(cudaFreeHost(host_done));
 }
 
 }  // namespace
 
 void run_leftovers_gpu(std::string_view program,
                        GpuLeftoverInputs const& inputs,
-                       std::function<void(size_t)> const& progress,
+                       GpuWalkProgress const& progress,
                        GpuLeftoverCounts* out) {
     program_name = program;
     check(cudaSetDevice(0));
@@ -1633,7 +1764,7 @@ void run_leftovers_gpu(std::string_view program,
 
 void run_pair_usage_gpu(std::string_view program,
                         GpuLeftoverInputs const& inputs,
-                        std::function<void(size_t)> const& progress,
+                        GpuWalkProgress const& progress,
                         std::vector<uint64_t>* out) {
     program_name = program;
     check(cudaSetDevice(0));
