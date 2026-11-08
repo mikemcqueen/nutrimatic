@@ -41,6 +41,18 @@ class Sentence:
     def root(self) -> Path:
         return Path("tmp") / f"s{self.n}"
 
+    @property
+    def composite(self) -> bool:
+        return "s" in self.n
+
+    @property
+    def no_pairs_flag(self) -> str:
+        return "--no-nopairs" if self.composite else f"-s{self.n}"
+
+    @property
+    def seed_flag(self) -> str:
+        return f"--pairs idx/pairs.s{self.n}" if self.composite else f"-s{self.n}"
+
 
 @dataclass
 class Step:
@@ -81,8 +93,8 @@ def tool_paths(*tools: str) -> list[str]:
 def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     if len(segs) == 1:
         pairs = f"idx/pairs.s{sentence.n}"
-        return f"seed-pairs -s{sentence.n} -m4", [], [pairs,
-                                                      *tool_paths("seed-pairs")]
+        return f"seed-pairs {sentence.seed_flag} -m4", [], [
+            pairs, *tool_paths("seed-pairs")]
     parent = segs[:-1]
     path = shlex.quote(str(node_dir(sentence, parent) / "pairs"))
     return f"cat {path}", [(parent, "pairs")], []
@@ -103,7 +115,8 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     dictionary = shlex.quote(sentence.dict)
     rank = Step(
         segs, ["pairs.ranked"], deps,
-        f"{source} | bag-stats-cuda --threads 0 -s{sentence.n} --ss {ss} --uc "
+        f"{source} | bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
+        f"--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict, *external, *tool_paths("bag-stats-cuda")])
     counted = Step(
@@ -122,7 +135,7 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     dump = Step(
         segs, ["dump"], deps,
         f"{source} | bag-stats-cuda -n {WB_ROWS} --wb --wbfrac-min --wbwp-min "
-        f"--threads 0 -s{sentence.n} --ss {ss} {letters} - {dictionary} "
+        f"--threads 0 {sentence.no_pairs_flag} --ss {ss} {letters} - {dictionary} "
         f"--progress 15 --cache-size 5000 > {d / 'dump.tmp'}",
         [sentence.dict, *external, *tool_paths("bag-stats-cuda")])
     top = d / "top.tmp"
@@ -144,8 +157,9 @@ def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
     n = sentence.n
     return [Step(
         segs, ["pairs"], [(parent, "words")],
-        f"head -n {thousands * 1000} {words} | seed-pairs -s{n} -m4 "
-        f"-d /dev/stdin | pfilter -s{n} -l {shlex.quote(sentence.letters)} - "
+        f"head -n {thousands * 1000} {words} | seed-pairs {sentence.seed_flag} "
+        f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} "
+        f"-l {shlex.quote(sentence.letters)} - "
         f"> {d / 'pairs.tmp'}",
         [f"idx/pairs.s{n}", *tool_paths("seed-pairs", "pfilter")])]
 
@@ -419,25 +433,26 @@ def adopt(sentence: Sentence) -> None:
         for step in steps_of(sentence, relative):
             if all((Path(directory) / out).exists() for out in step.outputs):
                 for output in step.outputs:
-                    manifest[output] = {
+                    manifest.setdefault(output, {
                         "adopted": True,
                         "inputs": current_inputs(sentence, step),
                         "external": {},
-                    }
+                    })
         if manifest:
             write_manifest(Path(directory), manifest)
 
 
 def load_sentence(arg: str) -> Sentence:
-    match = re.fullmatch(r"[sS]?([1-9])", arg)
-    if not match:
-        die(f"bad sentence {arg}: want sN")
-    n = match[1]
-    letters = os.environ.get(f"S{n}")
+    match = re.fullmatch(r"[sS]?([1-9])(?:[sS]([1-9]))?", arg)
+    if not match or (match[2] and match[1] >= match[2]):
+        die(f"bad sentence {arg}: want sN or sNsM, N less than M")
+    nums = [num for num in match.groups() if num]
+    values = [os.environ.get(f"S{num}") for num in nums]
     dictionary = os.environ.get("DICT")
-    if not letters or not dictionary:
-        die(f"$S{n} or $DICT is unset; source ./setup.sh")
-    return Sentence(n, letters, dictionary)
+    if not all(values) or not dictionary:
+        names = ", ".join(f"$S{num}" for num in nums)
+        die(f"{names} or $DICT is unset; source ./setup.sh")
+    return Sentence("s".join(nums), "".join(values), dictionary)
 
 
 def main() -> int:
@@ -455,7 +470,7 @@ def main() -> int:
                       help="show tmp/sN/targets word ranks per node")
     mode.add_argument("--adopt", action="store_true",
                       help="move the old flat file names into the tree")
-    parser.add_argument("sentence", metavar="sN")
+    parser.add_argument("sentence", metavar="sN|sNsM")
     parser.add_argument("paths", metavar="PATH", nargs="*")
     args = parser.parse_args()
 
