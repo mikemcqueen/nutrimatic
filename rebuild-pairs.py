@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Builds the new-pairs workflow's intermediate files under tmp/sN.
 
-See plans/rebuild-pairs.md. A path alternates steps and word cuts, starting
-with a step: pb3/2k/pb3/3k/pb2wb.
+See plans/rebuild-pairs.md. A path alternates steps and cuts (Nk or
+pp-NAME-Nk), starting with a step: pb3/2k/pb3/pp-1sq-5k/pb2wb.
 """
 
 import argparse
@@ -12,7 +12,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 
@@ -23,6 +22,7 @@ PROGRAM = "rebuild-pairs"
 MANIFEST = ".manifest.json"
 STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-x([1-9][0-9]*))?(?:-([a-z]+))?")
 CUT_RE = re.compile(r"([1-9][0-9]*)k")
+PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
 WB_ROWS = 5000000
 Segs = tuple[str, ...]
 
@@ -69,14 +69,21 @@ def parse_path(sentence: Sentence, path: str) -> Segs:
     segs = tuple(part for part in path.split("/") if part)
     if not valid_segs(segs):
         die(f"bad path {path}: want a step (pbN, pbNwb, optionally -xN then "
-            "-LETTERS), then alternating word cuts (Nk) and steps")
+            "-LETTERS), then alternating cuts (Nk, pp-NAME-Nk) and steps")
     bag = collections.Counter(sentence.letters)
-    for seg in segs[::2]:
-        used = STEP_RE.fullmatch(seg)[4]
+    for index, seg in enumerate(segs[::2]):
+        match = STEP_RE.fullmatch(seg)
+        used = match[4]
+        if match[3] and (index or match[2]):
+            die(f"bad path {path}: -x{match[3]} is only for a root pbN step")
         if used and list(used) != sorted(used):
             die(f"bad path {path}: {used} must be sorted")
         if used and collections.Counter(used) - bag:
             die(f"bad path {path}: {used} is not within s{sentence.n}")
+    for seg in segs[1::2]:
+        match = PP_CUT_RE.fullmatch(seg)
+        if match and not Path(f"idx/pp.{match[1]}").exists():
+            die(f"bad path {path}: idx/pp.{match[1]} doesn't exist")
     return segs
 
 
@@ -84,8 +91,8 @@ def valid_segs(segs: Segs) -> bool:
     if not segs:
         return False
     for index, seg in enumerate(segs):
-        pattern = CUT_RE if index % 2 else STEP_RE
-        if not pattern.fullmatch(seg):
+        patterns = (CUT_RE, PP_CUT_RE) if index % 2 else (STEP_RE,)
+        if not any(pattern.fullmatch(seg) for pattern in patterns):
             return False
     return True
 
@@ -94,15 +101,11 @@ def node_dir(sentence: Sentence, segs: Segs) -> Path:
     return sentence.root.joinpath(*segs)
 
 
-def tool_paths(*tools: str) -> list[str]:
-    return [shutil.which(tool) or tool for tool in tools]
-
-
 def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     if len(segs) == 1:
         source = f"seed-pairs {sentence.seed_flag} -m4"
         deps = []
-        external = [f"idx/pairs.s{sentence.n}", *tool_paths("seed-pairs")]
+        external = [f"idx/pairs.s{sentence.n}"]
     else:
         parent = segs[:-1]
         path = shlex.quote(str(node_dir(sentence, parent) / "pairs"))
@@ -112,7 +115,6 @@ def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     cap = STEP_RE.fullmatch(segs[-1])[3]
     if cap:
         source += f" | pfilter --no-nopairs --no-dict -m0 -x{cap} -"
-        external += tool_paths("pfilter")
     return source, deps, external
 
 
@@ -139,11 +141,11 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"{source} | bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
         f"{used_flag(segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
-        [sentence.dict, *external, *tool_paths("bag-stats-cuda")])
+        [sentence.dict, *external])
     counted = Step(
         segs, ["words.ranked"], [(segs, "pairs.ranked")],
         f"top-segments -n0 --pair-words --by-count < {d / 'pairs.ranked'} "
-        f"> {d / 'words.ranked.tmp'}", tool_paths("top-segments"))
+        f"> {d / 'words.ranked.tmp'}", [])
     return [rank, counted, words_step(sentence, segs)]
 
 
@@ -159,7 +161,7 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"--threads 0 {sentence.no_pairs_flag} {used_flag(segs)}--ss {ss} "
         f"{letters} - {dictionary} "
         f"--progress 15 --cache-size 5000 > {d / 'dump.tmp'}",
-        [sentence.dict, *external, *tool_paths("bag-stats-cuda")])
+        [sentence.dict, *external])
     top = d / "top.tmp"
     digest = Step(
         segs, ["pairs.ranked", "words.ranked"], [(segs, "dump")],
@@ -168,7 +170,7 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"> {d / 'pairs.ranked.tmp'}\n"
         f"top-segments -n0 --pair-words -c < {top} "
         f"> {d / 'words.ranked.tmp'}\n"
-        f"rm {top}", tool_paths("top-segments"), ["top.tmp"])
+        f"rm {top}", [], ["top.tmp"])
     return [dump, digest, words_step(sentence, segs)]
 
 
@@ -183,11 +185,29 @@ def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
         f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} -x0 "
         f"-l {shlex.quote(sentence.letters)} - "
         f"> {d / 'pairs.tmp'}",
-        [f"idx/pairs.s{n}", *tool_paths("seed-pairs", "pfilter")])]
+        [f"idx/pairs.s{n}"])]
+
+
+def pp_cut_step(sentence: Sentence, segs: Segs, name: str,
+                thousands: int) -> list[Step]:
+    d = node_dir(sentence, segs)
+    parent = segs[:-1]
+    ranked = node_dir(sentence, parent) / "pairs.ranked"
+    manifest = f"idx/pp.{name}"
+    return [Step(
+        segs, ["pairs"], [(parent, "pairs.ranked")],
+        f"pfilter {sentence.no_pairs_flag} -x0 --ranked {ranked} | "
+        f"pair-prior --ranked --manifest {manifest} --as-pairs "
+        f"-n {thousands * 1000} - > {d / 'pairs.tmp'}",
+        [manifest, "idx/p1.idx",
+         "cluer/data/cluedata"])]
 
 
 def steps_of(sentence: Sentence, segs: Segs) -> list[Step]:
     last = segs[-1]
+    pp_cut = PP_CUT_RE.fullmatch(last)
+    if pp_cut:
+        return pp_cut_step(sentence, segs, pp_cut[1], int(pp_cut[2]))
     cut = CUT_RE.fullmatch(last)
     if cut:
         return cut_step(sentence, segs, int(cut[1]))

@@ -63,12 +63,13 @@ double prior_score(PairEvidence const& evidence, PriorWeights const& weights);
 // Parses `spec`, absent for PRIOR_WEIGHTS_DEFAULT less the terms of an index
 // not given, into `weights`, and opens in `source` the indexes among `p1`
 // and `cluedata` that its terms read (both with `all`). False, with
-// `*error` set, on a bad SPEC, a weighted term whose index isn't given, or
-// an index that can't be opened, then `*failed` that index. `stale` is as
-// in PairEvidenceSource::open().
+// `*error` set, on a bad SPEC or a weighted term whose index isn't given,
+// both naming `label`, or on an index that can't be opened, then `*failed`
+// that index. `stale` is as in PairEvidenceSource::open().
 bool open_prior(std::optional<std::filesystem::path> const& p1,
                 std::optional<std::filesystem::path> const& cluedata,
                 std::optional<std::string> const& spec, bool all,
+                std::string_view label,
                 PriorWeights* weights, PairEvidenceSource* source,
                 std::string* error, PriorIndex* failed = nullptr,
                 std::string* stale = nullptr);

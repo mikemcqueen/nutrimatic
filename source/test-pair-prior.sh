@@ -88,6 +88,46 @@ expected='-1.000000 -1.000000 0 0 0 0 0 1 0 2 0 0 1 pound,writer
 -1.000000 -1.000000 0 0 0 0 0 0 0 0 0 0 0 abelard,author'
 [[ $actual == "$expected" ]] || fail "features are wrong: $actual"
 
+indexes=(--p1 "$test_dir/p1.idx" --clues "$test_dir/data/cluedata")
+printf '  2 abelard author\n10 pound writer\n5 nine darts\n' > "$test_dir/ranked"
+actual=$("$pair_prior" "${indexes[@]}" --ranked "$test_dir/ranked")
+expected='38 pound writer
+15 nine darts
+3 abelard author'
+[[ $actual == "$expected" ]] || fail "--ranked is wrong: $actual"
+
+actual=$("$pair_prior" "${indexes[@]}" --ranked --as-pairs -n 2 - \
+  < "$test_dir/ranked")
+[[ $actual == $'pound,writer\nnine,darts' ]] ||
+  fail "--as-pairs -n is wrong: $actual"
+
+printf 'mean=1\nexact=1\nadjacent=1\nadjacent-short=1\nlink=1\nlink-short=1\n' \
+  > "$test_dir/manifest"
+printf 'rare-answer=1\noptions=squared\n' >> "$test_dir/manifest"
+actual=$("$pair_prior" "${indexes[@]}" --manifest "$test_dir/manifest" \
+  --ranked "$test_dir/ranked")
+expected='144 pound writer
+45 nine darts
+5 abelard author'
+[[ $actual == "$expected" ]] || fail "options=squared is wrong: $actual"
+
+printf '10 pound writer\n7 writer pound\n' > "$test_dir/dupe"
+"$pair_prior" "${indexes[@]}" --ranked "$test_dir/dupe" 2> err &&
+  fail "--ranked accepted a reversed duplicate"
+grep -q 'line 2: duplicate pair' err || fail "no duplicate error: $(cat err)"
+
+"$pair_prior" "${indexes[@]}" --prior-weights mean=-1 --ranked \
+    "$test_dir/ranked" 2> /dev/null && fail "--ranked took a negative weight"
+
+printf 'options=squared\n' > "$test_dir/no-terms"
+"$pair_prior" "${indexes[@]}" --manifest "$test_dir/no-terms" --ranked \
+    "$test_dir/ranked" 2> /dev/null && fail "a manifest with no terms was read"
+
+printf 'mean=1\n\nexact=1\n' > "$test_dir/blank"
+"$pair_prior" "${indexes[@]}" --manifest "$test_dir/blank" --ranked \
+    "$test_dir/ranked" 2> err && fail "a manifest blank line was read"
+grep -q 'line 2:' err || fail "no line number for a blank line: $(cat err)"
+
 actual=$("$pair_prior" --clues "$test_dir/data/cluedata" "$test_dir/pairs")
 expected='3.000000 pound,writer
 3.000000 nine,darts

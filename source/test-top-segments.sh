@@ -64,6 +64,11 @@ actual=$("$top_segments" --pairs -c "$input")
 [[ $actual == "$expected_pair_counts" ]] ||
   fail "-c pair count output is wrong: $actual"
 
+actual=$(printf '10 cat dog\n1 hen owl\n' |
+  "$top_segments" --by-count --pairs -c)
+[[ $actual == $'10 cat,dog\n1 hen,owl' ]] ||
+  fail "-c counts are padded: $actual"
+
 expected_no_counts='alpha
 beta gamma
 delta
@@ -669,7 +674,7 @@ printf 'cat,dog\nact,god\n5 cat dog\n' > "$test_dir/pairs"
 actual=$("$top_segments" --pair-words --nc -n0 "$test_dir/pairs" | sort)
 [[ $actual == $'act\ncat\ndog\ngod' ]] || fail "pairs input is wrong: $actual"
 
-printf '5 cat dog\n3 cat dog\ncat,dog\n2 act god\n' > "$test_dir/counted"
+printf '  5 cat dog\n3 cat dog\ncat,dog\n2 act god\n' > "$test_dir/counted"
 actual=$("$top_segments" --by-count "$test_dir/counted" 2>/dev/null)
 [[ $actual == $'9 cat dog\n2 act god' ]] ||
   fail "--by-count is wrong: $actual"

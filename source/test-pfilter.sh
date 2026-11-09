@@ -29,6 +29,10 @@ actual=$("$pfilter" --no-dict -m 0 -l catdogx "$test_dir/pairs" 2>/dev/null)
 actual=$("$pfilter" --no-dict -m 0 --no-nopairs -l catdogx "$test_dir/pairs")
 [[ $actual == $'cat,dog\nact,god' ]] || fail "--no-nopairs is wrong: $actual"
 
+actual=$(printf '  7 cat dog\n3 act god\n' |
+  "$pfilter" --no-dict -m 0 --ranked - 2>/dev/null)
+[[ $actual == '  7 cat dog' ]] || fail "--ranked is wrong: $actual"
+
 actual=$("$pfilter" --no-dict -m 0 --no-nopairs --exact -l catdogx \
   "$test_dir/pairs")
 [[ -z $actual ]] || fail "--exact keeps a pair with letters left: $actual"

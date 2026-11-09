@@ -65,7 +65,8 @@ static bool parse_row(SegmentRowReader* reader, SegmentRow* out) {
     if (first >= 'a' && first <= 'z' &&
         line.find(',') != std::string::npos)
       return parse_pair_line(reader, out);
-    if (first < '0' || first > '9') {
+    char const digit = line[std::min(line.find_first_not_of(' '), line.size())];
+    if (digit < '0' || digit > '9') {
       report(reader->program, "%.*s:%" PRIu64
              ": expected \"score segment[,segment ...]\" or "
              "\"word,word[,word ...]\"",

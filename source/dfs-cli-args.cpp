@@ -449,6 +449,34 @@ bool parse_pair_row(
   return true;
 }
 
+bool parse_ranked_row(
+    std::string const& line, std::string_view what, std::string_view source,
+    size_t line_number, DfsPairRow* out, uint64_t* count) {
+  std::string_view rest(line);
+  rest.remove_prefix(std::min(rest.find_first_not_of(' '), rest.size()));
+  size_t const first = rest.find(' ');
+  size_t const second =
+      first == std::string_view::npos ? first : rest.find(' ', first + 1);
+  bool valid = second != std::string_view::npos &&
+      rest.find(' ', second + 1) == std::string_view::npos &&
+      rest.find_first_of(",-") == std::string_view::npos &&
+      parse_number(rest.substr(0, first), count);
+  if (valid) {
+    clean_word(rest.data() + first + 1, rest.data() + second, &out->left);
+    clean_word(rest.data() + second + 1, rest.data() + rest.size(),
+               &out->right);
+    valid = !out->left.empty() && !out->right.empty();
+  }
+  if (!valid) {
+    fprintf(stderr,
+        "error: %.*s \"%.*s\" line %zu: expected COUNT word word\n",
+        SV_ARG(what), SV_ARG(source), line_number);
+    return false;
+  }
+  out->line_number = line_number;
+  return true;
+}
+
 namespace {
 
 bool load_pair_rows_stream(

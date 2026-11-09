@@ -29,6 +29,7 @@ int const OPT_EXACT = 259;
 int const OPT_NO_NOPAIRS = 260;
 int const OPT_REQUIRED_WORDS = 261;
 int const OPT_KEEP_YES = 262;
+int const OPT_RANKED = 263;
 
 struct Args {
   PfilterOptions options;
@@ -37,6 +38,7 @@ struct Args {
   bool no_dict = false;
   bool cv = false;
   bool csv = false;
+  bool ranked = false;
   std::filesystem::path source;
 };
 
@@ -45,7 +47,7 @@ void usage(FILE* out) {
         "[--keep-yes] [--exact]] [-m N] [-x N] "
         "[-s N] [--no-nopairs] [-y] [-d FILE | --no-dict] [-i INDEX] "
         "[--rw FILE] "
-        "[--cv [--csv]] PAIRS-FILE|-\n", out);
+        "[--cv [--csv] | --ranked] PAIRS-FILE|-\n", out);
   if (out != stdout) return;
 
   fputs("  print pairs whose two words are in the dictionary\n"
@@ -92,6 +94,9 @@ void usage(FILE* out) {
       "first. Requires -l");
   dfs_help_option("--csv",
       "with --cv, sort as --cv does but print only the pairs");
+  dfs_help_option("--ranked",
+      "PAIRS-FILE contains COUNT word word lines; print the kept ones "
+      "unchanged, in input order");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -114,6 +119,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     { "required-words", OPT_REQUIRED_WORDS, OPTPARSE_REQUIRED },
     { "cv", OPT_CV, OPTPARSE_NONE },
     { "csv", OPT_CSV, OPTPARSE_NONE },
+    { "ranked", OPT_RANKED, OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -188,6 +194,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
       case OPT_CSV:
         out->csv = true;
         break;
+      case OPT_RANKED:
+        out->ranked = true;
+        break;
       case 'h':
         *help = true;
         return true;
@@ -249,6 +258,11 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return false;
   }
 
+  if (out->ranked && out->cv) {
+    report(PROGRAM, "--ranked and --cv can't be combined");
+    return false;
+  }
+
   if (out->no_dict && out->dictionary_file) {
     report(PROGRAM, "--dict and --no-dict can't be combined");
     return false;
@@ -274,8 +288,8 @@ bool print_kept_rows_with_cv(std::filesystem::path const& source,
                              bool csv) {
   std::vector<std::pair<std::string, double>> kept;
   size_t width = 0;
-  if (!read_rows(PROGRAM, source, "pair list", false,
-          [&](DfsPairRow const& row, std::string const& line) {
+  if (!read_rows(PROGRAM, source, "pair list", RowFormat::pairs,
+          [&](uint64_t, DfsPairRow const& row, std::string const& line) {
             if (!filter.keep(row) || !filter.is_new(row)) return true;
             kept.emplace_back(line,
                 remaining_cv_ratio(bag, row.left + row.right));
@@ -345,7 +359,8 @@ int main(int argc, char* argv[]) {
   if (args.cv)
     return print_kept_rows_with_cv(args.source, filter, *args.options.bag,
                args.csv) ? 0 : 1;
-  if (!print_kept_rows(PROGRAM, args.source, "pair list", false,
+  if (!print_kept_rows(PROGRAM, args.source, "pair list",
+          args.ranked ? RowFormat::ranked : RowFormat::pairs,
           [&](DfsPairRow const& row) {
             return filter.keep(row) && filter.is_new(row);
           }))

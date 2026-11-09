@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
   }
 
   for (char** file = args.files; *file != NULL; ++file) {
-    if (!print_kept_rows(PROGRAM, *file, "input", true,
+    if (!print_kept_rows(PROGRAM, *file, "input", RowFormat::pairs_or_words,
             [&](DfsPairRow const& row) { return fits(args, row); }))
       return 1;
   }

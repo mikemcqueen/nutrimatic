@@ -145,12 +145,13 @@ double prior_score(PairEvidence const& evidence, PriorWeights const& weights) {
 bool open_prior(std::optional<std::filesystem::path> const& p1,
                 std::optional<std::filesystem::path> const& cluedata,
                 std::optional<std::string> const& spec, bool all,
+                std::string_view label,
                 PriorWeights* weights, PairEvidenceSource* source,
                 std::string* error, PriorIndex* failed, std::string* stale) {
     if (failed != nullptr) *failed = PriorIndex::none;
     if (!parse_prior_weights(spec.value_or(PRIOR_WEIGHTS_DEFAULT), weights,
                              error)) {
-        *error = "--prior-weights: " + *error;
+        *error = std::string(label) + ": " + *error;
         return false;
     }
     bool use_p1 = all && p1;
@@ -162,7 +163,7 @@ bool open_prior(std::optional<std::filesystem::path> const& p1,
         if (!given && !spec) {
             weights->weights[i] = 0;
         } else if (!given) {
-            *error = std::string("--prior-weights ") + PRIOR_TERMS[i].name +
+            *error = std::string(label) + " " + PRIOR_TERMS[i].name +
                 " needs " + (PRIOR_TERMS[i].p1 ? "--p1" : "--clues");
             return false;
         } else {
@@ -193,8 +194,8 @@ bool open_default_prior(std::string_view program, PriorPaths* paths,
     std::string skipped;
     std::string stale;
     PriorIndex failed;
-    while (!open_prior(paths->p1, paths->clues, spec, all, weights, source,
-                       &error, &failed, &stale)) {
+    while (!open_prior(paths->p1, paths->clues, spec, all, "--prior-weights",
+                       weights, source, &error, &failed, &stale)) {
         std::optional<std::filesystem::path>* path;
         if (failed == PriorIndex::p1 && paths->p1_default) {
             path = &paths->p1;

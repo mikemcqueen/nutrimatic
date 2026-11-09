@@ -251,8 +251,8 @@ int main(int argc, char* argv[]) {
 
   std::vector<Entry> entries;
   std::set<std::string> seen;
-  if (!read_rows(PROGRAM, args.source, "input", true,
-          [&](DfsPairRow const& row, std::string const&) {
+  if (!read_rows(PROGRAM, args.source, "input", RowFormat::pairs_or_words,
+          [&](uint64_t, DfsPairRow const& row, std::string const&) {
             std::string const letters_used = row.left + row.right;
             if (!fits_letter_bag(args.bag, letters_used) ||
                 !seen.insert(row.entry()).second ||

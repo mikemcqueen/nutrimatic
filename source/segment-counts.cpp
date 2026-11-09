@@ -50,8 +50,10 @@ bool segment_counts_read(
   SegmentRow row;
   while (segment_rows_next(&reader, &row)) {
     uint64_t row_count = 1;
-    if (options.by_count && row.line[0] >= '0' && row.line[0] <= '9' &&
-        !parse_number(std::string_view(row.line).substr(0, row.line.find(' ')),
+    size_t const start = row.line.find_first_not_of(' ');
+    if (options.by_count && row.line[start] >= '0' && row.line[start] <= '9' &&
+        !parse_number(std::string_view(row.line).substr(
+                start, row.line.find(' ', start) - start),
             &row_count)) {
       report(data->program, "%.*s:%" PRIu64
              ": --by-count requires a nonnegative integer count",
@@ -345,8 +347,7 @@ bool segment_counts_print_top(
       continue;
     }
     if (options.show_counts) {
-      printf("%*" PRIu64 " %s\n",
-          width, ordered[i]->second.count, displayed.c_str());
+      printf("%" PRIu64 " %s\n", ordered[i]->second.count, displayed.c_str());
     } else {
       printf("%s\n", displayed.c_str());
     }

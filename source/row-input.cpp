@@ -42,24 +42,27 @@ bool read_lines(
 
 bool read_rows(
     std::string_view program, std::filesystem::path const& path,
-    std::string_view what, bool allow_single_words,
-    std::function<bool(DfsPairRow const&, std::string const&)> const& visit) {
+    std::string_view what, RowFormat format,
+    std::function<bool(uint64_t, DfsPairRow const&, std::string const&)> const&
+        visit) {
   return read_lines(program, path,
       [&](std::string const& line, size_t number) {
         DfsPairRow row;
-        return parse_pair_row(
-                   line, what, path.native(), number, allow_single_words,
-                   &row) &&
-            visit(row, line);
+        uint64_t count = 0;
+        bool const parsed = format == RowFormat::ranked
+            ? parse_ranked_row(line, what, path.native(), number, &row, &count)
+            : parse_pair_row(line, what, path.native(), number,
+                             format == RowFormat::pairs_or_words, &row);
+        return parsed && visit(count, row, line);
       });
 }
 
 bool print_kept_rows(
     std::string_view program, std::filesystem::path const& path,
-    std::string_view what, bool allow_single_words,
+    std::string_view what, RowFormat format,
     std::function<bool(DfsPairRow const&)> const& keep) {
-  return read_rows(program, path, what, allow_single_words,
-      [&](DfsPairRow const& row, std::string const& line) {
+  return read_rows(program, path, what, format,
+      [&](uint64_t, DfsPairRow const& row, std::string const& line) {
         if (keep(row) && !(std::cout << line << '\n')) {
           report(program, "can't write output");
           return false;

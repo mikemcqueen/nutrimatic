@@ -297,8 +297,8 @@ bool load_pair_bags(std::string_view program,
                     PairPrior const& prior, std::vector<PairBag>* out,
                     std::vector<std::vector<std::string>>* rows) {
     PairBagLoader loader(bag, prior, out, rows);
-    return read_rows(program, path, "pairs", false,
-        [&](DfsPairRow const& row, std::string const&) {
+    return read_rows(program, path, "pairs", RowFormat::pairs,
+        [&](uint64_t, DfsPairRow const& row, std::string const&) {
             if (!rejected.contains(row.entry())) loader.add(row);
             return true;
         });

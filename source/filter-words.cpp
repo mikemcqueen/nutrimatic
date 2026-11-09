@@ -106,8 +106,8 @@ bool load_yes_pair_words(std::filesystem::path const& root, int sentence,
           sentence != CLASSIFIED_NO_SENTENCE))
     return false;
   return path.empty() ||
-      read_rows(PROGRAM, path, "classified pair list", false,
-          [&](DfsPairRow const& row, std::string const&) {
+      read_rows(PROGRAM, path, "classified pair list", RowFormat::pairs,
+          [&](uint64_t, DfsPairRow const& row, std::string const&) {
             words->insert(row.left);
             words->insert(row.right);
             return true;
