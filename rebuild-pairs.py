@@ -20,7 +20,8 @@ from pathlib import Path
 
 PROGRAM = "rebuild-pairs"
 MANIFEST = ".manifest.json"
-STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-x([1-9][0-9]*))?(?:-([a-z]+))?")
+STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-(dict|big))?"
+                     r"(?:-x([1-9][0-9]*))?(?:-([a-z]+))?")
 CUT_RE = re.compile(r"([1-9][0-9]*)k")
 PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
 WB_ROWS = 5000000
@@ -37,6 +38,7 @@ class Sentence:
     n: str
     letters: str
     dict: str
+    big: str
 
     @property
     def root(self) -> Path:
@@ -69,14 +71,19 @@ class Step:
 def parse_path(sentence: Sentence, path: str) -> Segs:
     segs = tuple(part for part in path.split("/") if part)
     if not valid_segs(segs):
-        die(f"bad path {path}: want a step (pbN, pbNwb, optionally -xN then "
-            "-LETTERS), then alternating cuts (Nk, pp-NAME-Nk) and steps")
+        die(f"bad path {path}: want a step (pbN, pbNwb, optionally -dict or "
+            "-big, then -xN, then -LETTERS), then alternating cuts (Nk, "
+            "pp-NAME-Nk) and steps")
     bag = collections.Counter(sentence.letters)
     for index, seg in enumerate(segs[::2]):
         match = STEP_RE.fullmatch(seg)
-        used = match[4]
-        if match[3] and (index or match[2]):
-            die(f"bad path {path}: -x{match[3]} is only for a root pbN step")
+        used = match[5]
+        if match[3] and index:
+            die(f"bad path {path}: -{match[3]} is only for a root step")
+        if match[4] and (index or match[2]):
+            die(f"bad path {path}: -x{match[4]} is only for a root pbN step")
+        if used in ("dict", "big"):
+            die(f"bad path {path}: -{used} must come right after pbN or pbNwb")
         if used and list(used) != sorted(used):
             die(f"bad path {path}: {used} must be sorted")
         if used and collections.Counter(used) - bag:
@@ -103,24 +110,29 @@ def node_dir(sentence: Sentence, segs: Segs) -> Path:
 
 
 def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
+    match = STEP_RE.fullmatch(segs[-1])
     if len(segs) == 1:
         source = f"seed-pairs {sentence.seed_flag} -m4"
         deps = []
         external = [f"idx/pairs.s{sentence.n}"]
+        if match[3]:
+            seed_dict = sentence.big if match[3] == "big" else sentence.dict
+            source += f" -d {shlex.quote(seed_dict)}"
+            external.append(seed_dict)
     else:
         parent = segs[:-1]
         path = shlex.quote(str(node_dir(sentence, parent) / "pairs"))
         source = f"cat {path}"
         deps = [(parent, "pairs")]
         external = []
-    cap = STEP_RE.fullmatch(segs[-1])[3]
+    cap = match[4]
     if cap:
         source += f" | pfilter --no-nopairs --no-dict -m0 -x{cap} -"
     return source, deps, external
 
 
 def used_flag(segs: Segs) -> str:
-    used = STEP_RE.fullmatch(segs[-1])[4]
+    used = STEP_RE.fullmatch(segs[-1])[5]
     return f"-u {used} " if used else ""
 
 
@@ -248,6 +260,11 @@ def write_manifest(directory: Path, manifest: dict) -> None:
     os.replace(temporary, path)
 
 
+def changed_since(record: dict) -> list[str]:
+    return [Path(path).name for path, info in record.get("external", {}).items()
+            if stat(path) != info]
+
+
 def current_inputs(sentence: Sentence, step: Step) -> dict:
     return {
         str(node_dir(sentence, segs) / output):
@@ -278,6 +295,14 @@ class Planner:
         self.forced = forced
         self.memo: dict[tuple[Segs, str], bool] = {}
         self.order: list[tuple[Step, str]] = []
+        self.force_required: list[tuple[Step, str | None, list[str]]] = []
+
+    def mark_force_required(self, step: Step, reason: str | None) -> None:
+        directory = node_dir(self.sentence, step.segs)
+        record = read_manifest(directory).get(step.outputs[0], {})
+        changed = changed_since(record)
+        if reason or changed:
+            self.force_required.append((step, reason, changed))
 
     def visit(self, step: Step) -> bool:
         key = (step.segs, step.outputs[0])
@@ -290,6 +315,10 @@ class Planner:
         reason = ("forced" if step.segs in self.forced else None) \
             or stale_reason(self.sentence, step) \
             or ("upstream rebuilt" if upstream else None)
+        if step.gpu and len(step.segs) == 1 \
+                and reason not in ("forced", "missing"):
+            self.mark_force_required(step, reason)
+            reason = None
         if reason:
             self.order.append((step, reason))
         self.memo[key] = bool(reason)
@@ -366,6 +395,8 @@ def status(sentence: Sentence) -> None:
         for step in steps_of(sentence, segs):
             planner.visit(step)
     stale = {(step.segs, step.outputs[0]): why for step, why in planner.order}
+    stale |= {(step.segs, step.outputs[0]): reason
+              for step, reason, _ in planner.force_required if reason}
 
     tree = {segs[:i] for segs in nodes for i in range(1, len(segs) + 1)}
     rows: list[tuple] = []
@@ -385,9 +416,7 @@ def status(sentence: Sentence) -> None:
                     state = "partial"
                 else:
                     state = reason or "ok"
-                changed = [Path(p).name for p, info in
-                           manifest.get(output, {}).get("external", {}).items()
-                           if stat(p) != info]
+                changed = changed_since(manifest.get(output, {}))
                 note = f"  (changed since: {', '.join(changed)})" \
                     if changed else ""
                 rows.append(("file", "  " * depth + output, state,
@@ -496,10 +525,11 @@ def load_sentence(arg: str) -> Sentence:
     nums = [num for num in match.groups() if num]
     values = [os.environ.get(f"S{num}") for num in nums]
     dictionary = os.environ.get("DICT")
-    if not all(values) or not dictionary:
+    big = os.environ.get("BIG")
+    if not all(values) or not dictionary or not big:
         names = ", ".join(f"$S{num}" for num in nums)
-        die(f"{names} or $DICT is unset; source ./setup.sh")
-    return Sentence("s".join(nums), "".join(values), dictionary)
+        die(f"{names}, $DICT or $BIG is unset; source ./setup.sh")
+    return Sentence("s".join(nums), "".join(values), dictionary, big)
 
 
 def main() -> int:
@@ -509,7 +539,9 @@ def main() -> int:
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="print what would run")
     parser.add_argument("-f", "--force", action="store_true",
-                        help="also rerun every step of each named path")
+                        help="also rerun every step of each named path; "
+                        "the only way an out-of-date root bag-stats-cuda "
+                        "step (e.g. pb3) is rebuilt")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true",
                       help="show the tree and what is stale")
@@ -539,8 +571,15 @@ def main() -> int:
         for segs in paths:
             for step in steps_of(sentence, segs):
                 planner.visit(step)
+        for step, reason, changed in planner.force_required:
+            since = f"changed since: {', '.join(changed)}" if changed else None
+            why = ", ".join(part for part in (reason, since) if part)
+            print(f"{PROGRAM}: warning: s{sentence.n}/{step.segs[0]} "
+                  f"{' '.join(step.outputs)} is out of date ({why}); "
+                  f"rebuild it on its own with: {PROGRAM} -f s{sentence.n} "
+                  f"{step.segs[0]}", file=sys.stderr)
         total = len(planner.order)
-        if total == 0:
+        if total == 0 and not planner.force_required:
             print(f"{PROGRAM}: up to date")
         for index, (step, reason) in enumerate(planner.order, 1):
             print(f"{PROGRAM}: [{index}/{total}] s{sentence.n}/"

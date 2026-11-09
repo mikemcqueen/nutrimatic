@@ -16,15 +16,22 @@ A path alternates steps and cuts, and starts with a step:
 * `pp-NAME-Nk`: the top N thousand pairs of the step above it, by the
   `pair-prior` score under the manifest `idx/pp.NAME`
 
-A step takes two optional suffixes, in this order: `pb3-x15-glllpu`.
+A step takes three optional suffixes, in this order: `pb3-big-x15-glllpu`.
 
+* `-dict`, `-big`: `seed-pairs -d` with `$DICT` or `$BIG`, keeping only seeds
+  with both words in it; without it seeds have no dictionary filter. Accepted
+  on a root `pbN` or `pbNwb` only. bag-stats-cuda's `DICT` argument stays
+  `$DICT` either way. A forced pair with a word outside the dictionary is
+  dropped, with a warning
 * `-xN`: the step's input seeds go through `pfilter -xN` first, a cap of N
   letters per pair; without it they have no cap. Accepted on a root `pbN` only
 * `-LETTERS`: bag-stats-cuda `-u LETTERS`, in sorted order and within the
   sentence
 
-Both apply to that step alone: a cut below it isn't filtered by them, so it can
-feed steps with different suffixes.
+`-xN` and `-LETTERS` apply to that step alone: a cut below it isn't filtered by
+them, so it can feed steps with different suffixes. `-dict` and `-big` carry
+down: a cut's words come from the step's pairs, so they are all in the
+dictionary.
 
 The first step's seeds are `seed-pairs -sN -m4`; a later step's are the `pairs`
 file of the cut above it.
@@ -57,6 +64,12 @@ input changed, or a step it depends on reruns. `$DICT`, the seed pair file, and
 a `pp` cut's `idx/pp.NAME`, `idx/p1.idx` and `cluer/data/cluedata` are
 recorded and flagged by `--status` when they change, and don't cause a rebuild.
 Adopted steps have no recorded command, so only their inputs count.
+
+A root step's `bag-stats-cuda` run is the exception: without `-f` naming that
+root, it runs only when its output is missing. If it is otherwise out of date,
+by a changed command, a missing record or a changed recorded file, the run
+warns with the reason and leaves it alone, and the steps after it don't rerun
+because of it.
 
 Outputs are written to `FILE.tmp` and renamed. Each run holds its sentence's
 lock, so a second run on that sentence waits while runs on other sentences
