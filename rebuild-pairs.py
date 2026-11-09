@@ -6,6 +6,7 @@ with a step: pb3/2k/pb3/3k/pb2wb.
 """
 
 import argparse
+import collections
 import fcntl
 import json
 import os
@@ -20,7 +21,7 @@ from pathlib import Path
 
 PROGRAM = "rebuild-pairs"
 MANIFEST = ".manifest.json"
-STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?")
+STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-x([1-9][0-9]*))?(?:-([a-z]+))?")
 CUT_RE = re.compile(r"([1-9][0-9]*)k")
 WB_ROWS = 5000000
 Segs = tuple[str, ...]
@@ -64,11 +65,18 @@ class Step:
     scratch: list[str] = field(default_factory=list)
 
 
-def parse_path(path: str) -> Segs:
+def parse_path(sentence: Sentence, path: str) -> Segs:
     segs = tuple(part for part in path.split("/") if part)
     if not valid_segs(segs):
-        die(f"bad path {path}: want a step (pbN, pbNwb), then alternating "
-            "word cuts (Nk) and steps")
+        die(f"bad path {path}: want a step (pbN, pbNwb, optionally -xN then "
+            "-LETTERS), then alternating word cuts (Nk) and steps")
+    bag = collections.Counter(sentence.letters)
+    for seg in segs[::2]:
+        used = STEP_RE.fullmatch(seg)[4]
+        if used and list(used) != sorted(used):
+            die(f"bad path {path}: {used} must be sorted")
+        if used and collections.Counter(used) - bag:
+            die(f"bad path {path}: {used} is not within s{sentence.n}")
     return segs
 
 
@@ -92,12 +100,25 @@ def tool_paths(*tools: str) -> list[str]:
 
 def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     if len(segs) == 1:
-        pairs = f"idx/pairs.s{sentence.n}"
-        return f"seed-pairs {sentence.seed_flag} -m4", [], [
-            pairs, *tool_paths("seed-pairs")]
-    parent = segs[:-1]
-    path = shlex.quote(str(node_dir(sentence, parent) / "pairs"))
-    return f"cat {path}", [(parent, "pairs")], []
+        source = f"seed-pairs {sentence.seed_flag} -m4"
+        deps = []
+        external = [f"idx/pairs.s{sentence.n}", *tool_paths("seed-pairs")]
+    else:
+        parent = segs[:-1]
+        path = shlex.quote(str(node_dir(sentence, parent) / "pairs"))
+        source = f"cat {path}"
+        deps = [(parent, "pairs")]
+        external = []
+    cap = STEP_RE.fullmatch(segs[-1])[3]
+    if cap:
+        source += f" | pfilter --no-nopairs --no-dict -m0 -x{cap} -"
+        external += tool_paths("pfilter")
+    return source, deps, external
+
+
+def used_flag(segs: Segs) -> str:
+    used = STEP_RE.fullmatch(segs[-1])[4]
+    return f"-u {used} " if used else ""
 
 
 def words_step(sentence: Sentence, segs: Segs) -> Step:
@@ -116,7 +137,7 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     rank = Step(
         segs, ["pairs.ranked"], deps,
         f"{source} | bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
-        f"--ss {ss} --uc "
+        f"{used_flag(segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict, *external, *tool_paths("bag-stats-cuda")])
     counted = Step(
@@ -135,7 +156,8 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     dump = Step(
         segs, ["dump"], deps,
         f"{source} | bag-stats-cuda -n {WB_ROWS} --wb --wbfrac-min --wbwp-min "
-        f"--threads 0 {sentence.no_pairs_flag} --ss {ss} {letters} - {dictionary} "
+        f"--threads 0 {sentence.no_pairs_flag} {used_flag(segs)}--ss {ss} "
+        f"{letters} - {dictionary} "
         f"--progress 15 --cache-size 5000 > {d / 'dump.tmp'}",
         [sentence.dict, *external, *tool_paths("bag-stats-cuda")])
     top = d / "top.tmp"
@@ -158,7 +180,7 @@ def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
     return [Step(
         segs, ["pairs"], [(parent, "words")],
         f"head -n {thousands * 1000} {words} | seed-pairs {sentence.seed_flag} "
-        f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} "
+        f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} -x0 "
         f"-l {shlex.quote(sentence.letters)} - "
         f"> {d / 'pairs.tmp'}",
         [f"idx/pairs.s{n}", *tool_paths("seed-pairs", "pfilter")])]
@@ -487,7 +509,7 @@ def main() -> int:
         if args.adopt:
             adopt(sentence)
             return 0
-        paths = [parse_path(path) for path in args.paths]
+        paths = [parse_path(sentence, path) for path in args.paths]
         planner = Planner(sentence, set(paths) if args.force else set())
         for segs in paths:
             for step in steps_of(sentence, segs):
