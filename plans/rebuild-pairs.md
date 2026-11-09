@@ -58,5 +58,7 @@ a `pp` cut's `idx/pp.NAME`, `idx/p1.idx` and `cluer/data/cluedata` are
 recorded and flagged by `--status` when they change, and don't cause a rebuild.
 Adopted steps have no recorded command, so only their inputs count.
 
-Outputs are written to `FILE.tmp` and renamed. Runs hold one lock, so GPU jobs
-never overlap and a second run waits.
+Outputs are written to `FILE.tmp` and renamed. Each run holds its sentence's
+lock, so a second run on that sentence waits while runs on other sentences
+proceed. `bag-stats-cuda` steps also hold a global GPU lock for the step's
+duration, so GPU jobs never overlap.

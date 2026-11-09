@@ -63,6 +63,7 @@ class Step:
     command: str
     external: list[str]
     scratch: list[str] = field(default_factory=list)
+    gpu: bool = False
 
 
 def parse_path(sentence: Sentence, path: str) -> Segs:
@@ -141,7 +142,7 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"{source} | bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
         f"{used_flag(segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
-        [sentence.dict, *external])
+        [sentence.dict, *external], gpu=True)
     counted = Step(
         segs, ["words.ranked"], [(segs, "pairs.ranked")],
         f"top-segments -n0 --pair-words --by-count < {d / 'pairs.ranked'} "
@@ -161,7 +162,7 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"--threads 0 {sentence.no_pairs_flag} {used_flag(segs)}--ss {ss} "
         f"{letters} - {dictionary} "
         f"--progress 15 --cache-size 5000 > {d / 'dump.tmp'}",
-        [sentence.dict, *external])
+        [sentence.dict, *external], gpu=True)
     top = d / "top.tmp"
     digest = Step(
         segs, ["pairs.ranked", "words.ranked"], [(segs, "dump")],
@@ -182,7 +183,7 @@ def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
     return [Step(
         segs, ["pairs"], [(parent, "words")],
         f"head -n {thousands * 1000} {words} | seed-pairs {sentence.seed_flag} "
-        f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} -x0 "
+        f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} --no-dict -x0 "
         f"-l {shlex.quote(sentence.letters)} - "
         f"> {d / 'pairs.tmp'}",
         [f"idx/pairs.s{n}"])]
@@ -196,7 +197,7 @@ def pp_cut_step(sentence: Sentence, segs: Segs, name: str,
     manifest = f"idx/pp.{name}"
     return [Step(
         segs, ["pairs"], [(parent, "pairs.ranked")],
-        f"pfilter {sentence.no_pairs_flag} -x0 --ranked {ranked} | "
+        f"pfilter {sentence.no_pairs_flag} --no-dict -x0 --ranked {ranked} | "
         f"pair-prior --ranked --manifest {manifest} --as-pairs "
         f"-n {thousands * 1000} - > {d / 'pairs.tmp'}",
         [manifest, "idx/p1.idx",
@@ -301,7 +302,11 @@ def run_step(sentence: Sentence, step: Step) -> None:
     temporaries = [directory / f"{output}.tmp" for output in step.outputs]
     temporaries += [directory / name for name in step.scratch]
     try:
-        result = subprocess.run(["bash", "-euo", "pipefail", "-c", step.command])
+        with open("tmp/.rebuild-pairs.gpu.lock", "w") as gpu_lock:
+            if step.gpu:
+                fcntl.flock(gpu_lock, fcntl.LOCK_EX)
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", step.command])
         if result.returncode != 0:
             die(f"{'/'.join(step.segs)} {' '.join(step.outputs)} failed "
                 f"(exit {result.returncode})")
@@ -523,7 +528,7 @@ def main() -> int:
         return 0
     if not args.adopt and not args.paths:
         parser.error("give at least one PATH")
-    with open("tmp/.rebuild-pairs.lock", "w") as lock:
+    with open(f"tmp/.rebuild-pairs.s{sentence.n}.lock", "w") as lock:
         if not args.dry_run:
             fcntl.flock(lock, fcntl.LOCK_EX)
         if args.adopt:
