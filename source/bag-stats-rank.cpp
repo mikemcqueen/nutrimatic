@@ -325,7 +325,8 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::vector<PairBag>* final_bags,
                     std::vector<std::vector<std::string>>* final_rows,
                     bool* has_prior,
-                    std::vector<std::vector<std::string>>* pair_rows) {
+                    std::vector<std::vector<std::string>>* pair_rows,
+                    std::vector<std::vector<std::string>>* prospect_rows) {
     std::unordered_map<std::string, double> priors;
     PairEvidenceSource evidence;
     PriorWeights weights;
@@ -360,7 +361,7 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
         final_bags ? final_rows : pair_rows;
     if ((prospects_file &&
          !load_pair_bags(program, *prospects_file, bag, rejected, prior,
-                         prospect_bags)) ||
+                         prospect_bags, prospect_rows)) ||
         (loaded != nullptr &&
          !load_pair_bags(program, pairs_file, bag, rejected, prior, loaded,
                          loaded_rows)))

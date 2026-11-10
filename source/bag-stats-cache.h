@@ -98,6 +98,10 @@ class RestTable {
 
     bool enabled() const { return keys_ != nullptr; }
     size_t capacity() const { return capacity_; }
+
+    // Empties it. No other thread may be using it.
+    void clear();
+
     size_t remainders() const { return index_.total(); }
 
     bool get(PairsCounts const& rest, BagStatsCounts* out) const {

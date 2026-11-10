@@ -1,5 +1,7 @@
 #include "bag-stats-cache.h"
 
+#include <string.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <string_view>
@@ -66,6 +68,13 @@ RestTable::RestTable(std::string_view program, PairsCounts const& bag,
         rows_index_.reset();
         rows_.reset();
     }
+}
+
+void RestTable::clear() {
+    if (!keys_) return;
+    memset(keys_.get(), 0, slots_ * sizeof(uint64_t));
+    memset(rows_index_.get(), 0, slots_ * sizeof(uint32_t));
+    next_.store(0, std::memory_order_relaxed);
 }
 
 CachedCounts RestTable::narrow(BagStatsCounts const& counts) const {

@@ -193,7 +193,8 @@ class PairPickFilter {
 // into it, with `final_rows` as load_pair_bags() takes `rows`. `pair_bags`
 // may be null to skip it, and with `final_bags` null too PAIRS isn't read.
 // `has_prior`: whether the bags have priors. Unless `pair_rows` is null,
-// with `final_bags` null, also each of `pair_bags`' rows into it.
+// with `final_bags` null, also each of `pair_bags`' rows into it; unless
+// `prospect_rows` is null, each of `prospect_bags`' rows into it.
 bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::optional<std::filesystem::path> const& prospects_file,
                     std::filesystem::path const& pairs_file,
@@ -204,6 +205,8 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
                     std::vector<std::vector<std::string>>* final_rows,
                     bool* has_prior,
                     std::vector<std::vector<std::string>>* pair_rows =
+                        nullptr,
+                    std::vector<std::vector<std::string>>* prospect_rows =
                         nullptr);
 
 struct LengthValueHash {

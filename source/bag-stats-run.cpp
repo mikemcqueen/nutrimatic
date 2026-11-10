@@ -76,10 +76,16 @@ bool check_common_args(std::string_view program, struct optparse* options,
     if (!parse_search(program, out->search_text.value_or(DEFAULT_SEARCH),
                       &out->search, !pick_only))
         return false;
-    if (pick_only &&
+    if (out->leftovers &&
         (out->search.pairs == 0 ||
          out->search.prospects + out->search.words > 0)) {
-        report(program, "%s takes --ss of pb steps alone", mode);
+        report(program, "--leftovers takes --ss of pb steps alone");
+        return false;
+    }
+    if (out->pair_usage &&
+        (out->search.prospects + out->search.pairs == 0 ||
+         out->search.words > 0)) {
+        report(program, "--unique takes --ss of ppb and pb steps alone");
         return false;
     }
     if (!out->drop_no && out->sentence != CLASSIFIED_NO_SENTENCE) {
@@ -301,7 +307,8 @@ bool load_bag_stats_inputs(std::string_view program, BagStatsArgs const& args,
                         pair_filter && spellings && args.search.words == 0
                             ? &out->final_rows : nullptr,
                         &out->has_prior,
-                        args.pair_usage ? &out->pair_rows : nullptr) ||
+                        args.pair_usage ? &out->pair_rows : nullptr,
+                        args.pair_usage ? &out->prospect_rows : nullptr) ||
         (args.search.words > 0 &&
          !load_word_bags(program, args.dictionary_file, out->bag,
                          args.min_word_bag_length, &out->word_bags,
@@ -529,15 +536,21 @@ BagStatsRankers::BagStatsRankers(BagStatsArgs const& args,
              (args.rank.by_pick || ranker.needs_counts())) {}
 
 void rank_pair_usage(BagStatsArgs const& args,
-                     std::vector<std::vector<std::string>> const& pair_rows,
+                     std::initializer_list<
+                         std::vector<std::vector<std::string>> const*>
+                         row_lists,
                      std::vector<uint64_t> const& counts,
                      std::vector<BagStatsPairUsage>* out) {
     std::vector<BagStatsPairUsage>& used = *out;
     used.clear();
-    for (size_t bag = 0; bag < counts.size(); ++bag) {
-        if (counts[bag] == 0) continue;
-        for (std::string const& row : pair_rows[bag])
-            used.push_back({&row, counts[bag]});
+    size_t bag = 0;
+    for (std::vector<std::vector<std::string>> const* rows : row_lists) {
+        for (std::vector<std::string> const& bag_rows : *rows) {
+            uint64_t const count = counts[bag++];
+            if (count == 0) continue;
+            for (std::string const& row : bag_rows)
+                used.push_back({&row, count});
+        }
     }
     size_t const top = args.rank.top > 0
         ? std::min(used.size(), size_t(args.rank.top)) : used.size();

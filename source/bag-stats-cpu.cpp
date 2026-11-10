@@ -1230,7 +1230,7 @@ void list_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs,
     for (size_t t = 1; t < parts.size(); ++t)
         for (size_t bag = 0; bag < bags.size(); ++bag)
             parts[0][bag] += parts[t][bag];
-    rank_pair_usage(args, inputs.pair_rows, parts[0], out);
+    rank_pair_usage(args, {&inputs.pair_rows}, parts[0], out);
 }
 
 bool list_bag_stats(BagStatsOptions const& options,

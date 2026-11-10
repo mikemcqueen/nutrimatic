@@ -185,6 +185,10 @@ bool parse_args(char* argv[], BagStatsOptions* out, bool* help) {
     }
     if (!check_common_args(PROGRAM, &options, &out->common)) return false;
     Search const& search = out->common.search;
+    if (out->common.pair_usage && search.prospects > 0) {
+        report(PROGRAM, "--unique takes --ss of pb steps alone");
+        return false;
+    }
     if (out->common.leftovers || out->common.pair_usage) {
         if (out->exact || out->all || out->completions > 0) {
             report(PROGRAM, "%s doesn't go with --exact, --all or "

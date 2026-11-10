@@ -30,28 +30,44 @@ inline constexpr int GPU_MAX_LETTERS = 126;
 // The HyperLogLog register bits, as LeftoverSketch has them.
 inline constexpr int GPU_HLL_BITS = 14;
 
-// The most pb steps the --leftovers walk takes.
+// The most pick steps the --leftovers and --unique walks take.
 inline constexpr int GPU_MAX_PAIR_STEPS = 16;
 
-// The most prefix letters the --leftovers walk indexes.
-inline constexpr int GPU_MAX_PREFIX_LETTERS = 16;
+// The most prefix letters the walks index in unary, and the most bits of a
+// prefix cell's number.
+inline constexpr int GPU_MAX_PREFIX_LETTERS = 20;
 
-// What the --leftovers walk takes: the bag; its RemainderIndex number; the
-// pair bags, sorted by prefix cell, each one's letter counts,
-// GPU_LETTERS_BYTES apiece, number (none for run_pair_usage_gpu), PAIRS and
-// letters; the prefix letters, most significant first, each with its
-// stride, and the first pair bag of each prefix cell, then the pair bag
-// count; and the pb steps.
+// What the --leftovers walk takes: the bag; its RemainderIndex number and
+// how many numbers the index has (for run_pair_usage_gpu's memo); the pair
+// bags, the PAIRS bags then the --pp bags, each list sorted by prefix
+// cell, each one's letter counts, GPU_LETTERS_BYTES apiece, number (none
+// for run_pair_usage_gpu without a memo), PAIRS, letters and run; the
+// prefix letters a run codes in unary, each with its place in the run; the
+// last prefix letter, or -1, and the bits of a cell's number its count
+// takes below the run; for run_distinct_rests_gpu, each pair bag's place
+// in its list and the first step's list's pair bags by place; for the
+// PAIRS bags and then the --pp bags, the first
+// pair bag of each prefix cell, then the list's end; how many are PAIRS
+// bags; and the steps, the pb steps first.
 struct GpuLeftoverInputs {
     uint8_t bag[GPU_LETTERS_BYTES];
     uint64_t bag_number = 0;
+    uint64_t number_count = 0;
     std::vector<uint8_t> pair_letters;
     std::vector<uint64_t> numbers;
     std::vector<uint64_t> pairs;
     std::vector<uint8_t> lengths;
+    std::vector<uint32_t> runs;
+    std::vector<uint32_t> places;
+    std::vector<int> units;
     std::vector<std::pair<int, int>> prefix;
+    int last_letter = -1;
+    int last_bits = 0;
     std::vector<int> offsets;
+    std::vector<int> prospect_offsets;
+    int pair_bags = 0;
     int steps;
+    int pair_steps;
 };
 
 // What the --leftovers walk counts: combinations by how many picks they
@@ -92,6 +108,17 @@ void run_pair_usage_gpu(std::string_view program,
                         GpuLeftoverInputs const& inputs,
                         GpuWalkProgress const& progress,
                         std::vector<uint64_t>* out);
+
+// Walks the combinations of 2 or more steps whose first pick is one of
+// `units` units from `first_unit`, in `inputs`' places' order, and writes to
+// `out` the distinct numbers of what they leave, as many as a set sized
+// for `rests` of them holds; true when that is all of them and no more
+// than `rests`. A CUDA call failing prints `program` and CUDA's error on
+// stderr and exits 1.
+bool run_distinct_rests_gpu(std::string_view program,
+                            GpuLeftoverInputs const& inputs,
+                            size_t first_unit, size_t units, size_t rests,
+                            std::vector<uint64_t>* out);
 
 // What the device holds for every row, as flat arrays.
 struct GpuInputs {

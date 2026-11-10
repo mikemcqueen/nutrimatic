@@ -129,3 +129,13 @@ printf '%s\n' a,b c,de d,ce f,gh g,fh i,jk j,ik k,ij > "$test_dir/bag-pairs"
 usage=$(unique --min-pb-len 2 --ss pb,pb,pb abcdefghijk "$test_dir/bag-pairs")
 [[ $usage == $'16 a b\n11 c de\n11 d ce\n11 f gh\n11 g fh\n8 i jk\n8 j ik\n8 k ij' ]] ||
   fail "--unique --ss pb,pb,pb is wrong: $usage"
+printf '%s\n' i,jk j,ik k,ij > "$test_dir/ijk-pairs"
+usage=$(unique --min-pb-len 2 --ss ppb,pb,pb --pp "$test_dir/ijk-pairs" \
+  abcdefghijk "$test_dir/bag-pairs")
+[[ $usage == $'12 a b\n9 c de\n9 d ce\n9 f gh\n9 g fh\n8 i jk\n8 j ik\n8 k ij' ]] ||
+  fail "--unique --ss ppb,pb,pb is wrong: $usage"
+printf '%s\n' a,b i,jk j,ik k,ij > "$test_dir/ab-ijk-pairs"
+usage=$(unique --min-pb-len 2 --ss ppb,ppb,pb --pp "$test_dir/ab-ijk-pairs" \
+  abcdefghijk "$test_dir/bag-pairs")
+[[ $usage == $'12 a b\n4 i jk\n4 j ik\n4 k ij\n3 c de\n3 d ce\n3 f gh\n3 g fh' ]] ||
+  fail "--unique --ss ppb,ppb,pb is wrong: $usage"

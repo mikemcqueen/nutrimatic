@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <initializer_list>
 #include <iterator>
 #include <mutex>
 #include <optional>
@@ -177,8 +178,9 @@ struct BagStatsInputs {
     PairsExactCounter counter;
     std::vector<PairBag> final_bags;
     std::vector<std::vector<std::string>> final_rows;
-    // With pair_usage, the rows of each of pair_bags.
+    // With pair_usage, the rows of each of pair_bags and prospect_bags.
     std::vector<std::vector<std::string>> pair_rows;
+    std::vector<std::vector<std::string>> prospect_rows;
     bool has_prior = false;
     // Each pick step's list: the pb steps, then the ppb steps.
     std::vector<std::vector<PairBag> const*> steps;
@@ -344,17 +346,21 @@ int print_leftovers(BagStatsArgs const& args, std::string const& letters,
                     LeftoverSketch const* hll,
                     LeftoverUnique const* unique = nullptr);
 
-// A PAIRS row of a pb pick, and how many pick combinations it's in.
+// A PAIRS row of a pb pick or a --pp row of a ppb pick, and how many pick
+// combinations it's in.
 struct BagStatsPairUsage {
     std::string const* row;  // into the inputs' pair_rows
     uint64_t combinations;
 };
 
-// Each row of `pair_rows` whose bag has a nonzero count in `counts`, one per
-// pair bag, with that count: most first, ties by row, the first
-// args.rank.top when it is set.
+// Each row of `row_lists`, the rows of each bag of one list after another,
+// whose bag has a nonzero count in `counts`, one per bag in the same order,
+// with that count: most first, ties by row, the first args.rank.top when it
+// is set.
 void rank_pair_usage(BagStatsArgs const& args,
-                     std::vector<std::vector<std::string>> const& pair_rows,
+                     std::initializer_list<
+                         std::vector<std::vector<std::string>> const*>
+                         row_lists,
                      std::vector<uint64_t> const& counts,
                      std::vector<BagStatsPairUsage>* out);
 
@@ -621,16 +627,115 @@ void count_sort_values(Walk const& walk, R* ranker) {
     ranker->finish(parts);
 }
 
+// The rows top_rows()'s threads keep, a heap a thread. Whenever they hold
+// twice `top` between them, drops the rows past the top-th of them all and
+// has every thread skip rows past it from then on.
+class TopKeeper {
+  public:
+    TopKeeper(size_t threads, size_t top) : slots_(threads), top_(top) {}
+
+    // Whether `ranked`, its key, unit and seq set, is past the rows
+    // dropped so far, for thread `t`.
+    bool past(size_t t, RankedRow const& ranked) {
+        Slot& slot = slots_[t];
+        uint64_t const epoch = epoch_.load(std::memory_order_acquire);
+        if (slot.seen != epoch) {
+            std::lock_guard<std::mutex> lock(bound_lock_);
+            slot.bound = bound_;
+            slot.seen = epoch_.load(std::memory_order_relaxed);
+        }
+        if (slot.seen != 0 && !ranks_before(ranked, slot.bound)) return true;
+        return slot.heap.size() == top_ &&
+            !ranks_before(ranked, slot.heap.front());
+    }
+
+    // Keeps `ranked` for thread `t`.
+    void keep(size_t t, RankedRow&& ranked) {
+        Slot& slot = slots_[t];
+        bool grew = true;
+        {
+            std::lock_guard<std::mutex> lock(slot.lock);
+            if (slot.heap.size() == top_) {
+                std::pop_heap(slot.heap.begin(), slot.heap.end(),
+                              ranks_before);
+                slot.heap.pop_back();
+                grew = false;
+            }
+            slot.heap.push_back(std::move(ranked));
+            std::push_heap(slot.heap.begin(), slot.heap.end(), ranks_before);
+        }
+        if (grew && kept_.fetch_add(1, std::memory_order_relaxed) + 1 >=
+                2 * top_)
+            drop();
+    }
+
+    // The `top` rows kept that rank first, in order.
+    std::vector<RankedRow> take() {
+        std::vector<RankedRow> out;
+        for (Slot& slot : slots_)
+            std::move(slot.heap.begin(), slot.heap.end(),
+                      std::back_inserter(out));
+        std::sort(out.begin(), out.end(), ranks_before);
+        if (out.size() > top_) out.resize(top_);
+        return out;
+    }
+
+  private:
+    struct alignas(64) Slot {
+        std::vector<RankedRow> heap;
+        std::mutex lock;
+        RankedRow bound;
+        uint64_t seen = 0;
+    };
+
+    void drop() {
+        std::unique_lock<std::mutex> dropping(drop_lock_, std::try_to_lock);
+        if (!dropping.owns_lock() ||
+            kept_.load(std::memory_order_relaxed) < 2 * top_)
+            return;
+        for (Slot& slot : slots_) slot.lock.lock();
+        std::vector<RankedRow> keys;
+        for (Slot& slot : slots_)
+            for (RankedRow const& row : slot.heap)
+                keys.push_back({row.key, row.unit, row.seq, {}, {}});
+        std::nth_element(keys.begin(), keys.begin() + (top_ - 1), keys.end(),
+                         ranks_before);
+        RankedRow const& bound = keys[top_ - 1];
+        size_t kept = 0;
+        for (Slot& slot : slots_) {
+            std::erase_if(slot.heap, [&](RankedRow const& row) {
+                return ranks_before(bound, row);
+            });
+            std::make_heap(slot.heap.begin(), slot.heap.end(), ranks_before);
+            kept += slot.heap.size();
+        }
+        kept_.store(kept, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(bound_lock_);
+            bound_ = {bound.key, bound.unit, bound.seq, {}, {}};
+            epoch_.fetch_add(1, std::memory_order_release);
+        }
+        for (Slot& slot : slots_) slot.lock.unlock();
+    }
+
+    std::vector<Slot> slots_;
+    size_t const top_;
+    std::atomic<size_t> kept_{0};
+    std::atomic<uint64_t> epoch_{0};
+    std::mutex bound_lock_;
+    std::mutex drop_lock_;
+    RankedRow bound_;
+};
+
 // The `top` rows that rank first, in order.
 template <typename Walk, typename R>
 std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
                                 size_t top) {
     std::atomic<size_t> next{0};
-    std::vector<std::vector<RankedRow>> heaps(walk.threads);
+    TopKeeper keeper(walk.threads, top);
     Progress progress(walk, walk.passes);
     run_threads(walk.threads, [&](size_t t) {
         auto walker = walk.walker(walk.passes);
-        std::vector<RankedRow>& heap = heaps[t];
         std::vector<uint32_t> picks;
         for (size_t block;
              (block = next.fetch_add(1)) < walk.block_count();) {
@@ -645,8 +750,7 @@ std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
                 if constexpr (R::NEEDS_PICKS) walker.picks(&picks);
                 RankedRow ranked{ranker.key(row, length, picks), unit, seq++,
                                  {}, {}};
-                if (heap.size() == top && !ranks_before(ranked, heap.front()))
-                    return;
+                if (keeper.past(t, ranked)) return;
                 if (walk.args.rank.best_pairs == BestPairs::APPEAR) {
                     walker.picks(&ranked.best);
                 } else if constexpr (R::NEEDS_PICKS) {
@@ -656,22 +760,12 @@ std::vector<RankedRow> top_rows(Walk const& walk, R const& ranker,
                 row.pair = walker.pair();
                 row.pairs = walker.pairs();
                 ranked.row = std::move(row);
-                if (heap.size() == top) {
-                    std::pop_heap(heap.begin(), heap.end(), ranks_before);
-                    heap.pop_back();
-                }
-                heap.push_back(std::move(ranked));
-                std::push_heap(heap.begin(), heap.end(), ranks_before);
+                keeper.keep(t, std::move(ranked));
             });
             progress.finished_block(&walker, block);
         }
     });
-    std::vector<RankedRow> out;
-    for (std::vector<RankedRow>& heap : heaps)
-        std::move(heap.begin(), heap.end(), std::back_inserter(out));
-    std::sort(out.begin(), out.end(), ranks_before);
-    if (out.size() > top) out.resize(top);
-    return out;
+    return keeper.take();
 }
 
 // The row whose picks are `picks`, with its unit and walk sequence, its
