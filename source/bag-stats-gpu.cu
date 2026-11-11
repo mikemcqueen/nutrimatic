@@ -3539,6 +3539,13 @@ struct UsageWalk {
             return std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - start).count();
         };
+        // The stop is copied from pinned memory: WDDM holds a copy from
+        // pageable memory, or a memset, until the walk ends, and the walk
+        // won't end until it sees the stop. Pinning may synchronize, so it
+        // comes before the launch.
+        int* one = nullptr;
+        check(cudaMallocHost(&one, sizeof(int)));
+        *one = 1;
         launch_usage<COUNT_TYPE>(some, stream);
         double seconds = 0;
         while (cudaStreamQuery(stream) == cudaErrorNotReady) {
@@ -3552,14 +3559,14 @@ struct UsageWalk {
             double const at = elapsed();
             if (at < most && double(now.tasks) < PILOT_SHARE * tasks) continue;
             seconds = at * tasks / double(std::max(now.tasks, 1ULL));
-            int const one = 1;
-            check(cudaMemcpyAsync(stop, &one, sizeof one,
+            check(cudaMemcpyAsync(stop, one, sizeof(int),
                                   cudaMemcpyHostToDevice, side));
             check(cudaStreamSynchronize(side));
             break;
         }
         check(cudaStreamSynchronize(stream));
         if (seconds == 0) seconds = elapsed();
+        check(cudaFreeHost(one));
         check(cudaMemset(stop, 0, sizeof(int)));
         check(cudaMemset(p.progress, 0, sizeof(WalkProgress)));
         check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
