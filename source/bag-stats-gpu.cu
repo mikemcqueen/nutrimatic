@@ -2531,8 +2531,11 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
                                      &walks, &walk_count);
                 int const terms = q.tables.triple == nullptr ? 2 : 3;
                 unsigned triangles = 0;
-                for (unsigned todo = __ballot_sync(~0u, walk_count != 0);
-                     todo != 0; todo &= todo - 1) {
+                unsigned const walking = __ballot_sync(~0u, walk_count != 0);
+                // A walk told to stop drops its counts: no more walks.
+                if (walking != 0 && __any_sync(~0u, __ldcv(q.stop) != 0))
+                    break;
+                for (unsigned todo = walking; todo != 0; todo &= todo - 1) {
                     int const source = __ffs(int(todo)) - 1;
                     BagKey const rest = shuffle_key(next.rest, source);
                     uint64_t const from_walks =
