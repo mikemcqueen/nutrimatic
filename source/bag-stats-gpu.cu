@@ -1311,6 +1311,10 @@ constexpr uint64_t DENSE_MOST = 65536;
 constexpr uint64_t TWO_MOST = uint64_t(1) << 29;
 // The device memory the fit tables' third term leaves free.
 constexpr size_t TRIPLE_RESERVE = size_t(1) << 30;
+// The cells of a block of sum_tiles, and the columns it asks for at least
+// before it takes another letter.
+constexpr int TILE_CELLS = 4096;
+constexpr int TILE_COLUMNS = 16;
 constexpr int SET_DRAWS = 50000;
 constexpr size_t SET_KEPT = 5000;
 // What a sums walk's slab costs: seconds a byte of its table, and besides.
@@ -2819,6 +2823,58 @@ __global__ void sum_along(Entry* table, unsigned long long lines,
     }
 }
 
+// The letters one sum_tiles pass sums along: how many, and each one's size.
+constexpr int TILE_LETTERS = 16;
+struct TileLetters {
+    int count;
+    int sizes[TILE_LETTERS];
+};
+
+// Sums `table` along several letters at once: the letters of `letters`
+// are next to each other in the table's number, the first `stride` entries
+// apart, and their sizes multiply to `tile`. A block takes the tiles of up
+// to `columns` consecutive entries into shared memory, sums them along each
+// letter there, and writes them back.
+template <typename Entry>
+__global__ void sum_tiles(Entry* table, unsigned long long stride, int tile,
+                          int columns, TileLetters letters) {
+    extern __shared__ __align__(8) unsigned char tile_bytes[];
+    Entry* const cells = reinterpret_cast<Entry*>(tile_bytes);
+    unsigned long long const chunks = (stride + columns - 1) / columns;
+    unsigned long long const high = blockIdx.x / chunks;
+    unsigned long long const low = (blockIdx.x - high * chunks) * columns;
+    unsigned const wide =
+        unsigned(min((unsigned long long)columns, stride - low));
+    Entry* const base = table + high * stride * tile + low;
+    unsigned const count = wide * unsigned(tile);
+    for (unsigned i = threadIdx.x; i < count; i += blockDim.x) {
+        unsigned const row = i / wide;
+        cells[i] = base[row * stride + (i - row * wide)];
+    }
+    __syncthreads();
+    unsigned apart = wide;
+    for (int k = 0; k < letters.count; ++k) {
+        unsigned const size = unsigned(letters.sizes[k]);
+        unsigned const lines = count / size;
+        for (unsigned line = threadIdx.x; line < lines; line += blockDim.x) {
+            unsigned const above = line / apart;
+            Entry* at = cells + above * apart * size + (line - above * apart);
+            Entry sum = *at;
+            for (unsigned v = 1; v < size; ++v) {
+                at += apart;
+                sum += *at;
+                *at = sum;
+            }
+        }
+        __syncthreads();
+        apart *= size;
+    }
+    for (unsigned i = threadIdx.x; i < count; i += blockDim.x) {
+        unsigned const row = i / wide;
+        base[row * stride + (i - row * wide)] = cells[i];
+    }
+}
+
 // Adds values[k] to table[indexes[k]] for each of `count` k.
 __global__ void scatter_add(uint32_t* table, uint64_t const* indexes,
                             uint32_t const* values, unsigned long long count) {
@@ -3779,6 +3835,39 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
     plan_tasks(&d, &q);
     plan_tasks(&d, &sums);
 
+    // The sums' passes: as many letters each as fit a block's cells.
+    struct TilePass {
+        unsigned long long stride;
+        int tile;
+        int columns;
+        unsigned blocks;
+        TileLetters letters;
+    };
+    size_t const tile_bytes = size_t(TILE_CELLS) * sizeof(Entry);
+    check(cudaFuncSetAttribute(sum_tiles<Entry>,
+                               cudaFuncAttributeMaxDynamicSharedMemorySize,
+                               int(tile_bytes)));
+    std::vector<TilePass> passes;
+    for (size_t k = 0; k < dims.size();) {
+        TilePass pass{};
+        pass.stride = dims[k].second;
+        pass.columns = int(std::min<unsigned long long>(
+            pass.stride, (unsigned long long)TILE_COLUMNS));
+        pass.tile = 1;
+        do {
+            pass.letters.sizes[pass.letters.count++] = dims[k].first;
+            pass.tile *= dims[k].first;
+            ++k;
+        } while (k < dims.size() && pass.letters.count < TILE_LETTERS &&
+                 pass.tile * dims[k].first * pass.columns <= TILE_CELLS);
+        pass.columns = int(std::min<unsigned long long>(
+            pass.stride, (unsigned long long)(TILE_CELLS / pass.tile)));
+        pass.blocks = unsigned(
+            entries / (pass.stride * pass.tile) *
+            ((pass.stride + pass.columns - 1) / pass.columns));
+        passes.push_back(pass);
+    }
+
     cudaStream_t stream = nullptr;
     check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     auto const run = [&](auto const& launch, unsigned long long* next_task) {
@@ -3825,10 +3914,9 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
         run([&] { launch_usage<WalkCountType::SUM_SCATTER>(sums, stream); },
             sums.next_task);
         auto const t1 = std::chrono::steady_clock::now();
-        for (auto const& [size, at] : dims) {
-            unsigned long long const lines = entries / size;
-            sum_along<Entry><<<unsigned((lines + 255) / 256), 256, 0, stream>>>(
-                s.sums, lines, at, size);
+        for (TilePass const& pass : passes) {
+            sum_tiles<Entry><<<pass.blocks, 256, tile_bytes, stream>>>(
+                s.sums, pass.stride, pass.tile, pass.columns, pass.letters);
             check(cudaGetLastError());
         }
         check(cudaStreamSynchronize(stream));
