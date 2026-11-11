@@ -114,11 +114,37 @@ void run_pair_usage_gpu(std::string_view program,
 // `out` the distinct numbers of what they leave, as many as a set sized
 // for `rests` of them holds; true when that is all of them and no more
 // than `rests`. A CUDA call failing prints `program` and CUDA's error on
-// stderr and exits 1.
+// stderr and exits 1. Unless `rows` is null, also writes to it how many of
+// the combinations leave each. With `out` null, only counts the distinct
+// numbers. Unless `found` is null, writes how many there are to it.
 bool run_distinct_rests_gpu(std::string_view program,
                             GpuLeftoverInputs const& inputs,
                             size_t first_unit, size_t units, size_t rests,
-                            std::vector<uint64_t>* out);
+                            std::vector<uint64_t>* out,
+                            std::vector<uint64_t>* rows = nullptr,
+                            size_t* found = nullptr);
+
+// The most rests a run_distinct_rests_gpu() set that fits the device's free
+// memory holds, with `rows` one that counts each rest's rows.
+size_t gpu_rest_set_capacity(bool rows);
+
+// Walks the rows of `inputs` as run_distinct_rests_gpu() does, those of
+// `units` units from `first_unit`, for the rows whose rest is in a table:
+// `keys`, a power of two of slots, open addressed from mix64(number + 1),
+// each a rest's number + 1 or 0, and `values`, each slot's value, whose low
+// two bits are 1 for a rest whose rows are all wanted and 2 for one whose
+// rows are wanted only in units up to `last_unit`; with `keys` empty every
+// row is of the second kind. With `rows` null, counts each unit's rows of
+// the second kind into `unit_ties`, an entry for every unit of the list.
+// Else writes the wanted rows to `rows`, each its picks' places in their
+// lists and then its rest's value, in no order; false when there are more
+// than `capacity`.
+bool run_top_rows_gpu(std::string_view program,
+                      GpuLeftoverInputs const& inputs, size_t first_unit,
+                      size_t units, std::vector<uint64_t> const& keys,
+                      std::vector<uint32_t> const& values, uint32_t last_unit,
+                      size_t capacity, std::vector<uint32_t>* rows,
+                      std::vector<uint64_t>* unit_ties);
 
 // What the device holds for every row, as flat arrays.
 struct GpuInputs {
@@ -159,6 +185,9 @@ struct GpuFilterInfo {
     int longest_sum;
     size_t bytes;
     double seconds;
+    // With the exact sum table in the filter's place: its distinct sums.
+    uint64_t distinct_sums;
+    bool exact_table;
 };
 
 // The leftovers checked against the pair-sum filter and those it let
@@ -184,6 +213,9 @@ class GpuRowCounter {
 
     // The device memory taken.
     size_t bytes() const;
+
+    // The streams it counts on.
+    size_t streams() const;
 
     // The pair-sum filter's size and build time.
     GpuFilterInfo filter_info() const;

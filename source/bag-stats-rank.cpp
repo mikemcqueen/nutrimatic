@@ -424,9 +424,10 @@ std::pair<uint64_t, uint64_t> Distribution::above_and_tied(
 }
 
 void Ranker::add(Part* part, BagStatsRow const& row, size_t length,
-                 std::span<uint32_t const>) const {
+                 std::span<uint32_t const>, uint64_t rows) const {
     for (size_t k = 0; k < keys_.size(); ++k)
-        ++(*part)[k][{group(length), bag_stats_sort_value(keys_[k], row)}];
+        (*part)[k][{group(length), bag_stats_sort_value(keys_[k], row)}] +=
+            rows;
 }
 
 void Ranker::finish(std::vector<Part>& parts) {

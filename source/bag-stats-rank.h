@@ -261,8 +261,9 @@ class Ranker {
 
     Part part() const { return Part(keys_.size()); }
 
+    // Counts `rows` rows with `row`'s sort values.
     void add(Part* part, BagStatsRow const& row, size_t length,
-             std::span<uint32_t const>) const;
+             std::span<uint32_t const>, uint64_t rows = 1) const;
 
     void finish(std::vector<Part>& parts);
 

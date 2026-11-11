@@ -13,6 +13,7 @@
 #include <functional>
 #include <mutex>
 #include <numeric>
+#include <random>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -32,6 +33,14 @@ constexpr int FILTER_BLOCK_WORDS = 8;
 constexpr int FILTER_BITS_PER_PAIR = 12;
 constexpr size_t FILTER_RESERVE = size_t(1536) << 20;
 constexpr int BUILD_THREADS = 256;
+// The device memory the exact sum table leaves free, its slots a distinct
+// sum at its most and least full, and the claimed share past which an
+// insert gives up.
+constexpr size_t SUM_TABLE_RESERVE = size_t(3) << 30;
+constexpr double SUM_TABLE_SLOTS = 2.0;
+constexpr double SUM_TABLE_SLOTS_LEAST = 1.45;
+constexpr double SUM_TABLE_FULL = 0.8;
+constexpr size_t SUM_SLOT_BYTES = sizeof(uint64_t) + sizeof(uint32_t);
 
 static_assert(CANDIDATE_CAPACITY == 2 * PAIR_THREADS);
 
@@ -98,6 +107,9 @@ struct LeftoverShared {
     unsigned long long word_bags;
     unsigned long long solo;
     unsigned long long passed;
+    // With the exact sum table: with_pairs, total_pairs, max_pairs and
+    // with_min_pairs.
+    unsigned long long counts[4];
 };
 
 template <typename Key>
@@ -145,7 +157,16 @@ struct Params {
     uint32_t const* filter;
     size_t filter_blocks;
     unsigned long long* filter_counts;
+    // The exact sum table, or null: each slot's key, 0 while empty, and its
+    // sum's pairs.
+    uint64_t const* sum_keys;
+    uint32_t const* sum_counts;
+    size_t sum_slots;
 };
+
+// What pair_sums does with each sum: counts them and sketches the distinct
+// ones, sets its filter bits, or adds its pairs to the exact sum table.
+enum class PairSumMode { COUNT, FILTER, TABLE };
 
 // What the pair-sum kernels take.
 template <typename BagKey>
@@ -162,6 +183,15 @@ struct PairSumParams {
     size_t filter_blocks;
     unsigned long long* pairs;
     int* longest_sum;
+    // With COUNT, the HyperLogLog registers of the sums, 2^GPU_HLL_BITS.
+    uint32_t* registers;
+    // With TABLE: the table, the slots claimed, and nonzero once an insert
+    // found the table too full.
+    uint64_t* sum_keys;
+    uint32_t* sum_counts;
+    size_t sum_slots;
+    unsigned long long* claimed;
+    int* full;
 };
 
 // Whether `key` fits `pool`, which carries its guard bits; writes what is
@@ -207,10 +237,32 @@ __device__ inline bool passes(Params<Key> const& p, Key key) {
     return out;
 }
 
-// One warp per group `a`: counts the groups `b` from `a` on whose sum with
-// `a` fits the bag and finds the longest such sum, or sets those sums' bits
-// in the filter.
-template <typename BagKey, bool INSERT>
+// A sum's key in the exact sum table: the sum itself, or its hash when it
+// is wider than a slot's key. Never 0.
+__device__ inline uint64_t sum_table_key(Key64 sum) { return sum; }
+
+__device__ inline uint64_t sum_table_key(Key128 sum) {
+    uint64_t const hash = mix_key(sum);
+    return hash == 0 ? 1 : hash;
+}
+
+// The pairs of the sum `key` in the exact sum table of `p`.
+template <typename Key>
+__device__ inline uint32_t sum_pairs(Params<Key> const& p, Key key) {
+    uint64_t const stored = sum_table_key(key);
+    for (size_t i = home_slot(mix_key(key), p.sum_slots);;
+         i = i + 1 == p.sum_slots ? 0 : i + 1) {
+        uint64_t const at = __ldcg(&p.sum_keys[i]);
+        if (at == stored) return __ldcg(&p.sum_counts[i]);
+        if (at == 0) return 0;
+    }
+}
+
+// One warp per group `a`, over the groups `b` from `a` on whose sum with `a`
+// fits the bag. COUNT counts them, finds the longest such sum and sketches
+// the distinct sums; FILTER sets the sums' bits in the filter; TABLE adds
+// each pair's count to its sum's slot of the exact sum table.
+template <typename BagKey, PairSumMode MODE>
 __global__ void pair_sums(PairSumParams<BagKey> p) {
     int const a = int((size_t(blockIdx.x) * blockDim.x + threadIdx.x) >> 5);
     int const lane = threadIdx.x & 31;
@@ -220,26 +272,69 @@ __global__ void pair_sums(PairSumParams<BagKey> p) {
     if (!fits(p.bag | p.bag_guards, key, p.bag_guards, &left)) return;
     BagKey const pool = left | p.bag_guards;
     int const end = p.lenstart[p.bag_length - p.group_lengths[a] + 1];
-    bool const twice = p.group_sizes[a] >= 2;
+    uint32_t const size = p.group_sizes[a];
+    bool const twice = size >= 2;
     unsigned long long pairs = 0;
+    unsigned long long claimed = 0;
     int longest = 0;
+    if constexpr (MODE == PairSumMode::TABLE) {
+        if (__ldcv(p.full) != 0) return;
+    }
     for (int b = a + lane; b < end; b += 32) {
         if (b == a && !twice) continue;
         BagKey rest;
         if (!fits(pool, p.group_keys[b], p.bag_guards, &rest)) continue;
-        if constexpr (INSERT)
-            filter_insert(p.filter, p.filter_blocks,
-                          mix_key(key + p.group_keys[b]));
-        else {
+        BagKey const sum = key + p.group_keys[b];
+        if constexpr (MODE == PairSumMode::FILTER) {
+            filter_insert(p.filter, p.filter_blocks, mix_key(sum));
+        } else if constexpr (MODE == PairSumMode::TABLE) {
+            uint32_t const weight = b == a
+                ? uint32_t(uint64_t(size) * (size - 1) / 2)
+                : size * p.group_sizes[b];
+            uint64_t const stored = sum_table_key(sum);
+            size_t i = home_slot(mix_key(sum), p.sum_slots);
+            size_t probes = 0;
+            while (true) {
+                uint64_t at = p.sum_keys[i];
+                if (at == 0) {
+                    at = atomicCAS(
+                        reinterpret_cast<unsigned long long*>(&p.sum_keys[i]),
+                        0ULL, (unsigned long long)stored);
+                    if (at == 0) {
+                        ++claimed;
+                        at = stored;
+                    }
+                }
+                if (at == stored) {
+                    atomicAdd(&p.sum_counts[i], weight);
+                    break;
+                }
+                i = i + 1 == p.sum_slots ? 0 : i + 1;
+                if (++probes >= 4096 || probes >= p.sum_slots) {
+                    atomicExch(p.full, 1);
+                    break;
+                }
+            }
+        } else {
             ++pairs;
             longest = max(longest, int(p.group_lengths[b]));
+            uint64_t const mixed = mix_key(sum);
+            uint64_t const after = (mixed << GPU_HLL_BITS) |
+                (uint64_t(1) << (GPU_HLL_BITS - 1));
+            uint32_t const rank = uint32_t(__clzll((long long)after) + 1);
+            uint32_t* const slot =
+                p.registers + (mixed >> (64 - GPU_HLL_BITS));
+            if (rank > __ldcg(slot)) atomicMax(slot, rank);
         }
     }
-    if constexpr (!INSERT) {
+    if constexpr (MODE == PairSumMode::COUNT) {
         if (longest != 0)
             atomicMax(p.longest_sum, int(p.group_lengths[a]) + longest);
         pairs = warp_sum(pairs);
         if (lane == 0 && pairs != 0) atomicAdd(p.pairs, pairs);
+    } else if constexpr (MODE == PairSumMode::TABLE) {
+        claimed = warp_sum(claimed);
+        if (lane == 0 && claimed != 0) atomicAdd(p.claimed, claimed);
     }
 }
 
@@ -423,6 +518,7 @@ count_leftovers(Params<Key> p) {
             s.word_bags = 0;
             s.solo = 0;
             s.passed = 0;
+            for (int n = 0; n < 4; ++n) s.counts[n] = 0;
         }
         __syncthreads();
         int const row = s.row.row;
@@ -441,6 +537,10 @@ count_leftovers(Params<Key> p) {
         unsigned long long word_bags = 0;
         unsigned long long solo = 0;
         unsigned long long passed = 0;
+        unsigned long long with_pairs = 0;
+        unsigned long long total_pairs = 0;
+        unsigned long long max_pairs = 0;
+        unsigned long long with_min_pairs = 0;
         bool valid;
         Key key;
         int length;
@@ -454,6 +554,16 @@ count_leftovers(Params<Key> p) {
             if (length < 2 * p.min_group_length || length > p.longest_sum)
                 continue;
             ++leftovers;
+            if (p.sum_keys != nullptr) {
+                unsigned long long const pairs = sum_pairs(p, key);
+                if (pairs == 0) continue;
+                ++scanned;
+                ++with_pairs;
+                total_pairs += pairs;
+                max_pairs = max(max_pairs, pairs);
+                if (pairs >= p.min_pairs) ++with_min_pairs;
+                continue;
+            }
             if (!passes(p, key)) continue;
             ++scanned;
             ++passed;
@@ -466,9 +576,24 @@ count_leftovers(Params<Key> p) {
             atomicAdd(&s.solo, solo);
             atomicAdd(&s.passed, passed);
         }
+        if (p.sum_keys != nullptr) {
+            with_pairs = warp_sum(with_pairs);
+            total_pairs = warp_sum(total_pairs);
+            with_min_pairs = warp_sum(with_min_pairs);
+            for (int offset = 16; offset > 0; offset >>= 1)
+                max_pairs =
+                    max(max_pairs, __shfl_xor_sync(~0u, max_pairs, offset));
+            if (lane == 0 && with_pairs != 0) {
+                atomicAdd(&s.counts[0], with_pairs);
+                atomicAdd(&s.counts[1], total_pairs);
+                atomicMax(&s.counts[2], max_pairs);
+                atomicAdd(&s.counts[3], with_min_pairs);
+            }
+        }
         __syncthreads();
         if (tid == 0) {
-            p.out[row] = {s.word_bags, 0, 0, 0, s.solo, 0};
+            p.out[row] = {s.word_bags, s.counts[0], s.counts[1], s.counts[2],
+                          s.solo, s.counts[3]};
             if (s.passed != 0) p.flagged[atomicAdd(&p.next[2], 1)] = row;
         }
     }
@@ -743,6 +868,9 @@ struct GpuRowCounter::Impl {
     uint8_t* word_lengths = nullptr;
     uint32_t* filter = nullptr;
     size_t filter_blocks = 0;
+    uint64_t* sum_keys = nullptr;
+    uint32_t* sum_counts = nullptr;
+    size_t sum_slots = 0;
     GpuFilterInfo filter_info{};
     GpuFilterCounts filter_counts{};
     std::vector<Stream> streams;
@@ -812,13 +940,14 @@ struct GpuRowCounter::Impl {
         stream->out = allocate<GpuCounts>(GPU_BATCH_ROWS);
         stream->next = allocate<int>(3);
         stream->flagged = allocate<int>(GPU_BATCH_ROWS);
+        int const scan_blocks = sum_keys == nullptr ? pair_blocks : 0;
         size_t const word_entries =
-            size_t(leftover_blocks + pair_blocks) * word_count;
+            size_t(leftover_blocks + scan_blocks) * word_count;
         stream->word_keys = allocate<Key>(word_entries);
         stream->word_lengths = allocate<uint8_t>(word_entries);
-        stream->list_keys = allocate<Key>(size_t(pair_blocks) * list_capacity);
+        stream->list_keys = allocate<Key>(size_t(scan_blocks) * list_capacity);
         stream->list_indexes =
-            allocate<uint32_t>(size_t(pair_blocks) * list_capacity);
+            allocate<uint32_t>(size_t(scan_blocks) * list_capacity);
         stream->filter_counts = allocate<unsigned long long>(2);
         check(cudaMallocHost(&stream->host_rests,
                              GPU_BATCH_ROWS * GPU_LETTERS_BYTES));
@@ -828,9 +957,11 @@ struct GpuRowCounter::Impl {
                              2 * sizeof(unsigned long long)));
     }
 
+    // Counts the sums of two groups that fit the bag, then builds the exact
+    // sum table when the device has the room for it, else the pair-sum
+    // filter.
     template <typename Key>
-    void build_filter(uint8_t const* bag, Packing const& packing,
-                      int letters) {
+    void build_sums(uint8_t const* bag, Packing const& packing, int letters) {
         auto const start = std::chrono::steady_clock::now();
         PairSumParams<Key> p{};
         p.group_keys = static_cast<Key const*>(group_keys);
@@ -845,9 +976,13 @@ struct GpuRowCounter::Impl {
         check(cudaMemset(p.pairs, 0, sizeof(unsigned long long)));
         p.longest_sum = allocate<int>(1);
         check(cudaMemset(p.longest_sum, 0, sizeof(int)));
+        size_t const registers = size_t(1) << GPU_HLL_BITS;
+        p.registers = allocate<uint32_t>(registers);
+        check(cudaMemset(p.registers, 0, registers * sizeof(uint32_t)));
         int const grid = (group_count + BUILD_THREADS / 32 - 1) /
             (BUILD_THREADS / 32);
-        if (grid > 0) pair_sums<Key, false><<<grid, BUILD_THREADS>>>(p);
+        if (grid > 0)
+            pair_sums<Key, PairSumMode::COUNT><<<grid, BUILD_THREADS>>>(p);
         check(cudaGetLastError());
         unsigned long long pairs = 0;
         int longest_sum = 0;
@@ -855,10 +990,83 @@ struct GpuRowCounter::Impl {
                          cudaMemcpyDeviceToHost));
         check(cudaMemcpy(&longest_sum, p.longest_sum, sizeof longest_sum,
                          cudaMemcpyDeviceToHost));
+        std::vector<uint32_t> ranks(registers);
+        check(cudaMemcpy(ranks.data(), p.registers,
+                         registers * sizeof(uint32_t),
+                         cudaMemcpyDeviceToHost));
+        double inverse = 0;
+        size_t empty = 0;
+        for (uint32_t const rank : ranks) {
+            inverse += std::ldexp(1.0, -int(rank));
+            if (rank == 0) ++empty;
+        }
+        double const m = double(registers);
+        double distinct = 0.7213 / (1 + 1.079 / m) * m * m / inverse;
+        if (distinct <= 2.5 * m && empty != 0)
+            distinct = m * std::log(m / double(empty));
+        distinct = std::min(distinct * 1.05, double(pairs));
 
         size_t free = 0;
         size_t total = 0;
         check(cudaMemGetInfo(&free, &total));
+        size_t const table_room = free > SUM_TABLE_RESERVE
+            ? (free - SUM_TABLE_RESERVE) / SUM_SLOT_BYTES
+            : 0;
+        size_t const slots = std::min(
+            size_t(distinct * SUM_TABLE_SLOTS) + 1024, table_room);
+        bool exact = getenv("BSC_NO_SUM_TABLE") == nullptr && pairs != 0 &&
+            double(slots) >= distinct * SUM_TABLE_SLOTS_LEAST;
+        unsigned long long claimed = 0;
+        if (exact) {
+            void* keys = nullptr;
+            void* counts = nullptr;
+            check(cudaMalloc(&keys, slots * sizeof(uint64_t)));
+            check(cudaMalloc(&counts, slots * sizeof(uint32_t)));
+            check(cudaMemset(keys, 0, slots * sizeof(uint64_t)));
+            check(cudaMemset(counts, 0, slots * sizeof(uint32_t)));
+            p.sum_keys = static_cast<uint64_t*>(keys);
+            p.sum_counts = static_cast<uint32_t*>(counts);
+            p.sum_slots = slots;
+            p.claimed = allocate<unsigned long long>(1);
+            check(cudaMemset(p.claimed, 0, sizeof(unsigned long long)));
+            p.full = allocate<int>(1);
+            check(cudaMemset(p.full, 0, sizeof(int)));
+            pair_sums<Key, PairSumMode::TABLE><<<grid, BUILD_THREADS>>>(p);
+            check(cudaGetLastError());
+            int full = 0;
+            check(cudaMemcpy(&claimed, p.claimed, sizeof claimed,
+                             cudaMemcpyDeviceToHost));
+            check(cudaMemcpy(&full, p.full, sizeof full,
+                             cudaMemcpyDeviceToHost));
+            exact = full == 0 && double(claimed) <= SUM_TABLE_FULL * slots;
+            if (exact) {
+                buffers.push_back(keys);
+                buffers.push_back(counts);
+                bytes += slots * SUM_SLOT_BYTES;
+                sum_keys = p.sum_keys;
+                sum_counts = p.sum_counts;
+                sum_slots = slots;
+            } else {
+                check(cudaFree(keys));
+                check(cudaFree(counts));
+            }
+        }
+        if (exact) {
+            filter_info = {
+                pairs, longest_sum, slots * SUM_SLOT_BYTES,
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start)
+                    .count(),
+                claimed, true};
+            return;
+        }
+        if (pairs != 0 && getenv("BSC_NO_SUM_TABLE") == nullptr)
+            alert(program_name,
+                  "exact sum table needs %.1f GB for %.2fG sums, %.1f GB "
+                  "free; counting with the slower pair-sum filter",
+                  distinct * SUM_TABLE_SLOTS_LEAST * SUM_SLOT_BYTES / 1e9,
+                  distinct / 1e9, double(free) / 1e9);
+
         size_t const room = free > FILTER_RESERVE
             ? (free - FILTER_RESERVE) / (FILTER_BLOCK_WORDS * sizeof(uint32_t))
             : 0;
@@ -872,14 +1080,16 @@ struct GpuRowCounter::Impl {
         check(cudaMemset(filter, 0, filter_bytes));
         p.filter = filter;
         p.filter_blocks = filter_blocks;
-        if (grid > 0) pair_sums<Key, true><<<grid, BUILD_THREADS>>>(p);
+        if (grid > 0)
+            pair_sums<Key, PairSumMode::FILTER><<<grid, BUILD_THREADS>>>(p);
         check(cudaGetLastError());
         check(cudaDeviceSynchronize());
         filter_info = {
             pairs, longest_sum, filter_bytes,
             std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                           start)
-                .count()};
+                .count(),
+            0, false};
     }
 
     template <typename Key>
@@ -913,10 +1123,14 @@ struct GpuRowCounter::Impl {
         p.filter = filter;
         p.filter_blocks = filter_blocks;
         p.filter_counts = stream->filter_counts;
+        p.sum_keys = sum_keys;
+        p.sum_counts = sum_counts;
+        p.sum_slots = sum_slots;
         count_leftovers<Key><<<leftover_blocks, LEFTOVER_THREADS,
                                sizeof(LeftoverShared<Key>), stream->stream>>>(
             p);
         check(cudaGetLastError());
+        if (sum_keys != nullptr) return;
         size_t const offset = size_t(leftover_blocks) * word_count;
         p.word_list_keys += offset;
         p.word_list_lengths += offset;
@@ -946,8 +1160,8 @@ struct GpuRowCounter::Impl {
     void set_up(GpuInputs const& inputs, Packing const& packing, int letters) {
         upload_keys<Key>(inputs, packing);
         allow_shared<Key>();
+        build_sums<Key>(inputs.bag, packing, letters);
         for (Stream& stream : streams) allocate_stream<Key>(&stream);
-        build_filter<Key>(inputs.bag, packing, letters);
     }
 };
 
@@ -1003,6 +1217,8 @@ std::string const& GpuRowCounter::device() const { return impl_->device; }
 int GpuRowCounter::key_bits() const { return impl_->key_bits; }
 
 size_t GpuRowCounter::bytes() const { return impl_->bytes; }
+
+size_t GpuRowCounter::streams() const { return impl_->streams.size(); }
 
 GpuFilterInfo GpuRowCounter::filter_info() const {
     return impl_->filter_info;
@@ -1080,6 +1296,29 @@ constexpr int WALK_THREADS = 256;
 constexpr int WALK_WARPS = WALK_THREADS / 32;
 constexpr int TASK_CANDIDATES = 64;
 constexpr size_t MEMO_RESERVE = size_t(1) << 30;
+constexpr size_t SUMS_RESERVE = size_t(1) << 30;
+constexpr long double SLABS_MOST = 65536;
+// A pilot walks a sample of a walk's tasks: how many, enough to keep every
+// warp busy, and how long it may take.
+constexpr unsigned long long PILOT_TASKS = 32768;
+constexpr double PILOT_SECONDS = 0.4;
+constexpr double PILOT_SHARE = 0.9;
+// The candidates below the first picks from which a walk is worth a pilot.
+constexpr unsigned long long PILOT_FROM = 100000000;
+// The most rests the fit tables' dense letters number, and the most entries
+// of their `two`.
+constexpr uint64_t DENSE_MOST = 65536;
+constexpr uint64_t TWO_MOST = uint64_t(1) << 29;
+// The device memory the fit tables' third term leaves free.
+constexpr size_t TRIPLE_RESERVE = size_t(1) << 30;
+constexpr int SET_DRAWS = 50000;
+constexpr size_t SET_KEPT = 5000;
+// What a sums walk's slab costs: seconds a byte of its table, and besides.
+constexpr double SUMS_SECONDS_PER_BYTE = 0.12e-9;
+constexpr double SUMS_SECONDS_PER_SLAB = 0.1;
+// The combinations a second a memo walk and a scanning walk get through.
+constexpr double MEMO_RATE = 5e8;
+constexpr double SCAN_RATE = 5e7;
 constexpr int EVERY_CHUNK = 1 << 30;
 constexpr int SET_PROBES = 256;
 constexpr size_t SET_RESERVE = size_t(256) << 20;
@@ -1104,13 +1343,18 @@ struct WalkProgress {
     unsigned long long lookups;
     unsigned long long misses;
     unsigned long long miss_work;
+    // The tasks finished.
+    unsigned long long tasks;
 };
 
 // What a walk counts: the --leftovers counts; each pair bag's PAIRS rows of
 // the combinations, by scanning the last step's candidates; the same from
 // a memo of what fits each rest of the steps before the last; or nothing,
 // collecting the distinct rests of the combinations.
-enum class WalkCountType { LEFTOVERS, PAIR_USAGE, PAIR_USAGE_MEMO, RESTS };
+enum class WalkCountType {
+    LEFTOVERS, PAIR_USAGE, PAIR_USAGE_MEMO, RESTS,
+    SUM_SLABS, SUM_SCATTER, PAIR_USAGE_SUMS, PAIR_USAGE_TABLES, TOP_ROWS
+};
 
 // A pair bag: its letters packed, its PAIRS, and its run above its letter
 // count's 8 bits.
@@ -1735,6 +1979,263 @@ struct Memo {
     int letters;
 };
 
+// The most letters a slab fixes.
+constexpr int SLAB_LETTERS = 4;
+
+// The table of pair sums a PAIR_USAGE_SUMS walk counts its last two picks
+// from, a slab at a time: a slab is the rests with the same counts of the
+// slab letters. `sums` is the slab's table, by a rest's number over the
+// other letters: the PAIRS products of the left-out list's 2-sets that fit
+// the rest. `counts` is, by slab, the walk's combinations in it. Then the
+// slab letters' count and guard bits in a key, the slab's counts, each slab
+// letter's key shift, count mask and stride in a slab's index, and the
+// left-out list's shortest bag.
+template <typename BagKey>
+struct Slabs {
+    unsigned long long* sums;
+    unsigned long long* counts;
+    BagKey mask;
+    BagKey guards;
+    BagKey slab;
+    int letters;
+    uint8_t shifts[SLAB_LETTERS];
+    uint8_t masks[SLAB_LETTERS];
+    uint32_t strides[SLAB_LETTERS];
+    int shortest;
+};
+
+template <typename BagKey>
+__device__ inline uint32_t slab_index(Slabs<BagKey> const& slabs, BagKey rest) {
+    uint32_t index = 0;
+#pragma unroll
+    for (int k = 0; k < SLAB_LETTERS; ++k) {
+        if (k >= slabs.letters) break;
+        index += (uint32_t(rest >> slabs.shifts[k]) & slabs.masks[k]) *
+            slabs.strides[k];
+    }
+    return index;
+}
+
+// The most letters the fit tables take one at a time.
+constexpr int SPARSE_LETTERS = 16;
+
+// Tables that give the PAIRS of a list's bags that fit a rest without a
+// scan. The bag's letters are split in two: the dense letters, whose counts
+// number a rest, and the sparse letters. A bag fits a rest when it fits in
+// the dense letters and exceeds it in no sparse letter, so by inclusion and
+// exclusion the PAIRS that fit are
+//
+//     fits[n] - sum over e of one(e) + sum over e1 < e2 of two(e1, e2) - ...
+//
+// with n the rest's number, one(e) the PAIRS of the bags that fit in the
+// dense letters and exceed the rest in sparse letter e, and two(e1, e2) of
+// those that exceed it in both. Each is one entry: `one` at one_base[e] +
+// n * caps[e] + r, `two` at two_base[e2 * (e2 - 1) / 2 + e1] + (n *
+// caps[e1] + r1) * caps[e2] + r2, r = caps[e] - 1 - the rest's count of e,
+// and caps[e] the most of e a bag has. The sum stops at two; a bag that
+// exceeds the rest in j >= 3 sparse letters is then counted (j-1)(j-2)/2
+// times too many, and those bags are listed by three of their sparse
+// letters: `three` holds, for letters e1 < e2 < e3 and counts u1, u2 of the
+// first two, the bags with those counts and some of e3, most of e3 first,
+// each with its count of e3 as its code, from three_starts[three_base[t] +
+// (u1 - 1) * caps[e2] + (u2 - 1)], t the triple's number. Then each sparse
+// letter's key shift and count mask, and the dense letters' guard bits.
+template <typename BagKey>
+struct FitTables {
+    uint32_t const* fits;
+    uint32_t const* one;
+    uint32_t const* two;
+    // Unless null, the sum's third term: the PAIRS of the bags that exceed
+    // the rest in three sparse letters, at triple_base[t] + ((n * caps[e1]
+    // + r1) * caps[e2] + r2) * caps[e3] + r3. The sum then stops at three,
+    // a bag that exceeds the rest in j >= 4 sparse letters is counted
+    // (j-1)(j-2)(j-3)/6 times too few, and `three` lists those.
+    uint32_t const* triple;
+    uint64_t const* triple_base;
+    WalkBag<BagKey> const* three;
+    int const* three_starts;
+    uint64_t const* two_base;
+    uint32_t const* three_base;
+    int letters;
+    uint8_t shifts[SPARSE_LETTERS];
+    uint8_t masks[SPARSE_LETTERS];
+    uint8_t caps[SPARSE_LETTERS];
+    uint32_t one_base[SPARSE_LETTERS];
+    BagKey dense_guards;
+    // Nonzero once the walk is to stop: its counts are then dropped.
+    int const* stop;
+};
+
+__device__ inline int key_bits_set(Key64 key) { return __popcll(key); }
+
+__device__ inline int key_bits_set(Key128 key) {
+    return __popcll(Key64(key)) + __popcll(Key64(key >> 64));
+}
+
+// What the bags that exceed `rest` in sparse letters e1 < e2 < e3 of `t` and
+// more, and fit it in the dense letters, are miscounted by in the sum
+// through `terms` terms, 2 or 3: the bags whose first three such letters
+// these are. The warp calls it with the same arguments and walks each
+// bucket together; every lane gets the sum.
+template <typename BagKey>
+__device__ unsigned long long excess_three(FitTables<BagKey> const& t,
+                                           LeftoverParams<BagKey> const& p,
+                                           BagKey rest, int e1, int e2,
+                                           int e3, int terms,
+                                           unsigned long long* visited) {
+    int const lane = threadIdx.x & 31;
+    int const r1 = int(uint32_t(rest >> t.shifts[e1]) & t.masks[e1]);
+    int const r2 = int(uint32_t(rest >> t.shifts[e2]) & t.masks[e2]);
+    int const r3 = int(uint32_t(rest >> t.shifts[e3]) & t.masks[e3]);
+    int const cap1 = t.caps[e1];
+    int const cap2 = t.caps[e2];
+    BagKey const pool = rest | p.bag_guards;
+    BagKey const guard1 = BagKey(1) << (t.shifts[e1] + __popc(t.masks[e1]));
+    BagKey const guard2 = BagKey(1) << (t.shifts[e2] + __popc(t.masks[e2]));
+    BagKey const guard3 = BagKey(1) << (t.shifts[e3] + __popc(t.masks[e3]));
+    uint32_t const base =
+        t.three_base[e3 * (e3 - 1) * (e3 - 2) / 6 + e2 * (e2 - 1) / 2 + e1];
+    unsigned long long excess = 0;
+    unsigned long long count = 0;
+    for (int u1 = r1 + 1; u1 <= cap1; ++u1) {
+        if (__any_sync(~0u, __ldcv(t.stop) != 0)) return 0;
+        for (int u2 = r2 + 1; u2 <= cap2; ++u2) {
+            int const* const starts =
+                t.three_starts + base + (u1 - 1) * cap2 + (u2 - 1);
+            int const end = starts[1];
+            for (int b = starts[0] + lane;; b += 32) {
+                bool live = b < end;
+                WalkBag<BagKey> bag;
+                if (live) {
+                    bag = t.three[b];
+                    live = int(bag.code) > r3;
+                }
+                if (live) {
+                    ++count;
+                    BagKey const over = ~(pool - bag.key) & p.bag_guards;
+                    BagKey const first = over & (0 - over);
+                    BagKey const second =
+                        (over ^ first) & (0 - (over ^ first));
+                    BagKey const third = (over ^ first ^ second) &
+                        (0 - (over ^ first ^ second));
+                    if ((over & t.dense_guards) == 0 && first == guard1 &&
+                        second == guard2 && third == guard3) {
+                        unsigned long long const j = key_bits_set(over);
+                        unsigned long long const times = terms == 2
+                            ? (j - 1) * (j - 2) / 2
+                            : (j - 1) * (j - 2) * (j - 3) / 6;
+                        excess += times * bag.pairs;
+                    }
+                }
+                if (__ballot_sync(~0u, live) != ~0u) break;
+            }
+        }
+    }
+    *visited += count;
+    return warp_sum(excess);
+}
+
+// The most bucket walks one lookup hands to the warp.
+constexpr int WALKS_MOST = 5;
+
+// `rest`'s entry of the third term of `t` for sparse letters e1 < e2 < e3.
+template <typename BagKey>
+__device__ inline uint32_t triple_sum(FitTables<BagKey> const& t, BagKey rest,
+                                      uint64_t number, int e1, int e2,
+                                      int e3) {
+    uint64_t const cap1 = t.caps[e1];
+    uint64_t const cap2 = t.caps[e2];
+    uint64_t const cap3 = t.caps[e3];
+    uint64_t const r1 =
+        cap1 - 1 - (uint32_t(rest >> t.shifts[e1]) & t.masks[e1]);
+    uint64_t const r2 =
+        cap2 - 1 - (uint32_t(rest >> t.shifts[e2]) & t.masks[e2]);
+    uint64_t const r3 =
+        cap3 - 1 - (uint32_t(rest >> t.shifts[e3]) & t.masks[e3]);
+    return t.triple[
+        t.triple_base[e3 * (e3 - 1) * (e3 - 2) / 6 + e2 * (e2 - 1) / 2 + e1] +
+        ((number * cap1 + r1) * cap2 + r2) * cap3 + r3];
+}
+
+// The PAIRS of the bags of `t` that fit `rest`, numbered `number`, but for
+// the bucket walks it needs: those are added to `walks`, 12 bits each (e1,
+// e2 and e3 from the low bits), and counted in `walk_count`; past
+// WALKS_MOST the count is WALKS_MOST + 1 and the lookup is void.
+template <typename BagKey>
+__device__ long long table_fits(FitTables<BagKey> const& t, BagKey rest,
+                                uint64_t number, uint64_t* walks,
+                                int* walk_count) {
+    long long fitting = t.fits[number];
+    uint32_t exceeded = 0;
+#pragma unroll 1
+    for (int e = 0; e < t.letters; ++e) {
+        int const count = int(uint32_t(rest >> t.shifts[e]) & t.masks[e]);
+        int const cap = t.caps[e];
+        if (count >= cap) continue;
+        uint32_t const sum =
+            t.one[t.one_base[e] + number * cap + (cap - 1 - count)];
+        fitting -= sum;
+        if (sum != 0) exceeded |= 1u << e;
+    }
+    if ((exceeded & (exceeded - 1)) == 0) return fitting;
+    // above[e1]: the e2 past e1 some bag exceeds the rest in along with it.
+    uint16_t above[SPARSE_LETTERS];
+    bool three = false;
+    for (uint32_t m1 = exceeded; m1 != 0; m1 &= m1 - 1) {
+        int const e1 = __ffs(int(m1)) - 1;
+        int const cap1 = t.caps[e1];
+        uint64_t const row = number * cap1 + (cap1 - 1 -
+            int(uint32_t(rest >> t.shifts[e1]) & t.masks[e1]));
+        uint32_t both = 0;
+        for (uint32_t m2 = m1 & (m1 - 1); m2 != 0; m2 &= m2 - 1) {
+            int const e2 = __ffs(int(m2)) - 1;
+            int const cap2 = t.caps[e2];
+            uint32_t const sum = t.two[
+                t.two_base[e2 * (e2 - 1) / 2 + e1] + row * cap2 +
+                (cap2 - 1 - int(uint32_t(rest >> t.shifts[e2]) & t.masks[e2]))];
+            fitting += sum;
+            if (sum != 0) both |= 1u << e2;
+        }
+        above[e1] = uint16_t(both);
+        three = three || (both & (both - 1)) != 0;
+    }
+    if (!three) return fitting;
+    for (uint32_t m1 = exceeded; m1 != 0; m1 &= m1 - 1) {
+        int const e1 = __ffs(int(m1)) - 1;
+        for (uint32_t m2 = above[e1]; m2 != 0; m2 &= m2 - 1) {
+            int const e2 = __ffs(int(m2)) - 1;
+            for (uint32_t m3 = above[e1] & above[e2]; m3 != 0; m3 &= m3 - 1) {
+                int const e3 = __ffs(int(m3)) - 1;
+                uint64_t const walk = uint64_t(e1 | e2 << 4 | e3 << 8);
+                if (t.triple == nullptr) {
+                    if (*walk_count < WALKS_MOST)
+                        *walks |= walk << (12 * *walk_count);
+                    if (*walk_count <= WALKS_MOST) ++*walk_count;
+                    continue;
+                }
+                uint32_t const sum = triple_sum(t, rest, number, e1, e2, e3);
+                fitting -= sum;
+                if (sum == 0) continue;
+                // A bag exceeds the rest in a fourth letter too only if
+                // every three of the four have a sum.
+                bool four = false;
+                for (uint32_t m4 = above[e1] & above[e2] & above[e3];
+                     m4 != 0 && !four; m4 &= m4 - 1) {
+                    int const e4 = __ffs(int(m4)) - 1;
+                    four = triple_sum(t, rest, number, e1, e2, e4) != 0 &&
+                        triple_sum(t, rest, number, e1, e3, e4) != 0 &&
+                        triple_sum(t, rest, number, e2, e3, e4) != 0;
+                }
+                if (!four) continue;
+                if (*walk_count < WALKS_MOST)
+                    *walks |= walk << (12 * *walk_count);
+                if (*walk_count <= WALKS_MOST) ++*walk_count;
+            }
+        }
+    }
+    return fitting;
+}
+
 // What walk_pair_usage takes beyond the walk's: the tasks, each a run of
 // one unit's chunks below its first pick, as the next one, how many there
 // are, each unit's first, then their count, and each unit's chunks a task;
@@ -1744,6 +2245,9 @@ struct UsageParams {
     LeftoverParams<BagKey> walk;
     unsigned long long* next_task;
     unsigned long long tasks;
+    unsigned long long task_stride;
+    // Nonzero once the walk is to stop taking tasks.
+    int const* stop;
     unsigned long long const* task_starts;
     int const* task_chunks;
     Memo memo;
@@ -1752,6 +2256,26 @@ struct UsageParams {
     unsigned long long* set;
     uint64_t set_mask;
     unsigned long long* set_dropped;
+    // With RESTS, the words a slot of the set takes: 2 when the word after
+    // a rest's number counts its rows.
+    int set_stride;
+    // With TOP_ROWS, `set` holds the wanted rests' numbers + 1 and
+    // top_values each one's value: 1 in its low two bits for a rest whose
+    // rows are all wanted, 2 for one whose rows are wanted only in units up
+    // to top_last_unit. Without top_rows, the walk adds each unit's rows of
+    // the second kind to unit_ties; with it, it writes each wanted row's
+    // picks' places and then its rest's value to top_rows, top_capacity
+    // rows at most, and counts them in top_count.
+    uint32_t const* top_values;
+    uint32_t* top_rows;
+    unsigned long long top_capacity;
+    unsigned long long* top_count;
+    uint32_t top_last_unit;
+    unsigned long long* unit_ties;
+    // With the SUM types and PAIR_USAGE_SUMS.
+    Slabs<BagKey> slabs;
+    // With PAIR_USAGE_TABLES, the last step's list's.
+    FitTables<BagKey> tables;
 };
 
 // Adds the rest numbered `number` to the walk's set.
@@ -1761,12 +2285,29 @@ __device__ inline void add_rest(UsageParams<BagKey> const& q,
     unsigned long long const key = number + 1;
     uint64_t slot = mix64(key) & q.set_mask;
     for (int probe = 0; probe < SET_PROBES; ++probe) {
-        unsigned long long found = q.set[slot];
-        if (found == 0) found = atomicCAS(&q.set[slot], 0ULL, key);
-        if (found == 0 || found == key) return;
+        unsigned long long* const at = q.set + slot * q.set_stride;
+        unsigned long long found = *at;
+        if (found == 0) found = atomicCAS(at, 0ULL, key);
+        if (found == 0 || found == key) {
+            if (q.set_stride == 2) atomicAdd(at + 1, 1ULL);
+            return;
+        }
         slot = (slot + 1) & q.set_mask;
     }
     atomicAdd(q.set_dropped, 1ULL);
+}
+
+// The value of the rest numbered `number` in the walk's wanted rests, or 0.
+template <typename BagKey>
+__device__ inline uint32_t top_value(UsageParams<BagKey> const& q,
+                                     uint64_t number) {
+    unsigned long long const key = number + 1;
+    for (uint64_t slot = mix64(key) & q.set_mask;;
+         slot = (slot + 1) & q.set_mask) {
+        unsigned long long const found = __ldcg(&q.set[slot]);
+        if (found == key) return __ldcg(&q.top_values[slot]);
+        if (found == 0) return 0;
+    }
 }
 
 // `number` mixed one to one within `bits` bits.
@@ -1867,6 +2408,8 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
                                          unsigned long long* memo_scanned,
                                          unsigned long long* stats) {
     constexpr bool MEMO = COUNT_TYPE == WalkCountType::PAIR_USAGE_MEMO;
+    constexpr bool SUMS = COUNT_TYPE == WalkCountType::PAIR_USAGE_SUMS;
+    constexpr bool TABLES = COUNT_TYPE == WalkCountType::PAIR_USAGE_TABLES;
     LeftoverParams<BagKey> const& p = q.walk;
     int const lane = threadIdx.x & 31;
     Picked<BagKey> const from = levels[depth - 1].picked;
@@ -1874,6 +2417,7 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
     Picked<BagKey> next;
     unsigned long long w = 0;
     unsigned long long count = 0;
+    unsigned long long ties = 0;
     while (cursor.left > 0) {
         int const i = next_candidates(cells, &cursor);
         if (i >= 0) ++count;
@@ -1881,31 +2425,169 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
         if constexpr (COUNT_TYPE == WalkCountType::RESTS) {
             if (fit && in_order(p, from, next, depth))
                 add_rest(q, next.number);
-        } else if constexpr (!MEMO) {
+        } else if constexpr (COUNT_TYPE == WalkCountType::TOP_ROWS) {
+            if (!fit || !in_order(p, from, next, depth)) continue;
+            uint32_t const value =
+                q.top_values == nullptr ? 2 : top_value(q, next.number);
+            if (value == 0) continue;
+            bool const tie = (value & 3) == 2;
+            if (q.top_rows == nullptr) {
+                if (tie) ++ties;
+                continue;
+            }
+            if (tie && levels[0].picked.place > q.top_last_unit) continue;
+            unsigned long long const row = atomicAdd(q.top_count, 1ULL);
+            if (row >= q.top_capacity) continue;
+            uint32_t* const out = q.top_rows + row * (p.steps + 1);
+            for (int d = 0; d < depth; ++d) out[d] = levels[d].picked.place;
+            out[depth] = next.place;
+            out[p.steps] = value;
+        } else if constexpr (COUNT_TYPE == WalkCountType::SUM_SLABS) {
+            bool const wanted =
+                fit && next.letters >= 2 * q.slabs.shortest;
+            uint32_t const slab =
+                wanted ? slab_index(q.slabs, next.rest) : ~0u;
+            unsigned const same = __match_any_sync(~0u, slab);
+            if (wanted && lane == __ffs(int(same)) - 1)
+                atomicAdd(&q.slabs.counts[slab],
+                          (unsigned long long)__popc(same));
+        } else if constexpr (COUNT_TYPE == WalkCountType::SUM_SCATTER) {
+            BagKey left;
+            if (fit &&
+                fits(q.slabs.slab | q.slabs.guards,
+                     (p.bag - next.rest) & q.slabs.mask, q.slabs.guards,
+                     &left))
+                atomicAdd(&q.slabs.sums[p.bag_number - next.number],
+                          next.rows);
+        } else if constexpr (SUMS) {
+            bool const wanted =
+                fit && next.letters >= 2 * q.slabs.shortest &&
+                (next.rest & q.slabs.mask) == q.slabs.slab;
+            unsigned long long sets = 0;
+            if (wanted) sets = __ldcg(&q.slabs.sums[next.number]);
+            BagKey const pool = next.rest | p.bag_guards;
+            BagKey above = p.bag;
+            unsigned scans = 0;
+            for (int m = 0; m <= depth; ++m) {
+                BagKey const after =
+                    m < depth ? levels[m].picked.rest : next.rest;
+                unsigned long long const pairs =
+                    m < depth ? levels[m].picked.pairs : next.pairs;
+                BagKey const key = above - after;
+                above = after;
+                BagKey left = 0;
+                bool const again = wanted && sets != 0 &&
+                    (m >= p.pair_steps) == list &&
+                    fits(pool, key, p.bag_guards, &left);
+                unsigned const todo_all = __ballot_sync(~0u, again);
+                scans += __popc(todo_all);
+                unsigned long long fitting = 0;
+                for (unsigned todo = todo_all; todo != 0; todo &= todo - 1) {
+                    int const source = __ffs(int(todo)) - 1;
+                    unsigned long long const all = fitting_pairs(
+                        p, p.offsets[list], shuffle_key(left, source),
+                        memo_scanned);
+                    if (lane == source) fitting = all;
+                }
+                if (!again) continue;
+                BagKey const pool_left = left | p.bag_guards;
+                BagKey over = p.bag;
+                for (int y = 0; y <= m; ++y) {
+                    BagKey const under =
+                        y < depth ? levels[y].picked.rest : next.rest;
+                    unsigned long long const pairs_y =
+                        y < depth ? levels[y].picked.pairs : next.pairs;
+                    BagKey unused;
+                    if ((y >= p.pair_steps) == list &&
+                        fits(pool_left, over - under, p.bag_guards, &unused))
+                        fitting -= pairs_y;
+                    over = under;
+                }
+                sets -= pairs * fitting;
+            }
+            if (lane == 0) {
+                stats[0] += __popc(__ballot_sync(~0u, wanted));
+                stats[1] += scans;
+            } else {
+                __ballot_sync(~0u, wanted);
+            }
+            if (!wanted || sets == 0) continue;
+            atomicAdd(&p.usage[i], from.rows * sets);
+            w += next.pairs * sets;
+        } else if constexpr (!MEMO && !TABLES) {
             if (!fit) continue;
             atomicAdd(&p.usage[i], from.rows);
             w += next.pairs;
         } else {
             unsigned long long fitting = 0;
             bool const wanted = fit && next.letters >= q.memo.letters;
-            uint64_t const hash =
-                mix_within(next.number, q.memo.number_bits);
-            bool const miss = wanted && !memo_get(q.memo, hash, &fitting);
-            unsigned const missed = __ballot_sync(~0u, miss);
-            if (lane == 0) {
-                stats[0] += __popc(__ballot_sync(~0u, wanted));
-                stats[1] += __popc(missed);
+            if constexpr (TABLES) {
+                unsigned long long visited = 0;
+                uint64_t walks = 0;
+                int walk_count = 0;
+                long long sum = 0;
+                if (wanted)
+                    sum = table_fits(q.tables, next.rest, next.number,
+                                     &walks, &walk_count);
+                int const terms = q.tables.triple == nullptr ? 2 : 3;
+                unsigned triangles = 0;
+                for (unsigned todo = __ballot_sync(~0u, walk_count != 0);
+                     todo != 0; todo &= todo - 1) {
+                    int const source = __ffs(int(todo)) - 1;
+                    BagKey const rest = shuffle_key(next.rest, source);
+                    uint64_t const from_walks =
+                        __shfl_sync(~0u, walks, source);
+                    int const from_count =
+                        __shfl_sync(~0u, walk_count, source);
+                    triangles += from_count;
+                    if (from_count > WALKS_MOST) {
+                        unsigned long long const all = fitting_pairs(
+                            p, p.offsets[list], rest, memo_scanned);
+                        if (lane == source) sum = (long long)all;
+                        continue;
+                    }
+                    for (int k = 0; k < from_count; ++k) {
+                        uint32_t const walk =
+                            uint32_t(from_walks >> (12 * k));
+                        long long const excess = (long long)excess_three(
+                            q.tables, p, rest, walk & 15, walk >> 4 & 15,
+                            walk >> 8 & 15, terms, &visited);
+                        if (lane == source)
+                            sum += terms == 2 ? -excess : excess;
+                    }
+                }
+                fitting = (unsigned long long)sum;
+                *memo_scanned += warp_sum(visited);
+                if (lane == 0) {
+                    stats[0] += __popc(__ballot_sync(~0u, wanted));
+                    stats[1] += triangles;
+                } else {
+                    __ballot_sync(~0u, wanted);
+                }
             } else {
-                __ballot_sync(~0u, wanted);
-            }
-            for (unsigned todo = missed; todo != 0; todo &= todo - 1) {
-                int const source = __ffs(int(todo)) - 1;
-                unsigned long long const all = fitting_pairs(
-                    p, p.offsets[list], shuffle_key(next.rest, source),
-                    memo_scanned);
-                if (lane != source) continue;
-                fitting = all;
-                memo_put(q.memo, hash, all);
+                uint64_t const hash =
+                    mix_within(next.number, q.memo.number_bits);
+                bool const miss =
+                    wanted && !memo_get(q.memo, hash, &fitting);
+                unsigned const missed = __ballot_sync(~0u, miss);
+                if (lane == 0) {
+                    stats[0] += __popc(__ballot_sync(~0u, wanted));
+                    stats[1] += __popc(missed);
+                } else {
+                    __ballot_sync(~0u, wanted);
+                }
+                // A walk told to stop drops its counts: no more scans.
+                if (missed != 0 && __any_sync(~0u, __ldcv(q.stop) != 0))
+                    break;
+                for (unsigned todo = missed; todo != 0; todo &= todo - 1) {
+                    int const source = __ffs(int(todo)) - 1;
+                    unsigned long long const all = fitting_pairs(
+                        p, p.offsets[list], shuffle_key(next.rest, source),
+                        memo_scanned);
+                    if (lane != source) continue;
+                    fitting = all;
+                    memo_put(q.memo, hash, all);
+                }
             }
             if (!wanted || fitting == 0) continue;
             BagKey const pool = next.rest | p.bag_guards;
@@ -1924,6 +2606,11 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
             atomicAdd(&p.usage[i], from.rows * fitting);
             w += next.pairs * fitting;
         }
+    }
+    if constexpr (COUNT_TYPE == WalkCountType::TOP_ROWS) {
+        ties = warp_sum(ties);
+        if (lane == 0 && ties != 0)
+            atomicAdd(&q.unit_ties[levels[0].picked.place], ties);
     }
     *scanned += warp_sum(count);
     return warp_sum(w);
@@ -1973,7 +2660,10 @@ walk_pair_usage(UsageParams<BagKey> q) {
     unsigned long long unit_end = 0;
     while (true) {
         unsigned long long task = 0;
-        if (lane == 0) task = atomicAdd(q.next_task, 1ULL);
+        if (lane == 0) {
+            task = atomicAdd(q.next_task, 1ULL) * q.task_stride;
+            if (__ldcv(q.stop) != 0) task = q.tasks;
+        }
         task = __shfl_sync(~0u, task, 0);
         if (task >= q.tasks) return;
         if (task >= unit_end) {
@@ -2005,6 +2695,9 @@ walk_pair_usage(UsageParams<BagKey> q) {
         }
         int depth = 1;
         while (depth > 0) {
+            int stopped = 0;
+            if (lane == 0) stopped = __ldcv(q.stop);
+            if (__shfl_sync(~0u, stopped, 0) != 0) return;
             Cells const cells = levels[depth - 1].cells;
             if (depth == last) {
                 unsigned long long scanned = 0;
@@ -2050,11 +2743,14 @@ walk_pair_usage(UsageParams<BagKey> q) {
             ++depth;
         }
         if (lane == 0) {
+            atomicAdd(&p.progress->tasks, 1ULL);
             if (task + 1 == unit_end) atomicAdd(&p.progress->done, 1ULL);
             int const group = p.groups[unit];
             atomicAdd(&p.progress->first[group], first);
             atomicAdd(&p.progress->work[group], work + memo_work);
-            if constexpr (COUNT_TYPE == WalkCountType::PAIR_USAGE_MEMO) {
+            if constexpr (COUNT_TYPE == WalkCountType::PAIR_USAGE_MEMO ||
+                          COUNT_TYPE == WalkCountType::PAIR_USAGE_SUMS ||
+                          COUNT_TYPE == WalkCountType::PAIR_USAGE_TABLES) {
                 atomicAdd(&p.progress->lookups, stats[0]);
                 atomicAdd(&p.progress->misses, stats[1]);
                 atomicAdd(&p.progress->miss_work, memo_work);
@@ -2100,6 +2796,32 @@ count_unit_tasks(LeftoverParams<BagKey> p, unsigned long long* totals,
         task_chunks[unit] = int(size);
         task_counts[unit] = tasks;
     }
+}
+
+// Sums `table` along one letter: each of `lines` runs of `size` entries
+// `stride` apart becomes its running sums.
+template <typename Entry>
+__global__ void sum_along(Entry* table, unsigned long long lines,
+                          unsigned long long stride, int size) {
+    unsigned long long const line =
+        (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (line >= lines) return;
+    unsigned long long const high = line / stride;
+    Entry* at = table + high * stride * size + (line - high * stride);
+    Entry sum = *at;
+    for (int v = 1; v < size; ++v) {
+        at += stride;
+        sum += *at;
+        *at = sum;
+    }
+}
+
+// Adds values[k] to table[indexes[k]] for each of `count` k.
+__global__ void scatter_add(uint32_t* table, uint64_t const* indexes,
+                            uint32_t const* values, unsigned long long count) {
+    unsigned long long const k =
+        (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (k < count) atomicAdd(&table[indexes[k]], values[k]);
 }
 
 // The device blocks a kernel of WALK_THREADS threads and `shared` bytes
@@ -2307,26 +3029,731 @@ bool memo_layout(uint64_t numbers, uint64_t most, Memo* out) {
     return wide > 0 && memo.number_bits - memo.slot_bits + memo.value_bits <= 64;
 }
 
+// Builds the fit tables of bags [begin, end) of `inputs` on the device into
+// `out`, and writes every bag's number over the dense letters to `numbers`
+// and the bag's to `bag_number`. False when the tables don't suit the bag.
+template <typename BagKey>
+bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
+                      int begin, int end, DeviceBuffers* d,
+                      FitTables<BagKey>* out, std::vector<uint64_t>* numbers,
+                      uint64_t* bag_number) {
+    int const bags = int(inputs.pairs.size());
+    auto const letters_of = [&](int i) {
+        return &inputs.pair_letters[size_t(i) * GPU_LETTERS_BYTES];
+    };
+    // The dense letters: those the bag has fewest of, as many as leave the
+    // tables, the third term's too, within the device's free memory; or
+    // while their rests number at most DENSE_MOST when no split does.
+    std::vector<int> by_count;
+    for (int letter = 0; letter < 26; ++letter)
+        if (inputs.bag[letter] != 0) by_count.push_back(letter);
+    std::stable_sort(by_count.begin(), by_count.end(), [&](int a, int b) {
+        return inputs.bag[a] < inputs.bag[b];
+    });
+    std::vector<uint64_t> most(26, 0);
+    for (int i = begin; i < end; ++i)
+        for (int letter = 0; letter < 26; ++letter)
+            most[letter] =
+                std::max<uint64_t>(most[letter], letters_of(i)[letter]);
+    size_t free_bytes = 0;
+    size_t device_bytes = 0;
+    check(cudaMemGetInfo(&free_bytes, &device_bytes));
+    uint64_t const dense_most = getenv("BSC_DENSE") ? strtoull(getenv("BSC_DENSE"), nullptr, 10) : 0;
+    size_t dense_count = 0;
+    {
+        uint64_t rests = 1;
+        size_t fallback = 0;
+        for (size_t k = 0; k <= by_count.size(); ++k) {
+            if (k > 0) rests *= inputs.bag[by_count[k - 1]] + 1;
+            if (rests > (uint64_t(1) << 32)) break;
+            if (rests <= DENSE_MOST) fallback = k;
+            if (dense_most != 0 && rests > dense_most) break;
+            if (by_count.size() - k > size_t(SPARSE_LETTERS)) continue;
+            long double one = 0;
+            long double two = 0;
+            long double triple = 0;
+            for (size_t a = k; a < by_count.size(); ++a) {
+                long double const cap = most[by_count[a]];
+                triple += two * cap;
+                two += one * cap;
+                one += cap;
+            }
+            if (rests * one > UINT32_MAX || rests * two > TWO_MOST) continue;
+            if (free_bytes > TRIPLE_RESERVE &&
+                rests * (1 + one + two + triple) * 4 <=
+                    free_bytes - TRIPLE_RESERVE)
+                dense_count = k;
+        }
+        if (dense_count == 0) dense_count = fallback;
+    }
+    uint64_t lattice = 1;
+    std::vector<uint64_t> strides(26, 0);
+    std::vector<std::pair<int, uint64_t>> dims;
+    std::vector<int> sparse;
+    BagKey dense_guards = 0;
+    for (size_t k = 0; k < by_count.size(); ++k) {
+        int const letter = by_count[k];
+        uint64_t const size = inputs.bag[letter] + 1;
+        if (k < dense_count) {
+            strides[letter] = lattice;
+            dims.push_back({int(size), lattice});
+            lattice *= size;
+            int bits = 0;
+            while ((inputs.bag[letter] >> bits) != 0) ++bits;
+            dense_guards |= BagKey(1) << (packing.shifts[letter] + bits);
+        } else {
+            sparse.push_back(letter);
+        }
+    }
+    std::sort(sparse.begin(), sparse.end());
+    int const count = int(sparse.size());
+    if (count > SPARSE_LETTERS) return false;
+    auto const number = [&](uint8_t const* counts) {
+        uint64_t sum = 0;
+        for (int letter = 0; letter < 26; ++letter)
+            sum += counts[letter] * strides[letter];
+        return sum;
+    };
+    numbers->resize(size_t(bags));
+    for (int i = 0; i < bags; ++i) (*numbers)[i] = number(letters_of(i));
+    *bag_number = number(inputs.bag);
+
+    FitTables<BagKey>& t = *out;
+    t.letters = count;
+    t.dense_guards = dense_guards;
+    std::vector<uint64_t> caps(size_t(count), 0);
+    uint64_t all_pairs = 0;
+    for (int i = begin; i < end; ++i) {
+        all_pairs += inputs.pairs[i];
+        for (int e = 0; e < count; ++e)
+            caps[e] = std::max<uint64_t>(caps[e], letters_of(i)[sparse[e]]);
+    }
+    if (all_pairs > UINT32_MAX) return false;
+    uint64_t one_entries = 0;
+    for (int e = 0; e < count; ++e) {
+        int bits = 0;
+        while ((inputs.bag[sparse[e]] >> bits) != 0) ++bits;
+        t.shifts[e] = packing.shifts[sparse[e]];
+        t.masks[e] = uint8_t((1 << bits) - 1);
+        t.caps[e] = uint8_t(caps[e]);
+        t.one_base[e] = uint32_t(one_entries);
+        one_entries += lattice * caps[e];
+    }
+    std::vector<uint64_t> two_base(size_t(count) * (count - 1) / 2 + 1, 0);
+    uint64_t two_entries = 0;
+    for (int e2 = 1; e2 < count; ++e2)
+        for (int e1 = 0; e1 < e2; ++e1) {
+            two_base[e2 * (e2 - 1) / 2 + e1] = two_entries;
+            two_entries += lattice * caps[e1] * caps[e2];
+        }
+    if (one_entries > UINT32_MAX || two_entries > TWO_MOST) return false;
+    std::vector<uint32_t> three_base(
+        size_t(count) * (count - 1) * (count - 2) / 6 + 1, 0);
+    std::vector<uint64_t> triple_base(three_base.size(), 0);
+    uint64_t buckets = 0;
+    uint64_t triple_entries = 0;
+    for (int e3 = 2; e3 < count; ++e3)
+        for (int e2 = 1; e2 < e3; ++e2)
+            for (int e1 = 0; e1 < e2; ++e1) {
+                size_t const triple =
+                    e3 * (e3 - 1) * (e3 - 2) / 6 + e2 * (e2 - 1) / 2 + e1;
+                three_base[triple] = uint32_t(buckets);
+                buckets += caps[e1] * caps[e2];
+                triple_base[triple] = triple_entries;
+                triple_entries += lattice * caps[e1] * caps[e2] * caps[e3];
+            }
+    // The third term's table goes on the device if it has the room.
+    size_t const before = (one_entries + two_entries + lattice) * 4;
+    bool const with_triple = getenv("BSC_NO_TRIPLE") == nullptr &&
+        free_bytes > before + TRIPLE_RESERVE &&
+        triple_entries * 4 <= free_bytes - before - TRIPLE_RESERVE;
+    std::vector<uint64_t> triple_indexes;
+    std::vector<uint32_t> triple_values;
+
+    std::vector<uint32_t> fits(lattice, 0);
+    std::vector<uint32_t> one(one_entries, 0);
+    std::vector<uint32_t> two(two_entries, 0);
+    // A bag in a bucket of `three`: the bucket, its count of the third
+    // letter, and the bag.
+    struct Listed {
+        uint32_t bucket;
+        uint32_t count;
+        int bag;
+    };
+    std::vector<Listed> listed;
+    for (int i = begin; i < end; ++i) {
+        uint8_t const* const counts = letters_of(i);
+        uint64_t const n = (*numbers)[i];
+        uint32_t const pairs = uint32_t(inputs.pairs[i]);
+        fits[n] += pairs;
+        for (int e1 = 0; e1 < count; ++e1) {
+            uint64_t const u1 = counts[sparse[e1]];
+            if (u1 == 0) continue;
+            uint64_t const row = n * caps[e1] + (caps[e1] - u1);
+            one[t.one_base[e1] + row] += pairs;
+            for (int e2 = e1 + 1; e2 < count; ++e2) {
+                uint64_t const u2 = counts[sparse[e2]];
+                if (u2 == 0) continue;
+                two[two_base[e2 * (e2 - 1) / 2 + e1] + row * caps[e2] +
+                    (caps[e2] - u2)] += pairs;
+                for (int e3 = e2 + 1; e3 < count; ++e3) {
+                    uint32_t const u3 = counts[sparse[e3]];
+                    if (u3 == 0) continue;
+                    size_t const triple = e3 * (e3 - 1) * (e3 - 2) / 6 +
+                        e2 * (e2 - 1) / 2 + e1;
+                    listed.push_back(
+                        {uint32_t(three_base[triple] + (u1 - 1) * caps[e2] +
+                                  (u2 - 1)),
+                         u3, i});
+                    if (!with_triple) continue;
+                    triple_indexes.push_back(
+                        triple_base[triple] +
+                        ((row * caps[e2] + (caps[e2] - u2)) * caps[e3]) +
+                        (caps[e3] - u3));
+                    triple_values.push_back(pairs);
+                }
+            }
+        }
+    }
+    if (listed.size() > size_t(INT32_MAX)) return false;
+    std::sort(listed.begin(), listed.end(),
+              [](Listed const& a, Listed const& b) {
+        return a.bucket != b.bucket ? a.bucket < b.bucket
+            : a.count != b.count ? a.count > b.count : a.bag < b.bag;
+    });
+    std::vector<int> starts(buckets + 2, 0);
+    std::vector<WalkBag<BagKey>> three(listed.size());
+    for (size_t k = 0; k < listed.size(); ++k) {
+        ++starts[listed[k].bucket + 1];
+        three[k] = {packing.pack<BagKey>(letters_of(listed[k].bag)),
+                    uint32_t(inputs.pairs[listed[k].bag]), listed[k].count};
+    }
+    std::partial_sum(starts.begin(), starts.end(), starts.begin());
+
+    uint32_t* const device_fits = d->upload(fits);
+    uint32_t* const device_one = d->upload(one);
+    uint32_t* const device_two = d->upload(two);
+    auto const sum = [&](uint32_t* table, uint64_t entries, int size,
+                         uint64_t stride) {
+        if (entries == 0 || size < 2) return;
+        uint64_t const lines = entries / size;
+        sum_along<uint32_t><<<unsigned((lines + 255) / 256), 256>>>(
+            table, lines, stride, size);
+        check(cudaGetLastError());
+    };
+    for (auto const& [size, at] : dims) sum(device_fits, lattice, size, at);
+    for (int e = 0; e < count; ++e) {
+        uint64_t const entries = lattice * caps[e];
+        uint32_t* const table = device_one + t.one_base[e];
+        sum(table, entries, int(caps[e]), 1);
+        for (auto const& [size, at] : dims)
+            sum(table, entries, size, at * caps[e]);
+    }
+    for (int e2 = 1; e2 < count; ++e2)
+        for (int e1 = 0; e1 < e2; ++e1) {
+            uint64_t const cells = caps[e1] * caps[e2];
+            uint64_t const entries = lattice * cells;
+            uint32_t* const table =
+                device_two + two_base[e2 * (e2 - 1) / 2 + e1];
+            sum(table, entries, int(caps[e2]), 1);
+            sum(table, entries, int(caps[e1]), caps[e2]);
+            for (auto const& [size, at] : dims)
+                sum(table, entries, size, at * cells);
+        }
+    if (with_triple) {
+        uint32_t* const device_triple = d->allocate<uint32_t>(triple_entries);
+        {
+            DeviceBuffers list;
+            uint64_t const* const indexes = list.upload(triple_indexes);
+            uint32_t const* const values = list.upload(triple_values);
+            unsigned long long const added = triple_indexes.size();
+            if (added != 0)
+                scatter_add<<<unsigned((added + 255) / 256), 256>>>(
+                    device_triple, indexes, values, added);
+            check(cudaGetLastError());
+            check(cudaDeviceSynchronize());
+        }
+        for (int e3 = 2; e3 < count; ++e3)
+            for (int e2 = 1; e2 < e3; ++e2)
+                for (int e1 = 0; e1 < e2; ++e1) {
+                    uint64_t const cells = caps[e1] * caps[e2] * caps[e3];
+                    uint64_t const entries = lattice * cells;
+                    uint32_t* const table = device_triple + triple_base[
+                        e3 * (e3 - 1) * (e3 - 2) / 6 + e2 * (e2 - 1) / 2 + e1];
+                    sum(table, entries, int(caps[e3]), 1);
+                    sum(table, entries, int(caps[e2]), caps[e3]);
+                    sum(table, entries, int(caps[e1]), caps[e2] * caps[e3]);
+                    for (auto const& [size, at] : dims)
+                        sum(table, entries, size, at * cells);
+                }
+        t.triple = device_triple;
+        t.triple_base = d->upload(triple_base);
+    }
+    check(cudaDeviceSynchronize());
+    t.fits = device_fits;
+    t.one = device_one;
+    t.two = device_two;
+    t.three = d->upload(three);
+    t.three_starts = d->upload(starts);
+    t.two_base = d->upload(two_base);
+    t.three_base = d->upload(three_base);
+    if (getenv("BSC_DEBUG"))
+        fprintf(stderr, "DEBUG tables: %d dense letters, %llu rests, %d sparse letters, one %llu, two %llu entries, triple %llu entries%s, three %zu bags in %llu buckets\n",
+                int(dims.size()), (unsigned long long)lattice, count, (unsigned long long)one_entries, (unsigned long long)two_entries, (unsigned long long)triple_entries, with_triple ? "" : " (not built)", listed.size(), (unsigned long long)buckets);
+    return true;
+}
+
+// A walk's tasks: `totals` as finished_share takes them, and the units with
+// no tasks.
+struct TaskPlan {
+    std::vector<unsigned long long> totals;
+    size_t skipped = 0;
+};
+
+// Splits the walk of `q` into tasks, allocating from `d` its progress, work
+// groups and task arrays.
+template <typename BagKey>
+TaskPlan plan_tasks(DeviceBuffers* d, UsageParams<BagKey>* q) {
+    LeftoverParams<BagKey>& p = q->walk;
+    p.progress = d->allocate<WalkProgress>(1);
+    p.groups = d->allocate<uint8_t>(size_t(p.count));
+    q->next_task = d->allocate<unsigned long long>(1);
+    int* const task_chunks = d->allocate<int>(size_t(p.count));
+    unsigned long long* const task_counts =
+        d->allocate<unsigned long long>(size_t(p.count) + 1);
+    unsigned long long* const group_totals =
+        d->allocate<unsigned long long>(WORK_GROUPS);
+    count_unit_tasks<BagKey>
+        <<<walk_grid(count_unit_tasks<BagKey>, 0), WALK_THREADS>>>(
+            p, group_totals, task_chunks, task_counts, TASK_CANDIDATES);
+    check(cudaGetLastError());
+    TaskPlan plan;
+    plan.totals.resize(WORK_GROUPS);
+    d->download(group_totals, &plan.totals);
+    std::vector<unsigned long long> starts(size_t(p.count) + 1);
+    d->download(task_counts, &starts);
+    unsigned long long tasks = 0;
+    for (size_t unit = 0; unit < size_t(p.count); ++unit) {
+        unsigned long long const count = starts[unit];
+        if (count == 0) ++plan.skipped;
+        starts[unit] = tasks;
+        tasks += count;
+    }
+    starts.back() = tasks;
+    q->tasks = tasks;
+    q->task_stride = getenv("BSC_TASK_STRIDE") ? strtoull(getenv("BSC_TASK_STRIDE"), nullptr, 10) : 1;
+    q->task_starts = d->upload(starts);
+    q->task_chunks = task_chunks;
+    return plan;
+}
+
+// Launches the walk of `q` on `stream`.
+template <WalkCountType COUNT_TYPE, typename BagKey>
+void launch_usage(UsageParams<BagKey> const& q, cudaStream_t stream) {
+    size_t const shared =
+        size_t(WALK_WARPS) * size_t(q.walk.steps) * sizeof(Level<BagKey>);
+    walk_pair_usage<COUNT_TYPE, BagKey>
+        <<<walk_grid(walk_pair_usage<COUNT_TYPE, BagKey>, shared),
+           WALK_THREADS, shared, stream>>>(q);
+    check(cudaGetLastError());
+}
+
 // Walks `inputs` in `order`, in tasks, counting each pair bag's usage into
 // `out`, with `memo` for PAIR_USAGE_MEMO; or with RESTS, collecting the
 // distinct rest numbers a set of `slots` slots holds into `out` and
 // returning how many found no slot.
+template <WalkCountType COUNT_TYPE, typename BagKey>
+struct UsageWalk {
+    static constexpr bool MEMO = COUNT_TYPE == WalkCountType::PAIR_USAGE_MEMO;
+    static constexpr bool RESTS = COUNT_TYPE == WalkCountType::RESTS;
+    static constexpr bool TOP = COUNT_TYPE == WalkCountType::TOP_ROWS;
+    static constexpr bool TABLES =
+        COUNT_TYPE == WalkCountType::PAIR_USAGE_TABLES;
+
+    DeviceBuffers d;
+    UsageParams<BagKey> q{};
+    TaskPlan plan;
+    UsageOrder order;
+    int bags = 0;
+    int pair_bags = 0;
+    size_t slots = 0;
+    int* stop = nullptr;
+    // With RESTS, set before prepare(): whether the set counts each rest's
+    // rows, which finish() then writes to `rest_rows`.
+    bool count_rows = false;
+    std::vector<uint64_t> rest_rows;
+
+    // Sets the walk up on the device; false when PAIR_USAGE_TABLES' tables
+    // don't suit the bag.
+    bool prepare(GpuLeftoverInputs const& inputs, Packing const& packing,
+                 UsageOrder const& walk_order, Memo const& memo,
+                 size_t set_slots, size_t first_unit, size_t units) {
+        order = walk_order;
+        slots = set_slots;
+        bags = int(inputs.pairs.size());
+        pair_bags = inputs.pair_bags;
+        bool const two_lists = order.other_steps > 0;
+        LeftoverParams<BagKey>& p = q.walk;
+        set_walk_inputs(inputs, packing, &d, &p);
+        if constexpr (MEMO || RESTS || TOP)
+            p.numbers = d.upload(inputs.numbers);
+        int const* const pair_offsets = d.upload(inputs.offsets);
+        int const* const prospect_offsets = inputs.prospect_offsets.empty()
+            ? pair_offsets : d.upload(inputs.prospect_offsets);
+        p.offsets[0] = order.pairs_first ? pair_offsets : prospect_offsets;
+        p.offsets[1] = !two_lists ? p.offsets[0]
+            : order.pairs_first ? prospect_offsets : pair_offsets;
+        p.first_unit = order.pairs_first ? 0 : pair_bags;
+        p.count = order.pairs_first ? pair_bags : bags - pair_bags;
+        p.steps = order.first_steps + order.other_steps;
+        p.pair_steps = order.first_steps;
+        if constexpr (RESTS || TOP) {
+            p.order = d.upload(inputs.places);
+            p.units = d.upload(inputs.units);
+            p.first_unit = int(first_unit);
+            p.count = int(units);
+        }
+        p.usage = d.allocate<unsigned long long>(size_t(bags));
+        stop = d.allocate<int>(1);
+        q.stop = stop;
+        plan = plan_tasks(&d, &q);
+        if constexpr (MEMO || TABLES) {
+            bool const pairs_last = order.pairs_first != two_lists;
+            int const begin = pairs_last ? 0 : pair_bags;
+            int const end = pairs_last ? pair_bags : bags;
+            q.memo = memo;
+            q.memo.letters = GPU_MAX_LETTERS;
+            for (int i = begin; i < end; ++i)
+                q.memo.letters =
+                    std::min(q.memo.letters, int(inputs.lengths[i]));
+            if constexpr (MEMO) {
+                q.memo.slots = d.allocate<uint32_t>(
+                    (size_t(1) << memo.slot_bits) * (memo.narrow ? 1 : 2));
+            } else {
+                std::vector<uint64_t> numbers;
+                if (!build_fit_tables(inputs, packing, begin, end, &d,
+                                      &q.tables, &numbers, &p.bag_number))
+                    return false;
+                q.tables.stop = stop;
+                p.numbers = d.upload(numbers);
+            }
+        }
+        if constexpr (RESTS) {
+            q.set_stride = count_rows ? 2 : 1;
+            q.set = d.allocate<unsigned long long>(slots * q.set_stride);
+            q.set_mask = slots - 1;
+            q.set_dropped = d.allocate<unsigned long long>(1);
+        }
+        return true;
+    }
+
+    // The candidates below the units' first picks.
+    unsigned long long first_candidates() const {
+        unsigned long long sum = 0;
+        for (unsigned long long const total : plan.totals) sum += total;
+        return sum;
+    }
+
+    // Walks about `sample` of the tasks, evenly spaced, for at most `most`
+    // seconds, and undoes what it counted; the seconds the sample takes, by
+    // the share of it finished when it is cut short.
+    double pilot(unsigned long long sample, double most) {
+        LeftoverParams<BagKey>& p = q.walk;
+        UsageParams<BagKey> some = q;
+        some.task_stride = std::max<unsigned long long>(q.tasks / sample, 1);
+        double const tasks =
+            double((q.tasks + some.task_stride - 1) / some.task_stride);
+        cudaStream_t stream = nullptr;
+        cudaStream_t side = nullptr;
+        check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        check(cudaStreamCreateWithFlags(&side, cudaStreamNonBlocking));
+        // The kernel's first launch loads it: launch it with no tasks first.
+        UsageParams<BagKey> none = q;
+        none.tasks = 0;
+        check(cudaDeviceSynchronize());
+        launch_usage<COUNT_TYPE>(none, stream);
+        check(cudaStreamSynchronize(stream));
+        check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
+        check(cudaDeviceSynchronize());
+        auto const start = std::chrono::steady_clock::now();
+        auto const elapsed = [&] {
+            return std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - start).count();
+        };
+        launch_usage<COUNT_TYPE>(some, stream);
+        double seconds = 0;
+        while (cudaStreamQuery(stream) == cudaErrorNotReady) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // Stop at most of the sample: its last tasks are a few long
+            // ones, a warp each.
+            WalkProgress now;
+            check(cudaMemcpyAsync(&now, p.progress, sizeof now,
+                                  cudaMemcpyDeviceToHost, side));
+            check(cudaStreamSynchronize(side));
+            double const at = elapsed();
+            if (at < most && double(now.tasks) < PILOT_SHARE * tasks) continue;
+            seconds = at * tasks / double(std::max(now.tasks, 1ULL));
+            int const one = 1;
+            check(cudaMemcpyAsync(stop, &one, sizeof one,
+                                  cudaMemcpyHostToDevice, side));
+            check(cudaStreamSynchronize(side));
+            break;
+        }
+        check(cudaStreamSynchronize(stream));
+        if (seconds == 0) seconds = elapsed();
+        check(cudaMemset(stop, 0, sizeof(int)));
+        check(cudaMemset(p.progress, 0, sizeof(WalkProgress)));
+        check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
+        check(cudaMemset(p.usage, 0,
+                         size_t(bags) * sizeof(unsigned long long)));
+        check(cudaStreamDestroy(side));
+        check(cudaStreamDestroy(stream));
+        return seconds;
+    }
+
+    void run(GpuWalkProgress const& progress) {
+        cudaStream_t stream = nullptr;
+        check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        // The buffers' zeroing runs on the default stream, which the walk's
+        // stream doesn't wait for.
+        check(cudaDeviceSynchronize());
+        launch_usage<COUNT_TYPE>(q, stream);
+        wait_for_walk(stream, q.walk.progress, plan.totals, true,
+                      plan.skipped, progress);
+        check(cudaStreamDestroy(stream));
+    }
+
+    // Writes the walk's counts to `out`; with RESTS, the distinct rests,
+    // returning how many found no slot.
+    uint64_t finish(std::vector<uint64_t>* out) {
+        static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
+        if constexpr (RESTS) {
+            out->clear();
+            rest_rows.clear();
+            size_t const stride = size_t(q.set_stride);
+            std::vector<unsigned long long> part(
+                std::min(slots, size_t(1) << 23) * stride);
+            for (size_t at = 0; at < slots * stride; at += part.size()) {
+                d.download(q.set + at, &part);
+                for (size_t k = 0; k < part.size(); k += stride) {
+                    if (part[k] == 0) continue;
+                    out->push_back(part[k] - 1);
+                    if (stride == 2) rest_rows.push_back(part[k + 1]);
+                }
+            }
+            std::vector<unsigned long long> dropped(1);
+            d.download(q.set_dropped, &dropped);
+            return dropped[0];
+        }
+        out->resize(size_t(bags));
+        check(cudaMemcpy(out->data(), q.walk.usage,
+                         out->size() * sizeof(uint64_t),
+                         cudaMemcpyDeviceToHost));
+        for (int i = 0; i < bags; ++i)
+            (*out)[i] /= (i < pair_bags) == order.pairs_first
+                ? order.first_divisor : order.other_divisor;
+        return 0;
+    }
+};
+
 template <WalkCountType COUNT_TYPE, typename BagKey>
 uint64_t walk_usage(GpuLeftoverInputs const& inputs, Packing const& packing,
                     UsageOrder const& order, Memo const& memo, size_t slots,
                     size_t first_unit, size_t units,
                     GpuWalkProgress const& progress,
                     std::vector<uint64_t>* out) {
-    constexpr bool MEMO = COUNT_TYPE == WalkCountType::PAIR_USAGE_MEMO;
-    constexpr bool RESTS = COUNT_TYPE == WalkCountType::RESTS;
+    UsageWalk<COUNT_TYPE, BagKey> walk;
+    if (!walk.prepare(inputs, packing, order, memo, slots, first_unit, units))
+        return UINT64_MAX;
+    walk.run(progress);
+    return walk.finish(out);
+}
+
+uint64_t choose2(int n) { return uint64_t(n) * uint64_t(n - 1) / 2; }
+
+// An estimate of how many combinations of `order`'s steps fit the bag of
+// `inputs`, from SET_DRAWS random draws a step.
+double estimate_combinations(GpuLeftoverInputs const& inputs,
+                             UsageOrder const& order) {
+    int const bags = int(inputs.pairs.size());
+    int const pair_bags = inputs.pair_bags;
+    int const steps = order.first_steps + order.other_steps;
+    int const begin[2] = {order.pairs_first ? 0 : pair_bags,
+                          order.pairs_first ? pair_bags : 0};
+    int const size[2] = {order.pairs_first ? pair_bags : bags - pair_bags,
+                         order.pairs_first ? bags - pair_bags : pair_bags};
+    double all = 1;
+    for (int k = 0; k < steps; ++k) {
+        int const list = k >= order.first_steps;
+        int const nth = list ? k - order.first_steps : k;
+        if (size[list] == 0) return 0;
+        all *= double(size[list]) / double(nth + 1);
+    }
+    // Step by step: the share of draws that fit what a kept draw of the
+    // steps before leaves.
+    struct Partial {
+        uint8_t rest[GPU_LETTERS_BYTES];
+        int chosen[GPU_MAX_PAIR_STEPS];
+    };
+    std::mt19937_64 random(1);
+    std::vector<Partial> kept(1);
+    memcpy(kept[0].rest, inputs.bag, GPU_LETTERS_BYTES);
+    double share = 1;
+    for (int k = 0; k < steps && !kept.empty(); ++k) {
+        int const list = k >= order.first_steps;
+        std::vector<Partial> next;
+        int fit = 0;
+        for (int draw = 0; draw < SET_DRAWS; ++draw) {
+            Partial partial = kept[random() % kept.size()];
+            partial.chosen[k] =
+                begin[list] + int(random() % uint64_t(size[list]));
+            bool ok = true;
+            for (int j = list ? order.first_steps : 0; j < k; ++j)
+                ok = ok && partial.chosen[j] != partial.chosen[k];
+            uint8_t const* const letters = &inputs.pair_letters[
+                size_t(partial.chosen[k]) * GPU_LETTERS_BYTES];
+            for (int letter = 0; letter < 26 && ok; ++letter) {
+                ok = letters[letter] <= partial.rest[letter];
+                partial.rest[letter] -= letters[letter];
+            }
+            if (!ok) continue;
+            ++fit;
+            if (next.size() < SET_KEPT) next.push_back(partial);
+        }
+        share *= double(fit) / SET_DRAWS;
+        kept.swap(next);
+    }
+    return kept.empty() ? 0 : all * share;
+}
+
+// The sums walk's order for `inputs`: the list with 3 or more steps last,
+// the PAIRS bags' if both have, less two of its steps.
+UsageOrder sums_order(GpuLeftoverInputs const& inputs) {
+    int const pairs = inputs.pair_steps;
+    int const prospects = inputs.steps - inputs.pair_steps;
+    if (pairs >= 3) {
+        if (prospects == 0)
+            return {true, pairs - 2, 0, choose2(pairs - 1), 1};
+        return {false, prospects, pairs - 2, choose2(pairs),
+                choose2(pairs - 1)};
+    }
+    if (pairs == 0)
+        return {false, prospects - 2, 0, choose2(prospects - 1), 1};
+    return {true, pairs, prospects - 2, choose2(prospects),
+            choose2(prospects - 1)};
+}
+
+// Walks `inputs` in `order`, which leaves out two steps of its last list,
+// counting each pair bag's usage into `out`: for each slab of rests, builds
+// the table of the left-out list's pair sums that fit each rest, then walks
+// the combinations that leave a rest in the slab and counts their last two
+// picks from the table. False, with nothing walked, when the device has no
+// room for a slab.
+template <typename BagKey>
+bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
+                     UsageOrder const& order, double other_seconds,
+                     GpuWalkProgress const& progress,
+                     std::vector<uint64_t>* out) {
+    using Entry = unsigned long long;
     int const bags = int(inputs.pairs.size());
     int const pair_bags = inputs.pair_bags;
     bool const two_lists = order.other_steps > 0;
+    bool const pairs_left = order.pairs_first != two_lists;
+    int const left_begin = pairs_left ? 0 : pair_bags;
+    int const left_end = pairs_left ? pair_bags : bags;
+
+    // The slab letters: the fewest slabs whose tables fit the device.
+    std::vector<int> letters;
+    long double total = 1;
+    for (int letter = 0; letter < 26; ++letter) {
+        if (inputs.bag[letter] == 0) continue;
+        letters.push_back(letter);
+        total *= inputs.bag[letter] + 1;
+    }
+    size_t free = 0;
+    size_t device_total = 0;
+    check(cudaMemGetInfo(&free, &device_total));
+    size_t const room = free > SUMS_RESERVE ? free - SUMS_RESERVE : 0;
+    long double const most = (long double)(room / sizeof(Entry));
+    if (getenv("BSC_SLAB_ENTRIES")) const_cast<long double&>(most) = strtold(getenv("BSC_SLAB_ENTRIES"), nullptr);
+    if (most < 1) return false;
+    long double const need = total / most;
+    std::vector<int> slab_letters;
+    long double best = 0;
+    int const count = int(letters.size());
+    std::vector<int> chosen;
+    std::function<void(int, long double)> search = [&](int from,
+                                                       long double product) {
+        if (product >= need) {
+            if (best == 0 || product < best ||
+                (product == best && chosen.size() < slab_letters.size())) {
+                best = product;
+                slab_letters = chosen;
+            }
+            return;
+        }
+        if (int(chosen.size()) == SLAB_LETTERS) return;
+        for (int k = from; k < count; ++k) {
+            chosen.push_back(letters[k]);
+            search(k + 1, product * (inputs.bag[letters[k]] + 1));
+            chosen.pop_back();
+        }
+    };
+    search(0, 1);
+    if (best == 0 || best > SLABS_MOST) return false;
+    size_t const slabs = size_t(best);
+    size_t const entries = size_t(total / best + 0.5L);
+
+    // Every bag's number over the other letters, and the slab letters' bits.
+    std::vector<uint64_t> strides(26, 0);
+    std::vector<std::pair<int, uint64_t>> dims;
+    uint64_t stride = 1;
+    for (int const letter : letters) {
+        if (std::find(slab_letters.begin(), slab_letters.end(), letter) !=
+            slab_letters.end())
+            continue;
+        strides[letter] = stride;
+        dims.push_back({inputs.bag[letter] + 1, stride});
+        stride *= inputs.bag[letter] + 1;
+    }
+    auto const number = [&](uint8_t const* counts) {
+        uint64_t sum = 0;
+        for (int const letter : letters) sum += counts[letter] * strides[letter];
+        return sum;
+    };
+    std::vector<uint64_t> numbers;
+    numbers.resize(size_t(bags));
+    for (int i = 0; i < bags; ++i)
+        numbers[i] = number(&inputs.pair_letters[size_t(i) * GPU_LETTERS_BYTES]);
+
     DeviceBuffers d;
     UsageParams<BagKey> q{};
     LeftoverParams<BagKey>& p = q.walk;
     set_walk_inputs(inputs, packing, &d, &p);
-    if constexpr (MEMO || RESTS) p.numbers = d.upload(inputs.numbers);
+    p.numbers = d.upload(numbers);
+    p.bag_number = number(inputs.bag);
+    Slabs<BagKey>& s = q.slabs;
+    s.letters = int(slab_letters.size());
+    uint32_t slab_stride = 1;
+    for (int k = 0; k < s.letters; ++k) {
+        int const letter = slab_letters[k];
+        int bits = 0;
+        while ((inputs.bag[letter] >> bits) != 0) ++bits;
+        s.shifts[k] = packing.shifts[letter];
+        s.masks[k] = uint8_t((1 << bits) - 1);
+        s.strides[k] = slab_stride;
+        slab_stride *= inputs.bag[letter] + 1;
+        s.mask |= BagKey((1 << bits) - 1) << packing.shifts[letter];
+        s.guards |= BagKey(1) << (packing.shifts[letter] + bits);
+    }
+    s.shortest = GPU_MAX_LETTERS;
+    for (int i = left_begin; i < left_end; ++i)
+        s.shortest = std::min(s.shortest, int(inputs.lengths[i]));
+    s.counts = d.allocate<unsigned long long>(slabs);
+    s.sums = d.allocate<Entry>(entries);
+
+    // The walk of the combinations, and the walk of the left-out list's
+    // 2-sets.
     int const* const pair_offsets = d.upload(inputs.offsets);
     int const* const prospect_offsets = inputs.prospect_offsets.empty()
         ? pair_offsets : d.upload(inputs.prospect_offsets);
@@ -2337,89 +3764,100 @@ uint64_t walk_usage(GpuLeftoverInputs const& inputs, Packing const& packing,
     p.count = order.pairs_first ? pair_bags : bags - pair_bags;
     p.steps = order.first_steps + order.other_steps;
     p.pair_steps = order.first_steps;
-    if constexpr (RESTS) {
-        p.order = d.upload(inputs.places);
-        p.units = d.upload(inputs.units);
-        p.first_unit = int(first_unit);
-        p.count = int(units);
-    }
     p.usage = d.allocate<unsigned long long>(size_t(bags));
-    p.progress = d.allocate<WalkProgress>(1);
-    p.groups = d.allocate<uint8_t>(size_t(p.count));
-    q.next_task = d.allocate<unsigned long long>(1);
-    int* const task_chunks = d.allocate<int>(size_t(p.count));
-    unsigned long long* const task_counts =
-        d.allocate<unsigned long long>(size_t(p.count) + 1);
-    unsigned long long* const group_totals =
-        d.allocate<unsigned long long>(WORK_GROUPS);
-    count_unit_tasks<BagKey>
-        <<<walk_grid(count_unit_tasks<BagKey>, 0), WALK_THREADS>>>(
-            p, group_totals, task_chunks, task_counts, TASK_CANDIDATES);
-    check(cudaGetLastError());
-    std::vector<unsigned long long> totals(WORK_GROUPS);
-    d.download(group_totals, &totals);
-    std::vector<unsigned long long> starts(size_t(p.count) + 1);
-    d.download(task_counts, &starts);
-    size_t skipped = 0;
-    unsigned long long tasks = 0;
-    for (size_t unit = 0; unit < size_t(p.count); ++unit) {
-        unsigned long long const count = starts[unit];
-        if (count == 0) ++skipped;
-        starts[unit] = tasks;
-        tasks += count;
-    }
-    starts.back() = tasks;
-    q.tasks = tasks;
-    q.task_starts = d.upload(starts);
-    q.task_chunks = task_chunks;
-    if constexpr (MEMO) {
-        bool const pairs_last = order.pairs_first != two_lists;
-        int const begin = pairs_last ? 0 : pair_bags;
-        int const end = pairs_last ? pair_bags : bags;
-        q.memo = memo;
-        q.memo.letters = GPU_MAX_LETTERS;
-        for (int i = begin; i < end; ++i)
-            q.memo.letters = std::min(q.memo.letters, int(inputs.lengths[i]));
-        q.memo.slots = d.allocate<uint32_t>(
-            (size_t(1) << memo.slot_bits) * (memo.narrow ? 1 : 2));
-    }
-    if constexpr (RESTS) {
-        q.set = d.allocate<unsigned long long>(slots);
-        q.set_mask = slots - 1;
-        q.set_dropped = d.allocate<unsigned long long>(1);
-    }
+    q.stop = d.allocate<int>(1);
+    UsageParams<BagKey> sums = q;
+    sums.walk.offsets[0] = pairs_left ? pair_offsets : prospect_offsets;
+    sums.walk.offsets[1] = sums.walk.offsets[0];
+    sums.walk.first_unit = left_begin;
+    sums.walk.count = left_end - left_begin;
+    sums.walk.steps = 2;
+    sums.walk.pair_steps = 2;
+    plan_tasks(&d, &q);
+    plan_tasks(&d, &sums);
 
-    size_t const shared =
-        size_t(WALK_WARPS) * size_t(p.steps) * sizeof(Level<BagKey>);
     cudaStream_t stream = nullptr;
     check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    walk_pair_usage<COUNT_TYPE, BagKey>
-        <<<walk_grid(walk_pair_usage<COUNT_TYPE, BagKey>, shared),
-           WALK_THREADS, shared, stream>>>(q);
-    check(cudaGetLastError());
-    wait_for_walk(stream, p.progress, totals, true, skipped, progress);
-    check(cudaStreamDestroy(stream));
-    static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
-    if constexpr (RESTS) {
-        out->clear();
-        std::vector<unsigned long long> part(
-            std::min(slots, size_t(1) << 23));
-        for (size_t at = 0; at < slots; at += part.size()) {
-            d.download(q.set + at, &part);
-            for (unsigned long long const key : part)
-                if (key != 0) out->push_back(key - 1);
+    auto const run = [&](auto const& launch, unsigned long long* next_task) {
+        check(cudaMemsetAsync(next_task, 0, sizeof(unsigned long long),
+                              stream));
+        launch();
+        check(cudaStreamSynchronize(stream));
+        check(cudaGetLastError());
+    };
+    run([&] { launch_usage<WalkCountType::SUM_SLABS>(q, stream); },
+        q.next_task);
+    std::vector<unsigned long long> slab_counts(slabs);
+    d.download(s.counts, &slab_counts);
+    unsigned long long combinations = 0;
+    size_t used = 0;
+    for (unsigned long long const n : slab_counts) {
+        combinations += n;
+        used += n != 0;
+    }
+    bool const debug = getenv("BSC_DEBUG") != nullptr;
+    double const seconds = double(used) *
+        (double(entries) * sizeof(Entry) * SUMS_SECONDS_PER_BYTE +
+         SUMS_SECONDS_PER_SLAB);
+    if (debug)
+        fprintf(stderr, "DEBUG sums: %zu slabs of %zu entries (%.1f MB), %zu used, %llu combinations, letters %d, est %.1fs against %.1fs\n",
+                slabs, entries, double(entries) * sizeof(Entry) / 1048576, used, combinations, s.letters, seconds, other_seconds);
+    if (seconds > other_seconds) {
+        check(cudaStreamDestroy(stream));
+        return false;
+    }
+    unsigned long long done = 0;
+    for (size_t slab = 0; slab < slabs; ++slab) {
+        if (slab_counts[slab] == 0) continue;
+        auto const t0 = std::chrono::steady_clock::now();
+        BagKey key = 0;
+        for (int k = 0; k < s.letters; ++k) {
+            int const letter = slab_letters[k];
+            key |= BagKey(slab / s.strides[k] % (inputs.bag[letter] + 1))
+                << packing.shifts[letter];
         }
-        std::vector<unsigned long long> dropped(1);
-        d.download(q.set_dropped, &dropped);
-        return dropped[0];
+        q.slabs.slab = key;
+        sums.slabs.slab = key;
+        check(cudaMemsetAsync(s.sums, 0, entries * sizeof(Entry), stream));
+        run([&] { launch_usage<WalkCountType::SUM_SCATTER>(sums, stream); },
+            sums.next_task);
+        auto const t1 = std::chrono::steady_clock::now();
+        for (auto const& [size, at] : dims) {
+            unsigned long long const lines = entries / size;
+            sum_along<Entry><<<unsigned((lines + 255) / 256), 256, 0, stream>>>(
+                s.sums, lines, at, size);
+            check(cudaGetLastError());
+        }
+        check(cudaStreamSynchronize(stream));
+        auto const t2 = std::chrono::steady_clock::now();
+        run([&] { launch_usage<WalkCountType::PAIR_USAGE_SUMS>(q, stream); },
+            q.next_task);
+        auto const t3 = std::chrono::steady_clock::now();
+        if (debug) {
+            auto const sec = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+            fprintf(stderr, "DEBUG slab %zu: %llu combinations, scatter %.2fs, sums %.2fs, walk %.2fs\n",
+                    slab, slab_counts[slab], sec(t0, t1), sec(t1, t2), sec(t2, t3));
+        }
+        done += slab_counts[slab];
+        if (progress.due())
+            progress.report(size_t(double(p.count) * double(done) /
+                                   double(combinations)),
+                            double(done) / double(combinations));
+    }
+    check(cudaStreamDestroy(stream));
+    if (debug) {
+        WalkProgress now;
+        check(cudaMemcpy(&now, p.progress, sizeof now, cudaMemcpyDeviceToHost));
+        fprintf(stderr, "DEBUG sums lookups %llu scans %llu scan_work %llu\n", now.lookups, now.misses, now.miss_work);
     }
     out->resize(size_t(bags));
+    static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
     check(cudaMemcpy(out->data(), p.usage, out->size() * sizeof(uint64_t),
                      cudaMemcpyDeviceToHost));
     for (int i = 0; i < bags; ++i)
         (*out)[i] /= (i < pair_bags) == order.pairs_first
             ? order.first_divisor : order.other_divisor;
-    return 0;
+    return true;
 }
 
 // Walks `inputs` counting COUNT_TYPE's counts into `out`: GpuLeftoverCounts
@@ -2501,6 +3939,70 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     check(cudaStreamDestroy(stream));
 }
 
+// Walks `inputs` counting each pair bag's usage into `out` by the fastest of
+// the fit tables walk and the walk it replaces, the memo walk when `memo`,
+// for PAIRS of at most `most`, else the scanning walk: the one `mode` names,
+// else the one whose pilot gets through the larger share of its walk a
+// second.
+template <typename BagKey>
+void choose_usage_walk(GpuLeftoverInputs const& inputs, Packing const& packing,
+                       bool memo, uint64_t most, char const* mode,
+                       GpuWalkProgress const& progress,
+                       std::vector<uint64_t>* out) {
+    int const pairs = inputs.pair_steps;
+    int const prospects = inputs.steps - pairs;
+    UsageOrder const all{pairs > 0, pairs > 0 ? pairs : prospects,
+                         pairs > 0 ? prospects : 0};
+    bool const can_leave =
+        inputs.steps >= 3 && (pairs >= 2 || prospects >= 2);
+    UsageOrder const less = can_leave ? memo_order(inputs) : all;
+    char const forced = mode != nullptr ? mode[0] : 0;
+
+    auto const t0 = std::chrono::steady_clock::now();
+    auto const lap = [&](char const* what) {
+        if (getenv("BSC_DEBUG"))
+            fprintf(stderr, "DEBUG %.2fs %s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), what);
+    };
+    UsageWalk<WalkCountType::PAIR_USAGE, BagKey> scan;
+    UsageWalk<WalkCountType::PAIR_USAGE_MEMO, BagKey> remembered;
+    UsageWalk<WalkCountType::PAIR_USAGE_TABLES, BagKey> tables;
+    scan.prepare(inputs, packing, all, {}, 0, 0, 0);
+    lap("scan prepared");
+    bool use_tables = can_leave && (forced == 0 || forced == 't') &&
+        (forced == 't' || scan.first_candidates() >= PILOT_FROM) &&
+        tables.prepare(inputs, packing, less, {}, 0, 0, 0);
+    // The memo takes the room the tables leave.
+    Memo layout{};
+    bool const use_memo = memo && !(use_tables && forced == 't') &&
+        memo_layout(inputs.number_count, most, &layout);
+    lap("tables prepared");
+    if (use_memo) remembered.prepare(inputs, packing, less, layout, 0, 0, 0);
+    lap("memo prepared");
+    if (use_tables && forced != 't') {
+        double const table_seconds = tables.pilot(PILOT_TASKS, PILOT_SECONDS);
+        lap("tables pilot");
+        double const other_seconds = use_memo
+            ? remembered.pilot(PILOT_TASKS, PILOT_SECONDS)
+            : scan.pilot(PILOT_TASKS, PILOT_SECONDS);
+        if (getenv("BSC_DEBUG"))
+            fprintf(stderr, "DEBUG pilot: %llu of %llu tasks: tables %.3fs, %s %.3fs\n",
+                    PILOT_TASKS, tables.q.tasks, table_seconds,
+                    use_memo ? "memo" : "scan", other_seconds);
+        lap("pilots");
+        use_tables = table_seconds < other_seconds;
+    }
+    if (use_tables) {
+        tables.run(progress);
+        tables.finish(out);
+    } else if (use_memo) {
+        remembered.run(progress);
+        remembered.finish(out);
+    } else {
+        scan.run(progress);
+        scan.finish(out);
+    }
+}
+
 }  // namespace
 
 void run_leftovers_gpu(std::string_view program,
@@ -2530,12 +4032,11 @@ void run_pair_usage_gpu(std::string_view program,
     int const prospects = inputs.steps - pairs;
     uint64_t most = 0;
     for (uint64_t const count : inputs.pairs) most += count;
-    Memo layout{};
     char const* const mode = getenv("BSC_UC_MODE");
-    bool memo = !inputs.numbers.empty() && inputs.steps >= 4 &&
-        (pairs >= 2 || prospects >= 2) &&
-        memo_layout(inputs.number_count, most, &layout);
-    if (mode != nullptr && inputs.steps >= 3) memo = mode[0] == 'm' && memo_layout(inputs.number_count, most, &layout);
+    bool const can_memo = !inputs.numbers.empty() && inputs.steps >= 3 &&
+        (pairs >= 2 || prospects >= 2);
+    bool const memo =
+        can_memo && (mode != nullptr ? mode[0] == 'm' : inputs.steps >= 4);
     if (inputs.steps < 2 || (mode != nullptr && mode[0] == 'o')) {
         if (wide)
             walk_leftovers<WalkCountType::PAIR_USAGE, Key128>(
@@ -2545,51 +4046,185 @@ void run_pair_usage_gpu(std::string_view program,
                 inputs, packing, progress, out);
         return;
     }
-    if (memo) {
-        UsageOrder const order = memo_order(inputs);
-        if (wide)
-            walk_usage<WalkCountType::PAIR_USAGE_MEMO, Key128>(
-                inputs, packing, order, layout, 0, 0, 0, progress, out);
-        else
-            walk_usage<WalkCountType::PAIR_USAGE_MEMO, Key64>(
-                inputs, packing, order, layout, 0, 0, 0, progress, out);
-        return;
+    bool const sums = (mode == nullptr || mode[0] == 's') &&
+        inputs.steps >= 4 && (pairs >= 3 || prospects >= 3);
+    if (sums) {
+        UsageOrder const order = sums_order(inputs);
+        double other = 1e300;
+        if (mode == nullptr) {
+            UsageOrder const walked = memo
+                ? memo_order(inputs)
+                : UsageOrder{pairs > 0, pairs > 0 ? pairs : prospects,
+                             pairs > 0 ? prospects : 0};
+            UsageOrder before = walked;
+            if (!memo) --(before.other_steps > 0 ? before.other_steps
+                                                 : before.first_steps);
+            other = estimate_combinations(inputs, before) /
+                (memo ? MEMO_RATE : SCAN_RATE);
+        }
+        if (wide ? walk_usage_sums<Key128>(inputs, packing, order, other,
+                                           progress, out)
+                 : walk_usage_sums<Key64>(inputs, packing, order, other,
+                                          progress, out))
+            return;
     }
-    UsageOrder const order{pairs > 0, pairs > 0 ? pairs : prospects,
-                           pairs > 0 ? prospects : 0};
     if (wide)
-        walk_usage<WalkCountType::PAIR_USAGE, Key128>(
-            inputs, packing, order, {}, 0, 0, 0, progress, out);
+        choose_usage_walk<Key128>(inputs, packing, memo, most, mode, progress,
+                                  out);
     else
-        walk_usage<WalkCountType::PAIR_USAGE, Key64>(
-            inputs, packing, order, {}, 0, 0, 0, progress, out);
+        choose_usage_walk<Key64>(inputs, packing, memo, most, mode, progress,
+                                 out);
 }
+
+namespace {
+
+// Adds to `count` the slots of `set`, each `stride` words, that hold a
+// rest.
+__global__ void count_set_rests(unsigned long long const* set, size_t slots,
+                                int stride, unsigned long long* count) {
+    size_t const step = size_t(gridDim.x) * blockDim.x;
+    unsigned long long found = 0;
+    for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < slots;
+         i += step)
+        found += set[i * stride] != 0;
+    found = warp_sum(found);
+    if ((threadIdx.x & 31) == 0 && found != 0) atomicAdd(count, found);
+}
+
+// The RESTS walk of `inputs`, as run_distinct_rests_gpu() describes it.
+template <typename BagKey>
+uint64_t walk_distinct_rests(GpuLeftoverInputs const& inputs,
+                             Packing const& packing, size_t slots,
+                             size_t first_unit, size_t units,
+                             std::vector<uint64_t>* out,
+                             std::vector<uint64_t>* rows, size_t* found) {
+    int const pairs = inputs.pair_steps;
+    UsageOrder const order{pairs > 0, pairs > 0 ? pairs : inputs.steps,
+                           pairs > 0 ? inputs.steps - pairs : 0};
+    GpuWalkProgress const progress{[] { return false; },
+                                   [](size_t, double) {}};
+    UsageWalk<WalkCountType::RESTS, BagKey> walk;
+    walk.count_rows = rows != nullptr;
+    walk.prepare(inputs, packing, order, {}, slots, first_unit, units);
+    walk.run(progress);
+    if (out == nullptr) {
+        unsigned long long* const count =
+            walk.d.template allocate<unsigned long long>(1);
+        count_set_rests<<<1024, 256>>>(walk.q.set, slots, walk.q.set_stride,
+                                       count);
+        check(cudaGetLastError());
+        std::vector<unsigned long long> counted(1);
+        walk.d.download(count, &counted);
+        *found = size_t(counted[0]);
+        std::vector<unsigned long long> dropped(1);
+        walk.d.download(walk.q.set_dropped, &dropped);
+        return dropped[0];
+    }
+    uint64_t const dropped = walk.finish(out);
+    if (rows != nullptr) *rows = std::move(walk.rest_rows);
+    if (found != nullptr) *found = out->size();
+    return dropped;
+}
+
+// The TOP_ROWS walk of `inputs`, as run_top_rows_gpu() describes it.
+template <typename BagKey>
+bool walk_top_rows(GpuLeftoverInputs const& inputs, Packing const& packing,
+                   size_t first_unit, size_t units,
+                   std::vector<uint64_t> const& keys,
+                   std::vector<uint32_t> const& values, uint32_t last_unit,
+                   size_t capacity, std::vector<uint32_t>* rows,
+                   std::vector<uint64_t>* unit_ties) {
+    int const pairs = inputs.pair_steps;
+    UsageOrder const order{pairs > 0, pairs > 0 ? pairs : inputs.steps,
+                           pairs > 0 ? inputs.steps - pairs : 0};
+    GpuWalkProgress const progress{[] { return false; },
+                                   [](size_t, double) {}};
+    UsageWalk<WalkCountType::TOP_ROWS, BagKey> walk;
+    walk.prepare(inputs, packing, order, {}, 0, first_unit, units);
+    UsageParams<BagKey>& q = walk.q;
+    static_assert(sizeof(unsigned long long) == sizeof(uint64_t));
+    if (!keys.empty()) {
+        q.set = reinterpret_cast<unsigned long long*>(walk.d.upload(keys));
+        q.set_mask = keys.size() - 1;
+        q.top_values = walk.d.upload(values);
+    }
+    q.top_last_unit = last_unit;
+    size_t const width = size_t(inputs.steps) + 1;
+    size_t const all_units = inputs.units.size();
+    if (rows == nullptr) {
+        q.unit_ties =
+            walk.d.template allocate<unsigned long long>(all_units);
+    } else {
+        q.top_rows = walk.d.template allocate<uint32_t>(capacity * width);
+        q.top_capacity = capacity;
+        q.top_count = walk.d.template allocate<unsigned long long>(1);
+    }
+    walk.run(progress);
+    if (rows == nullptr) {
+        std::vector<unsigned long long> ties(all_units);
+        walk.d.download(q.unit_ties, &ties);
+        unit_ties->assign(ties.begin(), ties.end());
+        return true;
+    }
+    std::vector<unsigned long long> count(1);
+    walk.d.download(q.top_count, &count);
+    if (count[0] > capacity) return false;
+    rows->resize(size_t(count[0]) * width);
+    walk.d.download(q.top_rows, rows);
+    return true;
+}
+
+}  // namespace
 
 bool run_distinct_rests_gpu(std::string_view program,
                             GpuLeftoverInputs const& inputs,
                             size_t first_unit, size_t units, size_t rests,
-                            std::vector<uint64_t>* out) {
+                            std::vector<uint64_t>* out,
+                            std::vector<uint64_t>* rows, size_t* found) {
     program_name = program;
     check(cudaSetDevice(0));
     size_t free = 0;
     size_t total = 0;
     check(cudaMemGetInfo(&free, &total));
     size_t const room = free > SET_RESERVE ? free - SET_RESERVE : 0;
+    size_t const slot_bytes = sizeof(uint64_t) * (rows != nullptr ? 2 : 1);
     size_t slots = size_t(1) << 16;
-    while (slots < 2 * rests && 2 * slots * sizeof(uint64_t) <= room)
-        slots *= 2;
+    while (slots < 2 * rests && 2 * slots * slot_bytes <= room) slots *= 2;
     Packing const packing(inputs.bag);
-    int const pairs = inputs.pair_steps;
-    UsageOrder const order{pairs > 0, pairs > 0 ? pairs : inputs.steps,
-                           pairs > 0 ? inputs.steps - pairs : 0};
-    GpuWalkProgress const progress{[] { return false; },
-                                   [](size_t, double) {}};
+    size_t count = 0;
     uint64_t const dropped = packing.bits > 64
-        ? walk_usage<WalkCountType::RESTS, Key128>(
-              inputs, packing, order, {}, slots, first_unit, units, progress,
-              out)
-        : walk_usage<WalkCountType::RESTS, Key64>(
-              inputs, packing, order, {}, slots, first_unit, units, progress,
-              out);
-    return dropped == 0 && out->size() <= rests;
+        ? walk_distinct_rests<Key128>(inputs, packing, slots, first_unit,
+                                      units, out, rows, &count)
+        : walk_distinct_rests<Key64>(inputs, packing, slots, first_unit,
+                                     units, out, rows, &count);
+    if (found != nullptr) *found = count;
+    return dropped == 0 && count <= rests;
+}
+
+size_t gpu_rest_set_capacity(bool rows) {
+    check(cudaSetDevice(0));
+    size_t free = 0;
+    size_t total = 0;
+    check(cudaMemGetInfo(&free, &total));
+    size_t const room = free > SET_RESERVE ? free - SET_RESERVE : 0;
+    size_t const slot_bytes = sizeof(uint64_t) * (rows ? 2 : 1);
+    size_t slots = size_t(1) << 16;
+    while (2 * slots * slot_bytes <= room) slots *= 2;
+    return slots / 2;
+}
+
+bool run_top_rows_gpu(std::string_view program,
+                      GpuLeftoverInputs const& inputs, size_t first_unit,
+                      size_t units, std::vector<uint64_t> const& keys,
+                      std::vector<uint32_t> const& values, uint32_t last_unit,
+                      size_t capacity, std::vector<uint32_t>* rows,
+                      std::vector<uint64_t>* unit_ties) {
+    program_name = program;
+    check(cudaSetDevice(0));
+    Packing const packing(inputs.bag);
+    return packing.bits > 64
+        ? walk_top_rows<Key128>(inputs, packing, first_unit, units, keys,
+                                values, last_unit, capacity, rows, unit_ties)
+        : walk_top_rows<Key64>(inputs, packing, first_unit, units, keys,
+                               values, last_unit, capacity, rows, unit_ties);
 }
