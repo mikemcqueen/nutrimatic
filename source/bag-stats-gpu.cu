@@ -278,7 +278,7 @@ __global__ void pair_sums(PairSumParams<BagKey> p) {
     unsigned long long claimed = 0;
     int longest = 0;
     if constexpr (MODE == PairSumMode::TABLE) {
-        if (__ldcv(p.full) != 0) return;
+        if (__any_sync(~0u, __ldcv(p.full) != 0)) return;
     }
     for (int b = a + lane; b < end; b += 32) {
         if (b == a && !twice) continue;
@@ -871,6 +871,9 @@ struct GpuRowCounter::Impl {
     uint64_t* sum_keys = nullptr;
     uint32_t* sum_counts = nullptr;
     size_t sum_slots = 0;
+    // Whether no sum of two groups can have more pairs than a slot of the
+    // exact sum table counts.
+    bool sum_counts_fit = true;
     GpuFilterInfo filter_info{};
     GpuFilterCounts filter_counts{};
     std::vector<Stream> streams;
@@ -1015,7 +1018,7 @@ struct GpuRowCounter::Impl {
         size_t const slots = std::min(
             size_t(distinct * SUM_TABLE_SLOTS) + 1024, table_room);
         bool exact = getenv("BSC_NO_SUM_TABLE") == nullptr && pairs != 0 &&
-            double(slots) >= distinct * SUM_TABLE_SLOTS_LEAST;
+            sum_counts_fit && double(slots) >= distinct * SUM_TABLE_SLOTS_LEAST;
         unsigned long long claimed = 0;
         if (exact) {
             void* keys = nullptr;
@@ -1060,7 +1063,12 @@ struct GpuRowCounter::Impl {
                 claimed, true};
             return;
         }
-        if (pairs != 0 && getenv("BSC_NO_SUM_TABLE") == nullptr)
+        if (pairs != 0 && !sum_counts_fit)
+            alert(program_name,
+                  "a sum of two groups may have more than %u pairs, too many "
+                  "for the exact sum table; counting with the slower "
+                  "pair-sum filter", UINT32_MAX);
+        else if (pairs != 0 && getenv("BSC_NO_SUM_TABLE") == nullptr)
             alert(program_name,
                   "exact sum table needs %.1f GB for %.2fG sums, %.1f GB "
                   "free; counting with the slower pair-sum filter",
@@ -1201,6 +1209,15 @@ GpuRowCounter::GpuRowCounter(std::string_view program, GpuInputs const& inputs,
 
     impl.group_lengths = impl.upload(inputs.group_lengths);
     impl.group_sizes = impl.upload(inputs.group_sizes);
+    // A sum has at most one other group for each group, so at most the
+    // largest group's size of pairs for each word.
+    uint64_t words = 0;
+    uint64_t largest = 0;
+    for (uint32_t const size : inputs.group_sizes) {
+        words += size;
+        largest = std::max<uint64_t>(largest, size);
+    }
+    impl.sum_counts_fit = words * largest <= UINT32_MAX;
     impl.lenstart = impl.upload(lenstart);
     impl.word_lengths = impl.upload(inputs.word_lengths);
     if (impl.key_bits == 64)
@@ -1309,7 +1326,7 @@ constexpr unsigned long long PILOT_FROM = 100000000;
 // of their `two`.
 constexpr uint64_t DENSE_MOST = 65536;
 constexpr uint64_t TWO_MOST = uint64_t(1) << 29;
-// The device memory the fit tables' third term leaves free.
+// The device memory the fit tables leave free.
 constexpr size_t TRIPLE_RESERVE = size_t(1) << 30;
 // The cells of a block of sum_tiles, and the columns it asks for at least
 // before it takes another letter.
@@ -2902,8 +2919,11 @@ int walk_grid(Kernel kernel, size_t shared) {
 struct DeviceBuffers {
     std::vector<void*> buffers;
 
-    ~DeviceBuffers() {
+    ~DeviceBuffers() { release(); }
+
+    void release() {
         for (void* buffer : buffers) check(cudaFree(buffer));
+        buffers.clear();
     }
 
     template <typename T>
@@ -3114,6 +3134,16 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
         for (int letter = 0; letter < 26; ++letter)
             most[letter] =
                 std::max<uint64_t>(most[letter], letters_of(i)[letter]);
+    // listed_from[k]: the bags `three` lists when the sparse letters are
+    // by_count's from k on, one for each three of them a bag has.
+    std::vector<uint64_t> listed_from(by_count.size() + 1, 0);
+    for (int i = begin; i < end; ++i) {
+        uint64_t held = 0;
+        for (size_t k = by_count.size(); k-- > 0;) {
+            held += letters_of(i)[by_count[k]] != 0;
+            listed_from[k] += held * (held - 1) * (held - 2) / 6;
+        }
+    }
     size_t free_bytes = 0;
     size_t device_bytes = 0;
     check(cudaMemGetInfo(&free_bytes, &device_bytes));
@@ -3139,7 +3169,8 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
             }
             if (rests * one > UINT32_MAX || rests * two > TWO_MOST) continue;
             if (free_bytes > TRIPLE_RESERVE &&
-                rests * (1 + one + two + triple) * 4 <=
+                rests * (1 + one + two + triple) * 4 +
+                        listed_from[k] * sizeof(WalkBag<BagKey>) <=
                     free_bytes - TRIPLE_RESERVE)
                 dense_count = k;
         }
@@ -3221,8 +3252,27 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
                 triple_base[triple] = triple_entries;
                 triple_entries += lattice * caps[e1] * caps[e2] * caps[e3];
             }
-    // The third term's table goes on the device if it has the room.
-    size_t const before = (one_entries + two_entries + lattice) * 4;
+    // The third term's table goes on the device if it has the room; the
+    // tables without it and `three` have to.
+    uint64_t const listed_count = listed_from[dense_count];
+    size_t const table_bytes = (one_entries + two_entries + lattice) * 4;
+    size_t const listed_bytes = listed_count * sizeof(WalkBag<BagKey>) +
+        (buckets + 2) * sizeof(int);
+    size_t const before = table_bytes + listed_bytes;
+    if (listed_count > uint64_t(INT32_MAX) ||
+        free_bytes < before + TRIPLE_RESERVE) {
+        alert(program_name,
+              "fit tables need %.2f GB (%.2f GB of tables, %.2f GB for %.1fM "
+              "listed bags, %.2f GB kept free)%s, %.2f GB free; counting "
+              "without them",
+              double(before + TRIPLE_RESERVE) / 1e9, double(table_bytes) / 1e9,
+              double(listed_bytes) / 1e9, double(listed_count) / 1e6,
+              double(TRIPLE_RESERVE) / 1e9,
+              listed_count > uint64_t(INT32_MAX)
+                  ? " and list more bags than a walk can index" : "",
+              double(free_bytes) / 1e9);
+        return false;
+    }
     bool const with_triple = getenv("BSC_NO_TRIPLE") == nullptr &&
         free_bytes > before + TRIPLE_RESERVE &&
         triple_entries * 4 <= free_bytes - before - TRIPLE_RESERVE;
@@ -3240,6 +3290,7 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
         int bag;
     };
     std::vector<Listed> listed;
+    listed.reserve(listed_count);
     for (int i = begin; i < end; ++i) {
         uint8_t const* const counts = letters_of(i);
         uint64_t const n = (*numbers)[i];
@@ -3274,7 +3325,6 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
             }
         }
     }
-    if (listed.size() > size_t(INT32_MAX)) return false;
     std::sort(listed.begin(), listed.end(),
               [](Listed const& a, Listed const& b) {
         return a.bucket != b.bucket ? a.bucket < b.bucket
@@ -4090,12 +4140,17 @@ void choose_usage_walk(GpuLeftoverInputs const& inputs, Packing const& packing,
         use_tables = table_seconds < other_seconds;
     }
     if (use_tables) {
+        scan.d.release();
+        remembered.d.release();
         tables.run(progress);
         tables.finish(out);
     } else if (use_memo) {
+        scan.d.release();
+        tables.d.release();
         remembered.run(progress);
         remembered.finish(out);
     } else {
+        tables.d.release();
         scan.run(progress);
         scan.finish(out);
     }

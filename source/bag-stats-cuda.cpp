@@ -964,42 +964,58 @@ struct RangeRests {
 
 using RestKey = std::pair<double, double>;
 
-// Sorts `numbers` on `threads` threads, each one's entry of `rows` with it.
-void sort_rests(std::vector<uint64_t>* numbers, std::vector<uint64_t>* rows,
-                size_t threads) {
-    size_t const count = numbers->size();
-    std::vector<std::pair<uint64_t, uint64_t>> both(count);
-    size_t const runs = std::max<size_t>(std::min(threads, count >> 16), 1);
+// Runs work(begin, end) over [0, count) in parts, each on one of at most
+// `threads` threads; the parts it is in.
+template <typename Work>
+size_t run_parts(size_t count, size_t threads, Work const& work) {
+    size_t const parts = std::max<size_t>(std::min(threads, count >> 16), 1);
+    std::atomic<size_t> next{0};
+    run_threads(parts, [&](size_t) {
+        for (size_t part; (part = next.fetch_add(1)) < parts;)
+            work(count * part / parts, count * (part + 1) / parts);
+    });
+    return parts;
+}
+
+// Sorts [first, last) by `before`: in runs on at most `threads` threads,
+// then merged pairwise.
+template <typename Iterator, typename Before>
+void sort_on_threads(Iterator first, Iterator last, size_t threads,
+                     Before const& before) {
+    size_t const count = size_t(last - first);
+    size_t const runs = run_parts(count, threads, [&](size_t begin,
+                                                      size_t end) {
+        std::sort(first + begin, first + end, before);
+    });
     auto const run_start = [&](size_t run) { return count * run / runs; };
-    {
-        std::atomic<size_t> next{0};
-        run_threads(runs, [&](size_t) {
-            for (size_t run; (run = next.fetch_add(1)) < runs;) {
-                for (size_t i = run_start(run); i < run_start(run + 1); ++i)
-                    both[i] = {(*numbers)[i], (*rows)[i]};
-                std::sort(both.begin() + run_start(run),
-                          both.begin() + run_start(run + 1));
-            }
-        });
-    }
     for (size_t span = 1; span < runs; span *= 2) {
         std::atomic<size_t> next{0};
         run_threads(std::max<size_t>(runs / (2 * span), 1), [&](size_t) {
             for (size_t run;
                  (run = next.fetch_add(2 * span)) + span < runs;)
                 std::inplace_merge(
-                    both.begin() + run_start(run),
-                    both.begin() + run_start(run + span),
-                    both.begin() + run_start(std::min(run + 2 * span, runs)));
+                    first + run_start(run), first + run_start(run + span),
+                    first + run_start(std::min(run + 2 * span, runs)),
+                    before);
         });
     }
-    std::atomic<size_t> next{0};
-    run_threads(runs, [&](size_t) {
-        for (size_t run; (run = next.fetch_add(1)) < runs;)
-            for (size_t i = run_start(run); i < run_start(run + 1); ++i) {
-                (*numbers)[i] = both[i].first;
-                (*rows)[i] = both[i].second;
-            }
+}
+
+// Sorts `numbers` on `threads` threads, each one's entry of `rows` with it.
+void sort_rests(std::vector<uint64_t>* numbers, std::vector<uint64_t>* rows,
+                size_t threads) {
+    size_t const count = numbers->size();
+    std::vector<std::pair<uint64_t, uint64_t>> both(count);
+    run_parts(count, threads, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i)
+            both[i] = {(*numbers)[i], (*rows)[i]};
+    });
+    sort_on_threads(both.begin(), both.end(), threads, std::less<>());
+    run_parts(count, threads, [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            (*numbers)[i] = both[i].first;
+            (*rows)[i] = both[i].second;
+        }
     });
 }
 
@@ -1162,9 +1178,14 @@ void print_top_by_rest(Walk const& walk, BagStatsInputs const& inputs,
         RangeRests& range = one_range ? whole : scratch;
         if (one_range && !range.counts.empty()) return range;
         if (!one_range) {
-            run_distinct_rests_gpu(PROGRAM, gpu, bounds[r],
-                                   bounds[r + 1] - bounds[r], capacity,
-                                   &range.numbers, &range.rows);
+            if (!run_distinct_rests_gpu(PROGRAM, gpu, bounds[r],
+                                        bounds[r + 1] - bounds[r], capacity,
+                                        &range.numbers, &range.rows)) {
+                report(PROGRAM, "the device no longer holds the distinct "
+                       "remainders of a range of rows; its free memory "
+                       "fell during the run");
+                exit(1);
+            }
             sort_rests(&range.numbers, &range.rows, threads);
         }
         size_t const count = range.numbers.size();
@@ -1383,30 +1404,7 @@ void print_top_by_rest(Walk const& walk, BagStatsInputs const& inputs,
         return std::lexicographical_compare(row_a, row_a + steps, row_b,
                                             row_b + steps);
     };
-    // Sorted in runs on every thread, then merged pairwise.
-    size_t const runs = std::max<size_t>(std::min(threads, found >> 16), 1);
-    auto const run_start = [&](size_t run) { return found * run / runs; };
-    {
-        std::atomic<size_t> next{0};
-        run_threads(runs, [&](size_t) {
-            for (size_t run; (run = next.fetch_add(1)) < runs;)
-                std::sort(ranked.begin() + run_start(run),
-                          ranked.begin() + run_start(run + 1), before);
-        });
-    }
-    for (size_t span = 1; span < runs; span *= 2) {
-        std::atomic<size_t> next{0};
-        run_threads(std::max<size_t>(runs / (2 * span), 1), [&](size_t) {
-            for (size_t run;
-                 (run = next.fetch_add(2 * span)) + span < runs;)
-                std::inplace_merge(
-                    ranked.begin() + run_start(run),
-                    ranked.begin() + run_start(run + span),
-                    ranked.begin() +
-                        run_start(std::min(run + 2 * span, runs)),
-                    before);
-        });
-    }
+    sort_on_threads(ranked.begin(), ranked.end(), threads, before);
     if (ranked.size() > top) ranked.resize(top);
 
     bool const top_segments = args.rank.top_segments;
