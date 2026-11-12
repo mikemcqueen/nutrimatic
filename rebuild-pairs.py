@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Builds the new-pairs workflow's intermediate files under tmp/sN.
 
-See plans/rebuild-pairs.md. A path alternates steps and cuts (Nk or
-pp-NAME-Nk), starting with a step: pb3/2k/pb3/pp-1sq-5k/pb2wb.
+See plans/rebuild-pairs.md. A path is any number of u-LETTERS directories,
+then alternating steps and cuts (Nk or pp-NAME-Nk), starting with a step:
+u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. LETTERS may be several hyphen-separated
+groups: u-abc-def.
 """
 
 import argparse
@@ -20,8 +22,11 @@ from pathlib import Path
 
 PROGRAM = "rebuild-pairs"
 MANIFEST = ".manifest.json"
+LETTERS = r"[a-z]+(?:-[a-z]+)*"
 STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-(dict|big))?"
-                     r"(?:-x([1-9][0-9]*))?(?:-([a-z]+))?")
+                     rf"(?:-x([1-9][0-9]*))?(?:-({LETTERS}))?")
+PPB_RE = re.compile(r"ppb([1-9][0-9]*)?\.pb([1-9][0-9]*)?")
+USED_RE = re.compile(rf"u-({LETTERS})")
 CUT_RE = re.compile(r"([1-9][0-9]*)k")
 PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
 WB_ROWS = 5000000
@@ -68,41 +73,92 @@ class Step:
     gpu: bool = False
 
 
+def split_segs(segs: Segs) -> tuple[Segs, Segs]:
+    count = 0
+    while count < len(segs) and USED_RE.fullmatch(segs[count]):
+        count += 1
+    return segs[:count], segs[count:]
+
+
+def is_root(segs: Segs) -> bool:
+    return len(split_segs(segs)[1]) == 1
+
+
+def used_letters(segs: Segs) -> str:
+    used_dirs, rest = split_segs(segs)
+    used = "".join(USED_RE.fullmatch(seg)[1] for seg in used_dirs)
+    return used + (STEP_RE.fullmatch(rest[0])[5] or "")
+
+
+def canonical(seg: str) -> str:
+    match = PPB_RE.fullmatch(seg)
+    if not match:
+        return seg
+    ppb, pb = ("" if count in (None, "1") else count
+               for count in match.groups())
+    return f"ppb{ppb}.pb{pb}"
+
+
 def parse_path(sentence: Sentence, path: str) -> Segs:
-    segs = tuple(part for part in path.split("/") if part)
-    if not valid_segs(segs):
-        die(f"bad path {path}: want a step (pbN, pbNwb, optionally -dict or "
-            "-big, then -xN, then -LETTERS), then alternating cuts (Nk, "
-            "pp-NAME-Nk) and steps")
-    bag = collections.Counter(sentence.letters)
-    for index, seg in enumerate(segs[::2]):
-        match = STEP_RE.fullmatch(seg)
-        used = match[5]
-        if match[3] and index:
-            die(f"bad path {path}: -{match[3]} is only for a root step")
-        if match[4] and (index or match[2]):
-            die(f"bad path {path}: -x{match[4]} is only for a root pbN step")
-        if used in ("dict", "big"):
-            die(f"bad path {path}: -{used} must come right after pbN or pbNwb")
-        if used and list(used) != sorted(used):
-            die(f"bad path {path}: {used} must be sorted")
-        if used and collections.Counter(used) - bag:
-            die(f"bad path {path}: {used} is not within s{sentence.n}")
-    for seg in segs[1::2]:
+    segs = tuple(canonical(part) for part in path.split("/") if part)
+    error = path_error(sentence, segs)
+    if error:
+        die(f"bad path {path}: {error}")
+    for seg in segs:
         match = PP_CUT_RE.fullmatch(seg)
         if match and not Path(f"idx/pp.{match[1]}").exists():
             die(f"bad path {path}: idx/pp.{match[1]} doesn't exist")
     return segs
 
 
-def valid_segs(segs: Segs) -> bool:
-    if not segs:
-        return False
-    for index, seg in enumerate(segs):
-        patterns = (CUT_RE, PP_CUT_RE) if index % 2 else (STEP_RE,)
+def path_error(sentence: Sentence, segs: Segs) -> str | None:
+    used_dirs, rest = split_segs(segs)
+    for index, seg in enumerate(rest):
+        patterns = (CUT_RE, PP_CUT_RE) if index % 2 else (STEP_RE, PPB_RE)
         if not any(pattern.fullmatch(seg) for pattern in patterns):
-            return False
-    return True
+            rest = ()
+    if not rest:
+        return ("want any u-LETTERS directories, then a step (pbN, pbNwb, "
+                "optionally -dict or -big, then -xN, then -LETTERS; or "
+                "ppb[N].pb[M]), then alternating cuts (Nk, pp-NAME-Nk) and "
+                "steps")
+    root = STEP_RE.fullmatch(rest[0])
+    for index, seg in enumerate(rest[::2]):
+        match = STEP_RE.fullmatch(seg)
+        if not match:
+            if index != 1 or not root or root[2]:
+                return (f"{seg} goes below a cut that is directly below a "
+                        "root pbN step")
+            if len(rest) > 3:
+                return f"nothing goes below {seg}"
+            if seg != canonical(seg):
+                return f"{seg} is spelled {canonical(seg)}"
+            ppb = PPB_RE.fullmatch(seg)
+            if int(ppb[1] or 1) + int(ppb[2] or 1) < int(root[1]):
+                return (f"{seg} picks fewer pairs than {rest[0]}, whose "
+                        "pairs file would be missing pairs it could pick")
+            if root[4] and CUT_RE.fullmatch(rest[1]):
+                return (f"{seg} can't go below an Nk cut of a -x{root[4]} "
+                        "root: the cut's pairs can be longer than the cap")
+            continue
+        used = match[5]
+        if match[3] and index:
+            return f"-{match[3]} is only for a root step"
+        if match[4] and (index or match[2]):
+            return f"-x{match[4]} is only for a root pbN step"
+        for group in ("dict", "big"):
+            if used and group in used.split("-"):
+                return f"-{group} must come right after pbN or pbNwb"
+        if used and (index or used_dirs):
+            return (f"-{used} is only for a root step directly below "
+                    f"tmp/s{sentence.n}")
+    letters = [USED_RE.fullmatch(seg)[1] for seg in used_dirs]
+    if root[5]:
+        letters.append(root[5])
+    used = "".join(letters).replace("-", "")
+    if collections.Counter(used) - collections.Counter(sentence.letters):
+        return f"{used} is not within s{sentence.n}"
+    return None
 
 
 def node_dir(sentence: Sentence, segs: Segs) -> Path:
@@ -111,7 +167,8 @@ def node_dir(sentence: Sentence, segs: Segs) -> Path:
 
 def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     match = STEP_RE.fullmatch(segs[-1])
-    if len(segs) == 1:
+    used_dirs, rest = split_segs(segs)
+    if len(rest) == 1 and (len(used_dirs) < 2 or match[2]):
         source = f"seed-pairs {sentence.seed_flag} -m4"
         deps = []
         external = [f"idx/pairs.s{sentence.n}"]
@@ -120,7 +177,7 @@ def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
             source += f" -d {shlex.quote(seed_dict)}"
             external.append(seed_dict)
     else:
-        parent = segs[:-1]
+        parent = segs[:-1] if len(rest) > 1 else (*used_dirs[:-1], rest[0])
         path = shlex.quote(str(node_dir(sentence, parent) / "pairs"))
         source = f"cat {path}"
         deps = [(parent, "pairs")]
@@ -132,7 +189,7 @@ def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
 
 
 def used_flag(segs: Segs) -> str:
-    used = STEP_RE.fullmatch(segs[-1])[5]
+    used = used_letters(segs)
     return f"-u {used} " if used else ""
 
 
@@ -155,11 +212,39 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"{used_flag(segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict, *external], gpu=True)
-    counted = Step(
+    pairs = Step(
+        segs, ["pairs"], [(segs, "pairs.ranked")],
+        f"awk '{{print $2\",\"$3}}' {d / 'pairs.ranked'} > {d / 'pairs.tmp'}",
+        [])
+    return [rank, pairs, counted_step(sentence, segs),
+            words_step(sentence, segs)]
+
+
+def counted_step(sentence: Sentence, segs: Segs) -> Step:
+    d = node_dir(sentence, segs)
+    return Step(
         segs, ["words.ranked"], [(segs, "pairs.ranked")],
         f"top-segments -n0 --pair-words --by-count < {d / 'pairs.ranked'} "
         f"> {d / 'words.ranked.tmp'}", [])
-    return [rank, counted, words_step(sentence, segs)]
+
+
+def prospect_step(sentence: Sentence, segs: Segs, prospects: int,
+                  count: int) -> list[Step]:
+    d = node_dir(sentence, segs)
+    cut = segs[:-1]
+    root = segs[:-2]
+    ss = ",".join(["ppb"] * prospects + ["pb"] * count)
+    letters = shlex.quote(sentence.letters)
+    dictionary = shlex.quote(sentence.dict)
+    rank = Step(
+        segs, ["pairs.ranked"], [(cut, "pairs"), (root, "pairs")],
+        f"bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
+        f"{used_flag(segs)}--ss {ss} --uc "
+        f"--pp {node_dir(sentence, cut) / 'pairs'} "
+        f"{letters} {node_dir(sentence, root) / 'pairs'} {dictionary} "
+        f"--progress 15 > {d / 'pairs.ranked.tmp'}",
+        [sentence.dict], gpu=True)
+    return [rank, counted_step(sentence, segs), words_step(sentence, segs)]
 
 
 def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
@@ -196,7 +281,7 @@ def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
         segs, ["pairs"], [(parent, "words")],
         f"head -n {thousands * 1000} {words} | seed-pairs {sentence.seed_flag} "
         f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} --no-dict -x0 "
-        f"-l {shlex.quote(sentence.letters)} - "
+        f"-l {shlex.quote(sentence.letters)} {used_flag(segs)}- "
         f"> {d / 'pairs.tmp'}",
         [f"idx/pairs.s{n}"])]
 
@@ -224,6 +309,10 @@ def steps_of(sentence: Sentence, segs: Segs) -> list[Step]:
     cut = CUT_RE.fullmatch(last)
     if cut:
         return cut_step(sentence, segs, int(cut[1]))
+    ppb = PPB_RE.fullmatch(last)
+    if ppb:
+        return prospect_step(sentence, segs, int(ppb[1] or 1),
+                             int(ppb[2] or 1))
     match = STEP_RE.fullmatch(last)
     count = int(match[1])
     if match[2]:
@@ -315,7 +404,7 @@ class Planner:
         reason = ("forced" if step.segs in self.forced else None) \
             or stale_reason(self.sentence, step) \
             or ("upstream rebuilt" if upstream else None)
-        if step.gpu and len(step.segs) == 1 \
+        if step.gpu and is_root(step.segs) \
                 and reason not in ("forced", "missing"):
             self.mark_force_required(step, reason)
             reason = None
@@ -362,7 +451,7 @@ def nodes_of(sentence: Sentence) -> list[Segs]:
     found = []
 
     def walk(directory: Path, segs: Segs) -> None:
-        if segs and not valid_segs(segs):
+        if split_segs(segs)[1] and path_error(sentence, segs):
             return
         if segs and (directory / MANIFEST).exists():
             found.append(segs)
@@ -388,7 +477,7 @@ def natural(seg: str) -> list:
             for part in re.split(r"(\d+)", seg)]
 
 
-def status(sentence: Sentence) -> None:
+def status(sentence: Sentence, used: str | None) -> None:
     planner = Planner(sentence, set())
     nodes = nodes_of(sentence)
     for segs in nodes:
@@ -399,14 +488,25 @@ def status(sentence: Sentence) -> None:
               for step, reason, _ in planner.force_required if reason}
 
     tree = {segs[:i] for segs in nodes for i in range(1, len(segs) + 1)}
+    shown = [node for node in tree if not split_segs(node)[1]
+             and "".join(USED_RE.fullmatch(seg)[1] for seg in node)
+             .replace("-", "") == used]
+    if used is not None and not shown:
+        die(f"no u-LETTERS directories with used letters {used}")
     rows: list[tuple] = []
+
+    def visible(segs: Segs) -> bool:
+        return used is None or any(
+            segs[:len(node)] == node or node[:len(segs)] == segs
+            for node in shown)
 
     def collect(segs: Segs) -> None:
         depth = len(segs)
         rows.append(("dir", "  " * (depth - 1) + segs[-1] + "/"))
         directory = node_dir(sentence, segs)
         manifest = read_manifest(directory)
-        for step in steps_of(sentence, segs):
+        steps = steps_of(sentence, segs) if split_segs(segs)[1] else []
+        for step in steps:
             reason = stale.get((segs, step.outputs[0]))
             for output in step.outputs:
                 path = directory / output
@@ -421,12 +521,13 @@ def status(sentence: Sentence) -> None:
                     if changed else ""
                 rows.append(("file", "  " * depth + output, state,
                              line_count(path), note))
-        children = [node for node in tree
-                    if len(node) == depth + 1 and node[:depth] == segs]
+        children = [node for node in tree if len(node) == depth + 1
+                    and node[:depth] == segs and visible(node)]
         for child in sorted(children, key=lambda node: natural(node[-1])):
             collect(child)
 
-    for root in sorted((node for node in tree if len(node) == 1),
+    for root in sorted((node for node in tree
+                        if len(node) == 1 and visible(node)),
                        key=lambda node: natural(node[0])):
         collect(root)
 
@@ -503,7 +604,7 @@ def adopt(sentence: Sentence) -> None:
                 break
     for directory, _, _ in os.walk(root):
         relative = Path(directory).relative_to(root).parts
-        if not valid_segs(relative):
+        if not split_segs(relative)[1] or path_error(sentence, relative):
             continue
         manifest = read_manifest(Path(directory))
         for step in steps_of(sentence, relative):
@@ -535,16 +636,18 @@ def load_sentence(arg: str) -> Sentence:
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog=PROGRAM, description="Builds new-pairs workflow files under "
-        "tmp/sN; a path such as pb3/2k/pb3 is the build request.")
+        "tmp/sN; a path such as pb3/2k/pb3 or u-abc/pb3 is the build "
+        "request.")
     parser.add_argument("-n", "--dry-run", action="store_true",
                         help="print what would run")
     parser.add_argument("-f", "--force", action="store_true",
-                        help="also rerun every step of each named path; "
+                        help="also rerun every step of the named path; "
                         "the only way an out-of-date root bag-stats-cuda "
                         "step (e.g. pb3) is rebuilt")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true",
-                      help="show the tree and what is stale")
+                      help="show the tree and what is stale; with "
+                      "u-LETTERS, only the subtrees with those used letters")
     mode.add_argument("--report", action="store_true",
                       help="show tmp/sN/targets word ranks per node")
     mode.add_argument("--adopt", action="store_true",
@@ -555,29 +658,42 @@ def main() -> int:
 
     os.chdir(Path(__file__).resolve().parent)
     sentence = load_sentence(args.sentence)
-    if args.status or args.report:
-        (status if args.status else report)(sentence)
+    if args.status:
+        used = [USED_RE.fullmatch(path) for path in args.paths]
+        if len(used) > 1 or not all(used):
+            parser.error("--status takes at most one u-LETTERS")
+        status(sentence, used[0][1].replace("-", "") if used else None)
         return 0
-    if not args.adopt and not args.paths:
-        parser.error("give at least one PATH")
+    if args.report:
+        report(sentence)
+        return 0
+    if args.adopt and args.paths:
+        parser.error("--adopt takes no PATH")
+    if not args.adopt and len(args.paths) != 1:
+        parser.error("give exactly one PATH")
     with open(f"tmp/.rebuild-pairs.s{sentence.n}.lock", "w") as lock:
         if not args.dry_run:
             fcntl.flock(lock, fcntl.LOCK_EX)
         if args.adopt:
             adopt(sentence)
             return 0
-        paths = [parse_path(sentence, path) for path in args.paths]
-        planner = Planner(sentence, set(paths) if args.force else set())
-        for segs in paths:
-            for step in steps_of(sentence, segs):
-                planner.visit(step)
+        segs = parse_path(sentence, args.paths[0])
+        planner = Planner(sentence, {segs} if args.force else set())
+        for step in steps_of(sentence, segs):
+            planner.visit(step)
+        needed = {segs[:i] for i in range(1, len(segs) + 1)}
+        for step, reason in planner.order:
+            if step.gpu and is_root(step.segs) and step.segs not in needed:
+                die(f"parent GPU results missing; run {PROGRAM}.py "
+                    f"s{sentence.n} {'/'.join(step.segs)} to generate it")
         for step, reason, changed in planner.force_required:
             since = f"changed since: {', '.join(changed)}" if changed else None
             why = ", ".join(part for part in (reason, since) if part)
-            print(f"{PROGRAM}: warning: s{sentence.n}/{step.segs[0]} "
+            root = "/".join(step.segs)
+            print(f"{PROGRAM}: warning: s{sentence.n}/{root} "
                   f"{' '.join(step.outputs)} is out of date ({why}); "
                   f"rebuild it on its own with: {PROGRAM} -f s{sentence.n} "
-                  f"{step.segs[0]}", file=sys.stderr)
+                  f"{root}", file=sys.stderr)
         total = len(planner.order)
         if total == 0 and not planner.force_required:
             print(f"{PROGRAM}: up to date")
