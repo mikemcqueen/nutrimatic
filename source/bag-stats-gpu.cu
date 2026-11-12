@@ -50,6 +50,13 @@ __constant__ uint32_t SALT[FILTER_BLOCK_WORDS] = {
 };
 
 std::string program_name = "bag-stats-cuda";
+bool table_reports = false;
+
+// Reports `format` when set_gpu_table_reports() is on.
+template <typename... Args>
+void table_report(char const* format, Args... args) {
+    if (table_reports) report(program_name, format, args...);
+}
 
 void check(cudaError_t error) {
     if (error == cudaSuccess) return;
@@ -1015,11 +1022,12 @@ struct GpuRowCounter::Impl {
         size_t const table_room = free > SUM_TABLE_RESERVE
             ? (free - SUM_TABLE_RESERVE) / SUM_SLOT_BYTES
             : 0;
-        size_t const slots = std::min(
-            size_t(distinct * SUM_TABLE_SLOTS) + 1024, table_room);
+        size_t const wanted_slots = size_t(distinct * SUM_TABLE_SLOTS) + 1024;
+        size_t const slots = std::min(wanted_slots, table_room);
         bool exact = getenv("BSC_NO_SUM_TABLE") == nullptr && pairs != 0 &&
             sum_counts_fit && double(slots) >= distinct * SUM_TABLE_SLOTS_LEAST;
         unsigned long long claimed = 0;
+        bool overflowed = false;
         if (exact) {
             void* keys = nullptr;
             void* counts = nullptr;
@@ -1042,6 +1050,7 @@ struct GpuRowCounter::Impl {
             check(cudaMemcpy(&full, p.full, sizeof full,
                              cudaMemcpyDeviceToHost));
             exact = full == 0 && double(claimed) <= SUM_TABLE_FULL * slots;
+            overflowed = !exact;
             if (exact) {
                 buffers.push_back(keys);
                 buffers.push_back(counts);
@@ -1057,13 +1066,25 @@ struct GpuRowCounter::Impl {
         if (exact) {
             filter_info = {
                 pairs, longest_sum, slots * SUM_SLOT_BYTES,
+                wanted_slots * SUM_SLOT_BYTES,
                 std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - start)
                     .count(),
                 claimed, true};
             return;
         }
-        if (pairs != 0 && !sum_counts_fit)
+        if (overflowed)
+            alert(program_name,
+                  "exact sum table of %.2fG slots (%s) filled past %.0f%% "
+                  "with %.2fG of an estimated %.2fG sums; counting with the "
+                  "slower pair-sum filter",
+                  double(slots) / 1e9,
+                  gpu_fit_text(double(slots) * SUM_SLOT_BYTES,
+                               double(wanted_slots) * SUM_SLOT_BYTES)
+                      .c_str(),
+                  SUM_TABLE_FULL * 100, double(claimed) / 1e9,
+                  distinct / 1e9);
+        else if (pairs != 0 && !sum_counts_fit)
             alert(program_name,
                   "a sum of two groups may have more than %u pairs, too many "
                   "for the exact sum table; counting with the slower "
@@ -1094,6 +1115,7 @@ struct GpuRowCounter::Impl {
         check(cudaDeviceSynchronize());
         filter_info = {
             pairs, longest_sum, filter_bytes,
+            wanted * FILTER_BLOCK_WORDS * sizeof(uint32_t),
             std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                           start)
                 .count(),
@@ -3105,7 +3127,23 @@ bool memo_layout(uint64_t numbers, uint64_t most, Memo* out) {
     int const narrow = std::min(wide + 1, memo.number_bits);
     memo.narrow = memo.number_bits - narrow + memo.value_bits <= 32;
     memo.slot_bits = memo.narrow ? narrow : std::min(wide, memo.number_bits);
-    return wide > 0 && memo.number_bits - memo.slot_bits + memo.value_bits <= 64;
+    bool const fits =
+        wide > 0 && memo.number_bits - memo.slot_bits + memo.value_bits <= 64;
+    double const optimal = std::ldexp(memo.value_bits <= 32 ? 4.0 : 8.0,
+                                      memo.number_bits);
+    if (fits)
+        table_report("pair usage memo: 2^%d slots for 2^%d rest numbers, %s, "
+                     "%s free",
+                     memo.slot_bits, memo.number_bits,
+                     gpu_fit_text(std::ldexp(memo.narrow ? 4.0 : 8.0,
+                                             memo.slot_bits),
+                                  optimal).c_str(),
+                     gpu_bytes_text(double(free)).c_str());
+    else
+        table_report("pair usage memo: no room (optimal %s, %s free)",
+                     gpu_bytes_text(optimal).c_str(),
+                     gpu_bytes_text(double(free)).c_str());
+    return fits;
 }
 
 // Builds the fit tables of bags [begin, end) of `inputs` on the device into
@@ -3149,6 +3187,9 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
     check(cudaMemGetInfo(&free_bytes, &device_bytes));
     uint64_t const dense_most = getenv("BSC_DENSE") ? strtoull(getenv("BSC_DENSE"), nullptr, 10) : 0;
     size_t dense_count = 0;
+    // The most dense letters with room for every table, and their bytes.
+    size_t optimal_count = 0;
+    long double optimal_bytes = 0;
     {
         uint64_t rests = 1;
         size_t fallback = 0;
@@ -3168,10 +3209,12 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
                 one += cap;
             }
             if (rests * one > UINT32_MAX || rests * two > TWO_MOST) continue;
+            long double const need = rests * (1 + one + two + triple) * 4 +
+                listed_from[k] * sizeof(WalkBag<BagKey>);
+            optimal_count = k;
+            optimal_bytes = need;
             if (free_bytes > TRIPLE_RESERVE &&
-                rests * (1 + one + two + triple) * 4 +
-                        listed_from[k] * sizeof(WalkBag<BagKey>) <=
-                    free_bytes - TRIPLE_RESERVE)
+                need <= free_bytes - TRIPLE_RESERVE)
                 dense_count = k;
         }
         if (dense_count == 0) dense_count = fallback;
@@ -3406,6 +3449,27 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
     t.three_starts = d->upload(starts);
     t.two_base = d->upload(two_base);
     t.three_base = d->upload(three_base);
+    double const triple_bytes = double(triple_entries) * 4;
+    std::string const built = gpu_bytes_text(
+        double(before) + (with_triple ? triple_bytes : 0));
+    std::string const free_text = gpu_bytes_text(double(free_bytes));
+    if (dims.size() == optimal_count && with_triple)
+        table_report("fit tables: %d of %zu letters dense, triple table "
+                     "built, %s (optimal), %s free",
+                     int(dims.size()), by_count.size(), built.c_str(),
+                     free_text.c_str());
+    else
+        table_report("fit tables: %d of %zu letters dense, triple table %s, "
+                     "%s; optimal %zu dense with the triple table needs %s "
+                     "(constrained), %s free",
+                     int(dims.size()), by_count.size(),
+                     with_triple ? "built" : "not built", built.c_str(),
+                     optimal_count,
+                     gpu_bytes_text(dims.size() == optimal_count
+                                        ? double(before) + triple_bytes
+                                        : double(optimal_bytes))
+                         .c_str(),
+                     free_text.c_str());
     if (getenv("BSC_DEBUG"))
         fprintf(stderr, "DEBUG tables: %d dense letters, %llu rests, %d sparse letters, one %llu, two %llu entries, triple %llu entries%s, three %zu bags in %llu buckets\n",
                 int(dims.size()), (unsigned long long)lattice, count, (unsigned long long)one_entries, (unsigned long long)two_entries, (unsigned long long)triple_entries, with_triple ? "" : " (not built)", listed.size(), (unsigned long long)buckets);
@@ -3792,7 +3856,13 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
     size_t const room = free > SUMS_RESERVE ? free - SUMS_RESERVE : 0;
     long double const most = (long double)(room / sizeof(Entry));
     if (getenv("BSC_SLAB_ENTRIES")) const_cast<long double&>(most) = strtold(getenv("BSC_SLAB_ENTRIES"), nullptr);
-    if (most < 1) return false;
+    double const whole = double(total) * sizeof(Entry);
+    if (most < 1) {
+        table_report("pair sums table: no room (one slab needs %s, %s free)",
+                     gpu_bytes_text(whole).c_str(),
+                     gpu_bytes_text(double(free)).c_str());
+        return false;
+    }
     long double const need = total / most;
     std::vector<int> slab_letters;
     long double best = 0;
@@ -3816,9 +3886,27 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
         }
     };
     search(0, 1);
-    if (best == 0 || best > SLABS_MOST) return false;
+    if (best == 0 || best > SLABS_MOST) {
+        table_report("pair sums table: no split of at most %d letters into "
+                     "at most %.0Lf slabs fits (one slab needs %s, %s free)",
+                     SLAB_LETTERS, SLABS_MOST, gpu_bytes_text(whole).c_str(),
+                     gpu_bytes_text(double(free)).c_str());
+        return false;
+    }
     size_t const slabs = size_t(best);
     size_t const entries = size_t(total / best + 0.5L);
+    double const slab_bytes = double(entries) * sizeof(Entry);
+    if (slabs == 1)
+        table_report("pair sums table: 1 slab, %s (optimal), %s free",
+                     gpu_bytes_text(slab_bytes).c_str(),
+                     gpu_bytes_text(double(free)).c_str());
+    else
+        table_report("pair sums table: %zu slabs over %zu letters, %s each; "
+                     "optimal 1 slab needs %s (constrained), %s free",
+                     slabs, slab_letters.size(),
+                     gpu_bytes_text(slab_bytes).c_str(),
+                     gpu_bytes_text(whole).c_str(),
+                     gpu_bytes_text(double(free)).c_str());
 
     // Every bag's number over the other letters, and the slab letters' bits.
     std::vector<uint64_t> strides(26, 0);
@@ -3952,6 +4040,9 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
         fprintf(stderr, "DEBUG sums: %zu slabs of %zu entries (%.1f MB), %zu used, %llu combinations, letters %d, est %.1fs against %.1fs\n",
                 slabs, entries, double(entries) * sizeof(Entry) / 1048576, used, combinations, s.letters, seconds, other_seconds);
     if (seconds > other_seconds) {
+        table_report("pair sums walk: %zu of %zu slabs used, estimated "
+                     "%.1fs against %.1fs for the walk it replaces; not used",
+                     used, slabs, seconds, other_seconds);
         check(cudaStreamDestroy(stream));
         return false;
     }
@@ -4138,6 +4229,14 @@ void choose_usage_walk(GpuLeftoverInputs const& inputs, Packing const& packing,
                     use_memo ? "memo" : "scan", other_seconds);
         lap("pilots");
         use_tables = table_seconds < other_seconds;
+        table_report("pair usage walk: %s (pilots: fit tables %.3fs, %s "
+                     "%.3fs)",
+                     use_tables ? "fit tables" : use_memo ? "memo" : "scan",
+                     table_seconds, use_memo ? "memo" : "scan",
+                     other_seconds);
+    } else {
+        table_report("pair usage walk: %s",
+                     use_tables ? "fit tables" : use_memo ? "memo" : "scan");
     }
     if (use_tables) {
         scan.d.release();
@@ -4380,4 +4479,23 @@ bool run_top_rows_gpu(std::string_view program,
                                 values, last_unit, capacity, rows, unit_ties)
         : walk_top_rows<Key64>(inputs, packing, first_unit, units, keys,
                                values, last_unit, capacity, rows, unit_ties);
+}
+
+void set_gpu_table_reports(bool on) { table_reports = on; }
+
+std::string gpu_bytes_text(double bytes) {
+    char text[32];
+    if (bytes < 1e6)
+        snprintf(text, sizeof text, "%.1f KB", bytes / 1e3);
+    else if (bytes < 1e9)
+        snprintf(text, sizeof text, "%.1f MB", bytes / 1e6);
+    else
+        snprintf(text, sizeof text, "%.2f GB", bytes / 1e9);
+    return text;
+}
+
+std::string gpu_fit_text(double bytes, double optimal) {
+    if (bytes >= optimal) return gpu_bytes_text(bytes) + " (optimal)";
+    return gpu_bytes_text(bytes) + " of optimal " + gpu_bytes_text(optimal) +
+        " (constrained)";
 }

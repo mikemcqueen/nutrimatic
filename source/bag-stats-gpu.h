@@ -128,6 +128,17 @@ bool run_distinct_rests_gpu(std::string_view program,
 // memory holds, with `rows` one that counts each rest's rows.
 size_t gpu_rest_set_capacity(bool rows);
 
+// When `on`, run_pair_usage_gpu() reports on stderr how each table it sizes
+// to the device's free memory compares with the table it would build with
+// room for all of it.
+void set_gpu_table_reports(bool on);
+
+// `bytes` in KB, in MB from 1 MB, or in GB from 1 GB.
+std::string gpu_bytes_text(double bytes);
+
+// `bytes`, and `optimal` when the room for the optimal table was short.
+std::string gpu_fit_text(double bytes, double optimal);
+
 // Walks the rows of `inputs` as run_distinct_rests_gpu() does, those of
 // `units` units from `first_unit`, for the rows whose rest is in a table:
 // `keys`, a power of two of slots, open addressed from mix64(number + 1),
@@ -178,12 +189,13 @@ struct GpuCounts {
 };
 
 // The pair-sum filter: the group pairs it was sized for, the letters in the
-// longest of their sums, its device bytes and the seconds its two kernels
-// took.
+// longest of their sums, its device bytes, the bytes it wanted, and the
+// seconds its two kernels took.
 struct GpuFilterInfo {
     uint64_t pairs;
     int longest_sum;
     size_t bytes;
+    size_t optimal_bytes;
     double seconds;
     // With the exact sum table in the filter's place: its distinct sums.
     uint64_t distinct_sums;

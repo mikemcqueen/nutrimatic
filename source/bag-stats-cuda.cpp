@@ -1095,11 +1095,11 @@ void print_top_by_rest(Walk const& walk, BagStatsInputs const& inputs,
     leftover_inputs(inputs, args, &gpu, &sorted);
     RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
     number_inputs(inputs, index, sorted, &gpu);
-    size_t const capacity = std::min(
-        gpu_rest_set_capacity(true),
-        std::max<size_t>(size_t(args.cache_size_mb) * 1024 * 1024 /
-                             RANGE_REST_BYTES,
-                         size_t(1) << 16));
+    size_t const device_capacity = gpu_rest_set_capacity(true);
+    size_t const cache_capacity = std::max<size_t>(
+        size_t(args.cache_size_mb) * 1024 * 1024 / RANGE_REST_BYTES,
+        size_t(1) << 16);
+    size_t const capacity = std::min(device_capacity, cache_capacity);
 
     // Range r is units [bounds[r], bounds[r + 1]).
     stage("finding distinct remainders");
@@ -1109,6 +1109,10 @@ void print_top_by_rest(Walk const& walk, BagStatsInputs const& inputs,
         PROGRAM, gpu, 0, units, capacity, &whole.numbers, &whole.rows);
     if (one_range) {
         bounds.push_back(units);
+        if (args.progress != 0)
+            report(PROGRAM, "distinct remainders: %zu in one range (optimal), "
+                   "of the %zu the device and --cache-size hold",
+                   whole.numbers.size(), capacity);
     } else {
         whole = {};
         std::vector<uint64_t> unit_rows;
@@ -1148,8 +1152,11 @@ void print_top_by_rest(Walk const& walk, BagStatsInputs const& inputs,
         }
         if (args.progress != 0)
             report(PROGRAM, "more distinct remainders than the %zu the "
-                   "device and --cache-size hold: counting them in %zu "
-                   "ranges of rows", capacity, bounds.size() - 1);
+                   "%s holds (device %zu, --cache-size %zu): counting them "
+                   "in %zu ranges of rows (constrained)", capacity,
+                   device_capacity < cache_capacity ? "device"
+                                                    : "--cache-size",
+                   device_capacity, cache_capacity, bounds.size() - 1);
     }
     size_t const ranges = bounds.size() - 1;
 
@@ -1529,6 +1536,7 @@ int main(int argc, char* argv[]) {
         report(PROGRAM, "LETTERS has more than %d letters", GPU_MAX_LETTERS);
         return 1;
     }
+    set_gpu_table_reports(args.progress != 0);
     stage("loading inputs");
     if (!load_bag_stats_inputs(PROGRAM, args, &inputs, nullptr)) return 1;
     if (args.leftovers) {
@@ -1564,20 +1572,21 @@ int main(int argc, char* argv[]) {
                counter.device().c_str(), counter.key_bits(),
                double(counter.bytes()) / (1024 * 1024));
         GpuFilterInfo const filter = counter.filter_info();
+        std::string const fit = gpu_fit_text(double(filter.bytes),
+                                             double(filter.optimal_bytes));
         if (filter.exact_table)
             report(PROGRAM,
                    "exact sum table: %llu group pairs, %llu sums, longest "
-                   "sum %d letters, %.1f MB, built in %.1fs",
+                   "sum %d letters, %s, built in %.1fs",
                    (unsigned long long)filter.pairs,
                    (unsigned long long)filter.distinct_sums,
-                   filter.longest_sum,
-                   double(filter.bytes) / (1024 * 1024), filter.seconds);
+                   filter.longest_sum, fit.c_str(), filter.seconds);
         else
             report(PROGRAM,
                    "pair-sum filter: %llu group pairs, longest sum %d "
-                   "letters, %.1f MB (%.1f bits per pair), built in %.1fs",
+                   "letters, %s (%.1f bits per pair), built in %.1fs",
                    (unsigned long long)filter.pairs, filter.longest_sum,
-                   double(filter.bytes) / (1024 * 1024),
+                   fit.c_str(),
                    filter.pairs == 0
                        ? 0.0
                        : double(filter.bytes) * 8 / filter.pairs,
