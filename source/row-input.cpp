@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -40,19 +41,74 @@ bool read_lines(
   });
 }
 
+namespace {
+
+RowFormat line_format(std::string_view line) {
+  size_t const start = std::min(line.find_first_not_of(' '), line.size());
+  size_t const space = line.find(' ', start);
+  std::string_view const lead = line.substr(start, space - start);
+  if (space != std::string_view::npos && !lead.empty() &&
+      std::all_of(lead.begin(), lead.end(),
+                  [](char ch) { return ch >= '0' && ch <= '9'; }))
+    return line.find(' ', space + 1) == std::string_view::npos
+        ? RowFormat::ranked_words : RowFormat::ranked;
+  return line.find(',') == std::string_view::npos
+      ? RowFormat::words : RowFormat::pairs;
+}
+
+char const* format_name(RowFormat format) {
+  switch (format) {
+    case RowFormat::pairs: return "word,word";
+    case RowFormat::pairs_or_words: return "word or word,word";
+    case RowFormat::ranked: return "COUNT word word";
+    case RowFormat::words: return "word";
+    case RowFormat::ranked_words: return "COUNT word";
+    case RowFormat::detect: break;
+  }
+  return "a row";
+}
+
+}  // namespace
+
 bool read_rows(
     std::string_view program, std::filesystem::path const& path,
     std::string_view what, RowFormat format,
     std::function<bool(uint64_t, DfsPairRow const&, std::string const&)> const&
         visit) {
+  bool const strict = format == RowFormat::detect ||
+      format == RowFormat::words || format == RowFormat::ranked_words;
+  RowFormat file_format = format;
   return read_lines(program, path,
       [&](std::string const& line, size_t number) {
+        if (strict) {
+          RowFormat const found = line_format(line);
+          if (file_format == RowFormat::detect) file_format = found;
+          if (found != file_format) {
+            fprintf(stderr,
+                "error: %.*s \"%s\" line %zu: expected %s, the format %s\n",
+                SV_ARG(what), path.c_str(), number, format_name(file_format),
+                format == RowFormat::detect
+                    ? "of line 1" : "required here");
+            return false;
+          }
+        }
         DfsPairRow row;
         uint64_t count = 0;
-        bool const parsed = format == RowFormat::ranked
-            ? parse_ranked_row(line, what, path.native(), number, &row, &count)
-            : parse_pair_row(line, what, path.native(), number,
-                             format == RowFormat::pairs_or_words, &row);
+        bool parsed = false;
+        switch (file_format) {
+          case RowFormat::ranked:
+          case RowFormat::ranked_words:
+            parsed = parse_ranked_row(line, what, path.native(), number,
+                file_format == RowFormat::ranked_words, &row, &count);
+            break;
+          case RowFormat::pairs:
+          case RowFormat::pairs_or_words:
+          case RowFormat::words:
+          case RowFormat::detect:
+            parsed = parse_pair_row(line, what, path.native(), number,
+                file_format != RowFormat::pairs, &row);
+            break;
+        }
         return parsed && visit(count, row, line);
       });
 }

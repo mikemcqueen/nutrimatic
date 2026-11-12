@@ -220,11 +220,12 @@ bool parse_pair_row(
     std::string const& line, std::string_view what, std::string_view source,
     size_t line_number, bool allow_single_words, DfsPairRow* out);
 
-// Parse one "COUNT word word" line, leading spaces skipped, into `*out` and
-// `*count`. Prints a source/line diagnostic on failure.
+// Parse one "COUNT word word" line, or "COUNT word" when `single_word`,
+// leading spaces skipped, into `*out` and `*count`; a single word leaves
+// `out->right` empty. Prints a source/line diagnostic on failure.
 bool parse_ranked_row(
     std::string const& line, std::string_view what, std::string_view source,
-    size_t line_number, DfsPairRow* out, uint64_t* count);
+    size_t line_number, bool single_word, DfsPairRow* out, uint64_t* count);
 
 // A pair set owns normalized whole-entry keys. The general loader below owns
 // every two-word pair as both "left right" and "right left"; the extraction

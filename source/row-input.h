@@ -11,9 +11,14 @@
 
 #include "dfs-cli-args.h"
 
-// What each line of a row file holds: word,word; that or a single word; or
-// COUNT word word.
-enum class RowFormat { pairs, pairs_or_words, ranked };
+// What each line of a row file holds: word,word; that or a single word;
+// COUNT word word; a single word; or COUNT word. `detect` takes the format
+// from a file's first line among word,word, word, COUNT word word and
+// COUNT word. Under `words`, `ranked_words` and `detect`, a line of any other
+// format is an error.
+enum class RowFormat {
+  pairs, pairs_or_words, ranked, words, ranked_words, detect
+};
 
 // Calls `read` on `path` opened for reading, or on standard input when `path`
 // is '-', and returns what it returns. A file that can't be opened is
@@ -29,9 +34,10 @@ bool read_lines(
     std::string_view program, std::filesystem::path const& path,
     std::function<bool(std::string const&, size_t)> const& visit);
 
-// As read_lines(), but calls `visit` on each line's COUNT, 0 unless `format`
-// is ranked, then its row, parsed by parse_ranked_row() or parse_pair_row()
-// with `what` naming rows in its diagnostics, and the line.
+// As read_lines(), but calls `visit` on each line's COUNT, 0 unless the
+// line's format is ranked or ranked_words, then its row, parsed by
+// parse_ranked_row() or parse_pair_row() with `what` naming rows in its
+// diagnostics, and the line. A single word leaves the row's `right` empty.
 bool read_rows(
     std::string_view program, std::filesystem::path const& path,
     std::string_view what, RowFormat format,
