@@ -34,6 +34,7 @@ struct Args {
   Mode mode = Mode::count;
   std::string bag;
   int by = 1;
+  bool relaxed = false;
   bool all = false;
 };
 
@@ -48,8 +49,10 @@ struct BagWithRows : Bag {
 };
 
 void usage(FILE* out) {
-  fputs("usage: letter-bags [--match BAG | --near BAG [--by N] |\n"
-        "                    --outliers [--by N] [--all]] FILE|-...\n", out);
+  fputs("usage: letter-bags [--match BAG |\n"
+        "                    --near BAG [--by N] [--relaxed] |\n"
+        "                    --outliers [--by N] [--relaxed] [--all]] "
+        "FILE|-...\n", out);
   if (out != stdout) return;
 
   fputs("  count the lines of each FILE and the distinct letter bags they\n"
@@ -68,10 +71,10 @@ void usage(FILE* out) {
       "print instead each line, from its first letter, whose letters are "
       "those of BAG; BAG's letters are lowercased and all else dropped");
   dfs_help_option("--near BAG",
-      "print instead each bag that is BAG with at most N letters added, "
-      "removed or replaced, a replaced letter counting once, as its first "
-      "line from its first letter; nearest first, then in input order; BAG "
-      "as for --match");
+      "print instead each bag that is BAG with at most N letters added or "
+      "removed, a replaced letter counting as one removed and one added, as "
+      "its first line from its first letter; nearest first, then in input "
+      "order; BAG as for --match");
   dfs_help_option("--outliers",
       "print instead the line and outlier counts, then each bag with no "
       "other bag within N letters, as for --near, as its first line from "
@@ -80,6 +83,8 @@ void usage(FILE* out) {
       "outlier bag, from its first letter");
   dfs_help_option("--by N", "with --near or --outliers, the letters that "
       "may differ; defaults to 1");
+  dfs_help_option("--relaxed", "with --near or --outliers, count a replaced "
+      "letter once: the larger of the letters removed and added");
   dfs_help_option("-h, --help", "show this help");
 }
 
@@ -89,12 +94,14 @@ bool parse_args(char* argv[], Args* out, bool* help) {
   int const OPT_BY = 258;
   int const OPT_OUTLIERS = 259;
   int const OPT_ALL = 260;
+  int const OPT_RELAXED = 261;
   static struct optparse_long const long_options[] = {
     { "outliers", OPT_OUTLIERS, OPTPARSE_NONE },
     { "all", OPT_ALL, OPTPARSE_NONE },
     { "match", OPT_MATCH, OPTPARSE_REQUIRED },
     { "near", OPT_NEAR, OPTPARSE_REQUIRED },
     { "by", OPT_BY, OPTPARSE_REQUIRED },
+    { "relaxed", OPT_RELAXED, OPTPARSE_NONE },
     { "help", 'h', OPTPARSE_NONE },
     { NULL, 0, OPTPARSE_NONE },
   };
@@ -142,6 +149,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         }
         by_given = true;
         break;
+      case OPT_RELAXED:
+        out->relaxed = true;
+        break;
       case 'h':
         *help = true;
         return true;
@@ -153,6 +163,10 @@ bool parse_args(char* argv[], Args* out, bool* help) {
 
   if (by_given && out->mode != Mode::near && out->mode != Mode::outliers) {
     fprintf(stderr, "error: --by requires --near or --outliers\n");
+    return false;
+  }
+  if (out->relaxed && out->mode != Mode::near && out->mode != Mode::outliers) {
+    fprintf(stderr, "error: --relaxed requires --near or --outliers\n");
     return false;
   }
   if (out->all && out->mode != Mode::outliers) {
@@ -177,7 +191,7 @@ void bag_key(DfsPairRow const& row, std::string* key) {
   std::sort(key->begin(), key->end());
 }
 
-int bag_distance(std::string_view a, std::string_view b) {
+int bag_distance(std::string_view a, std::string_view b, bool relaxed) {
   int only_a = 0;
   int only_b = 0;
   size_t i = 0;
@@ -194,7 +208,7 @@ int bag_distance(std::string_view a, std::string_view b) {
       ++j;
     }
   }
-  return std::max(only_a, only_b);
+  return relaxed ? std::max(only_a, only_b) : only_a + only_b;
 }
 
 template <typename B = Bag>
@@ -258,7 +272,7 @@ bool print_near(Args const& args) {
     size_t const gap = length > args.bag.size()
         ? length - args.bag.size() : args.bag.size() - length;
     if (gap > size_t(args.by)) continue;
-    int const distance = bag_distance(it->first, args.bag);
+    int const distance = bag_distance(it->first, args.bag, args.relaxed);
     if (distance <= args.by) near.push_back({distance, it});
   }
   std::sort(near.begin(), near.end(), [](Near const& a, Near const& b) {
@@ -357,7 +371,7 @@ void set_near(NearFlags* near, uint32_t id) {
 }
 
 void mark_near_bags(Keys const& keys, std::vector<Slot> const& table, int by,
-                    size_t threads, NearFlags* near) {
+                    bool relaxed, size_t threads, NearFlags* near) {
   size_t const mask = table.size() - 1;
   std::atomic<size_t> next{0};
   run_threads(threads, [&](size_t) {
@@ -377,7 +391,8 @@ void mark_near_bags(Keys const& keys, std::vector<Slot> const& table, int by,
             Slot const slot = table[at];
             if (slot.tag != tag || slot.id == id || is_near(*near, slot.id))
               continue;
-            if (bag_distance(keys[slot.id], keys[id]) > by) continue;
+            if (bag_distance(keys[slot.id], keys[id], relaxed) > by)
+              continue;
             set_near(near, slot.id);
             set_near(near, uint32_t(id));
           }
@@ -436,7 +451,7 @@ bool print_outliers(Args const& args) {
             table[at] = {uint32_t(hash >> 32), open[i]};
           }
         }
-        mark_near_bags(keys, table, by, threads, &near);
+        mark_near_bags(keys, table, by, args.relaxed, threads, &near);
       }
       begin = end;
     }

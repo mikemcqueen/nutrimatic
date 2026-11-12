@@ -50,15 +50,17 @@ actual=$("$letter_bags" --match tae "$test_dir/ranked-words")
 
 printf '%s\n' white whitney whites whitey yetiwh whit > "$test_dir/near"
 actual=$("$letter_bags" --near whitey "$test_dir/near")
-[[ $actual == $'whitey\nwhite\nwhitney\nwhites' ]] ||
+[[ $actual == $'whitey\nwhite\nwhitney' ]] ||
   fail "--near output is wrong: $actual"
 actual=$("$letter_bags" --near whitey --by 2 "$test_dir/near" | tail -1)
 [[ $actual == whit ]] || fail "--near --by 2 output is wrong: $actual"
 actual=$("$letter_bags" --match whitez "$test_dir/near")
 [[ $actual == 'bag not found' ]] || fail "--match not found is wrong: $actual"
 actual=$("$letter_bags" --near whitez "$test_dir/near")
+[[ $actual == white ]] || fail "--near not found is wrong: $actual"
+actual=$("$letter_bags" --near whitez --relaxed "$test_dir/near")
 [[ $actual == $'white\nwhites\nwhitey' ]] ||
-  fail "--near not found is wrong: $actual"
+  fail "--near --relaxed is wrong: $actual"
 actual=$("$letter_bags" --near zzzz "$test_dir/near")
 [[ $actual == 'no nearby bags found' ]] ||
   fail "--near no results is wrong: $actual"
@@ -85,7 +87,7 @@ actual=$("$letter_bags" --outliers --by 3 "$test_dir/near")
   }'
   printf '%s\n' uuuuvvvvvvwwwwwwxx xxxyyyyyyzzzzzzuuu uxvvvvvyyywwwwwzzz
 } > "$test_dir/chunks"
-actual=$("$letter_bags" --outliers --by 3 "$test_dir/chunks" | grep '^[u-z]')
+actual=$("$letter_bags" --outliers --by 3 --relaxed "$test_dir/chunks" | grep '^[u-z]')
 [[ $actual == $'uuuxxxvvvyyywwwzzz (1)\nuxvvvvvyyywwwwwzzz (1)' ]] ||
   fail "--outliers across stages and chunks is wrong: $actual"
 if "$letter_bags" --match a --near a "$test_dir/near" > /dev/null 2>&1; then
