@@ -4,7 +4,8 @@
 See plans/rebuild-pairs.md. A path is any number of u-LETTERS directories,
 then alternating steps and cuts (Nk or pp-NAME-Nk), starting with a step:
 u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. LETTERS may be several hyphen-separated
-groups: u-abc-def.
+groups: u-abc-def. An all-uppercase group is an alias from tmp/sN/aliases.json,
+added with --add-alias: u-OT-def.
 """
 
 import argparse
@@ -22,11 +23,14 @@ from pathlib import Path
 
 PROGRAM = "rebuild-pairs"
 MANIFEST = ".manifest.json"
-LETTERS = r"[a-z]+(?:-[a-z]+)*"
+ALIASES = "aliases.json"
+GROUP = r"(?:[a-z]+|[A-Z]+)"
+LETTERS = rf"{GROUP}(?:-{GROUP})*"
 STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-(dict|big))?"
                      rf"(?:-x([1-9][0-9]*))?(?:-({LETTERS}))?")
 PPB_RE = re.compile(r"ppb([1-9][0-9]*)?\.pb([1-9][0-9]*)?")
 USED_RE = re.compile(rf"u-({LETTERS})")
+ALIAS_RE = re.compile(r"([A-Z]+)=([a-z]+)")
 CUT_RE = re.compile(r"([1-9][0-9]*)k")
 PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
 WB_ROWS = 5000000
@@ -44,6 +48,7 @@ class Sentence:
     letters: str
     dict: str
     big: str
+    aliases: dict[str, str] = field(default_factory=dict)
 
     @property
     def root(self) -> Path:
@@ -84,10 +89,17 @@ def is_root(segs: Segs) -> bool:
     return len(split_segs(segs)[1]) == 1
 
 
-def used_letters(segs: Segs) -> str:
+def resolve(sentence: Sentence, letters: str) -> str:
+    return "-".join(sentence.aliases.get(group, group)
+                    for group in letters.split("-"))
+
+
+def used_letters(sentence: Sentence, segs: Segs) -> str:
     used_dirs, rest = split_segs(segs)
-    used = "".join(USED_RE.fullmatch(seg)[1] for seg in used_dirs)
-    return used + (STEP_RE.fullmatch(rest[0])[5] or "")
+    letters = [USED_RE.fullmatch(seg)[1] for seg in used_dirs]
+    if rest:
+        letters.append(STEP_RE.fullmatch(rest[0])[5] or "")
+    return "".join(resolve(sentence, part) for part in letters)
 
 
 def canonical(seg: str) -> str:
@@ -112,6 +124,11 @@ def parse_path(sentence: Sentence, path: str) -> Segs:
 
 
 def path_error(sentence: Sentence, segs: Segs) -> str | None:
+    for seg in segs:
+        for group in seg.split("-"):
+            if re.fullmatch(r"[A-Za-z]+", group) \
+                    and not re.fullmatch(GROUP, group):
+                return f"{group} mixes upper and lower case"
     used_dirs, rest = split_segs(segs)
     for index, seg in enumerate(rest):
         patterns = (CUT_RE, PP_CUT_RE) if index % 2 else (STEP_RE, PPB_RE)
@@ -152,10 +169,10 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
         if used and (index or used_dirs):
             return (f"-{used} is only for a root step directly below "
                     f"tmp/s{sentence.n}")
-    letters = [USED_RE.fullmatch(seg)[1] for seg in used_dirs]
-    if root[5]:
-        letters.append(root[5])
-    used = "".join(letters).replace("-", "")
+    used = used_letters(sentence, segs).replace("-", "")
+    for group in re.findall(r"[A-Z]+", used):
+        return (f"s{sentence.n} has no alias {group}; add it with "
+                f"--add-alias {group}=LETTERS")
     if collections.Counter(used) - collections.Counter(sentence.letters):
         return f"{used} is not within s{sentence.n}"
     return None
@@ -188,8 +205,8 @@ def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     return source, deps, external
 
 
-def used_flag(segs: Segs) -> str:
-    used = used_letters(segs)
+def used_flag(sentence: Sentence, segs: Segs) -> str:
+    used = used_letters(sentence, segs)
     return f"-u {used} " if used else ""
 
 
@@ -209,7 +226,7 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     rank = Step(
         segs, ["pairs.ranked"], deps,
         f"{source} | bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
-        f"{used_flag(segs)}--ss {ss} --uc "
+        f"{used_flag(sentence, segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict, *external], gpu=True)
     pairs = Step(
@@ -239,7 +256,7 @@ def prospect_step(sentence: Sentence, segs: Segs, prospects: int,
     rank = Step(
         segs, ["pairs.ranked"], [(cut, "pairs"), (root, "pairs")],
         f"bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
-        f"{used_flag(segs)}--ss {ss} --uc "
+        f"{used_flag(sentence, segs)}--ss {ss} --uc "
         f"--pp {node_dir(sentence, cut) / 'pairs'} "
         f"{letters} {node_dir(sentence, root) / 'pairs'} {dictionary} "
         f"--progress 15 > {d / 'pairs.ranked.tmp'}",
@@ -256,7 +273,7 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     dump = Step(
         segs, ["dump"], deps,
         f"{source} | bag-stats-cuda -n {WB_ROWS} --wb --wbfrac-min --wbwp-min "
-        f"--threads 0 {sentence.no_pairs_flag} {used_flag(segs)}--ss {ss} "
+        f"--threads 0 {sentence.no_pairs_flag} {used_flag(sentence, segs)}--ss {ss} "
         f"{letters} - {dictionary} "
         f"--progress 15 --cache-size 5000 > {d / 'dump.tmp'}",
         [sentence.dict, *external], gpu=True)
@@ -281,7 +298,7 @@ def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
         segs, ["pairs"], [(parent, "words")],
         f"head -n {thousands * 1000} {words} | seed-pairs {sentence.seed_flag} "
         f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} --no-dict -x0 "
-        f"-l {shlex.quote(sentence.letters)} {used_flag(segs)}- "
+        f"-l {shlex.quote(sentence.letters)} {used_flag(sentence, segs)}- "
         f"> {d / 'pairs.tmp'}",
         [f"idx/pairs.s{n}"])]
 
@@ -489,8 +506,7 @@ def status(sentence: Sentence, used: str | None) -> None:
 
     tree = {segs[:i] for segs in nodes for i in range(1, len(segs) + 1)}
     shown = [node for node in tree if not split_segs(node)[1]
-             and "".join(USED_RE.fullmatch(seg)[1] for seg in node)
-             .replace("-", "") == used]
+             and used_letters(sentence, node).replace("-", "") == used]
     if used is not None and not shown:
         die(f"no u-LETTERS directories with used letters {used}")
     rows: list[tuple] = []
@@ -619,6 +635,45 @@ def adopt(sentence: Sentence) -> None:
             write_manifest(Path(directory), manifest)
 
 
+def write_aliases(sentence: Sentence, aliases: dict[str, str]) -> None:
+    sentence.root.mkdir(parents=True, exist_ok=True)
+    temporary = sentence.root / (ALIASES + ".tmp")
+    temporary.write_text(json.dumps(aliases, indent=1, sort_keys=True) + "\n")
+    os.replace(temporary, sentence.root / ALIASES)
+
+
+def remove_aliases(sentence: Sentence, names: list[str]) -> None:
+    aliases = dict(sentence.aliases)
+    removed = []
+    for name in names:
+        if name not in aliases:
+            die(f"s{sentence.n} has no alias {name}")
+        removed.append(f"removed alias {name}={aliases.pop(name)}")
+    write_aliases(sentence, aliases)
+    print("\n".join(removed))
+
+
+def add_aliases(sentence: Sentence, specs: list[str]) -> None:
+    aliases = dict(sentence.aliases)
+    bag = collections.Counter(sentence.letters)
+    added = []
+    for spec in specs:
+        match = ALIAS_RE.fullmatch(spec)
+        if not match:
+            die(f"bad alias {spec}: want NAME=letters, NAME all uppercase "
+                "and letters all lowercase")
+        name, letters = match.groups()
+        if aliases.get(name, letters) != letters:
+            die(f"alias {name} is already {aliases[name]}; edit "
+                f"{sentence.root / ALIASES} to change it")
+        if collections.Counter(letters) - bag:
+            die(f"bad alias {spec}: {letters} is not within s{sentence.n}")
+        aliases[name] = letters
+        added.append(f"added alias {name}={letters}")
+    write_aliases(sentence, aliases)
+    print("\n".join(added))
+
+
 def load_sentence(arg: str) -> Sentence:
     match = re.fullmatch(r"[sS]?([1-9])(?:[sS]([1-9]))?", arg)
     if not match or (match[2] and match[1] >= match[2]):
@@ -630,7 +685,12 @@ def load_sentence(arg: str) -> Sentence:
     if not all(values) or not dictionary or not big:
         names = ", ".join(f"$S{num}" for num in nums)
         die(f"{names}, $DICT or $BIG is unset; source ./setup.sh")
-    return Sentence("s".join(nums), "".join(values), dictionary, big)
+    sentence = Sentence("s".join(nums), "".join(values), dictionary, big)
+    try:
+        sentence.aliases = json.loads((sentence.root / ALIASES).read_text())
+    except FileNotFoundError:
+        pass
+    return sentence
 
 
 def main() -> int:
@@ -652,6 +712,13 @@ def main() -> int:
                       help="show tmp/sN/targets word ranks per node")
     mode.add_argument("--adopt", action="store_true",
                       help="move the old flat file names into the tree")
+    mode.add_argument("--add-alias", action="append", metavar="NAME=letters",
+                      help="name a group of used letters, kept in "
+                      "tmp/sN/aliases.json: --add-alias OT=onetwo makes "
+                      "u-OT use the letters onetwo; may be repeated")
+    mode.add_argument("--remove-alias", action="append", metavar="NAME",
+                      help="drop an alias from tmp/sN/aliases.json; may be "
+                      "repeated")
     parser.add_argument("sentence", metavar="sN|sNsM")
     parser.add_argument("paths", metavar="PATH", nargs="*")
     args = parser.parse_args()
@@ -662,20 +729,33 @@ def main() -> int:
         used = [USED_RE.fullmatch(path) for path in args.paths]
         if len(used) > 1 or not all(used):
             parser.error("--status takes at most one u-LETTERS")
-        status(sentence, used[0][1].replace("-", "") if used else None)
+        letters = resolve(sentence, used[0][1]).replace("-", "") \
+            if used else None
+        for group in re.findall(r"[A-Z]+", letters or ""):
+            die(f"s{sentence.n} has no alias {group}")
+        status(sentence, letters)
         return 0
     if args.report:
         report(sentence)
         return 0
     if args.adopt and args.paths:
         parser.error("--adopt takes no PATH")
-    if not args.adopt and len(args.paths) != 1:
+    alias_mode = args.add_alias or args.remove_alias
+    if alias_mode and args.paths:
+        parser.error("--add-alias and --remove-alias take no PATH")
+    if not args.adopt and not alias_mode and len(args.paths) != 1:
         parser.error("give exactly one PATH")
     with open(f"tmp/.rebuild-pairs.s{sentence.n}.lock", "w") as lock:
         if not args.dry_run:
             fcntl.flock(lock, fcntl.LOCK_EX)
         if args.adopt:
             adopt(sentence)
+            return 0
+        if args.add_alias:
+            add_aliases(sentence, args.add_alias)
+            return 0
+        if args.remove_alias:
+            remove_aliases(sentence, args.remove_alias)
             return 0
         segs = parse_path(sentence, args.paths[0])
         planner = Planner(sentence, {segs} if args.force else set())

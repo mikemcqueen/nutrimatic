@@ -51,6 +51,27 @@ One bag can be spelled several ways: `u-abcdef`, `u-abc-def`, `u-abc/u-def`,
 Each spelling is its own directory with its own root runs. Nothing merges
 them or warns.
 
+### Aliases
+
+A group that is all uppercase is an alias: a name for a group of letters,
+kept per sentence in `tmp/sN/aliases.json`. After `--add-alias OT=onetwo
+--add-alias TF=threefour`, `u-OT-TF` uses the letters `onetwo-threefour`, and
+that is what `-u` gets. The directory keeps the alias in its name:
+`tmp/sN/u-OT-TF`. Aliases work wherever LETTERS does: `u-OT/u-TF`, the root
+suffix `pb3-dict-OT`, and `--status sN u-OT`.
+
+A name is uppercase letters only and its letters are one lowercase group
+within the sentence. Groups of a LETTERS may be aliases or letters in any
+mix, `u-OT-threefour`, but one group is all uppercase or all lowercase: `u-Ot`
+is rejected, and so is an alias the sentence doesn't have. `--add-alias`
+prints `added alias NAME=letters`. It rejects a name that already stands for
+other letters; changing one is an edit of `aliases.json`, and the steps below
+a directory that uses it are then stale by their changed command.
+
+`--remove-alias NAME` drops an alias and prints `removed alias NAME=letters`.
+Directories that use the name stay on disk; their paths are rejected, and
+`--status` and `--report` leave them out, until the alias is added again.
+
 Exact counts for a different set of used letters need their own root
 bag-stats-cuda run, which is what a nested `u-LETTERS` directory is: each one
 holds its own root steps.
@@ -124,6 +145,8 @@ Any `pbN` or `pbNwb` step can be cut and fed forward.
     rebuild-pairs.py --status sN u-L    only the subtrees with used letters L
     rebuild-pairs.py --report sN        each tmp/sN/targets word's rank per node
     rebuild-pairs.py --adopt sN         move the old flat names into the tree
+    rebuild-pairs.py sN --add-alias NAME=letters    name a group of used letters
+    rebuild-pairs.py sN --remove-alias NAME         drop an alias
 
 Each build call takes one PATH.
 
@@ -131,7 +154,8 @@ Each build call takes one PATH.
 used letters are exactly `abcdef`: `u-abcdef`, `u-abc-def` and `u-abc/u-def`
 when they exist. Each comes with the directory lines of the `u-LETTERS`
 directories above it and none of their steps. The match is on the
-concatenated letters as written, hyphens dropped, not sorted.
+concatenated letters as written, aliases replaced by their letters and
+hyphens dropped, not sorted.
 
 ## Rebuilds
 
