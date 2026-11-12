@@ -1359,9 +1359,11 @@ constexpr size_t SET_KEPT = 5000;
 // What a sums walk's slab costs: seconds a byte of its table, and besides.
 constexpr double SUMS_SECONDS_PER_BYTE = 0.12e-9;
 constexpr double SUMS_SECONDS_PER_SLAB = 0.1;
-// The combinations a second a memo walk and a scanning walk get through.
+// The combinations a second a memo walk and a scanning walk get through,
+// and the lookups a second a fit tables walk does.
 constexpr double MEMO_RATE = 5e8;
 constexpr double SCAN_RATE = 5e7;
+constexpr double TABLES_RATE = 3e7;
 constexpr int EVERY_CHUNK = 1 << 30;
 constexpr int SET_PROBES = 256;
 constexpr size_t SET_RESERVE = size_t(256) << 20;
@@ -2029,13 +2031,14 @@ constexpr int SLAB_LETTERS = 4;
 // from, a slab at a time: a slab is the rests with the same counts of the
 // slab letters. `sums` is the slab's table, by a rest's number over the
 // other letters: the PAIRS products of the left-out list's 2-sets that fit
-// the rest. `counts` is, by slab, the walk's combinations in it. Then the
-// slab letters' count and guard bits in a key, the slab's counts, each slab
-// letter's key shift, count mask and stride in a slab's index, and the
-// left-out list's shortest bag.
+// the rest, 4 bytes each when `narrow`, else 8. `counts` is, by slab, the
+// walk's combinations in it. Then the slab letters' count and guard bits in
+// a key, the slab's counts, each slab letter's key shift, count mask and
+// stride in a slab's index, the left-out list's shortest bag, and whether
+// the walk takes no step of that list.
 template <typename BagKey>
 struct Slabs {
-    unsigned long long* sums;
+    void* sums;
     unsigned long long* counts;
     BagKey mask;
     BagKey guards;
@@ -2045,6 +2048,8 @@ struct Slabs {
     uint8_t masks[SLAB_LETTERS];
     uint32_t strides[SLAB_LETTERS];
     int shortest;
+    bool apart;
+    bool narrow;
 };
 
 template <typename BagKey>
@@ -2293,6 +2298,8 @@ struct UsageParams {
     int const* stop;
     unsigned long long const* task_starts;
     int const* task_chunks;
+    // Each unit's tasks finished.
+    unsigned* unit_tasks;
     Memo memo;
     // With RESTS, the set of rest numbers + 1, open addressed, 0 while
     // empty; its slots less 1; and how many rests found no slot.
@@ -2499,15 +2506,27 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
             if (fit &&
                 fits(q.slabs.slab | q.slabs.guards,
                      (p.bag - next.rest) & q.slabs.mask, q.slabs.guards,
-                     &left))
-                atomicAdd(&q.slabs.sums[p.bag_number - next.number],
-                          next.rows);
+                     &left)) {
+                uint64_t const at = p.bag_number - next.number;
+                if (q.slabs.narrow)
+                    atomicAdd(static_cast<uint32_t*>(q.slabs.sums) + at,
+                              uint32_t(next.rows));
+                else
+                    atomicAdd(
+                        static_cast<unsigned long long*>(q.slabs.sums) + at,
+                        next.rows);
+            }
         } else if constexpr (SUMS) {
             bool const wanted =
                 fit && next.letters >= 2 * q.slabs.shortest &&
                 (next.rest & q.slabs.mask) == q.slabs.slab;
             unsigned long long sets = 0;
-            if (wanted) sets = __ldcg(&q.slabs.sums[next.number]);
+            if (wanted)
+                sets = q.slabs.narrow
+                    ? __ldcg(static_cast<uint32_t const*>(q.slabs.sums) +
+                             next.number)
+                    : __ldcg(static_cast<unsigned long long const*>(
+                                 q.slabs.sums) + next.number);
             BagKey const pool = next.rest | p.bag_guards;
             BagKey above = p.bag;
             unsigned scans = 0;
@@ -2519,7 +2538,7 @@ __device__ unsigned long long usage_step(UsageParams<BagKey> const& q,
                 BagKey const key = above - after;
                 above = after;
                 BagKey left = 0;
-                bool const again = wanted && sets != 0 &&
+                bool const again = wanted && sets != 0 && !q.slabs.apart &&
                     (m >= p.pair_steps) == list &&
                     fits(pool, key, p.bag_guards, &left);
                 unsigned const todo_all = __ballot_sync(~0u, again);
@@ -2790,7 +2809,9 @@ walk_pair_usage(UsageParams<BagKey> q) {
         }
         if (lane == 0) {
             atomicAdd(&p.progress->tasks, 1ULL);
-            if (task + 1 == unit_end) atomicAdd(&p.progress->done, 1ULL);
+            if (atomicAdd(&q.unit_tasks[unit], 1u) + 1 ==
+                unit_end - q.task_starts[unit])
+                atomicAdd(&p.progress->done, 1ULL);
             int const group = p.groups[unit];
             atomicAdd(&p.progress->first[group], first);
             atomicAdd(&p.progress->work[group], work + memo_work);
@@ -3046,10 +3067,11 @@ double finished_share(std::vector<unsigned long long> const& totals,
 
 // Waits for the walk on `stream` to finish, reporting to `progress` from
 // `device`, with `totals` as finished_share takes them when `shares`, and
-// `skipped` units finished before it started.
+// `skipped` of its `units` units finished before it started.
 void wait_for_walk(cudaStream_t stream, WalkProgress const* device,
                    std::vector<unsigned long long> const& totals, bool shares,
-                   size_t skipped, GpuWalkProgress const& progress) {
+                   size_t skipped, size_t units,
+                   GpuWalkProgress const& progress) {
     cudaStream_t poll = nullptr;
     check(cudaStreamCreateWithFlags(&poll, cudaStreamNonBlocking));
     while (true) {
@@ -3064,7 +3086,7 @@ void wait_for_walk(cudaStream_t stream, WalkProgress const* device,
         check(cudaMemcpyAsync(&now, device, sizeof now,
                               cudaMemcpyDeviceToHost, poll));
         check(cudaStreamSynchronize(poll));
-        progress.report(size_t(now.done) + skipped,
+        progress.report(size_t(now.done) + skipped, units,
                         shares ? finished_share(totals, now) : -1);
     }
     check(cudaStreamDestroy(poll));
@@ -3517,6 +3539,7 @@ TaskPlan plan_tasks(DeviceBuffers* d, UsageParams<BagKey>* q) {
     q->task_stride = getenv("BSC_TASK_STRIDE") ? strtoull(getenv("BSC_TASK_STRIDE"), nullptr, 10) : 1;
     q->task_starts = d->upload(starts);
     q->task_chunks = task_chunks;
+    q->unit_tasks = d->allocate<unsigned>(size_t(p.count));
     return plan;
 }
 
@@ -3684,6 +3707,7 @@ struct UsageWalk {
         check(cudaMemset(stop, 0, sizeof(int)));
         check(cudaMemset(p.progress, 0, sizeof(WalkProgress)));
         check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
+        check(cudaMemset(q.unit_tasks, 0, size_t(p.count) * sizeof(unsigned)));
         check(cudaMemset(p.usage, 0,
                          size_t(bags) * sizeof(unsigned long long)));
         check(cudaStreamDestroy(side));
@@ -3699,7 +3723,7 @@ struct UsageWalk {
         check(cudaDeviceSynchronize());
         launch_usage<COUNT_TYPE>(q, stream);
         wait_for_walk(stream, q.walk.progress, plan.totals, true,
-                      plan.skipped, progress);
+                      plan.skipped, size_t(q.walk.count), progress);
         check(cudaStreamDestroy(stream));
     }
 
@@ -3823,24 +3847,43 @@ UsageOrder sums_order(GpuLeftoverInputs const& inputs) {
             choose2(prospects - 1)};
 }
 
-// Walks `inputs` in `order`, which leaves out two steps of its last list,
-// counting each pair bag's usage into `out`: for each slab of rests, builds
-// the table of the left-out list's pair sums that fit each rest, then walks
-// the combinations that leave a rest in the slab and counts their last two
-// picks from the table. False, with nothing walked, when the device has no
-// room for a slab.
+// Walks `inputs` in `order`, which leaves out two steps of the PAIRS bags'
+// list when `pairs_left`, else of the other, counting the usage of the bags
+// of the lists it walks into `out`: for each slab of rests, builds the table
+// of the left-out list's pair sums that fit each rest, then walks the
+// combinations that leave a rest in the slab and counts their last two
+// picks from the table. The left-out list is the last one `order` walks, or
+// one it doesn't walk at all. False, with nothing walked, when the device
+// has no room for a slab, or when the slabs are estimated to take longer
+// than `other_seconds`. Unless `estimate` is null, only writes the seconds
+// the slabs are estimated to take to it. The table's entries are 4 bytes
+// when the PAIRS products of all the left-out list's 2-sets sum to under
+// 2^32.
 template <typename BagKey>
 bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
-                     UsageOrder const& order, double other_seconds,
+                     UsageOrder const& order, bool pairs_left,
+                     double other_seconds, double* estimate,
                      GpuWalkProgress const& progress,
                      std::vector<uint64_t>* out) {
-    using Entry = unsigned long long;
     int const bags = int(inputs.pairs.size());
     int const pair_bags = inputs.pair_bags;
     bool const two_lists = order.other_steps > 0;
-    bool const pairs_left = order.pairs_first != two_lists;
+    bool const apart = !two_lists && pairs_left != order.pairs_first;
+    bool const told = apart && estimate == nullptr;
+    char const* const what = !apart ? "pair sums table"
+        : pairs_left ? "pair sums table of the PAIRS bags"
+                     : "pair sums table of the prospects";
     int const left_begin = pairs_left ? 0 : pair_bags;
     int const left_end = pairs_left ? pair_bags : bags;
+    long double left_pairs = 0;
+    long double left_squares = 0;
+    for (int i = left_begin; i < left_end; ++i) {
+        left_pairs += inputs.pairs[i];
+        left_squares += (long double)inputs.pairs[i] * inputs.pairs[i];
+    }
+    bool const narrow = getenv("BSC_WIDE_SUMS") == nullptr &&
+        (left_pairs * left_pairs - left_squares) / 2 <= UINT32_MAX;
+    size_t const entry_bytes = narrow ? 4 : 8;
 
     // The slab letters: the fewest slabs whose tables fit the device.
     std::vector<int> letters;
@@ -3854,11 +3897,11 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
     size_t device_total = 0;
     check(cudaMemGetInfo(&free, &device_total));
     size_t const room = free > SUMS_RESERVE ? free - SUMS_RESERVE : 0;
-    long double const most = (long double)(room / sizeof(Entry));
+    long double const most = (long double)(room / entry_bytes);
     if (getenv("BSC_SLAB_ENTRIES")) const_cast<long double&>(most) = strtold(getenv("BSC_SLAB_ENTRIES"), nullptr);
-    double const whole = double(total) * sizeof(Entry);
+    double const whole = double(total) * entry_bytes;
     if (most < 1) {
-        table_report("pair sums table: no room (one slab needs %s, %s free)",
+        table_report("%s: no room (one slab needs %s, %s free)", what,
                      gpu_bytes_text(whole).c_str(),
                      gpu_bytes_text(double(free)).c_str());
         return false;
@@ -3887,23 +3930,24 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
     };
     search(0, 1);
     if (best == 0 || best > SLABS_MOST) {
-        table_report("pair sums table: no split of at most %d letters into "
+        table_report("%s: no split of at most %d letters into "
                      "at most %.0Lf slabs fits (one slab needs %s, %s free)",
-                     SLAB_LETTERS, SLABS_MOST, gpu_bytes_text(whole).c_str(),
+                     what, SLAB_LETTERS, SLABS_MOST,
+                     gpu_bytes_text(whole).c_str(),
                      gpu_bytes_text(double(free)).c_str());
         return false;
     }
     size_t const slabs = size_t(best);
     size_t const entries = size_t(total / best + 0.5L);
-    double const slab_bytes = double(entries) * sizeof(Entry);
-    if (slabs == 1)
-        table_report("pair sums table: 1 slab, %s (optimal), %s free",
+    double const slab_bytes = double(entries) * entry_bytes;
+    if (!told && slabs == 1)
+        table_report("%s: 1 slab, %s (optimal), %s free", what,
                      gpu_bytes_text(slab_bytes).c_str(),
                      gpu_bytes_text(double(free)).c_str());
-    else
-        table_report("pair sums table: %zu slabs over %zu letters, %s each; "
+    else if (!told)
+        table_report("%s: %zu slabs over %zu letters, %s each; "
                      "optimal 1 slab needs %s (constrained), %s free",
-                     slabs, slab_letters.size(),
+                     what, slabs, slab_letters.size(),
                      gpu_bytes_text(slab_bytes).c_str(),
                      gpu_bytes_text(whole).c_str(),
                      gpu_bytes_text(double(free)).c_str());
@@ -3953,8 +3997,11 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
     s.shortest = GPU_MAX_LETTERS;
     for (int i = left_begin; i < left_end; ++i)
         s.shortest = std::min(s.shortest, int(inputs.lengths[i]));
+    s.apart = apart;
     s.counts = d.allocate<unsigned long long>(slabs);
-    s.sums = d.allocate<Entry>(entries);
+    s.narrow = narrow;
+    s.sums = narrow ? static_cast<void*>(d.allocate<uint32_t>(entries))
+                    : d.allocate<unsigned long long>(entries);
 
     // The walk of the combinations, and the walk of the left-out list's
     // 2-sets.
@@ -3988,8 +4035,12 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
         unsigned blocks;
         TileLetters letters;
     };
-    size_t const tile_bytes = size_t(TILE_CELLS) * sizeof(Entry);
-    check(cudaFuncSetAttribute(sum_tiles<Entry>,
+    size_t const tile_bytes = size_t(TILE_CELLS) * entry_bytes;
+    check(narrow
+        ? cudaFuncSetAttribute(sum_tiles<uint32_t>,
+                               cudaFuncAttributeMaxDynamicSharedMemorySize,
+                               int(tile_bytes))
+        : cudaFuncSetAttribute(sum_tiles<unsigned long long>,
                                cudaFuncAttributeMaxDynamicSharedMemorySize,
                                int(tile_bytes)));
     std::vector<TilePass> passes;
@@ -4034,11 +4085,16 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
     }
     bool const debug = getenv("BSC_DEBUG") != nullptr;
     double const seconds = double(used) *
-        (double(entries) * sizeof(Entry) * SUMS_SECONDS_PER_BYTE +
+        (double(entries) * entry_bytes * SUMS_SECONDS_PER_BYTE +
          SUMS_SECONDS_PER_SLAB);
     if (debug)
         fprintf(stderr, "DEBUG sums: %zu slabs of %zu entries (%.1f MB), %zu used, %llu combinations, letters %d, est %.1fs against %.1fs\n",
-                slabs, entries, double(entries) * sizeof(Entry) / 1048576, used, combinations, s.letters, seconds, other_seconds);
+                slabs, entries, double(entries) * entry_bytes / 1048576, used, combinations, s.letters, seconds, other_seconds);
+    if (estimate != nullptr) {
+        *estimate = seconds;
+        check(cudaStreamDestroy(stream));
+        return true;
+    }
     if (seconds > other_seconds) {
         table_report("pair sums walk: %zu of %zu slabs used, estimated "
                      "%.1fs against %.1fs for the walk it replaces; not used",
@@ -4047,6 +4103,7 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
         return false;
     }
     unsigned long long done = 0;
+    size_t walked = 0;
     for (size_t slab = 0; slab < slabs; ++slab) {
         if (slab_counts[slab] == 0) continue;
         auto const t0 = std::chrono::steady_clock::now();
@@ -4058,13 +4115,20 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
         }
         q.slabs.slab = key;
         sums.slabs.slab = key;
-        check(cudaMemsetAsync(s.sums, 0, entries * sizeof(Entry), stream));
+        check(cudaMemsetAsync(s.sums, 0, entries * entry_bytes, stream));
         run([&] { launch_usage<WalkCountType::SUM_SCATTER>(sums, stream); },
             sums.next_task);
         auto const t1 = std::chrono::steady_clock::now();
         for (TilePass const& pass : passes) {
-            sum_tiles<Entry><<<pass.blocks, 256, tile_bytes, stream>>>(
-                s.sums, pass.stride, pass.tile, pass.columns, pass.letters);
+            if (narrow)
+                sum_tiles<uint32_t><<<pass.blocks, 256, tile_bytes, stream>>>(
+                    static_cast<uint32_t*>(s.sums), pass.stride, pass.tile,
+                    pass.columns, pass.letters);
+            else
+                sum_tiles<unsigned long long>
+                    <<<pass.blocks, 256, tile_bytes, stream>>>(
+                        static_cast<unsigned long long*>(s.sums), pass.stride,
+                        pass.tile, pass.columns, pass.letters);
             check(cudaGetLastError());
         }
         check(cudaStreamSynchronize(stream));
@@ -4078,10 +4142,13 @@ bool walk_usage_sums(GpuLeftoverInputs const& inputs, Packing const& packing,
                     slab, slab_counts[slab], sec(t0, t1), sec(t1, t2), sec(t2, t3));
         }
         done += slab_counts[slab];
+        ++walked;
+        // With two steps to walk, a slab's table takes most of its time.
+        double const share = apart ? double(walked) / double(used)
+                                   : double(done) / double(combinations);
         if (progress.due())
-            progress.report(size_t(double(p.count) * double(done) /
-                                   double(combinations)),
-                            double(done) / double(combinations));
+            progress.report(size_t(double(p.count) * share), size_t(p.count),
+                            share);
     }
     check(cudaStreamDestroy(stream));
     if (debug) {
@@ -4154,7 +4221,8 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     walk_leftover_picks<COUNT_TYPE, BagKey>
         <<<grid, WALK_THREADS, shared, stream>>>(p);
     check(cudaGetLastError());
-    wait_for_walk(stream, p.progress, totals, inputs.steps > 1, 0, progress);
+    wait_for_walk(stream, p.progress, totals, inputs.steps > 1, 0,
+                  size_t(count), progress);
     if constexpr (LEFTOVERS) {
         out->by_picks.assign(steps, 0);
         out->combinations.assign(lengths, 0);
@@ -4314,11 +4382,62 @@ void run_pair_usage_gpu(std::string_view program,
             other = estimate_combinations(inputs, before) /
                 (memo ? MEMO_RATE : SCAN_RATE);
         }
-        if (wide ? walk_usage_sums<Key128>(inputs, packing, order, other,
-                                           progress, out)
-                 : walk_usage_sums<Key64>(inputs, packing, order, other,
-                                          progress, out))
+        bool const pairs_left = order.pairs_first != (order.other_steps > 0);
+        if (wide ? walk_usage_sums<Key128>(inputs, packing, order, pairs_left,
+                                           other, nullptr, progress, out)
+                 : walk_usage_sums<Key64>(inputs, packing, order, pairs_left,
+                                          other, nullptr, progress, out))
             return;
+    }
+    // With 2 steps of each list, two walks: each walks one list's steps and
+    // counts the other's from its pair sums.
+    if ((mode == nullptr || mode[0] == 's') && pairs == 2 && prospects == 2) {
+        auto const walk = [&](bool pairs_left, double* estimate,
+                              GpuWalkProgress const& to,
+                              std::vector<uint64_t>* counts) {
+            UsageOrder const order{!pairs_left, 2, 0};
+            return wide
+                ? walk_usage_sums<Key128>(inputs, packing, order, pairs_left,
+                                          1e300, estimate, to, counts)
+                : walk_usage_sums<Key64>(inputs, packing, order, pairs_left,
+                                         1e300, estimate, to, counts);
+        };
+        double seconds[2] = {};
+        bool const fits = walk(true, &seconds[0], progress, nullptr) &&
+            walk(false, &seconds[1], progress, nullptr);
+        double const all = seconds[0] + seconds[1];
+        double const other = mode != nullptr ? 1e300
+            : estimate_combinations(inputs, memo_order(inputs)) / TABLES_RATE;
+        if (fits && all > other)
+            table_report("pair sums walks: estimated %.1fs against %.1fs for "
+                         "the walk they replace; not used", all, other);
+        if (fits && all <= other) {
+            if (mode == nullptr)
+                table_report("pair usage walk: pair sums, 2 walks (estimated "
+                             "%.1fs against %.1fs for the walk they replace)",
+                             all, other);
+            else
+                table_report("pair usage walk: pair sums, 2 walks (estimated "
+                             "%.1fs)", all);
+            size_t const pair_bags = size_t(inputs.pair_bags);
+            size_t const bags = inputs.pairs.size();
+            double const first = all > 0 ? seconds[0] / all : 0.5;
+            auto const part = [&](size_t before, double from, double share) {
+                return GpuWalkProgress{
+                    progress.due,
+                    [&progress, before, bags, from, share](
+                        size_t done, size_t, double finished) {
+                        progress.report(before + done, bags,
+                                        from + share * finished);
+                    }};
+            };
+            std::vector<uint64_t> of_pairs;
+            walk(true, nullptr, part(0, 0, first), out);
+            walk(false, nullptr, part(bags - pair_bags, first, 1 - first),
+                 &of_pairs);
+            for (size_t i = 0; i < bags; ++i) (*out)[i] += of_pairs[i];
+            return;
+        }
     }
     if (wide)
         choose_usage_walk<Key128>(inputs, packing, memo, most, mode, progress,
@@ -4354,7 +4473,7 @@ uint64_t walk_distinct_rests(GpuLeftoverInputs const& inputs,
     UsageOrder const order{pairs > 0, pairs > 0 ? pairs : inputs.steps,
                            pairs > 0 ? inputs.steps - pairs : 0};
     GpuWalkProgress const progress{[] { return false; },
-                                   [](size_t, double) {}};
+                                   [](size_t, size_t, double) {}};
     UsageWalk<WalkCountType::RESTS, BagKey> walk;
     walk.count_rows = rows != nullptr;
     walk.prepare(inputs, packing, order, {}, slots, first_unit, units);
@@ -4390,7 +4509,7 @@ bool walk_top_rows(GpuLeftoverInputs const& inputs, Packing const& packing,
     UsageOrder const order{pairs > 0, pairs > 0 ? pairs : inputs.steps,
                            pairs > 0 ? inputs.steps - pairs : 0};
     GpuWalkProgress const progress{[] { return false; },
-                                   [](size_t, double) {}};
+                                   [](size_t, size_t, double) {}};
     UsageWalk<WalkCountType::TOP_ROWS, BagKey> walk;
     walk.prepare(inputs, packing, order, {}, 0, first_unit, units);
     UsageParams<BagKey>& q = walk.q;

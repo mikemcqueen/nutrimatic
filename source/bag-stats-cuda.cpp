@@ -407,8 +407,8 @@ void with_walk_progress(BagStatsArgs const& args, BagStatsInputs const& inputs,
     Progress progress(walk, 1);
     size_t reported = 0;
     run(GpuWalkProgress{[&] { return progress.due(); },
-                        [&](size_t done, double share) {
-        progress.measured(share);
+                        [&](size_t done, size_t units, double share) {
+        progress.measured(share, units);
         progress.finished(&walk, done - reported);
         reported = done;
     }});

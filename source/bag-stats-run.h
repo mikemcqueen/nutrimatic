@@ -437,9 +437,11 @@ class Progress {
         finished(walker, blocks_[block + 1] - blocks_[block]);
     }
 
-    // Takes `share` as the share of the work done, ignoring a negative one.
-    void measured(double share) {
+    // Takes `share` as the share of the work done, ignoring a negative one,
+    // and `units` as the units to finish.
+    void measured(double share, size_t units) {
         if (share >= 0) share_.store(share, std::memory_order_relaxed);
+        units_.store(units, std::memory_order_relaxed);
     }
 
     // Whether the interval has passed.
@@ -467,8 +469,8 @@ class Progress {
             : ", ~" + format_duration(elapsed * (1 - share) / share) +
                   " left";
         report(program_, "pass %d/%d: %zu/%zu pair bags (%.1f%%), %s%s%s",
-               pass_, passes_, done, units_, 100.0 * share,
-               format_duration(elapsed).c_str(), left.c_str(),
+               pass_, passes_, done, units_.load(std::memory_order_relaxed),
+               100.0 * share, format_duration(elapsed).c_str(), left.c_str(),
                hooks_.text().c_str());
     }
 
@@ -482,7 +484,8 @@ class Progress {
         double const share = share_.load(std::memory_order_relaxed);
         if (share >= 0) return share;
         if (unit_work_.empty() || unit_work_.back() == 0)
-            return double(done) / double(units_);
+            return double(done) /
+                   double(units_.load(std::memory_order_relaxed));
         return double(work_done_.load(std::memory_order_relaxed)) /
                double(unit_work_.back());
     }
@@ -491,7 +494,7 @@ class Progress {
     Clock::duration const interval_;
     int const pass_;
     int const passes_;
-    size_t const units_;
+    std::atomic<size_t> units_;
     std::vector<size_t> const& blocks_;
     std::vector<uint64_t> const& unit_work_;
     decltype(std::declval<Walk const&>().progress_hooks()) hooks_;

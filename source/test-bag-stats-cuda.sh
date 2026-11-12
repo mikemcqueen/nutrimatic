@@ -139,3 +139,7 @@ usage=$(unique --min-pb-len 2 --ss ppb,ppb,pb --pp "$test_dir/ab-ijk-pairs" \
   abcdefghijk "$test_dir/bag-pairs")
 [[ $usage == $'12 a b\n4 i jk\n4 j ik\n4 k ij\n3 c de\n3 d ce\n3 f gh\n3 g fh' ]] ||
   fail "--unique --ss ppb,ppb,pb is wrong: $usage"
+usage=$(BSC_UC_MODE=s unique --min-pb-len 2 --ss ppb,ppb,pb,pb \
+  --pp "$test_dir/ab-ijk-pairs" abcdefghijk "$test_dir/bag-pairs")
+[[ $usage == $'12 a b\n6 c de\n6 d ce\n6 f gh\n6 g fh\n4 i jk\n4 j ik\n4 k ij' ]] ||
+  fail "--unique --ss ppb,ppb,pb,pb by pair sums is wrong: $usage"

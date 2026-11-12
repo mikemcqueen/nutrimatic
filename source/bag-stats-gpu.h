@@ -82,13 +82,13 @@ struct GpuLeftoverCounts {
 };
 
 // What a GPU pick walk reports to while it runs: about every 100 ms it asks
-// due(), and when true, calls report(units, share), `units` the first picks
-// finished so far and `share` its estimate of the share of its work
-// finished, from the candidates finished units scanned; exact with 2
-// steps, negative when it has none.
+// due(), and when true, calls report(done, units, share), `done` of its
+// `units` first picks finished so far and `share` its estimate of the share
+// of its work finished, from the candidates finished units scanned; exact
+// with 2 steps, negative when it has none.
 struct GpuWalkProgress {
     std::function<bool()> due;
-    std::function<void(size_t, double)> report;
+    std::function<void(size_t, size_t, double)> report;
 };
 
 // Walks every combination of one pair bag per step, in increasing order,
