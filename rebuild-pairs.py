@@ -440,6 +440,7 @@ def run_step(sentence: Sentence, step: Step) -> None:
         with open("tmp/.rebuild-pairs.gpu.lock", "w") as gpu_lock:
             if step.gpu:
                 fcntl.flock(gpu_lock, fcntl.LOCK_EX)
+                print(f"Executing {step.command}", flush=True)
             result = subprocess.run(
                 ["bash", "-euo", "pipefail", "-c", step.command])
         if result.returncode != 0:
