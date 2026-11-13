@@ -48,7 +48,8 @@ inline constexpr int GPU_MAX_PREFIX_LETTERS = 20;
 // in its list and the first step's list's pair bags by place; for the
 // PAIRS bags and then the --pp bags, the first
 // pair bag of each prefix cell, then the list's end; how many are PAIRS
-// bags; and the steps, the pb steps first.
+// bags; the steps, the pb steps first; and unless empty, a pair bag's name
+// for run_pair_usage_gpu's reports of its running tasks.
 struct GpuLeftoverInputs {
     uint8_t bag[GPU_LETTERS_BYTES];
     uint64_t bag_number = 0;
@@ -68,6 +69,7 @@ struct GpuLeftoverInputs {
     int pair_bags = 0;
     int steps;
     int pair_steps;
+    std::function<std::string(int)> name;
 };
 
 // What the --leftovers walk counts: combinations by how many picks they

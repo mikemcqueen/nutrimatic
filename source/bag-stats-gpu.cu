@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -1372,6 +1373,23 @@ constexpr uint32_t NO_RUN = ~0u;
 // The work groups the walk's progress estimate puts units in.
 constexpr int WORK_GROUPS = 64;
 
+// The warps a task walk keeps the running task of, the words it keeps for
+// each, the progress reports with no task finished after which it lists
+// the running tasks, and the most it lists.
+constexpr int RUNNING_SLOTS = 65536;
+constexpr int RUNNING_WORDS = 4;
+constexpr int STALL_REPORTS = 4;
+constexpr size_t STALL_TASKS = 32;
+// The candidates a task scans before it may defer its rest, the most
+// tasks' rests a launch defers, and the most parts a deferred rest's runs
+// are split in.
+constexpr unsigned long long TASK_BUDGET = 1ULL << 20;
+constexpr size_t DEFERRED_ROOM = size_t(1) << 21;
+constexpr int DEFERRED_RUNS = 8;
+// A part of a deferred rest's run is this share of the picks the task
+// made before it deferred.
+constexpr int DEFERRED_SHARE = 8;
+
 // The work group of a unit scanning `candidates` below its first pick:
 // their bit length.
 __device__ inline int work_group(unsigned long long candidates) {
@@ -2284,6 +2302,13 @@ __device__ long long table_fits(FitTables<BagKey> const& t, BagKey rest,
     return fitting;
 }
 
+// The rest of a task, deferred: the task, and the walk's cursor below its
+// first pick.
+struct Deferred {
+    unsigned long long task;
+    RunCursor cursor;
+};
+
 // What walk_pair_usage takes beyond the walk's: the tasks, each a run of
 // one unit's chunks below its first pick, as the next one, how many there
 // are, each unit's first, then their count, and each unit's chunks a task;
@@ -2294,6 +2319,29 @@ struct UsageParams {
     unsigned long long* next_task;
     unsigned long long tasks;
     unsigned long long task_stride;
+    // Unless null, the `listed` tasks the walk takes instead, increasing.
+    unsigned long long const* task_list;
+    unsigned long long listed;
+    // Each warp's running task, RUNNING_WORDS words for each of the first
+    // running_slots warps: the task + 1, 0 between tasks; then as of its
+    // last pick below the first, that pick's pair bag, ~0 before any, the
+    // candidates scanned below the first pick, and the candidates scanned
+    // in all.
+    unsigned long long* running;
+    int running_slots;
+    // The tasks this launch takes, and how many of them have ended.
+    unsigned long long launch_tasks;
+    unsigned long long* ended;
+    // Unless 0, the candidates a task scans before, with no task left to
+    // take, it defers its rest: to `deferred`, with room for
+    // deferred_room, counted in deferred_count.
+    unsigned long long budget;
+    Deferred* deferred;
+    unsigned long long* deferred_count;
+    unsigned long long deferred_room;
+    // Unless null, the `launch_tasks` deferred rests the walk takes
+    // instead of tasks.
+    Deferred const* resume;
     // Nonzero once the walk is to stop taking tasks.
     int const* stop;
     unsigned long long const* task_starts;
@@ -2697,9 +2745,46 @@ __device__ inline int task_unit(UsageParams<BagKey> const& q,
     return low;
 }
 
+// Defers the rest of `task`, at `cursor` below its first pick with runs of
+// `mask`, after `picks` picks: the cursor's run in parts of `picks` /
+// DEFERRED_SHARE candidates, and the runs after it in at most DEFERRED_RUNS parts. Returns
+// the parts, 0 when nothing is left or there is no room for them.
+template <typename BagKey>
+__device__ int defer_rest(UsageParams<BagKey> const& q,
+                          unsigned long long task, RunCursor const& cursor,
+                          uint32_t mask, int picks) {
+    int const rest = max(cursor.end - cursor.next, 0);
+    int const size = max(picks / DEFERRED_SHARE, 1);
+    int const run_parts = (rest + size - 1) / size;
+    int const first = int(extract(cursor.run, mask));
+    int const runs =
+        cursor.left > 0 ? min(cursor.left, (1 << __popc(mask)) - first) : 0;
+    int const runs_parts = min(runs, DEFERRED_RUNS);
+    int const parts = run_parts + runs_parts;
+    if (parts == 0) return 0;
+    unsigned long long const at =
+        atomicAdd(q.deferred_count, (unsigned long long)parts);
+    if (at + parts > q.deferred_room) {
+        atomicAdd(q.deferred_count, 0ULL - (unsigned long long)parts);
+        return 0;
+    }
+    Deferred* out = q.deferred + at;
+    for (int k = 0; k < run_parts; ++k)
+        *out++ = {task, {0, 0, cursor.next + k * size,
+                         min(cursor.next + (k + 1) * size, cursor.end)}};
+    for (int k = 0; k < runs_parts; ++k) {
+        int const begin = int((long long)runs * k / runs_parts);
+        int const end = int((long long)runs * (k + 1) / runs_parts);
+        *out++ = {task, {deposit(uint32_t(first + begin), mask), end - begin,
+                         0, 0}};
+    }
+    return parts;
+}
+
 // Walks the tasks, each warp taking the next until none are left: every
 // combination of the walk's steps under the task's chunks, counted as
-// usage_step counts its last pick.
+// usage_step counts its last pick. With a budget, a task past it defers its
+// rest once no task is left to take; and the tasks may be deferred rests.
 template <WalkCountType COUNT_TYPE, typename BagKey>
 __global__ void __launch_bounds__(WALK_THREADS)
 walk_pair_usage(UsageParams<BagKey> q) {
@@ -2720,19 +2805,42 @@ walk_pair_usage(UsageParams<BagKey> q) {
         atomicAdd(&p.usage[at.index], above * w);
         if (depth > 0) levels[depth - 1].below += at.pairs * w;
     };
+    int const slot = int(blockIdx.x) * WALK_WARPS + int(threadIdx.x >> 5);
+    unsigned long long* const running =
+        lane == 0 && q.running != nullptr && slot < q.running_slots
+            ? q.running + size_t(slot) * RUNNING_WORDS : nullptr;
     int unit = -1;
     int unit_first = 0;
+    unsigned long long unit_begin = 0;
     unsigned long long unit_end = 0;
     while (true) {
         unsigned long long task = 0;
         if (lane == 0) {
-            task = atomicAdd(q.next_task, 1ULL) * q.task_stride;
+            unsigned long long const taken = atomicAdd(q.next_task, 1ULL);
+            if (q.resume != nullptr) {
+                task = q.tasks;
+                if (taken < q.launch_tasks) {
+                    task = q.resume[taken].task;
+                    levels[1].cursor = q.resume[taken].cursor;
+                }
+            } else if (q.task_list == nullptr) {
+                task = taken * q.task_stride;
+            } else {
+                task = taken < q.listed ? q.task_list[taken] : q.tasks;
+            }
             if (__ldcv(q.stop) != 0) task = q.tasks;
         }
         task = __shfl_sync(~0u, task, 0);
         if (task >= q.tasks) return;
-        if (task >= unit_end) {
-            unit = task_unit(q, task, max(unit, 0));
+        if (running != nullptr) {
+            running[1] = ~0ULL;
+            running[2] = 0;
+            running[3] = 0;
+            running[0] = task + 1;
+        }
+        if (task >= unit_end || task < unit_begin) {
+            unit = task_unit(q, task, task < unit_begin ? 0 : max(unit, 0));
+            unit_begin = q.task_starts[unit];
             unit_end = q.task_starts[unit + 1];
             Picked<BagKey> first;
             pick<COUNT_TYPE>(p, root, unit_bag(p, unit), &first);
@@ -2756,13 +2864,30 @@ walk_pair_usage(UsageParams<BagKey> q) {
         unsigned long long stats[2] = {};
         if (lane == 0) {
             levels[0].below = 0;
-            if (last > 1) levels[1].cursor = {chunk, chunks * top.lanes, 0, 0};
+            if (last > 1 && q.resume == nullptr)
+                levels[1].cursor = {chunk, chunks * top.lanes, 0, 0};
         }
+        int picks = 0;
+        int parts = 0;
         int depth = 1;
         while (depth > 0) {
             int stopped = 0;
-            if (lane == 0) stopped = __ldcv(q.stop);
-            if (__shfl_sync(~0u, stopped, 0) != 0) return;
+            if (lane == 0) {
+                stopped = __ldcv(q.stop);
+                if (stopped == 0 && depth == 1 && last > 1 &&
+                    q.budget != 0 && work >= q.budget &&
+                    __ldcv(q.next_task) >= q.launch_tasks) {
+                    parts = defer_rest(q, task, levels[1].cursor,
+                                       top.high | top.low, picks);
+                    if (parts != 0) stopped = -1;
+                }
+            }
+            stopped = __shfl_sync(~0u, stopped, 0);
+            if (stopped > 0) return;
+            if (stopped < 0) {
+                finish(0, levels[0].below);
+                break;
+            }
             Cells const cells = levels[depth - 1].cells;
             if (depth == last) {
                 unsigned long long scanned = 0;
@@ -2804,13 +2929,24 @@ walk_pair_usage(UsageParams<BagKey> q) {
                 levels[depth].cells = under;
                 levels[depth].below = 0;
                 if (depth + 1 < last) levels[depth + 1].cursor = start;
+                if (depth == 1 && running != nullptr) {
+                    running[1] = (unsigned long long)next.index;
+                    running[2] = first;
+                    running[3] = work;
+                }
             }
+            if (depth == 1) ++picks;
             ++depth;
         }
         if (lane == 0) {
-            atomicAdd(&p.progress->tasks, 1ULL);
-            if (atomicAdd(&q.unit_tasks[unit], 1u) + 1 ==
-                unit_end - q.task_starts[unit])
+            if (running != nullptr) running[0] = 0;
+            if (q.ended != nullptr) atomicAdd(q.ended, 1ULL);
+            // A task and its deferred parts count as the one task: each
+            // adds 1 less the parts it defers.
+            atomicAdd(&p.progress->tasks, 1ULL - (unsigned long long)parts);
+            unsigned const add = 1u - unsigned(parts);
+            if (atomicAdd(&q.unit_tasks[unit], add) + add ==
+                unsigned(unit_end - unit_begin))
                 atomicAdd(&p.progress->done, 1ULL);
             int const group = p.groups[unit];
             atomicAdd(&p.progress->first[group], first);
@@ -3065,13 +3201,111 @@ double finished_share(std::vector<unsigned long long> const& totals,
     return total > 0 ? finished / total : -1;
 }
 
+// What a task walk's reports of its tasks read: the device's next task,
+// tasks ended and running tasks, the warps it has slots for and the walk's
+// warps, which launch of the walk it is and the tasks it takes, each
+// unit's first task, the first unit's pair bag, or unless null the units'
+// pair bags, and unless null the pair bags' names.
+struct TaskWatch {
+    unsigned long long const* next_task;
+    unsigned long long const* ended;
+    unsigned long long const* running;
+    int slots;
+    int warps;
+    int launch;
+    unsigned long long walked;
+    std::vector<unsigned long long> const* starts;
+    int first_unit;
+    std::vector<int> const* units;
+    std::function<std::string(int)> const* name;
+};
+
+// The tasks ended as of the last report, and the reports since one ended.
+struct TaskStall {
+    unsigned long long finished = 0;
+    int reports = 0;
+};
+
+// Reports the tasks of `watch`'s launch running once none are left to
+// take; and after STALL_REPORTS reports with none ended, and each doubling
+// of them, the running tasks: the task, which of its unit's it is, the
+// unit's pair bag, and as of the task's last pick below it, that pick and
+// the candidates scanned below the first pick and in all.
+void report_tasks(TaskWatch const& watch, cudaStream_t poll,
+                  TaskStall* stall) {
+    if (!table_reports) return;
+    unsigned long long next = 0;
+    unsigned long long finished = 0;
+    check(cudaMemcpyAsync(&next, watch.next_task, sizeof next,
+                          cudaMemcpyDeviceToHost, poll));
+    check(cudaMemcpyAsync(&finished, watch.ended, sizeof finished,
+                          cudaMemcpyDeviceToHost, poll));
+    check(cudaStreamSynchronize(poll));
+    unsigned long long const taken = std::min(next, watch.walked);
+    unsigned long long const unfinished = taken - std::min(finished, taken);
+    if (taken == watch.walked && unfinished != 0)
+        table_report("tasks: launch %d: %llu of %llu ended, %llu running on "
+                     "%d warps",
+                     watch.launch, finished, watch.walked, unfinished,
+                     watch.warps);
+    stall->reports = finished == stall->finished ? stall->reports + 1 : 0;
+    stall->finished = finished;
+    int const reports = stall->reports;
+    if (unfinished == 0 || reports < STALL_REPORTS ||
+        (reports & (reports - 1)) != 0)
+        return;
+    std::vector<unsigned long long> words(size_t(watch.slots) *
+                                          RUNNING_WORDS);
+    check(cudaMemcpyAsync(words.data(), watch.running,
+                          words.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost, poll));
+    check(cudaStreamSynchronize(poll));
+    std::vector<std::array<unsigned long long, RUNNING_WORDS>> tasks;
+    for (size_t at = 0; at < words.size(); at += RUNNING_WORDS) {
+        if (words[at] == 0) continue;
+        tasks.push_back({words[at] - 1, words[at + 1], words[at + 2],
+                         words[at + 3]});
+    }
+    std::sort(tasks.begin(), tasks.end());
+    auto const name = [&](int bag) {
+        return watch.name != nullptr && *watch.name
+            ? (*watch.name)(bag) : "pair bag " + std::to_string(bag);
+    };
+    table_report("no task ended in %d reports; %zu running:", reports,
+                 tasks.size());
+    std::vector<unsigned long long> const& starts = *watch.starts;
+    for (size_t k = 0; k < tasks.size() && k < STALL_TASKS; ++k) {
+        unsigned long long const task = tasks[k][0];
+        size_t const unit = size_t(
+            std::upper_bound(starts.begin(), starts.end(), task) -
+            starts.begin() - 1);
+        if (unit + 1 >= starts.size()) continue;
+        int const bag = watch.units != nullptr
+            ? (*watch.units)[size_t(watch.first_unit) + unit]
+            : watch.first_unit + int(unit);
+        std::string const under = tasks[k][1] == ~0ULL
+            ? std::string("no pick below it yet")
+            : "at \"" + name(int(tasks[k][1])) + "\"";
+        table_report("  task %llu, %llu of %llu of \"%s\": %s, %llu "
+                     "candidates below the first pick, %llu in all",
+                     task, task - starts[unit] + 1,
+                     starts[unit + 1] - starts[unit], name(bag).c_str(),
+                     under.c_str(), tasks[k][2], tasks[k][3]);
+    }
+    if (tasks.size() > STALL_TASKS)
+        table_report("  and %zu more", tasks.size() - STALL_TASKS);
+}
+
 // Waits for the walk on `stream` to finish, reporting to `progress` from
 // `device`, with `totals` as finished_share takes them when `shares`, and
-// `skipped` of its `units` units finished before it started.
+// `skipped` of its `units` units finished before it started; and unless
+// `watch` is null, reporting its tasks.
 void wait_for_walk(cudaStream_t stream, WalkProgress const* device,
                    std::vector<unsigned long long> const& totals, bool shares,
                    size_t skipped, size_t units,
-                   GpuWalkProgress const& progress) {
+                   GpuWalkProgress const& progress,
+                   TaskWatch const* watch = nullptr) {
+    TaskStall stall;
     cudaStream_t poll = nullptr;
     check(cudaStreamCreateWithFlags(&poll, cudaStreamNonBlocking));
     while (true) {
@@ -3088,6 +3322,7 @@ void wait_for_walk(cudaStream_t stream, WalkProgress const* device,
         check(cudaStreamSynchronize(poll));
         progress.report(size_t(now.done) + skipped, units,
                         shares ? finished_share(totals, now) : -1);
+        if (watch != nullptr) report_tasks(*watch, poll, &stall);
     }
     check(cudaStreamDestroy(poll));
     check(cudaStreamSynchronize(stream));
@@ -3498,15 +3733,35 @@ bool build_fit_tables(GpuLeftoverInputs const& inputs, Packing const& packing,
     return true;
 }
 
-// A walk's tasks: `totals` as finished_share takes them, and the units with
-// no tasks.
+// A walk's tasks: `totals` as finished_share takes them, the units with no
+// tasks, each unit's first task then their count, and the tasks the walk
+// takes.
 struct TaskPlan {
     std::vector<unsigned long long> totals;
     size_t skipped = 0;
+    std::vector<unsigned long long> starts;
+    unsigned long long walked = 0;
 };
 
+// The tasks below `tasks` that BSC_TASKS lists, increasing.
+std::vector<unsigned long long> listed_tasks(unsigned long long tasks) {
+    std::vector<unsigned long long> list;
+    char const* at = getenv("BSC_TASKS");
+    while (at != nullptr && *at != 0) {
+        char* end = nullptr;
+        unsigned long long const task = strtoull(at, &end, 10);
+        if (end == at) break;
+        if (task < tasks) list.push_back(task);
+        at = *end == ',' ? end + 1 : end;
+    }
+    std::sort(list.begin(), list.end());
+    list.erase(std::unique(list.begin(), list.end()), list.end());
+    return list;
+}
+
 // Splits the walk of `q` into tasks, allocating from `d` its progress, work
-// groups and task arrays.
+// groups and task arrays. BSC_TASK_STRIDE=N has the walk take every Nth
+// task, and BSC_TASKS=T,... those tasks.
 template <typename BagKey>
 TaskPlan plan_tasks(DeviceBuffers* d, UsageParams<BagKey>* q) {
     LeftoverParams<BagKey>& p = q->walk;
@@ -3537,21 +3792,36 @@ TaskPlan plan_tasks(DeviceBuffers* d, UsageParams<BagKey>* q) {
     starts.back() = tasks;
     q->tasks = tasks;
     q->task_stride = getenv("BSC_TASK_STRIDE") ? strtoull(getenv("BSC_TASK_STRIDE"), nullptr, 10) : 1;
+    q->task_stride = std::max(q->task_stride, 1ULL);
+    plan.walked = (tasks + q->task_stride - 1) / q->task_stride;
+    if (getenv("BSC_TASKS")) {
+        std::vector<unsigned long long> const list = listed_tasks(tasks);
+        q->task_list = d->upload(list);
+        q->listed = list.size();
+        plan.walked = list.size();
+    }
+    q->launch_tasks = plan.walked;
+    q->ended = d->allocate<unsigned long long>(1);
+    q->running = d->allocate<unsigned long long>(size_t(RUNNING_SLOTS) *
+                                                 RUNNING_WORDS);
+    q->running_slots = RUNNING_SLOTS;
     q->task_starts = d->upload(starts);
     q->task_chunks = task_chunks;
     q->unit_tasks = d->allocate<unsigned>(size_t(p.count));
+    plan.starts = std::move(starts);
     return plan;
 }
 
-// Launches the walk of `q` on `stream`.
+// Launches the walk of `q` on `stream`; returns its warps.
 template <WalkCountType COUNT_TYPE, typename BagKey>
-void launch_usage(UsageParams<BagKey> const& q, cudaStream_t stream) {
+int launch_usage(UsageParams<BagKey> const& q, cudaStream_t stream) {
     size_t const shared =
         size_t(WALK_WARPS) * size_t(q.walk.steps) * sizeof(Level<BagKey>);
+    int const grid = walk_grid(walk_pair_usage<COUNT_TYPE, BagKey>, shared);
     walk_pair_usage<COUNT_TYPE, BagKey>
-        <<<walk_grid(walk_pair_usage<COUNT_TYPE, BagKey>, shared),
-           WALK_THREADS, shared, stream>>>(q);
+        <<<grid, WALK_THREADS, shared, stream>>>(q);
     check(cudaGetLastError());
+    return grid * WALK_WARPS;
 }
 
 // Walks `inputs` in `order`, in tasks, counting each pair bag's usage into
@@ -3570,6 +3840,7 @@ struct UsageWalk {
     UsageParams<BagKey> q{};
     TaskPlan plan;
     UsageOrder order;
+    GpuLeftoverInputs const* walked = nullptr;
     int bags = 0;
     int pair_bags = 0;
     size_t slots = 0;
@@ -3585,6 +3856,7 @@ struct UsageWalk {
                  UsageOrder const& walk_order, Memo const& memo,
                  size_t set_slots, size_t first_unit, size_t units) {
         order = walk_order;
+        walked = &inputs;
         slots = set_slots;
         bags = int(inputs.pairs.size());
         pair_bags = inputs.pair_bags;
@@ -3708,6 +3980,10 @@ struct UsageWalk {
         check(cudaMemset(p.progress, 0, sizeof(WalkProgress)));
         check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
         check(cudaMemset(q.unit_tasks, 0, size_t(p.count) * sizeof(unsigned)));
+        check(cudaMemset(q.running, 0,
+                         size_t(RUNNING_SLOTS) * RUNNING_WORDS *
+                             sizeof(unsigned long long)));
+        check(cudaMemset(q.ended, 0, sizeof(unsigned long long)));
         check(cudaMemset(p.usage, 0,
                          size_t(bags) * sizeof(unsigned long long)));
         check(cudaStreamDestroy(side));
@@ -3720,11 +3996,61 @@ struct UsageWalk {
         check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
         // The buffers' zeroing runs on the default stream, which the walk's
         // stream doesn't wait for.
+        UsageParams<BagKey> launched = q;
+        Deferred* rests[2] = {};
+        if constexpr (!RESTS && !TOP) {
+            char const* const budget = getenv("BSC_TASK_BUDGET");
+            launched.budget =
+                budget ? strtoull(budget, nullptr, 10) : TASK_BUDGET;
+            if (q.walk.steps < 3) launched.budget = 0;
+        }
+        if (launched.budget != 0) {
+            for (Deferred*& rest : rests)
+                rest = d.allocate<Deferred>(DEFERRED_ROOM);
+            launched.deferred = rests[0];
+            launched.deferred_room = DEFERRED_ROOM;
+            launched.deferred_count = d.allocate<unsigned long long>(1);
+        }
         check(cudaDeviceSynchronize());
-        launch_usage<COUNT_TYPE>(q, stream);
-        wait_for_walk(stream, q.walk.progress, plan.totals, true,
-                      plan.skipped, size_t(q.walk.count), progress);
+        auto const start = std::chrono::steady_clock::now();
+        unsigned long long deferred = 0;
+        int launches = 0;
+        while (true) {
+            int const warps = launch_usage<COUNT_TYPE>(launched, stream);
+            TaskWatch const watch{
+                q.next_task, q.ended, q.running,
+                std::min(warps, RUNNING_SLOTS), warps, ++launches,
+                launched.launch_tasks, &plan.starts, q.walk.first_unit,
+                q.walk.units != nullptr ? &walked->units : nullptr,
+                &walked->name};
+            wait_for_walk(stream, q.walk.progress, plan.totals, true,
+                          plan.skipped, size_t(q.walk.count), progress,
+                          &watch);
+            if (launched.budget == 0) break;
+            unsigned long long count = 0;
+            check(cudaMemcpy(&count, launched.deferred_count, sizeof count,
+                             cudaMemcpyDeviceToHost));
+            if (count == 0) break;
+            deferred += count;
+            launched.resume = launched.deferred;
+            launched.launch_tasks = count;
+            launched.deferred = rests[launches % 2];
+            check(cudaMemset(launched.deferred_count, 0, sizeof count));
+            check(cudaMemset(q.next_task, 0, sizeof count));
+            check(cudaMemset(q.ended, 0, sizeof count));
+            check(cudaDeviceSynchronize());
+        }
         check(cudaStreamDestroy(stream));
+        if (launches > 1)
+            table_report("task walk: %d launches, %llu deferred rests of "
+                         "tasks", launches, deferred);
+        if (plan.walked != q.tasks)
+            table_report("walked %llu of %llu tasks in %.1fs; the counts are "
+                         "of those tasks only",
+                         plan.walked, q.tasks,
+                         std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - start)
+                             .count());
     }
 
     // Writes the walk's counts to `out`; with RESTS, the distinct rests,

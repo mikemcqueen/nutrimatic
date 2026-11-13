@@ -1472,6 +1472,11 @@ int run_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs) {
     leftover_inputs(inputs, args, &gpu, &sorted);
     RemainderIndex const index(inputs.bag, UINT64_MAX - 1);
     if (index.total() != 0) number_inputs(inputs, index, sorted, &gpu);
+    gpu.name = [&](int position) {
+        size_t const at = sorted[size_t(position)];
+        return position < gpu.pair_bags ? inputs.pair_bags[at].pair
+                                        : inputs.prospect_bags[at].pair;
+    };
     std::vector<uint64_t> by_position;
     with_walk_progress(args, inputs, [&](GpuWalkProgress const& progress) {
         run_pair_usage_gpu(PROGRAM, gpu, progress, &by_position);
