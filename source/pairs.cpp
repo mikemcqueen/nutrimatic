@@ -19,6 +19,7 @@ constexpr char PROGRAM[] = "pairs";
 namespace {
 
 constexpr int OPT_MIN_MAX_WORDS = 256;
+constexpr int OPT_WITH = 257;
 
 struct Args {
     std::optional<std::filesystem::path> dictionary_file;
@@ -28,11 +29,14 @@ struct Args {
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
             "usage: %.*s [-d FILE] [-u LETTERS] [-m N] [-x] [--mx M[,X]] [-c] "
-            "LETTERS\n", SV_ARG(program));
+            "LETTERS\n"
+            "       %.*s [-d FILE] [-m N] [-c] --with WORD [LETTERS]\n",
+            SV_ARG(program), SV_ARG(program));
     if (out != stdout) return;
 
     fputs("  print word,word pairs of distinct dictionary words that fit\n"
-          "  together within LETTERS\n"
+          "  together within LETTERS; with --with WORD, only pairs of WORD\n"
+          "  and another word, from the whole dictionary when LETTERS is left out\n"
           "\noptions:\n", stdout);
     dfs_help_option("-d, --dict FILE",
         "read words from FILE, or - for stdin (default: $WFROOT/%s)",
@@ -46,6 +50,9 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("--mx, --min-max-words M[,X]",
         "print combinations of M to X words, at most %d (default: 2,2; "
         "1 also prints single words)", PAIRS_MAX_WORDS);
+    dfs_help_option("--with WORD",
+        "only print pairs of WORD and another dictionary word; LETTERS is "
+        "optional, and given, both words must fit within it together");
     dfs_help_option("-c, --count",
         "print only how many lines would be printed");
     dfs_help_option("-h, --help", "show this help");
@@ -80,6 +87,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "exact", 'x', OPTPARSE_NONE },
         { "mx", OPT_MIN_MAX_WORDS, OPTPARSE_REQUIRED },
         { "min-max-words", OPT_MIN_MAX_WORDS, OPTPARSE_REQUIRED },
+        { "with", OPT_WITH, OPTPARSE_REQUIRED },
         { "count", 'c', OPTPARSE_NONE },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
@@ -108,6 +116,13 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case 'c':
             out->options.count = true;
             break;
+          case OPT_WITH:
+            out->options.with = options.optarg;
+            if (out->options.with.empty()) {
+              report(PROGRAM, "--with needs a word");
+              return false;
+            }
+            break;
           case OPT_MIN_MAX_WORDS:
             if (!parse_min_max_words(options.optarg, &out->options))
                 return false;
@@ -122,8 +137,21 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
 
     char const* letters = optparse_arg(&options);
-    if (letters == NULL || optparse_arg(&options) != NULL) return false;
-    out->options.letters = letters;
+    if (letters != NULL && optparse_arg(&options) != NULL) return false;
+    bool const with = !out->options.with.empty();
+    if (letters == NULL) {
+      if (!with) return false;
+      if (out->options.exact || !out->options.used_letters.empty()) {
+        report(PROGRAM, "-x and -u need LETTERS");
+        return false;
+      }
+    } else {
+      out->options.letters = letters;
+    }
+    if (with && out->options.min_words < 2) {
+      report(PROGRAM, "--with prints only pairs; --mx must start at 2");
+      return false;
+    }
     return true;
 }
 

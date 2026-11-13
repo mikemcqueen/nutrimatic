@@ -19,9 +19,11 @@ inline constexpr int PAIRS_MAX_WORDS = 2;
 // PAIRS_MAX_WORDS) distinct words of at least min_word_length letters (0 for
 // no minimum) that fit together within letters less used_letters, or that use
 // all of them when exact. With count, pairs prints how many lines there are
-// instead of the lines.
+// instead of the lines. A nonempty `with` prints only pairs of `with` and
+// another word; then empty letters means any word pairs with it.
 struct PairsOptions {
   std::string letters;
+  std::string with;
   std::string used_letters;
   int min_word_length = PAIRS_DEFAULT_MIN_WORD_LENGTH;
   bool exact = false;
@@ -100,13 +102,13 @@ inline PairsCounts pairs_add(PairsCounts const& a, PairsCounts const& b) {
 // left,right with left < right.
 class Pairs {
  public:
-  // Takes `options` and the letters left once its used_letters are removed.
-  // Returns false, with the error diagnosed, when they aren't all available
-  // or nothing is left.
+  // Takes `options` and the letters left once its used_letters (and its
+  // `with` word) are removed. Returns false, with the error diagnosed, when
+  // they aren't all available or nothing is left.
   bool load(PairsOptions const& options);
 
-  // Adds `word` when it's long enough, has a letter, and fits the letters. Only valid after
-  // load() succeeds.
+  // Adds `word` when it's long enough, has a letter, fits the letters, and
+  // isn't options.with. Only valid after load() succeeds.
   void add(std::string const& word);
 
   // Writes the single words, then the pairs, one per line, or, with
@@ -121,6 +123,9 @@ class Pairs {
   void each_line(Emit emit) const;
 
   PairsOptions options_;
+  // Whether words must fit bag_; false for `with` and no letters.
+  bool bounded_ = true;
+  // The letters left for words; with `with`, after its letters.
   PairsCounts bag_;
   std::vector<PairsCounts> keys_;
   std::vector<std::vector<std::string>> groups_;

@@ -96,3 +96,32 @@ if "$pairs" --mx 2,3 -d "$exact" abc 2>/dev/null; then
 fi
 [[ $("$pairs" -c --mx 1,1 -m 0 -d "$exact" abc) == 4 ]] ||
   fail "--count is wrong"
+
+with=$test_dir/with.txt
+cat > "$with" <<'EOF2'
+ab
+cd
+dc
+ef
+ab
+xyz
+EOF2
+check_pairs with-letters "$with" abcd 2 'ab,cd
+ab,dc' --with ab
+check_pairs with-exact "$with" cdef 1 'cd,ef' -x --with cd
+check_pairs with-word-not-in-dict "$with" abcd 1 'ab,c' --with c -u d
+[[ $("$pairs" -m 0 -d "$with" --with ab | sort) == 'ab,cd
+ab,dc
+ab,ef
+ab,xyz' ]] || fail "--with without letters is wrong"
+[[ $("$pairs" -m 3 -c -d "$with" --with ab) == 1 ]] ||
+  fail "--with without letters ignores -m"
+if "$pairs" -x -d "$with" --with ab 2>/dev/null; then
+  fail "-x without letters was accepted"
+fi
+if "$pairs" -d "$with" --with ab --mx 1 abcd 2>/dev/null; then
+  fail "--with --mx 1 was accepted"
+fi
+if "$pairs" -d "$with" --with xyz abcd 2>/dev/null; then
+  fail "--with a word that doesn't fit was accepted"
+fi

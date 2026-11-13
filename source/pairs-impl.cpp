@@ -40,20 +40,30 @@ bool Pairs::load(PairsOptions const& options) {
   groups_.clear();
   group_indices_.clear();
 
+  bounded_ = !(options_.letters.empty() && !options_.with.empty());
+  bag_ = PairsCounts{};
+  if (!bounded_) return true;
+
   std::string letters;
   if (!subtract_letters(bag_letters(options_.letters),
                         bag_letters(options_.used_letters), &letters))
     return false;
   bag_ = pairs_letter_counts(letters);
+  if (!options_.with.empty() &&
+      !pairs_subtract(bag_, pairs_letter_counts(options_.with), &bag_)) {
+    fprintf(stderr, "error: \"%s\" doesn't fit within \"%s\"\n",
+            options_.with.c_str(), letters.c_str());
+    return false;
+  }
   return true;
 }
 
 void Pairs::add(std::string const& word) {
   if ((int) word.size() < options_.min_word_length) return;
+  if (!options_.with.empty() && word == options_.with) return;
   PairsCounts const counts = pairs_letter_counts(word);
   if (counts == PairsCounts{}) return;
-  PairsCounts remaining;
-  if (!pairs_subtract(bag_, counts, &remaining)) return;
+  if (bounded_ && !pairs_fits(bag_, counts)) return;
 
   auto const inserted = group_indices_.emplace(counts, groups_.size());
   if (inserted.second) {
@@ -68,6 +78,23 @@ void Pairs::add(std::string const& word) {
 
 template <typename Emit>
 void Pairs::each_line(Emit emit) const {
+  auto const emit_pair = [&emit](std::string const& x, std::string const& y) {
+    if (x < y)
+      emit(x, &y);
+    else
+      emit(y, &x);
+  };
+
+  if (!options_.with.empty()) {
+    if (options_.max_words < 2) return;
+    for (size_t a = 0; a < groups_.size(); ++a) {
+      if (options_.exact && keys_[a] != bag_) continue;
+      for (std::string const& word : groups_[a])
+        emit_pair(options_.with, word);
+    }
+    return;
+  }
+
   if (options_.min_words <= 1) {
     if (options_.exact) {
       auto const solo = group_indices_.find(bag_);
@@ -80,13 +107,6 @@ void Pairs::each_line(Emit emit) const {
     }
   }
   if (options_.max_words < 2) return;
-
-  auto const emit_pair = [&emit](std::string const& x, std::string const& y) {
-    if (x < y)
-      emit(x, &y);
-    else
-      emit(y, &x);
-  };
 
   PairsCounts remaining;
   std::vector<size_t> matching_groups(groups_.size());
