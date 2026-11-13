@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -43,12 +44,18 @@ bool framed_red(bool invalid, F draw) {
   return result;
 }
 
+std::string_view seed_root(std::string_view name) {
+  return name.substr(0, name.find('.'));
+}
+
 }  // namespace
 
 Window::Window()
     : seed_max_length_(app_state().seed_max_length),
       sentence_(app_state().sentence) {
   AppState const& state = app_state();
+  std::snprintf(seed_, sizeof seed_, "%s", state.seed_name.c_str());
+  seed_root_ = seed_root(seed_);
   list_seeds();
   std::snprintf(letters_, sizeof letters_, "%s", state.visual_letters.c_str());
   std::snprintf(used_letters_, sizeof used_letters_, "%s",
@@ -59,8 +66,8 @@ Window::Window()
 
 void Window::list_seeds() {
   seed_names_.clear();
-  if (sentence_ == CLASSIFIED_NO_SENTENCE) return;
-  std::string const prefix = "pairs.s" + std::to_string(sentence_);
+  if (sentence_ == CLASSIFIED_NO_SENTENCE || seed_root_.empty()) return;
+  std::string const prefix = seed_root_ + ".s" + std::to_string(sentence_);
   std::error_code error;
   for (std::filesystem::directory_iterator
            it(app_state().seed_directory, error), end;
@@ -92,15 +99,32 @@ void Window::render() {
     ImGui::TextUnformatted("seed:");
     ImGui::SameLine(0, 0);
     float const spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-    ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight() + spacing));
+    float const side = ImGui::GetFrameHeight();
+    ImVec2 const seed_min = ImGui::GetCursorScreenPos();
+    ImGui::SetNextItemWidth(-(2 * side + spacing));
     std::optional<std::string> seed_chosen;
-    if (ImGui::BeginCombo("##seed", app_state().seed_name.c_str())) {
+    if (ImGui::InputText("##seed", seed_, sizeof seed_,
+                         ImGuiInputTextFlags_EnterReturnsTrue))
+      seed_chosen = seed_;
+    if (std::string_view const root = seed_root(seed_); root != seed_root_) {
+      seed_root_ = root;
+      list_seeds();
+    }
+    ImGui::SameLine(0, 0);
+    if (ImGui::ArrowButton("##seed_list", ImGuiDir_Down))
+      ImGui::OpenPopup("seed_list");
+    ImVec2 const seed_max = ImGui::GetItemRectMax();
+    ImGui::SetNextWindowPos(ImVec2(seed_min.x, seed_max.y));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(seed_max.x - seed_min.x, 0),
+                                        ImVec2(FLT_MAX, FLT_MAX));
+    if (ImGui::BeginPopup("seed_list")) {
       for (std::string const& name : seed_names_) {
-        bool const selected = name == app_state().seed_name;
+        bool const selected = name == seed_;
         if (ImGui::Selectable(name.c_str(), selected)) seed_chosen = name;
         if (selected) ImGui::SetItemDefaultFocus();
       }
-      ImGui::EndCombo();
+      if (seed_names_.empty()) ImGui::TextDisabled("no pair files");
+      ImGui::EndPopup();
     }
     ImGui::SameLine(0, spacing);
     bool const seed_refreshed = refresh_button("seed_refresh");
@@ -215,9 +239,10 @@ void Window::render() {
     }
     if (seed_refreshed) {
       list_seeds();
-      seed_chosen = state.seed_name;
+      seed_chosen = seed_;
     }
     if (seed_chosen) {
+      std::snprintf(seed_, sizeof seed_, "%s", seed_chosen->c_str());
       state.load_seed_and_bad_bags(std::move(*seed_chosen));
       std::vector<SeedViewKey> keys;
       for (Column const& column : columns_) {

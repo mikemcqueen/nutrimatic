@@ -16,16 +16,18 @@
 // "new" and "YES" checkboxes setting app_state()'s new_only and new_keep_yes,
 // "YES" greyed out unless "new" is checked, then a BAD checkbox that toggles
 // app_state()'s judged_bad_filter and sentence buttons S1-S9 (s), then the
-// columns side by side. The seed field is a dropdown showing app_state()'s
-// seed_name and listing the selected sentence's pair files (see list_seeds()),
-// followed by a refresh button. Choosing a file loads it, with its bad bags
-// (see AppState::load_seed_and_bad_bags()), keeps only the seed views the
+// columns side by side. The seed field starts from app_state()'s seed_name and
+// is followed by a dropdown arrow listing the selected sentence's pair files
+// for the root typed in the field (see list_seeds()), listed again whenever the
+// root changes, then a refresh button. Enter in the field loads the file named
+// there, and choosing a listed file puts it there and loads it, with its bad
+// bags (see AppState::load_seed_and_bad_bags()), keeps only the seed views the
 // columns' seed sources name and reads the pair file again when it's newer (see
 // AppState::refresh_seed_files()), reloads the loaded dictionaries whose files
 // are newer (see AppState::refresh_dictionaries()), and refreshes the required
 // words (see AppState::refresh_required_words()); the refresh button lists the
-// files again and does the same for seed_name. The x: field starts from
-// app_state()'s seed_max_length, and Enter in it stores it there.
+// files again and does the same for the name in the field. The x: field starts
+// from app_state()'s seed_max_length, and Enter in it stores it there.
 // The letters fields start from app_state(), and Enter in any of them, or
 // toggling "new", stores all three and "new" there and validates them (see
 // AppState::validate_letters()), bumping app_state()'s generation when what the
@@ -94,14 +96,17 @@ class Window {
 
  private:
   // Sets seed_names_ to the sorted names of the files in app_state()'s
-  // seed_directory named pairs.sN or pairs.sN.*, N being sentence_; none
-  // without a sentence.
+  // seed_directory named R.sN or R.sN.*, R being seed_root_ and N sentence_;
+  // none without a sentence or a root.
   void list_seeds();
 
   // Opens a Review of column `id`; see the class comment.
   void open_review(ColumnIdentifier id);
 
   std::vector<Column> columns_;
+  char seed_[256] = {};
+  // The part of seed_ before its first '.', which list_seeds() lists for.
+  std::string seed_root_;
   std::vector<std::string> seed_names_;
   int seed_max_length_;
   char letters_[256] = {};

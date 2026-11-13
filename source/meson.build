@@ -160,9 +160,12 @@ foreach p : ['remove-markup']
   executable(p, p + '.cpp', dependencies: [tre_dep, xml2_dep], install: true)
 endforeach
 
-foreach p : ['make-index', 'merge-indexes', 'explore-index']
+foreach p : ['make-index', 'merge-indexes']
   executable(p, p + '.cpp', link_with: index_lib, install: true)
 endforeach
+
+explore_index = executable('explore-index', 'explore-index.cpp',
+  link_with: [optparse_lib, index_lib], install: true)
 
 dump_index = executable('dump-index', 'dump-index.cpp',
   link_with: [optparse_lib, index_lib], install: true)
@@ -453,6 +456,11 @@ make_dfs_test_index = executable(
   'make-dfs-test-index', 'make-dfs-test-index.cpp',
   link_with: index_lib,
   install: false,
+)
+test(
+  'explore-index',
+  bash,
+  args: [files('test-explore-index.sh'), explore_index, make_dfs_test_index],
 )
 test(
   'dump-index',
