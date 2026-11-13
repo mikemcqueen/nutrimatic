@@ -3,7 +3,8 @@
 
 See plans/rebuild-pairs.md. A path is any number of u-LETTERS directories,
 then alternating steps and cuts (Nk or pp-NAME-Nk), starting with a step:
-u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. LETTERS may be several hyphen-separated
+u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. An Nk cut's N may have up to three decimals:
+1.5k. LETTERS may be several hyphen-separated
 groups: u-abc-def. An all-uppercase group is an alias from tmp/sN/aliases.json,
 added with --add-alias: u-OT-def.
 """
@@ -31,7 +32,7 @@ STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-(dict|big))?"
 PPB_RE = re.compile(r"ppb([1-9][0-9]*)?\.pb([1-9][0-9]*)?")
 USED_RE = re.compile(rf"u-({LETTERS})")
 ALIAS_RE = re.compile(r"([A-Z]+)=([a-z]+)")
-CUT_RE = re.compile(r"([1-9][0-9]*)k")
+CUT_RE = re.compile(r"([1-9][0-9]*(?:\.[0-9]{0,2}[1-9])?|0\.[0-9]{0,2}[1-9])k")
 PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
 WB_ROWS = 5000000
 Segs = tuple[str, ...]
@@ -89,6 +90,18 @@ def is_root(segs: Segs) -> bool:
     return len(split_segs(segs)[1]) == 1
 
 
+def pool_of(rest: Segs) -> int | None:
+    for index in range(len(rest) - 3, -1, -2):
+        if STEP_RE.fullmatch(rest[index]):
+            return index
+    return None
+
+
+def cut_words(thousands: str) -> int:
+    whole, _, fraction = thousands.partition(".")
+    return int(whole) * 1000 + int(fraction.ljust(3, "0"))
+
+
 def resolve(sentence: Sentence, letters: str) -> str:
     return "-".join(sentence.aliases.get(group, group)
                     for group in letters.split("-"))
@@ -139,24 +152,29 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
                 "optionally -dict or -big, then -xN, then -LETTERS; or "
                 "ppb[N].pb[M]), then alternating cuts (Nk, pp-NAME-Nk) and "
                 "steps")
-    root = STEP_RE.fullmatch(rest[0])
     for index, seg in enumerate(rest[::2]):
         match = STEP_RE.fullmatch(seg)
         if not match:
-            if index != 1 or not root or root[2]:
-                return (f"{seg} goes below a cut that is directly below a "
-                        "root pbN step")
-            if len(rest) > 3:
-                return f"nothing goes below {seg}"
+            at = pool_of(rest[:2 * index + 1])
+            pool = None if at is None else STEP_RE.fullmatch(rest[at])
+            if not pool or pool[2]:
+                return (f"{seg} goes below a cut of a pbN step or of a ppb "
+                        "step below one")
             if seg != canonical(seg):
                 return f"{seg} is spelled {canonical(seg)}"
             ppb = PPB_RE.fullmatch(seg)
-            if int(ppb[1] or 1) + int(ppb[2] or 1) < int(root[1]):
-                return (f"{seg} picks fewer pairs than {rest[0]}, whose "
+            if int(ppb[1] or 1) + int(ppb[2] or 1) < int(pool[1]):
+                return (f"{seg} picks fewer pairs than {rest[at]}, whose "
                         "pairs file would be missing pairs it could pick")
-            if root[4] and CUT_RE.fullmatch(rest[1]):
-                return (f"{seg} can't go below an Nk cut of a -x{root[4]} "
-                        "root: the cut's pairs can be longer than the cap")
+            if CUT_RE.fullmatch(rest[2 * index - 1]):
+                if pool[4]:
+                    return (f"{seg} can't go below an Nk cut of a "
+                            f"-x{pool[4]} root: the cut's pairs can be "
+                            "longer than the cap")
+                if at and PP_CUT_RE.fullmatch(rest[at - 1]):
+                    return (f"{seg} can't go below an Nk cut when "
+                            f"{rest[at]} is below {rest[at - 1]}: the cut's "
+                            f"pairs needn't be among {rest[at - 1]}'s")
             continue
         used = match[5]
         if match[3] and index:
@@ -249,16 +267,17 @@ def prospect_step(sentence: Sentence, segs: Segs, prospects: int,
                   count: int) -> list[Step]:
     d = node_dir(sentence, segs)
     cut = segs[:-1]
-    root = segs[:-2]
+    used_dirs, rest = split_segs(segs)
+    pool = (*used_dirs, *rest[:pool_of(rest) + 1])
     ss = ",".join(["ppb"] * prospects + ["pb"] * count)
     letters = shlex.quote(sentence.letters)
     dictionary = shlex.quote(sentence.dict)
     rank = Step(
-        segs, ["pairs.ranked"], [(cut, "pairs"), (root, "pairs")],
+        segs, ["pairs.ranked"], [(cut, "pairs"), (pool, "pairs")],
         f"bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
         f"{used_flag(sentence, segs)}--ss {ss} --uc "
         f"--pp {node_dir(sentence, cut) / 'pairs'} "
-        f"{letters} {node_dir(sentence, root) / 'pairs'} {dictionary} "
+        f"{letters} {node_dir(sentence, pool) / 'pairs'} {dictionary} "
         f"--progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict], gpu=True)
     return [rank, counted_step(sentence, segs), words_step(sentence, segs)]
@@ -289,14 +308,14 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     return [dump, digest, words_step(sentence, segs)]
 
 
-def cut_step(sentence: Sentence, segs: Segs, thousands: int) -> list[Step]:
+def cut_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     d = node_dir(sentence, segs)
     parent = segs[:-1]
     words = node_dir(sentence, parent) / "words"
     n = sentence.n
     return [Step(
         segs, ["pairs"], [(parent, "words")],
-        f"head -n {thousands * 1000} {words} | seed-pairs {sentence.seed_flag} "
+        f"head -n {count} {words} | seed-pairs {sentence.seed_flag} "
         f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} --no-dict -x0 "
         f"-l {shlex.quote(sentence.letters)} {used_flag(sentence, segs)}- "
         f"> {d / 'pairs.tmp'}",
@@ -325,7 +344,7 @@ def steps_of(sentence: Sentence, segs: Segs) -> list[Step]:
         return pp_cut_step(sentence, segs, pp_cut[1], int(pp_cut[2]))
     cut = CUT_RE.fullmatch(last)
     if cut:
-        return cut_step(sentence, segs, int(cut[1]))
+        return cut_step(sentence, segs, cut_words(cut[1]))
     ppb = PPB_RE.fullmatch(last)
     if ppb:
         return prospect_step(sentence, segs, int(ppb[1] or 1),

@@ -1338,13 +1338,6 @@ constexpr int TASK_CANDIDATES = 64;
 constexpr size_t MEMO_RESERVE = size_t(1) << 30;
 constexpr size_t SUMS_RESERVE = size_t(1) << 30;
 constexpr long double SLABS_MOST = 65536;
-// A pilot walks a sample of a walk's tasks: how many, enough to keep every
-// warp busy, and how long it may take.
-constexpr unsigned long long PILOT_TASKS = 32768;
-constexpr double PILOT_SECONDS = 0.4;
-constexpr double PILOT_SHARE = 0.9;
-// The candidates below the first picks from which a walk is worth a pilot.
-constexpr unsigned long long PILOT_FROM = 100000000;
 // The most rests the fit tables' dense letters number, and the most entries
 // of their `two`.
 constexpr uint64_t DENSE_MOST = 65536;
@@ -1360,10 +1353,7 @@ constexpr size_t SET_KEPT = 5000;
 // What a sums walk's slab costs: seconds a byte of its table, and besides.
 constexpr double SUMS_SECONDS_PER_BYTE = 0.12e-9;
 constexpr double SUMS_SECONDS_PER_SLAB = 0.1;
-// The combinations a second a memo walk and a scanning walk get through,
-// and the lookups a second a fit tables walk does.
-constexpr double MEMO_RATE = 5e8;
-constexpr double SCAN_RATE = 5e7;
+// The lookups a second a fit tables walk does.
 constexpr double TABLES_RATE = 3e7;
 constexpr int EVERY_CHUNK = 1 << 30;
 constexpr int SET_PROBES = 256;
@@ -3915,82 +3905,6 @@ struct UsageWalk {
         return true;
     }
 
-    // The candidates below the units' first picks.
-    unsigned long long first_candidates() const {
-        unsigned long long sum = 0;
-        for (unsigned long long const total : plan.totals) sum += total;
-        return sum;
-    }
-
-    // Walks about `sample` of the tasks, evenly spaced, for at most `most`
-    // seconds, and undoes what it counted; the seconds the sample takes, by
-    // the share of it finished when it is cut short.
-    double pilot(unsigned long long sample, double most) {
-        LeftoverParams<BagKey>& p = q.walk;
-        UsageParams<BagKey> some = q;
-        some.task_stride = std::max<unsigned long long>(q.tasks / sample, 1);
-        double const tasks =
-            double((q.tasks + some.task_stride - 1) / some.task_stride);
-        cudaStream_t stream = nullptr;
-        cudaStream_t side = nullptr;
-        check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-        check(cudaStreamCreateWithFlags(&side, cudaStreamNonBlocking));
-        // The kernel's first launch loads it: launch it with no tasks first.
-        UsageParams<BagKey> none = q;
-        none.tasks = 0;
-        check(cudaDeviceSynchronize());
-        launch_usage<COUNT_TYPE>(none, stream);
-        check(cudaStreamSynchronize(stream));
-        check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
-        check(cudaDeviceSynchronize());
-        auto const start = std::chrono::steady_clock::now();
-        auto const elapsed = [&] {
-            return std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - start).count();
-        };
-        // The stop is copied from pinned memory: WDDM holds a copy from
-        // pageable memory, or a memset, until the walk ends, and the walk
-        // won't end until it sees the stop. Pinning may synchronize, so it
-        // comes before the launch.
-        int* one = nullptr;
-        check(cudaMallocHost(&one, sizeof(int)));
-        *one = 1;
-        launch_usage<COUNT_TYPE>(some, stream);
-        double seconds = 0;
-        while (cudaStreamQuery(stream) == cudaErrorNotReady) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            // Stop at most of the sample: its last tasks are a few long
-            // ones, a warp each.
-            WalkProgress now;
-            check(cudaMemcpyAsync(&now, p.progress, sizeof now,
-                                  cudaMemcpyDeviceToHost, side));
-            check(cudaStreamSynchronize(side));
-            double const at = elapsed();
-            if (at < most && double(now.tasks) < PILOT_SHARE * tasks) continue;
-            seconds = at * tasks / double(std::max(now.tasks, 1ULL));
-            check(cudaMemcpyAsync(stop, one, sizeof(int),
-                                  cudaMemcpyHostToDevice, side));
-            check(cudaStreamSynchronize(side));
-            break;
-        }
-        check(cudaStreamSynchronize(stream));
-        if (seconds == 0) seconds = elapsed();
-        check(cudaFreeHost(one));
-        check(cudaMemset(stop, 0, sizeof(int)));
-        check(cudaMemset(p.progress, 0, sizeof(WalkProgress)));
-        check(cudaMemset(q.next_task, 0, sizeof(unsigned long long)));
-        check(cudaMemset(q.unit_tasks, 0, size_t(p.count) * sizeof(unsigned)));
-        check(cudaMemset(q.running, 0,
-                         size_t(RUNNING_SLOTS) * RUNNING_WORDS *
-                             sizeof(unsigned long long)));
-        check(cudaMemset(q.ended, 0, sizeof(unsigned long long)));
-        check(cudaMemset(p.usage, 0,
-                         size_t(bags) * sizeof(unsigned long long)));
-        check(cudaStreamDestroy(side));
-        check(cudaStreamDestroy(stream));
-        return seconds;
-    }
-
     void run(GpuWalkProgress const& progress) {
         cudaStream_t stream = nullptr;
         check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -4608,11 +4522,10 @@ void walk_leftovers(GpuLeftoverInputs const& inputs, Packing const& packing,
     check(cudaStreamDestroy(stream));
 }
 
-// Walks `inputs` counting each pair bag's usage into `out` by the fastest of
-// the fit tables walk and the walk it replaces, the memo walk when `memo`,
-// for PAIRS of at most `most`, else the scanning walk: the one `mode` names,
-// else the one whose pilot gets through the larger share of its walk a
-// second.
+// Walks `inputs` counting each pair bag's usage into `out` by the fit tables
+// walk where its tables suit the bag, else by the walk it replaces: the memo
+// walk when `memo`, for PAIRS of at most `most`, else the scanning walk.
+// `mode` names one of the three instead.
 template <typename BagKey>
 void choose_usage_walk(GpuLeftoverInputs const& inputs, Packing const& packing,
                        bool memo, uint64_t most, char const* mode,
@@ -4627,62 +4540,29 @@ void choose_usage_walk(GpuLeftoverInputs const& inputs, Packing const& packing,
     UsageOrder const less = can_leave ? memo_order(inputs) : all;
     char const forced = mode != nullptr ? mode[0] : 0;
 
-    auto const t0 = std::chrono::steady_clock::now();
-    auto const lap = [&](char const* what) {
-        if (getenv("BSC_DEBUG"))
-            fprintf(stderr, "DEBUG %.2fs %s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), what);
-    };
-    UsageWalk<WalkCountType::PAIR_USAGE, BagKey> scan;
-    UsageWalk<WalkCountType::PAIR_USAGE_MEMO, BagKey> remembered;
     UsageWalk<WalkCountType::PAIR_USAGE_TABLES, BagKey> tables;
-    scan.prepare(inputs, packing, all, {}, 0, 0, 0);
-    lap("scan prepared");
-    bool use_tables = can_leave && (forced == 0 || forced == 't') &&
-        (forced == 't' || scan.first_candidates() >= PILOT_FROM) &&
-        tables.prepare(inputs, packing, less, {}, 0, 0, 0);
-    // The memo takes the room the tables leave.
-    Memo layout{};
-    bool const use_memo = memo && !(use_tables && forced == 't') &&
-        memo_layout(inputs.number_count, most, &layout);
-    lap("tables prepared");
-    if (use_memo) remembered.prepare(inputs, packing, less, layout, 0, 0, 0);
-    lap("memo prepared");
-    if (use_tables && forced != 't') {
-        double const table_seconds = tables.pilot(PILOT_TASKS, PILOT_SECONDS);
-        lap("tables pilot");
-        double const other_seconds = use_memo
-            ? remembered.pilot(PILOT_TASKS, PILOT_SECONDS)
-            : scan.pilot(PILOT_TASKS, PILOT_SECONDS);
-        if (getenv("BSC_DEBUG"))
-            fprintf(stderr, "DEBUG pilot: %llu of %llu tasks: tables %.3fs, %s %.3fs\n",
-                    PILOT_TASKS, tables.q.tasks, table_seconds,
-                    use_memo ? "memo" : "scan", other_seconds);
-        lap("pilots");
-        use_tables = table_seconds < other_seconds;
-        table_report("pair usage walk: %s (pilots: fit tables %.3fs, %s "
-                     "%.3fs)",
-                     use_tables ? "fit tables" : use_memo ? "memo" : "scan",
-                     table_seconds, use_memo ? "memo" : "scan",
-                     other_seconds);
-    } else {
-        table_report("pair usage walk: %s",
-                     use_tables ? "fit tables" : use_memo ? "memo" : "scan");
-    }
-    if (use_tables) {
-        scan.d.release();
-        remembered.d.release();
+    if (can_leave && (forced == 0 || forced == 't') &&
+        tables.prepare(inputs, packing, less, {}, 0, 0, 0)) {
+        table_report("pair usage walk: %s", "fit tables");
         tables.run(progress);
         tables.finish(out);
-    } else if (use_memo) {
-        scan.d.release();
-        tables.d.release();
+        return;
+    }
+    tables.d.release();
+    Memo layout{};
+    if (memo && memo_layout(inputs.number_count, most, &layout)) {
+        UsageWalk<WalkCountType::PAIR_USAGE_MEMO, BagKey> remembered;
+        remembered.prepare(inputs, packing, less, layout, 0, 0, 0);
+        table_report("pair usage walk: %s", "memo");
         remembered.run(progress);
         remembered.finish(out);
-    } else {
-        tables.d.release();
-        scan.run(progress);
-        scan.finish(out);
+        return;
     }
+    UsageWalk<WalkCountType::PAIR_USAGE, BagKey> scan;
+    scan.prepare(inputs, packing, all, {}, 0, 0, 0);
+    table_report("pair usage walk: %s", "scan");
+    scan.run(progress);
+    scan.finish(out);
 }
 
 // Walks `inputs` counting each pair bag's usage into `out`, by the walk
@@ -4709,18 +4589,8 @@ void count_pair_usage(GpuLeftoverInputs const& inputs, Packing const& packing,
     bool const by_sums = mode == nullptr || mode[0] == 's';
     if (by_sums && inputs.steps >= 4 && (pairs >= 3 || prospects >= 3)) {
         UsageOrder const order = sums_order(inputs);
-        double other = 1e300;
-        if (mode == nullptr) {
-            UsageOrder const walked = memo
-                ? memo_order(inputs)
-                : UsageOrder{pairs > 0, pairs > 0 ? pairs : prospects,
-                             pairs > 0 ? prospects : 0};
-            UsageOrder before = walked;
-            if (!memo) --(before.other_steps > 0 ? before.other_steps
-                                                 : before.first_steps);
-            other = estimate_combinations(inputs, before) /
-                (memo ? MEMO_RATE : SCAN_RATE);
-        }
+        double const other = mode != nullptr ? 1e300
+            : estimate_combinations(inputs, memo_order(inputs)) / TABLES_RATE;
         SumsWalk<BagKey> walk;
         if (walk.prepare(inputs, packing, order,
                          order.pairs_first != (order.other_steps > 0))) {

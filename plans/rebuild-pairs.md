@@ -22,7 +22,9 @@ cuts, starting with a step:
   `ppb2.pb` is `ppb,ppb,pb` and `ppb2.pb2` is `ppb,ppb,pb,pb`. A 1 may be
   written out on the command line and is dropped: `ppb1.pb3` builds `ppb.pb3`
   and `ppb2.pb1` builds `ppb2.pb`
-* `Nk`: seed pairs from the top N thousand words of the step above it
+* `Nk`: seed pairs from the top N thousand words of the step above it. N may
+  have up to three decimals, `1.5k` being the top 1,500 words and `0.25k` the
+  top 250, with no trailing zero: `1.50k` and `1.0k` are rejected
 * `pp-NAME-Nk`: the top N thousand pairs of the step above it, by the
   `pair-prior` score under the manifest `idx/pp.NAME`
 
@@ -110,18 +112,61 @@ all in the dictionary.
   rows, so it can't be the input
 * A later `pbN` or `pbNwb` step: the `pairs` file of the cut above it
 * A `ppb[N].pb[M]` step: `--pp` is the `pairs` file of the cut above it, and
-  PAIRS is the `pairs` file of the root step above that cut
+  PAIRS is the `pairs` file of its pool step
 
 ### ppb steps
 
-A `ppb[N].pb[M]` step sits below a cut that is directly below a root `pbN`
-step, takes no suffixes, and has no cuts below it. It is rejected:
+A `ppb[N].pb[M]` step sits below a cut of a `pbN` step, or below a cut of a
+`ppb` step that itself qualifies, and takes no suffixes:
 
-* when N + M is less than the root step's pick count: the root's `pairs`
+    pb3-dict/pp-1sq-3k/ppb3.pb/pp-1sq-3k/ppb.pb3
+    pb3-dict/pp-1sq-3k/ppb3.pb/1.5k/pb3/pp-1sq-3k/ppb3.pb
+
+Its pool step is the nearest `pbN` step above it, root or not, with only
+`ppb` steps between. In the second path the first `ppb3.pb`'s pool step is
+`pb3-dict` and the last one's is the `pb3` below `1.5k`, which ran on the
+pairs of the top 1,500 words: a second round on a smaller pool. A `pbNwb`
+step is not a pool step, and a `ppb` step whose nearest step above is one is
+rejected.
+
+Every `ppb` step uses its pool step's `pairs` as PAIRS. A `ppb` step's
+`pairs.ranked` holds only pool pairs and its prospects, and those prospects
+are themselves a cut of the pool step or of a `ppb` step above, so a cut of
+it stands to the pool step as a cut of the pool step does.
+
+The rule every `ppb` step must meet: PAIRS holds every pair that can be in a
+combination with one of its prospects. The pool step's `pairs` holds every
+pair of its input that is in one of its combinations, so the rule holds when
+the step picks at least as many pairs as the pool step and the pool step's
+input holds every pair that can be in a combination under its bag. Pairs that
+are in no combination don't matter, as prospects or as partners.
+
+A `pp-NAME-Nk` cut takes its pairs from the `pairs.ranked` of the step above,
+so its pairs are already pool pairs or prospects of a `ppb` step above. An
+`Nk` cut instead holds every seed pair of its words, so below one the pool
+step's input must hold every such pair that can be in a combination. By pool
+step:
+
+* A root step directly below `tmp/sN` or a top-level `u-LETTERS` directory:
+  its input is every seed pair, so it holds them
+* A root step below a nested `u-LETTERS` directory: its input is the `pairs`
+  of the same-named step above, which holds every pair that can be in a
+  combination under the smaller bag (see Step inputs), so it holds them
+* A step below an `Nk` cut: its input is every seed pair of that cut's words,
+  and an `Nk` cut further down takes its words from that cut's pairs, so it
+  holds them
+* An `-xN` root: the cap drops pairs longer than N letters, and those can be
+  in a combination, so it doesn't hold them
+* A step below a `pp-NAME-Nk` cut: the `pp` cut keeps only its top pairs by
+  `pair-prior` score, and the pairs it drops can be in a combination, so it
+  doesn't hold them
+
+So a `ppb` step is rejected:
+
+* when N + M is less than the pool step's pick count: the pool step's `pairs`
   would be missing pairs the step could pick
-* below an `Nk` cut of an `-xN` root: the cut's pairs can be longer than the
-  cap, so a prospect may not be one of the root's input pairs, and the root's
-  `pairs` may then be missing pairs that combine with it
+* below an `Nk` cut when the pool step is an `-xN` root
+* below an `Nk` cut when the pool step is below a `pp-NAME-Nk` cut
 
 ## Files
 
@@ -134,7 +179,8 @@ step, takes no suffixes, and has no cuts below it. It is rejected:
 `pairs.ranked` is `COUNT word word`, `words.ranked` is `COUNT word`, `pairs` is
 `word,word`, and `words` is one word per line. A `pbN` step's `pairs` is its
 `pairs.ranked` in the same order without the counts, `awk '{print $2","$3}'`.
-Any `pbN` or `pbNwb` step can be cut and fed forward.
+Any `pbN`, `pbNwb` or `ppb[N].pb[M]` step can be cut and fed forward: an `Nk`
+cut reads the step's `words`, a `pp-NAME-Nk` cut its `pairs.ranked`.
 
 ## Commands
 
@@ -183,6 +229,16 @@ proceed. `bag-stats-cuda` steps also hold a global GPU lock for the step's
 duration, so GPU jobs never overlap.
 
 ## Previous steps:
+
+An `Nk` cut's N was a whole number of thousands.
+
+A `ppb[N].pb[M]` step sat below a cut of a root `pbN` step, or below a cut of
+a `ppb` step that itself qualified, with only `ppb` steps between it and the
+root. Every step in such a chain used the root's `pairs` as PAIRS, and a `ppb`
+step anywhere below a later `pbN` step was rejected.
+
+A `ppb[N].pb[M]` step had to sit below a cut directly below a root `pbN` step,
+and nothing could go below it.
 
 Each `u-LETTERS` directory's letters, and a root step's `-LETTERS` suffix, had
 to be in sorted order: `u-cba` was rejected.
