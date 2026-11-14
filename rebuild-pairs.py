@@ -2,9 +2,9 @@
 """Builds the new-pairs workflow's intermediate files under tmp/sN.
 
 See plans/rebuild-pairs.md. A path is any number of u-LETTERS directories,
-then alternating steps and cuts (Nk or pp-NAME-Nk), starting with a step:
-u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. An Nk cut's N may have up to three decimals:
-1.5k. LETTERS may be several hyphen-separated
+then alternating steps and cuts (Nk, pp-NAME-Nk or union-Nk), starting with
+a step: u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. An Nk cut's N may have up to three
+decimals: 1.5k. LETTERS may be several hyphen-separated
 groups: u-abc-def. An all-uppercase group is an alias from tmp/sN/aliases.json,
 added with --add-alias: u-OT-def.
 """
@@ -32,7 +32,9 @@ STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-(dict|big))?"
 PPB_RE = re.compile(r"ppb([1-9][0-9]*)?\.pb([1-9][0-9]*)?")
 USED_RE = re.compile(rf"u-({LETTERS})")
 ALIAS_RE = re.compile(r"([A-Z]+)=([a-z]+)")
-CUT_RE = re.compile(r"([1-9][0-9]*(?:\.[0-9]{0,2}[1-9])?|0\.[0-9]{0,2}[1-9])k")
+THOUSANDS = r"([1-9][0-9]*(?:\.[0-9]{0,2}[1-9])?|0\.[0-9]{0,2}[1-9])k"
+CUT_RE = re.compile(THOUSANDS)
+UNION_RE = re.compile(rf"union-{THOUSANDS}")
 PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
 WB_ROWS = 5000000
 Segs = tuple[str, ...]
@@ -144,14 +146,21 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
                 return f"{group} mixes upper and lower case"
     used_dirs, rest = split_segs(segs)
     for index, seg in enumerate(rest):
-        patterns = (CUT_RE, PP_CUT_RE) if index % 2 else (STEP_RE, PPB_RE)
+        patterns = (CUT_RE, PP_CUT_RE, UNION_RE) if index % 2 \
+            else (STEP_RE, PPB_RE)
         if not any(pattern.fullmatch(seg) for pattern in patterns):
             rest = ()
     if not rest:
         return ("want any u-LETTERS directories, then a step (pbN, pbNwb, "
                 "optionally -dict or -big, then -xN, then -LETTERS; or "
-                "ppb[N].pb[M]), then alternating cuts (Nk, pp-NAME-Nk) and "
-                "steps")
+                "ppb[N].pb[M]), then alternating cuts (Nk, pp-NAME-Nk, union-Nk) "
+                "and steps")
+    for index in range(1, len(rest), 2):
+        if UNION_RE.fullmatch(rest[index]) and not (
+                index > 1 and PPB_RE.fullmatch(rest[index - 1])
+                and PP_CUT_RE.fullmatch(rest[index - 2])):
+            return (f"{rest[index]} goes below a ppb step that is below a "
+                    "pp-NAME-Nk cut")
     for index, seg in enumerate(rest[::2]):
         match = STEP_RE.fullmatch(seg)
         if not match:
@@ -171,7 +180,8 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
                     return (f"{seg} can't go below an Nk cut of a "
                             f"-x{pool[4]} root: the cut's pairs can be "
                             "longer than the cap")
-                if at and PP_CUT_RE.fullmatch(rest[at - 1]):
+                if at and (PP_CUT_RE.fullmatch(rest[at - 1])
+                           or UNION_RE.fullmatch(rest[at - 1])):
                     return (f"{seg} can't go below an Nk cut when "
                             f"{rest[at]} is below {rest[at - 1]}: the cut's "
                             f"pairs needn't be among {rest[at - 1]}'s")
@@ -337,8 +347,24 @@ def pp_cut_step(sentence: Sentence, segs: Segs, name: str,
          "cluer/data/cluedata"])]
 
 
+def union_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
+    d = node_dir(sentence, segs)
+    ppb = segs[:-1]
+    cut = segs[:-2]
+    top = d / "cut.tmp"
+    return [Step(
+        segs, ["pairs"], [(cut, "pairs"), (ppb, "pairs.ranked")],
+        f"head -n {count} {node_dir(sentence, cut) / 'pairs'} > {top}\n"
+        f"head -n {count} {node_dir(sentence, ppb) / 'pairs.ranked'} | "
+        f"awk '{{print $2\",\"$3}}' | pcomm {top} - > {d / 'pairs.tmp'}\n"
+        f"rm {top}", [], ["cut.tmp"])]
+
+
 def steps_of(sentence: Sentence, segs: Segs) -> list[Step]:
     last = segs[-1]
+    union = UNION_RE.fullmatch(last)
+    if union:
+        return union_step(sentence, segs, cut_words(union[1]))
     pp_cut = PP_CUT_RE.fullmatch(last)
     if pp_cut:
         return pp_cut_step(sentence, segs, pp_cut[1], int(pp_cut[2]))
@@ -514,7 +540,7 @@ def natural(seg: str) -> list:
             for part in re.split(r"(\d+)", seg)]
 
 
-def status(sentence: Sentence, used: str | None) -> None:
+def status(sentence: Sentence, used: str | None, paths: list[Segs]) -> None:
     planner = Planner(sentence, set())
     nodes = nodes_of(sentence)
     for segs in nodes:
@@ -529,10 +555,14 @@ def status(sentence: Sentence, used: str | None) -> None:
              and used_letters(sentence, node).replace("-", "") == used]
     if used is not None and not shown:
         die(f"no u-LETTERS directories with used letters {used}")
+    for segs in paths:
+        if segs not in tree:
+            die(f"{'/'.join(segs)} has nothing built")
+    shown += paths
     rows: list[tuple] = []
 
     def visible(segs: Segs) -> bool:
-        return used is None or any(
+        return not shown or any(
             segs[:len(node)] == node or node[:len(segs)] == segs
             for node in shown)
 
@@ -727,7 +757,8 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true",
                       help="show the tree and what is stale; with "
-                      "u-LETTERS, only the subtrees with those used letters")
+                      "PATH, only the subtree at PATH; with u-LETTERS, only "
+                      "the subtrees with those used letters")
     mode.add_argument("--report", action="store_true",
                       help="show tmp/sN/targets word ranks per node")
     mode.add_argument("--adopt", action="store_true",
@@ -747,13 +778,15 @@ def main() -> int:
     sentence = load_sentence(args.sentence)
     if args.status:
         used = [USED_RE.fullmatch(path) for path in args.paths]
-        if len(used) > 1 or not all(used):
+        if sum(map(bool, used)) > 1:
             parser.error("--status takes at most one u-LETTERS")
-        letters = resolve(sentence, used[0][1]).replace("-", "") \
-            if used else None
+        letters = next((resolve(sentence, match[1]).replace("-", "")
+                        for match in used if match), None)
         for group in re.findall(r"[A-Z]+", letters or ""):
             die(f"s{sentence.n} has no alias {group}")
-        status(sentence, letters)
+        paths = [parse_path(sentence, path)
+                 for path, match in zip(args.paths, used) if not match]
+        status(sentence, letters, paths)
         return 0
     if args.report:
         report(sentence)

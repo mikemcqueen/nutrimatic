@@ -27,6 +27,20 @@ cuts, starting with a step:
   top 250, with no trailing zero: `1.50k` and `1.0k` are rejected
 * `pp-NAME-Nk`: the top N thousand pairs of the step above it, by the
   `pair-prior` score under the manifest `idx/pp.NAME`
+* `union-Nk`: below a `ppb` step that is directly below a `pp-NAME-Nk` cut,
+  the top N thousand pairs of that cut together with the top N thousand of
+  the `ppb` step's `pairs.ranked`, a pair in both kept once. N is written as
+  for `Nk`:
+
+      pb3-dict/pp-1sq-3k/ppb3.pb/union-1.35k
+
+  The cut and the `ppb` order each rank some correct pairs well that the
+  other ranks low, so the union holds more of them than either alone at the
+  same size (private/ppb-pair-cuts.md). Its `pairs` is the cut's pairs first,
+  then the `ppb` step's that the cut's top N lacks:
+
+      head -n N cut/pairs > cut.tmp
+      head -n N ppb/pairs.ranked | awk '{print $2","$3}' | pcomm cut.tmp -
 
 A root step is the first step of a path: the one directly below `tmp/sN` or
 a `u-LETTERS` directory.
@@ -166,7 +180,13 @@ So a `ppb` step is rejected:
 * when N + M is less than the pool step's pick count: the pool step's `pairs`
   would be missing pairs the step could pick
 * below an `Nk` cut when the pool step is an `-xN` root
-* below an `Nk` cut when the pool step is below a `pp-NAME-Nk` cut
+* below an `Nk` cut when the pool step is below a `pp-NAME-Nk` or
+  `union-Nk` cut
+
+A `union-Nk` cut's pairs are the cut's pairs, which are the `ppb` step's
+prospects, and pairs of the `ppb` step's `pairs.ranked`, so like a `pp` cut
+it holds only pool pairs and prospects, and like one it drops pairs that can
+be in a combination.
 
 ## Files
 
@@ -175,6 +195,7 @@ So a `ppb` step is rejected:
     ppb[N].pb[M]  pairs.ranked  words.ranked  words
     Nk            pairs
     pp-NAME-Nk    pairs
+    union-Nk      pairs
 
 `pairs.ranked` is `COUNT word word`, `words.ranked` is `COUNT word`, `pairs` is
 `word,word`, and `words` is one word per line. A `pbN` step's `pairs` is its
@@ -189,6 +210,8 @@ cut reads the step's `words`, a `pp-NAME-Nk` cut its `pairs.ranked`.
     rebuild-pairs.py -f sN PATH         also rerun the steps of PATH
     rebuild-pairs.py --status sN        the tree: files, line counts, stale steps
     rebuild-pairs.py --status sN u-L    only the subtrees with used letters L
+    rebuild-pairs.py --status sN PATH   only the subtree at PATH, e.g. pb3-dict;
+                                        several PATHs may be given
     rebuild-pairs.py --report sN        each tmp/sN/targets word's rank per node
     rebuild-pairs.py --adopt sN         move the old flat names into the tree
     rebuild-pairs.py sN --add-alias NAME=letters    name a group of used letters
