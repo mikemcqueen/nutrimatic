@@ -1486,6 +1486,14 @@ int run_pair_usage(BagStatsArgs const& args, BagStatsInputs const& inputs) {
     for (size_t position = 0; position < sorted.size(); ++position)
         counts[sorted[position] + (position < pair_bags ? 0 : pair_bags)] =
             by_position[position];
+    __extension__ typedef unsigned __int128 Uses;
+    Uses pair_uses = 0;
+    size_t bag = 0;
+    for (auto const* const rows : {&inputs.pair_rows, &inputs.prospect_rows})
+        for (std::vector<std::string> const& bag_rows : *rows)
+            pair_uses += Uses(bag_rows.size()) * counts[bag++];
+    report(PROGRAM, "%llu rows of pairs",
+           (unsigned long long)(pair_uses / inputs.steps.size()));
     std::vector<BagStatsPairUsage> used;
     rank_pair_usage(args, {&inputs.pair_rows, &inputs.prospect_rows}, counts,
                     &used);

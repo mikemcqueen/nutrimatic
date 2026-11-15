@@ -257,12 +257,16 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"{used_flag(sentence, segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict, *external], gpu=True)
-    pairs = Step(
+    return [rank, pairs_step(sentence, segs), counted_step(sentence, segs),
+            words_step(sentence, segs)]
+
+
+def pairs_step(sentence: Sentence, segs: Segs) -> Step:
+    d = node_dir(sentence, segs)
+    return Step(
         segs, ["pairs"], [(segs, "pairs.ranked")],
         f"awk '{{print $2\",\"$3}}' {d / 'pairs.ranked'} > {d / 'pairs.tmp'}",
         [])
-    return [rank, pairs, counted_step(sentence, segs),
-            words_step(sentence, segs)]
 
 
 def counted_step(sentence: Sentence, segs: Segs) -> Step:
@@ -290,7 +294,8 @@ def prospect_step(sentence: Sentence, segs: Segs, prospects: int,
         f"{letters} {node_dir(sentence, pool) / 'pairs'} {dictionary} "
         f"--progress 15 > {d / 'pairs.ranked.tmp'}",
         [sentence.dict], gpu=True)
-    return [rank, counted_step(sentence, segs), words_step(sentence, segs)]
+    return [rank, pairs_step(sentence, segs), counted_step(sentence, segs),
+            words_step(sentence, segs)]
 
 
 def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:

@@ -192,16 +192,17 @@ be in a combination.
 
     pbN           pairs.ranked  pairs  words.ranked  words
     pbNwb         dump  pairs.ranked  words.ranked  words
-    ppb[N].pb[M]  pairs.ranked  words.ranked  words
+    ppb[N].pb[M]  pairs.ranked  pairs  words.ranked  words
     Nk            pairs
     pp-NAME-Nk    pairs
     union-Nk      pairs
 
 `pairs.ranked` is `COUNT word word`, `words.ranked` is `COUNT word`, `pairs` is
-`word,word`, and `words` is one word per line. A `pbN` step's `pairs` is its
-`pairs.ranked` in the same order without the counts, `awk '{print $2","$3}'`.
-Any `pbN`, `pbNwb` or `ppb[N].pb[M]` step can be cut and fed forward: an `Nk`
-cut reads the step's `words`, a `pp-NAME-Nk` cut its `pairs.ranked`.
+`word,word`, and `words` is one word per line. A `pbN` or `ppb[N].pb[M]`
+step's `pairs` is its `pairs.ranked` in the same order without the counts,
+`awk '{print $2","$3}'`. Any `pbN`, `pbNwb` or `ppb[N].pb[M]` step can be cut
+and fed forward: an `Nk` cut reads the step's `words`, a `pp-NAME-Nk` cut its
+`pairs.ranked`.
 
 ## Commands
 
