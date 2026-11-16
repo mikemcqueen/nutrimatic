@@ -144,7 +144,7 @@ bool check_common_args(std::string_view program, struct optparse* options,
         (out->dictionary_file == "-") + (out->prospects_file == "-") +
         (rank.prior_file == "-");
     if (stdin_inputs > 1) {
-        report(program, "only one of PAIRS, DICT, --pp and --prior can "
+        report(program, "only one of PAIRS-FILE, DICT, --pp and --prior can "
                "be -");
         return false;
     }
@@ -161,9 +161,9 @@ void help_common_options(bool pair_filter) {
     fprintf(stdout,
           "  for each combination of pair letter bags that fits LETTERS, count\n"
           "  the combinations of DICT word bags that fit what is left, and the\n"
-          "  exact pairs (pairs -m%d -x -c) of what is left after each; PAIRS,\n"
-          "  DICT or the --pp FILE may be - for stdin; pairs in\n"
-          "  $WFROOT/%s/no/no.pairs are dropped from PAIRS and --pp\n"
+          "  exact pairs (pairs -m%d -x -c) of what is left after each;\n"
+          "  PAIRS-FILE, DICT or the --pp FILE may be - for stdin; pairs in\n"
+          "  $WFROOT/%s/no/no.pairs are dropped from PAIRS-FILE and --pp\n"
           "\n"
           "  output: %s\n"
           "\noptions:\n", INNER_MIN_WORD_LENGTH, WORKFLOW_CLASSIFIED_PATH,
@@ -180,26 +180,26 @@ void help_common_options(bool pair_filter) {
                     "WORDBAGS",
                     DEFAULT_MIN_WB_LENGTH, int(BAG_STATS_MIN_PAIRS));
     dfs_help_option("--min-pb-len N",
-                    "pb picks only PAIRS bags of at least N letters "
+                    "pb picks only PAIRS-FILE bags of at least N letters "
                     "(default %d)%s", DEFAULT_MIN_PB_LENGTH,
-                    pair_filter ? "; pf counts every PAIRS row" : "");
+                    pair_filter ? "; pf counts every PAIRS-FILE row" : "");
     dfs_help_option("--ss STEPS",
                     "the search sequence, comma-separated: ppb picks a pair "
-                    "bag from the --pp FILE, pb one from PAIRS, wb a word bag "
-                    "from DICT, and p, last and once, counts the exact pairs "
-                    "left%s; order doesn't matter; each row names its ppb "
-                    "and pb picks%s (default %s)",
+                    "bag from the --pp FILE, pb one from PAIRS-FILE, wb a "
+                    "word bag from DICT, and p, last and once, counts the "
+                    "exact pairs left%s; order doesn't matter; each row "
+                    "names its ppb and pb picks%s (default %s)",
                     pair_filter
-                        ? ", or pf instead the PAIRS rows that fit what is "
-                          "left; any number of each"
+                        ? ", or pf instead the PAIRS-FILE rows that fit what "
+                          "is left; any number of each"
                         : "; at least one ppb or pb and one wb",
                     pair_filter
                         ? ", and without them the one row is all of LETTERS"
                         : "",
                     DEFAULT_SEARCH);
     dfs_help_option("--pp FILE",
-                    "the prospective pairs ppb picks from, rows as in PAIRS; "
-                    "their bags are dropped from PAIRS");
+                    "the prospective pairs ppb picks from, rows as in "
+                    "PAIRS-FILE; their bags are dropped from PAIRS-FILE");
     dfs_help_option("--threads N",
                     "count on N threads, at most the hardware threads, 0 for "
                     "all of them (default: 0)");

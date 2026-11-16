@@ -60,7 +60,7 @@ void usage(std::string_view program, FILE* out) {
           "  options, among the dump's rows only, and print them sorted;\n"
           "  equal rows keep their order\n"
           "\n"
-          "  the pick bags are rebuilt from the PAIRS and --pp files the\n"
+          "  the pick bags are rebuilt from the PAIRS-FILE and --pp files the\n"
           "  header names, or --pp's, less the classified NO pairs of the dump's\n"
           "  sentence; a row whose pick has no pairs left is dropped, and\n"
           "  the others' PAIR and PAIRS are rebuilt from their bags\n"
@@ -331,7 +331,7 @@ bool load_dump(Args const& args, Dump* dump) {
         if (!check_rank_args(PROGRAM, args.rank, dump->search)) return false;
         bool const pick_pairs = dump->search.pairs > 0;
         if (pick_pairs && h.pairs == "-") {
-            report(PROGRAM, "the dump's PAIRS was standard input; can't "
+            report(PROGRAM, "the dump's PAIRS-FILE was standard input; can't "
                    "rebuild its bags");
             return false;
         }

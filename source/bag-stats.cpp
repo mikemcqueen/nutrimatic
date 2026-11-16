@@ -40,17 +40,17 @@ void usage(std::string_view program, FILE* out) {
             "       [--prior FILE | --no-prior |\n"
             "        [--p1 INDEX] [--clues CLUEDATA] [--prior-weights SPEC]]\n"
             "       [--top-segments] [--exact]\n"
-            "       LETTERS PAIRS DICT\n"
+            "       LETTERS PAIRS-FILE DICT\n"
             "       %.*s --ss [wb,...]p|pf [-u LETTERS]\n"
             "       [-s N | --no-nopairs] [--min-wb-len N] [--threads N]\n"
             "       [--exact] [--completions N | --all]\n"
-            "       LETTERS PAIRS DICT\n"
+            "       LETTERS PAIRS-FILE DICT\n"
             "       %.*s --leftovers [--hll] [--unique] --ss pb[,pb...]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
-            "       [--threads N] [--progress N] LETTERS PAIRS DICT\n"
+            "       [--threads N] [--progress N] LETTERS PAIRS-FILE DICT\n"
             "       %.*s --unique [--count] --ss pb[,pb...] [-n N]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
-            "       [--threads N] [--progress N] LETTERS PAIRS DICT\n",
+            "       [--threads N] [--progress N] LETTERS PAIRS-FILE DICT\n",
             SV_ARG(program),
             SV_ARG(program),
             SV_ARG(program),
@@ -68,28 +68,28 @@ void usage(std::string_view program, FILE* out) {
                     "DICT order, without pick steps only those with pairs, "
                     "or SOLO: each one's PC, SOLO when it leaves nothing, "
                     "and its word bags, each as its DICT spellings, or with "
-                    "a last pf and no wb steps each PAIRS bag pf counts, as "
-                    "its rows; --score without SORT options prints the row "
-                    "without its rank, counted from what its picks leave "
-                    "alone");
+                    "a last pf and no wb steps each PAIRS-FILE bag pf "
+                    "counts, as its rows; --score without SORT options "
+                    "prints the row without its rank, counted from what its "
+                    "picks leave alone");
     dfs_help_option("--all",
                     "--completions of every completion with pairs, or SOLO");
     dfs_help_option("--leftovers",
                     "with --ss of pb steps alone, count the combinations "
                     "that fit, by how many picks they make, and those of "
-                    "every pb step, their PAIRS rows and their distinct "
+                    "every pb step, their PAIRS-FILE rows and their distinct "
                     "leftovers by how many letters they leave");
     dfs_help_option("--hll, --hyper-log-log",
                     "with --leftovers, estimate the distinct leftovers by "
                     "HyperLogLog, within about 1%%, in little memory, as "
                     "LEFTOVERS_HLL");
     dfs_help_option("--unique",
-                    "with --leftovers, also count the distinct PAIRS bags "
-                    "the combinations pick, as UNIQUE_BAGS, and the PAIRS "
+                    "with --leftovers, also count the distinct PAIRS-FILE bags "
+                    "the combinations pick, as UNIQUE_BAGS, and the PAIRS-FILE "
                     "rows those bags hold, as UNIQUE_PAIRS, by how many "
                     "picks they make, by how many letters they leave, and "
                     "in the all row of any length; without it, with --ss "
-                    "of pb steps alone, print each PAIRS row the "
+                    "of pb steps alone, print each PAIRS-FILE row the "
                     "combinations use as left,right, by how many pair "
                     "combinations it's in, most first, ties by pair, the "
                     "first N with -n N");
@@ -99,9 +99,9 @@ void usage(std::string_view program, FILE* out) {
                     "it's in");
     dfs_help_option("--uc, --unique-count", "--unique --count");
     dfs_help_option("--exact",
-                    "with a last pf, count only the PAIRS rows that use all "
-                    "of what's left, as wb and pb steps before it need; a "
-                    "last p counts only those already");
+                    "with a last pf, count only the PAIRS-FILE rows that use "
+                    "all of what's left, as wb and pb steps before it need; "
+                    "a last p counts only those already");
     help_common_tail();
 }
 

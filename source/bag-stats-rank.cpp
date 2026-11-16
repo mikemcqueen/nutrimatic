@@ -198,7 +198,7 @@ void help_rank_output_options() {
                     "and TERM with that Q, the other picks' Q their best");
     dfs_help_option("--best-pairs appear|lead",
                     "with -n, print the -n rows' pair picks instead, each "
-                    "once as PAIRS writes it, at the first row it is in "
+                    "once as PAIRS-FILE writes it, at the first row it is in "
                     "(appear) or leads, its own term sqrt(P) * Q^(3/4) the "
                     "smallest of the row's, the one in its key (lead, only "
                     "with --by-pick)");
@@ -660,7 +660,8 @@ bool score_picks(std::string_view program,
             report(program, "--score %s isn't two words whose bag is "
                    "in %s and fits the letters", name.c_str(),
                    i < prospects
-                        ? "--pp" : "PAIRS, of at least --min-pb-len letters,");
+                        ? "--pp"
+                        : "PAIRS-FILE, of at least --min-pb-len letters,");
             return false;
         }
         picks[step] = size_t(found - bags.begin());

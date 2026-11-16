@@ -32,8 +32,8 @@ struct Args {
 };
 
 void usage(std::string_view program, FILE* out) {
-    fprintf(out, "usage: %.*s [-s N] [--pairs PAIRS] [--p1 INDEX] [--pm P] "
-            "[-m N]\n       [-x N] [-d FILE] [--threads N]\n",
+    fprintf(out, "usage: %.*s [-s N] [--pairs PAIRS-FILE] [--p1 INDEX] "
+            "[--pm P]\n       [-m N] [-x N] [-d FILE] [--threads N]\n",
             SV_ARG(program));
     if (out != stdout) return;
 
@@ -49,8 +49,8 @@ void usage(std::string_view program, FILE* out) {
                     "sentence N, from 1 to %d: force in %s/sN.pairs; the "
                     "pair file defaults to %s/pairs.sN",
                     WORKFLOW_SENTENCES, IDX_PATH, IDX_PATH);
-    dfs_help_option("--pairs PAIRS",
-                    "read PAIRS as the pair file, overriding the default "
+    dfs_help_option("--pairs PAIRS-FILE",
+                    "read PAIRS-FILE as the pair file, overriding the default "
                     "of -s");
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
@@ -66,7 +66,8 @@ void usage(std::string_view program, FILE* out) {
                     "keep pairs whose words are both in FILE, warning "
                     "about each word of a forced pair that isn't");
     dfs_help_option("--threads N",
-                    "read PAIRS on N threads, 0 for all of them (default 0)");
+                    "read PAIRS-FILE on N threads, 0 for all of them "
+                    "(default 0)");
     dfs_help_option("-h, --help", "show this help");
 }
 

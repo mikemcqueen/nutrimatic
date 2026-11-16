@@ -21,10 +21,10 @@ struct FirstOccurrence {
 
 static void usage(std::string_view program) {
   fprintf(stdout,
-      "usage: %.*s PAIRS\n"
-      "  print each pair of PAIRS that also appears in the opposite word\n"
+      "usage: %.*s PAIRS-FILE\n"
+      "  print each pair of PAIRS-FILE that also appears in the opposite word\n"
       "  order, once per pair, spelled as its second occurrence wrote it\n"
-      "  PAIRS  word,word lines, as in best.pairs\n"
+      "  PAIRS-FILE  word,word lines, as in best.pairs\n"
       "  stderr gets N/TOTAL duplicate pairs found, where TOTAL counts\n"
       "  distinct unordered pairs\n",
       SV_ARG(program));
@@ -51,7 +51,7 @@ int main(int argc, char* argv[]) {
   }
 
   if (pairs_path == NULL) {
-    report(PROGRAM, "no PAIRS file");
+    report(PROGRAM, "no PAIRS-FILE");
     usage(argv[0]);
     return 2;
   }

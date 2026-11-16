@@ -54,13 +54,13 @@ struct ScoredRow {
 void usage(std::string_view program, FILE* out) {
     fprintf(out, "usage: %.*s [--p1 INDEX] [--clues CLUEDATA]\n"
             "       [--prior-weights SPEC | --manifest FILE | --features]\n"
-            "       [--ranked [--as-pairs] [-n N]] PAIRS...\n",
+            "       [--ranked [--as-pairs] [-n N]] PAIRS-FILE...\n",
             SV_ARG(program));
     if (out != stdout) return;
 
-    fputs("  print \"SCORE word,word\" for each distinct pair of PAIRS, in\n"
-          "  order, SCORE as --prior-weights weighs it; PAIRS may be - for\n"
-          "  stdin\n"
+    fputs("  print \"SCORE word,word\" for each distinct pair of the\n"
+          "  PAIRS-FILEs, in order, SCORE as --prior-weights weighs it;\n"
+          "  PAIRS-FILE may be - for stdin\n"
           "\noptions:\n", stdout);
     dfs_help_option("--p1 INDEX",
                     "look pairs up in INDEX, as make-p1-index writes it "
@@ -89,7 +89,7 @@ void usage(std::string_view program, FILE* out) {
                     "of each word order (-1 without a verdict) and the "
                     "clue counts");
     dfs_help_option("--ranked",
-                    "the one PAIRS file holds COUNT word word lines; print "
+                    "the one PAIRS-FILE holds COUNT word word lines; print "
                     "\"SCORE word word\", SCORE being COUNT times the prior, "
                     "rounded, by descending score then pair; a pair listed "
                     "twice, in either order, or a negative weight is an "

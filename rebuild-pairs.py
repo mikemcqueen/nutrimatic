@@ -2,9 +2,11 @@
 """Builds the new-pairs workflow's intermediate files under tmp/sN.
 
 See plans/rebuild-pairs.md. A path is any number of u-LETTERS directories,
-then alternating steps and cuts (Nk, pp-NAME-Nk or union-Nk), starting with
-a step: u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb. An Nk cut's N may have up to three
-decimals: 1.5k. LETTERS may be several hyphen-separated
+then a step, then any number of links, each of which is cuts followed by a
+step, and optionally cuts at the end. The cuts between two steps are Nk,
+pp-NAME-Nk, Nk/pp-NAME-Nk or union-Nk: u-abc/pb3/2k/pb3/pp-1sq-5k/pb2wb or
+pb3-dict/pp-1sq-3k/ppb3.pb/2k/pp-1sq-3k/ppb2.pb2. An Nk cut's N may have up
+to three decimals: 1.5k. LETTERS may be several hyphen-separated
 groups: u-abc-def. An all-uppercase group is an alias from tmp/sN/aliases.json,
 added with --add-alias: u-OT-def.
 """
@@ -36,6 +38,10 @@ THOUSANDS = r"([1-9][0-9]*(?:\.[0-9]{0,2}[1-9])?|0\.[0-9]{0,2}[1-9])k"
 CUT_RE = re.compile(THOUSANDS)
 UNION_RE = re.compile(rf"union-{THOUSANDS}")
 PP_CUT_RE = re.compile(r"pp-([0-9a-z]+)-([1-9][0-9]*)k")
+KINDS = ((STEP_RE, "pb"), (PPB_RE, "ppb"), (CUT_RE, "word"),
+         (PP_CUT_RE, "pp"), (UNION_RE, "union"))
+STEP_KINDS = ("pb", "ppb")
+PAIR_KINDS = ("pp", "union")
 WB_ROWS = 5000000
 Segs = tuple[str, ...]
 
@@ -92,11 +98,16 @@ def is_root(segs: Segs) -> bool:
     return len(split_segs(segs)[1]) == 1
 
 
-def pool_of(rest: Segs) -> int | None:
-    for index in range(len(rest) - 3, -1, -2):
-        if STEP_RE.fullmatch(rest[index]):
+def kind_of(seg: str) -> str | None:
+    return next((kind for pattern, kind in KINDS
+                 if pattern.fullmatch(seg)), None)
+
+
+def pairs_node(rest: Segs) -> int:
+    for index in range(len(rest) - 2, -1, -1):
+        if STEP_RE.fullmatch(rest[index]) or CUT_RE.fullmatch(rest[index]):
             return index
-    return None
+    raise AssertionError("a path starts with a step")
 
 
 def cut_words(thousands: str) -> int:
@@ -145,47 +156,47 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
                     and not re.fullmatch(GROUP, group):
                 return f"{group} mixes upper and lower case"
     used_dirs, rest = split_segs(segs)
-    for index, seg in enumerate(rest):
-        patterns = (CUT_RE, PP_CUT_RE, UNION_RE) if index % 2 \
-            else (STEP_RE, PPB_RE)
-        if not any(pattern.fullmatch(seg) for pattern in patterns):
-            rest = ()
-    if not rest:
+    kinds = [kind_of(seg) for seg in rest]
+    if not rest or None in kinds or kinds[0] not in STEP_KINDS:
         return ("want any u-LETTERS directories, then a step (pbN, pbNwb, "
                 "optionally -dict or -big, then -xN, then -LETTERS; or "
-                "ppb[N].pb[M]), then alternating cuts (Nk, pp-NAME-Nk, union-Nk) "
-                "and steps")
-    for index in range(1, len(rest), 2):
-        if UNION_RE.fullmatch(rest[index]) and not (
-                index > 1 and PPB_RE.fullmatch(rest[index - 1])
-                and PP_CUT_RE.fullmatch(rest[index - 2])):
-            return (f"{rest[index]} goes below a ppb step that is below a "
+                "ppb[N].pb[M]), then links of cuts (Nk, pp-NAME-Nk, "
+                "Nk/pp-NAME-Nk or union-Nk) followed by a step, and "
+                "optionally cuts at the end")
+    for index in range(1, len(rest)):
+        seg, kind, above = rest[index], kinds[index], kinds[index - 1]
+        if kind in STEP_KINDS and above in STEP_KINDS:
+            return f"{seg} goes directly below {rest[index - 1]}: want a cut"
+        if kind == "word" and above not in STEP_KINDS:
+            return (f"{seg} can't go below {rest[index - 1]}: an Nk cut goes "
+                    "directly below a step")
+        if kind in PAIR_KINDS and above in PAIR_KINDS:
+            return (f"{seg} can't go below {rest[index - 1]}: a pair cut "
+                    "goes below a step or an Nk cut")
+        if kind == "union" and not (
+                index > 1 and above == "ppb" and kinds[index - 2] == "pp"):
+            return (f"{seg} goes below a ppb step that is below a "
                     "pp-NAME-Nk cut")
-    for index, seg in enumerate(rest[::2]):
-        match = STEP_RE.fullmatch(seg)
-        if not match:
-            at = pool_of(rest[:2 * index + 1])
-            pool = None if at is None else STEP_RE.fullmatch(rest[at])
-            if not pool or pool[2]:
-                return (f"{seg} goes below a cut of a pbN step or of a ppb "
-                        "step below one")
+    for index, seg in enumerate(rest):
+        if kinds[index] not in STEP_KINDS:
+            continue
+        if kinds[index] == "ppb":
+            if kinds[index - 1] not in PAIR_KINDS:
+                return (f"{seg} goes directly below a pp-NAME-Nk or "
+                        "union-Nk cut")
+            at = pairs_node(rest[:index + 1])
+            pool = STEP_RE.fullmatch(rest[at])
+            if pool and pool[2]:
+                return (f"{seg}'s nearest pbN step or Nk cut above is "
+                        f"{rest[at]}, a pbNwb step")
             if seg != canonical(seg):
                 return f"{seg} is spelled {canonical(seg)}"
             ppb = PPB_RE.fullmatch(seg)
-            if int(ppb[1] or 1) + int(ppb[2] or 1) < int(pool[1]):
+            if pool and int(ppb[1] or 1) + int(ppb[2] or 1) < int(pool[1]):
                 return (f"{seg} picks fewer pairs than {rest[at]}, whose "
                         "pairs file would be missing pairs it could pick")
-            if CUT_RE.fullmatch(rest[2 * index - 1]):
-                if pool[4]:
-                    return (f"{seg} can't go below an Nk cut of a "
-                            f"-x{pool[4]} root: the cut's pairs can be "
-                            "longer than the cap")
-                if at and (PP_CUT_RE.fullmatch(rest[at - 1])
-                           or UNION_RE.fullmatch(rest[at - 1])):
-                    return (f"{seg} can't go below an Nk cut when "
-                            f"{rest[at]} is below {rest[at - 1]}: the cut's "
-                            f"pairs needn't be among {rest[at - 1]}'s")
             continue
+        match = STEP_RE.fullmatch(seg)
         used = match[5]
         if match[3] and index:
             return f"-{match[3]} is only for a root step"
@@ -282,7 +293,7 @@ def prospect_step(sentence: Sentence, segs: Segs, prospects: int,
     d = node_dir(sentence, segs)
     cut = segs[:-1]
     used_dirs, rest = split_segs(segs)
-    pool = (*used_dirs, *rest[:pool_of(rest) + 1])
+    pool = (*used_dirs, *rest[:pairs_node(rest) + 1])
     ss = ",".join(["ppb"] * prospects + ["pb"] * count)
     letters = shlex.quote(sentence.letters)
     dictionary = shlex.quote(sentence.dict)
@@ -341,15 +352,23 @@ def pp_cut_step(sentence: Sentence, segs: Segs, name: str,
                 thousands: int) -> list[Step]:
     d = node_dir(sentence, segs)
     parent = segs[:-1]
-    ranked = node_dir(sentence, parent) / "pairs.ranked"
     manifest = f"idx/pp.{name}"
+    prior = (f"pair-prior --ranked --manifest {manifest} --as-pairs "
+             f"-n {thousands * 1000} - > {d / 'pairs.tmp'}")
+    external = [manifest, "idx/p1.idx", "cluer/data/cluedata"]
+    if kind_of(parent[-1]) != "word":
+        ranked = node_dir(sentence, parent) / "pairs.ranked"
+        return [Step(
+            segs, ["pairs"], [(parent, "pairs.ranked")],
+            f"pfilter {sentence.no_pairs_flag} --no-dict -x0 "
+            f"--ranked {ranked} | {prior}", external)]
+    step = segs[:-2]
+    pairs = node_dir(sentence, parent) / "pairs"
+    ranked = node_dir(sentence, step) / "pairs.ranked"
     return [Step(
-        segs, ["pairs"], [(parent, "pairs.ranked")],
-        f"pfilter {sentence.no_pairs_flag} --no-dict -x0 --ranked {ranked} | "
-        f"pair-prior --ranked --manifest {manifest} --as-pairs "
-        f"-n {thousands * 1000} - > {d / 'pairs.tmp'}",
-        [manifest, "idx/p1.idx",
-         "cluer/data/cluedata"])]
+        segs, ["pairs"], [(parent, "pairs"), (step, "pairs.ranked")],
+        f"awk 'NR==FNR{{k[$1];next}} ($2\",\"$3) in k' {pairs} {ranked} | "
+        f"{prior}", external)]
 
 
 def union_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:

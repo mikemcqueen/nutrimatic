@@ -67,13 +67,13 @@ void usage(std::string_view program, FILE* out) {
             "       [--prior FILE | --no-prior |\n"
             "        [--p1 INDEX] [--clues CLUEDATA] [--prior-weights SPEC]]\n"
             "       [--top-segments]\n"
-            "       LETTERS PAIRS DICT\n"
+            "       LETTERS PAIRS-FILE DICT\n"
             "       %.*s --leftovers --hll --ss pb[,pb...]\n"
             "       [-u LETTERS] [-s N | --no-nopairs] [--min-pb-len N]\n"
-            "       [--progress N] LETTERS PAIRS DICT\n"
+            "       [--progress N] LETTERS PAIRS-FILE DICT\n"
             "       %.*s --unique [--count] --ss [ppb,...][pb,...] [-n N]\n"
             "       [--pp FILE] [-u LETTERS] [-s N | --no-nopairs]\n"
-            "       [--min-pb-len N] [--progress N] LETTERS PAIRS DICT\n",
+            "       [--min-pb-len N] [--progress N] LETTERS PAIRS-FILE DICT\n",
             SV_ARG(program), SV_ARG(program), SV_ARG(program));
     if (out != stdout) return;
 
@@ -85,17 +85,18 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("--leftovers",
                     "with --ss of pb steps alone and --hll, count the "
                     "combinations that fit, by how many picks they make, "
-                    "and those of every pb step, their PAIRS rows and their "
-                    "distinct leftovers by how many letters they leave, all "
-                    "on the GPU");
+                    "and those of every pb step, their PAIRS-FILE rows and "
+                    "their distinct leftovers by how many letters they "
+                    "leave, all on the GPU");
     dfs_help_option("--hll, --hyper-log-log",
                     "with --leftovers, estimate the distinct leftovers by "
                     "HyperLogLog, within about 1%%, as LEFTOVERS_HLL");
     dfs_help_option("--unique",
-                    "with --ss of ppb and pb steps alone, print each PAIRS "
-                    "and --pp row the combinations use as left,right, by how "
-                    "many pair combinations it's in, most first, ties by "
-                    "pair, the first N with -n N, all on the GPU");
+                    "with --ss of ppb and pb steps alone, print each "
+                    "PAIRS-FILE and --pp row the combinations use as "
+                    "left,right, by how many pair combinations it's in, "
+                    "most first, ties by pair, the first N with -n N, all "
+                    "on the GPU");
     dfs_help_option("--count",
                     "with --unique, print each row as \"COUNT left right\", "
                     "COUNT the pair combinations it's in");
