@@ -40,6 +40,16 @@ struct CluePairCounts {
     uint32_t clues_b = 0;
 };
 
+// How answers() matches a pair's two parts against a clue, as cluer's
+// query_index.py -e and -j do.
+enum class ClueMatch {
+    // The whole clue, ignoring case, is the two parts in either order joined
+    // by one space or hyphen.
+    exact,
+    // The two parts' words are consecutive clue words, in either order.
+    adjacent,
+};
+
 // cluer's whole-word clue index (../words/cluer/index.py), as build_index.py
 // writes it to the `index` directory beside its cluedata. Words are compared
 // as the index sees them: lower case, apostrophes deleted.
@@ -51,6 +61,12 @@ class ClueIndex {
     bool open(std::filesystem::path const& cluedata, std::string* error);
 
     CluePairCounts pair(std::string_view a, std::string_view b) const;
+
+    // Sets `*out` to the distinct answers, upper-cased, of the clues where
+    // `a` and `b` match as `match` says. Each part is one or more lower-case
+    // words separated by single spaces.
+    void answers(std::string_view a, std::string_view b, ClueMatch match,
+                 std::vector<std::string_view>* out) const;
 
   private:
     // The sorted clue ids containing `word`, empty when no clue has it.
@@ -72,6 +88,16 @@ class ClueIndex {
     std::unordered_map<std::string, uint32_t> answers_;
     std::vector<uint32_t> answer_start_;
     std::vector<uint32_t> answer_clues_;
+    // Each distinct answer, by its answers_ number.
+    std::vector<std::string> answer_names_;
+    // Clue c's answer references are ref_start_[c] to ref_start_[c + 1] in
+    // refs_, each an answers.txt line number shifted left one bit; group_
+    // maps that line to its answers_ number.
+    MappedFile ref_start_file_;
+    MappedFile refs_file_;
+    NpyArray<uint32_t> ref_start_;
+    NpyArray<uint32_t> refs_;
+    std::vector<uint32_t> group_;
 };
 
 #endif

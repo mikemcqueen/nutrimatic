@@ -84,6 +84,32 @@ void intersect(NpyArray<uint32_t> small, NpyArray<uint32_t> big,
     }
 }
 
+std::string lower(std::string_view text) {
+    std::string out(text);
+    for (char& c : out)
+        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    return out;
+}
+
+// `part`'s words, split on single spaces, appended to `out`.
+void append_words(std::string_view part,
+                  std::vector<std::string_view>* out) {
+    for (size_t i = 0;;) {
+        size_t const end = std::min(part.find(' ', i), part.size());
+        out->push_back(part.substr(i, end - i));
+        if (end == part.size()) return;
+        i = end + 1;
+    }
+}
+
+bool contains_run(std::vector<std::string> const& words,
+                  std::vector<std::string_view> const& run) {
+    for (size_t i = 0; i + run.size() <= words.size(); ++i)
+        if (std::equal(run.begin(), run.end(), words.begin() + i))
+            return true;
+    return false;
+}
+
 }  // namespace
 
 bool ClueIndex::open(std::filesystem::path const& cluedata,
@@ -111,17 +137,14 @@ bool ClueIndex::open(std::filesystem::path const& cluedata,
         return false;
     }
 
-    NpyArray<uint32_t> ref_start;
-    NpyArray<uint32_t> refs;
-    MappedFile ref_start_file;
-    MappedFile refs_file;
     if (!data_.open(cluedata, error) ||
         !open_array(dir, "postings.npy", &postings_file_, &postings_, error) ||
         !open_array(dir, "postings_start.npy", &postings_start_file_,
                     &postings_start_, error) ||
         !open_array(dir, "clue_off.npy", &clue_off_file_, &clue_off_, error) ||
-        !open_array(dir, "ref_start.npy", &ref_start_file, &ref_start, error) ||
-        !open_array(dir, "refs.npy", &refs_file, &refs, error))
+        !open_array(dir, "ref_start.npy", &ref_start_file_, &ref_start_,
+                    error) ||
+        !open_array(dir, "refs.npy", &refs_file_, &refs_, error))
         return false;
 
     std::string tokens;
@@ -140,15 +163,15 @@ bool ClueIndex::open(std::filesystem::path const& cluedata,
         return false;
     };
     if (words_.size() + 1 != postings_start_.size ||
-        ref_start.size != clue_off_.size + 1 ||
-        postings_start_[0] != 0 || ref_start[0] != 0 ||
+        ref_start_.size != clue_off_.size + 1 ||
+        postings_start_[0] != 0 || ref_start_[0] != 0 ||
         postings_start_[words_.size()] != postings_.size ||
-        ref_start[clue_off_.size] != refs.size)
+        ref_start_[clue_off_.size] != refs_.size)
         return disagree();
     for (size_t i = 0; i < words_.size(); ++i)
         if (postings_start_[i] > postings_start_[i + 1]) return disagree();
     for (size_t c = 0; c < clue_off_.size; ++c)
-        if (ref_start[c] > ref_start[c + 1] ||
+        if (ref_start_[c] > ref_start_[c + 1] ||
             clue_off_[c] >= data_.size() ||
             clue_off_[c] + 1 + uint8_t(data_.data()[clue_off_[c]]) >
                 data_.size())
@@ -156,31 +179,33 @@ bool ClueIndex::open(std::filesystem::path const& cluedata,
     for (uint32_t clue : postings_)
         if (clue >= clue_off_.size) return disagree();
 
-    std::vector<uint32_t> group;
+    group_.clear();
     answers_.clear();
+    answer_names_.clear();
     for (size_t i = 0; i < answers.size();) {
         size_t const end = std::min(answers.find('\n', i), answers.size());
         auto const inserted = answers_.emplace(
             upper(std::string_view(answers).substr(i, end - i)),
             uint32_t(answers_.size()));
-        group.push_back(inserted.first->second);
+        if (inserted.second) answer_names_.push_back(inserted.first->first);
+        group_.push_back(inserted.first->second);
         i = end + 1;
     }
     answer_start_.assign(answers_.size() + 1, 0);
-    for (uint32_t ref : refs) {
-        if ((ref >> 1) >= group.size()) {
+    for (uint32_t ref : refs_) {
+        if ((ref >> 1) >= group_.size()) {
             *error = dir.string() + ": a reference past the answers";
             return false;
         }
-        ++answer_start_[group[ref >> 1] + 1];
+        ++answer_start_[group_[ref >> 1] + 1];
     }
     for (size_t i = 1; i < answer_start_.size(); ++i)
         answer_start_[i] += answer_start_[i - 1];
     std::vector<uint32_t> next(answer_start_.begin(), answer_start_.end() - 1);
-    answer_clues_.assign(refs.size, 0);
+    answer_clues_.assign(refs_.size, 0);
     for (uint32_t c = 0; c < clue_off_.size; ++c)
-        for (uint32_t r = ref_start[c]; r < ref_start[c + 1]; ++r)
-            answer_clues_[next[group[refs[r] >> 1]]++] = c;
+        for (uint32_t r = ref_start_[c]; r < ref_start_[c + 1]; ++r)
+            answer_clues_[next[group_[refs_[r] >> 1]]++] = c;
     std::vector<uint32_t> compact;
     std::vector<uint32_t> starts{0};
     for (size_t a = 0; a + 1 < answer_start_.size(); ++a) {
@@ -267,4 +292,59 @@ CluePairCounts ClueIndex::pair(std::string_view a, std::string_view b) const {
             out.min_words = uint32_t(words.size());
     }
     return out;
+}
+
+void ClueIndex::answers(std::string_view a, std::string_view b,
+                        ClueMatch match,
+                        std::vector<std::string_view>* out) const {
+    out->clear();
+    std::vector<std::string_view> ab;
+    append_words(a, &ab);
+    size_t const a_words = ab.size();
+    append_words(b, &ab);
+    std::vector<std::string_view> ba(ab.begin() + a_words, ab.end());
+    ba.insert(ba.end(), ab.begin(), ab.begin() + a_words);
+
+    std::vector<NpyArray<uint32_t>> lists;
+    for (std::string_view word : ab) {
+        NpyArray<uint32_t> const list = postings(word);
+        if (list.size == 0) return;
+        lists.push_back(list);
+    }
+    std::sort(lists.begin(), lists.end(),
+              [](NpyArray<uint32_t> x, NpyArray<uint32_t> y) {
+                  return x.size < y.size;
+              });
+    std::vector<uint32_t> shared(lists[0].begin(), lists[0].end());
+    std::vector<uint32_t> next;
+    for (size_t i = 1; i < lists.size() && !shared.empty(); ++i) {
+        intersect({shared.data(), shared.size()}, lists[i], &next);
+        shared.swap(next);
+    }
+
+    std::string const joined[] = {
+        std::string(a) + ' ' + std::string(b),
+        std::string(a) + '-' + std::string(b),
+        std::string(b) + ' ' + std::string(a),
+        std::string(b) + '-' + std::string(a),
+    };
+    std::vector<std::string> words;
+    std::vector<uint32_t> found;
+    for (uint32_t id : shared) {
+        if (match == ClueMatch::exact) {
+            std::string const text = lower(clue(id));
+            if (std::find(std::begin(joined), std::end(joined), text) ==
+                std::end(joined))
+                continue;
+        } else {
+            clue_words(clue(id), &words);
+            if (!contains_run(words, ab) && !contains_run(words, ba))
+                continue;
+        }
+        for (uint32_t r = ref_start_[id]; r < ref_start_[id + 1]; ++r)
+            found.push_back(group_[refs_[r] >> 1]);
+    }
+    std::sort(found.begin(), found.end());
+    found.erase(std::unique(found.begin(), found.end()), found.end());
+    for (uint32_t answer : found) out->push_back(answer_names_[answer]);
 }

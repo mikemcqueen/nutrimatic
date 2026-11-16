@@ -12,12 +12,15 @@
 #include "dfs-cli-args.h"
 
 // What each line of a row file holds: word,word; that or a single word;
-// COUNT word word; a single word; or COUNT word. `detect` takes the format
+// COUNT word word; a single word; COUNT word; or phrase,phrase, where each
+// side is one or more words that keep single spaces between them, as cluer's
+// clean_words() splits text: lower case, apostrophes deleted, and any other
+// run of characters but a-z and 0-9 one space. `detect` takes the format
 // from a file's first line among word,word, word, COUNT word word and
 // COUNT word. Under `words`, `ranked_words` and `detect`, a line of any other
 // format is an error.
 enum class RowFormat {
-  pairs, pairs_or_words, ranked, words, ranked_words, detect
+  pairs, pairs_or_words, ranked, words, ranked_words, phrase_pairs, detect
 };
 
 // Calls `read` on `path` opened for reading, or on standard input when `path`

@@ -32,14 +32,16 @@ constexpr char PROGRAM[] = "bag-stats-sort";
 constexpr int OPT_PAIR_BAG_LENGTH = 256;
 constexpr int OPT_SEARCH = 257;
 constexpr int OPT_PROSPECTS = 258;
+constexpr int OPT_PAIRS = 259;
 
 struct Args {
     int sentence = CLASSIFIED_NO_SENTENCE;
     RankArgs rank;
     int pair_bag_length = -1;
-    // --ss and --pp, when given.
+    // --ss, --pp and --pairs, when given.
     std::optional<std::string> search;
     std::optional<std::filesystem::path> prospects_file;
+    std::optional<std::filesystem::path> pairs_file;
     std::filesystem::path input_file = "-";
 };
 
@@ -51,7 +53,7 @@ void usage(std::string_view program, FILE* out) {
             "       [--prior FILE | --no-prior |\n"
             "        [--p1 INDEX] [--clues CLUEDATA] [--prior-weights SPEC]]\n"
             "       [--top-segments] [--pb-len N] [--ss STEPS] [--pp FILE]\n"
-            "       [FILE|-]\n",
+            "       [--pairs PAIRS-FILE] [FILE|-]\n",
             SV_ARG(program));
     if (out != stdout) return;
 
@@ -61,9 +63,10 @@ void usage(std::string_view program, FILE* out) {
           "  equal rows keep their order\n"
           "\n"
           "  the pick bags are rebuilt from the PAIRS-FILE and --pp files the\n"
-          "  header names, or --pp's, less the classified NO pairs of the dump's\n"
-          "  sentence; a row whose pick has no pairs left is dropped, and\n"
-          "  the others' PAIR and PAIRS are rebuilt from their bags\n"
+          "  header names, or --pairs' and --pp's, less the classified NO\n"
+          "  pairs of the dump's sentence; a row whose pick has no pairs left\n"
+          "  is dropped, and the others' PAIR and PAIRS are rebuilt from\n"
+          "  their bags\n"
           "\n"
           "  with more than one sort option, each row's value under each\n"
           "  option becomes its percentile among all rows, and rows sort by\n"
@@ -87,6 +90,9 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("--pp FILE",
                     "the prospective pairs the ppb picks are from, in place "
                     "of the dump's");
+    dfs_help_option("--pairs PAIRS-FILE",
+                    "the pairs the pb picks are from, in place of the "
+                    "dump's");
     dfs_help_option("-h, --help", "show this help");
     fputs("\nSORT options, at least one:\n", stdout);
     help_rank_sort_options();
@@ -99,6 +105,7 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "pb-len", OPT_PAIR_BAG_LENGTH, OPTPARSE_REQUIRED },
         { "ss", OPT_SEARCH, OPTPARSE_REQUIRED },
         { "pp", OPT_PROSPECTS, OPTPARSE_REQUIRED },
+        { "pairs", OPT_PAIRS, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -128,6 +135,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case OPT_PROSPECTS:
             out->prospects_file = options.optarg;
             break;
+          case OPT_PAIRS:
+            out->pairs_file = options.optarg;
+            break;
           case 'h':
             *help = true;
             return true;
@@ -144,8 +154,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     char const* const input = optparse_arg(&options);
     if (input != NULL) out->input_file = input;
     if ((out->input_file == "-") + (out->rank.prior_file == "-") +
-        (out->prospects_file == "-") > 1) {
-        report(PROGRAM, "only one of FILE, --prior and --pp can be -");
+        (out->prospects_file == "-") + (out->pairs_file == "-") > 1) {
+        report(PROGRAM, "only one of FILE, --prior, --pp and --pairs can be -");
         return false;
     }
     return optparse_arg(&options) == NULL;
@@ -330,9 +340,10 @@ bool load_dump(Args const& args, Dump* dump) {
         }
         if (!check_rank_args(PROGRAM, args.rank, dump->search)) return false;
         bool const pick_pairs = dump->search.pairs > 0;
-        if (pick_pairs && h.pairs == "-") {
-            report(PROGRAM, "the dump's PAIRS-FILE was standard input; can't "
-                   "rebuild its bags");
+        if (args.pairs_file) h.pairs = bag_stats_header_path(*args.pairs_file);
+        else if (pick_pairs && h.pairs == "-") {
+            report(PROGRAM, "the dump's PAIRS-FILE was standard input; give "
+                   "--pairs");
             return false;
         }
         if (args.sentence != CLASSIFIED_NO_SENTENCE) h.sentence = args.sentence;

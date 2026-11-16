@@ -32,7 +32,10 @@ cut's pairs are a subset of its parent's.
   holds no files of its own. LETTERS may be several hyphen-separated groups:
   `u-abc-def`
 * `pbN`: bag-stats-cuda `--ss pb,...,pb --uc`
-* `pbNwb`: bag-stats-cuda `--ss pb,...,pb,wb,p`, sorted as in step 5a
+* `pbNwb[M]`: bag-stats-cuda `--ss pb,...,pb,wb,...,wb,p`, N `pb` and M
+  `wb`, sorted as in step 5a. A missing M is 1, and a 1 written out is
+  dropped: `pb2wb1` builds `pb2wb`. `pb2wb2` is `pb,pb,wb,wb,p`. Elsewhere
+  `pbNwb` means any M
 * `ppb[N].pb[M]`: bag-stats-cuda `--ss ppb,...,ppb,pb,...,pb --uc --pp FILE`,
   N `ppb` and M `pb`, a missing number being 1: `ppb.pb3` is `ppb,pb,pb,pb`,
   `ppb2.pb` is `ppb,ppb,pb` and `ppb2.pb2` is `ppb,ppb,pb,pb`. A 1 may be

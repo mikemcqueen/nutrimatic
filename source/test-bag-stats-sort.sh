@@ -50,6 +50,14 @@ for options in "-n 50 --tp --mp --by-pick" \
     fail "--ss ppb,pb $options isn't bag-stats's: $actual"
 done
 
+"$bag_stats" --min-wb-len 3 --min-pb-len 6 --ss pb,pb,wb,p $letters - "$test_dir/dict" \
+  < "$test_dir/pairs" > "$test_dir/stdin-dump" 2> /dev/null
+expected=$("$bag_stats_sort" -n 5 --tp "$test_dir/dump" 2> /dev/null)
+actual=$("$bag_stats_sort" -n 5 --tp --pairs "$test_dir/pairs" \
+  "$test_dir/stdin-dump" 2> /dev/null)
+[[ -n $actual && $actual == "$expected" ]] ||
+  fail "--pairs doesn't replace the dump's standard input: $actual"
+
 mkdir -p "$WFROOT/.wf/classified/no"
 printf '%s\n' act,god bee,rat > "$WFROOT/.wf/classified/no/no.pairs"
 actual=$("$bag_stats_sort" --tp "$test_dir/dump" 2> "$test_dir/err" |

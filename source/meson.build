@@ -318,6 +318,10 @@ pair_prior = executable('pair-prior', 'pair-prior.cpp',
   link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
   install: true)
 
+pair_answers = executable('pair-answers', 'pair-answers.cpp',
+  link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
+  install: true)
+
 make_p1_index = executable('make-p1-index', 'make-p1-index.cpp',
   link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
   dependencies: thread_dep,
@@ -544,6 +548,11 @@ test(
   'pair-prior',
   bash,
   args: [files('test-pair-prior.sh'), pair_prior, make_p1_index],
+)
+test(
+  'pair-answers',
+  bash,
+  args: [files('test-pair-answers.sh'), pair_answers],
 )
 test(
   'seed-pairs',

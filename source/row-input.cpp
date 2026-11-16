@@ -63,9 +63,45 @@ char const* format_name(RowFormat format) {
     case RowFormat::ranked: return "COUNT word word";
     case RowFormat::words: return "word";
     case RowFormat::ranked_words: return "COUNT word";
+    case RowFormat::phrase_pairs: return "phrase,phrase";
     case RowFormat::detect: break;
   }
   return "a row";
+}
+
+// `text` as cluer's clean_words() splits it, the words joined by single
+// spaces.
+std::string clean_phrase(std::string_view text) {
+  std::string out;
+  bool gap = false;
+  for (char ch : text) {
+    if (ch == '\'') continue;
+    if (ch >= 'A' && ch <= 'Z') ch = char(ch - 'A' + 'a');
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      if (gap && !out.empty()) out += ' ';
+      out += ch;
+      gap = false;
+    } else {
+      gap = true;
+    }
+  }
+  return out;
+}
+
+bool parse_phrase_pair_row(std::string_view line, std::string_view what,
+                           std::filesystem::path const& path, size_t number,
+                           DfsPairRow* out) {
+  size_t const comma = line.find(',');
+  if (comma != std::string_view::npos &&
+      line.find(',', comma + 1) == std::string_view::npos) {
+    out->left = clean_phrase(line.substr(0, comma));
+    out->right = clean_phrase(line.substr(comma + 1));
+    out->line_number = number;
+    if (!out->left.empty() && !out->right.empty()) return true;
+  }
+  fprintf(stderr, "error: %.*s \"%s\" line %zu: expected phrase,phrase\n",
+          SV_ARG(what), path.c_str(), number);
+  return false;
 }
 
 }  // namespace
@@ -100,6 +136,9 @@ bool read_rows(
           case RowFormat::ranked_words:
             parsed = parse_ranked_row(line, what, path.native(), number,
                 file_format == RowFormat::ranked_words, &row, &count);
+            break;
+          case RowFormat::phrase_pairs:
+            parsed = parse_phrase_pair_row(line, what, path, number, &row);
             break;
           case RowFormat::pairs:
           case RowFormat::pairs_or_words:

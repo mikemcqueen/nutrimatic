@@ -29,7 +29,7 @@ MANIFEST = ".manifest.json"
 ALIASES = "aliases.json"
 GROUP = r"(?:[a-z]+|[A-Z]+)"
 LETTERS = rf"{GROUP}(?:-{GROUP})*"
-STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb)?(?:-(dict|big))?"
+STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb([1-9][0-9]*)?)?(?:-(dict|big))?"
                      rf"(?:-x([1-9][0-9]*))?(?:-({LETTERS}))?")
 PPB_RE = re.compile(r"ppb([1-9][0-9]*)?\.pb([1-9][0-9]*)?")
 USED_RE = re.compile(rf"u-({LETTERS})")
@@ -124,11 +124,14 @@ def used_letters(sentence: Sentence, segs: Segs) -> str:
     used_dirs, rest = split_segs(segs)
     letters = [USED_RE.fullmatch(seg)[1] for seg in used_dirs]
     if rest:
-        letters.append(STEP_RE.fullmatch(rest[0])[5] or "")
+        letters.append(STEP_RE.fullmatch(rest[0])[6] or "")
     return "".join(resolve(sentence, part) for part in letters)
 
 
 def canonical(seg: str) -> str:
+    step = STEP_RE.fullmatch(seg)
+    if step and step[3] == "1":
+        return seg[:step.end(2) - 1] + seg[step.end(2):]
     match = PPB_RE.fullmatch(seg)
     if not match:
         return seg
@@ -158,11 +161,11 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
     used_dirs, rest = split_segs(segs)
     kinds = [kind_of(seg) for seg in rest]
     if not rest or None in kinds or kinds[0] not in STEP_KINDS:
-        return ("want any u-LETTERS directories, then a step (pbN, pbNwb, "
-                "optionally -dict or -big, then -xN, then -LETTERS; or "
-                "ppb[N].pb[M]), then links of cuts (Nk, pp-NAME-Nk, "
-                "Nk/pp-NAME-Nk or union-Nk) followed by a step, and "
-                "optionally cuts at the end")
+        return ("want any u-LETTERS directories, then a step (pbN, "
+                "pbNwb[M], optionally -dict or -big, then -xN, then "
+                "-LETTERS; or ppb[N].pb[M]), then links of cuts (Nk, "
+                "pp-NAME-Nk, Nk/pp-NAME-Nk or union-Nk) followed by a step, "
+                "and optionally cuts at the end")
     for index in range(1, len(rest)):
         seg, kind, above = rest[index], kinds[index], kinds[index - 1]
         if kind in STEP_KINDS and above in STEP_KINDS:
@@ -196,15 +199,17 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
                 return (f"{seg} picks fewer pairs than {rest[at]}, whose "
                         "pairs file would be missing pairs it could pick")
             continue
+        if seg != canonical(seg):
+            return f"{seg} is spelled {canonical(seg)}"
         match = STEP_RE.fullmatch(seg)
-        used = match[5]
-        if match[3] and index:
-            return f"-{match[3]} is only for a root step"
-        if match[4] and (index or match[2]):
-            return f"-x{match[4]} is only for a root pbN step"
+        used = match[6]
+        if match[4] and index:
+            return f"-{match[4]} is only for a root step"
+        if match[5] and (index or match[2]):
+            return f"-x{match[5]} is only for a root pbN step"
         for group in ("dict", "big"):
             if used and group in used.split("-"):
-                return f"-{group} must come right after pbN or pbNwb"
+                return f"-{group} must come right after pbN or pbNwb[M]"
         if used and (index or used_dirs):
             return (f"-{used} is only for a root step directly below "
                     f"tmp/s{sentence.n}")
@@ -228,8 +233,8 @@ def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
         source = f"seed-pairs {sentence.seed_flag} -m4"
         deps = []
         external = [f"idx/pairs.s{sentence.n}"]
-        if match[3]:
-            seed_dict = sentence.big if match[3] == "big" else sentence.dict
+        if match[4]:
+            seed_dict = sentence.big if match[4] == "big" else sentence.dict
             source += f" -d {shlex.quote(seed_dict)}"
             external.append(seed_dict)
     else:
@@ -238,7 +243,7 @@ def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
         source = f"cat {path}"
         deps = [(parent, "pairs")]
         external = []
-    cap = match[4]
+    cap = match[5]
     if cap:
         source += f" | pfilter --no-nopairs --no-dict -m0 -x{cap} -"
     return source, deps, external
@@ -309,10 +314,11 @@ def prospect_step(sentence: Sentence, segs: Segs, prospects: int,
             words_step(sentence, segs)]
 
 
-def word_bag_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
+def word_bag_step(sentence: Sentence, segs: Segs, count: int,
+                  words: int) -> list[Step]:
     d = node_dir(sentence, segs)
     source, deps, external = step_input(sentence, segs)
-    ss = ",".join(["pb"] * count + ["wb", "p"])
+    ss = ",".join(["pb"] * count + ["wb"] * words + ["p"])
     letters = shlex.quote(sentence.letters)
     dictionary = shlex.quote(sentence.dict)
     dump = Step(
@@ -402,7 +408,7 @@ def steps_of(sentence: Sentence, segs: Segs) -> list[Step]:
     match = STEP_RE.fullmatch(last)
     count = int(match[1])
     if match[2]:
-        return word_bag_step(sentence, segs, count)
+        return word_bag_step(sentence, segs, count, int(match[3] or 1))
     return pair_step(sentence, segs, count)
 
 
