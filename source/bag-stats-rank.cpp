@@ -144,9 +144,22 @@ bool check_rank_args(std::string_view program, RankArgs const& args,
     }
     bool const evidence = args.evidence.p1 || args.evidence.clues ||
         args.prior_weights;
-    if ((args.prior_file || args.no_prior || evidence) && !args.by_pick) {
+    if ((args.prior_file || args.no_prior || evidence) && !args.by_pick &&
+        !args.pair_score) {
         report(program, "--prior, --no-prior, --p1, --clues and "
-               "--prior-weights go with --by-pick");
+               "--prior-weights go with --by-pick or --pair-score");
+        return false;
+    }
+    if (args.pair_score &&
+        (args.by_length || args.by_pick || !args.score.empty() ||
+         args.score_detail || args.best_pairs != BestPairs::NONE ||
+         args.top_segments)) {
+        report(program, "--pair-score goes without --by-length, --by-pick, "
+               "--score, --score-detail, --best-pairs and --top-segments");
+        return false;
+    }
+    if (args.pair_score && search.prospects + search.pairs < 2) {
+        report(program, "--pair-score needs two or more ppb and pb steps");
         return false;
     }
     if (int(args.prior_file.has_value()) + args.no_prior + evidence > 1) {
@@ -204,7 +217,7 @@ void help_rank_output_options() {
                     "with --by-pick)");
 }
 
-void help_rank_sort_options() {
+void help_rank_sort_options(bool pair_score) {
     dfs_help_option("--by-length",
                     "rank each row's sort value only among the rows whose "
                     "pair picks have as many letters, so the best of each "
@@ -219,24 +232,39 @@ void help_rank_sort_options() {
                     "smallest; needs two or more ppb and pb steps; without "
                     "--prior or --no-prior, the prior is from --p1 and "
                     "--clues");
+    if (pair_score)
+        dfs_help_option("--pair-score LAMBDA",
+                        "print a header line, \"SCORE PRIOR POINTS ROWS PICK "
+                        "BEST\", then a line per pick, PICK as word,word, by "
+                        "SCORE: over the pick's rows, "
+                        "the best sum of the row's picks' priors plus LAMBDA "
+                        "times the row's POINTS for the pick; those are "
+                        "-log2(min(1, K * f)), f the largest over the row's "
+                        "other picks of the row's best top fraction among "
+                        "that pick's rows over the K sort keys; BEST is that "
+                        "row's PAIR; LAMBDA 0 ranks by priors alone; without "
+                        "--prior or --no-prior, the prior is from --p1 and "
+                        "--clues");
+    char const* const prior_users = pair_score
+        ? "with --by-pick or --pair-score" : "with --by-pick";
     dfs_help_option("--prior FILE",
                     "\"SCORE word,word\" lines, as pair-prior prints them, "
                     "larger better; a pick bag scores its best row, below "
-                    "every score when none is in FILE; only with --by-pick");
+                    "every score when none is in FILE; only %s", prior_users);
     dfs_help_option("--no-prior",
-                    "with --by-pick, weight no pick by a prior, reading no "
-                    "index");
+                    "%s, weight no pick by a prior, reading no index",
+                    prior_users);
     dfs_help_option("--p1 INDEX",
                     "score each pair's prior from its phase 1 verdicts in "
                     "INDEX, as make-p1-index writes it, as pair-prior does "
                     "(default: %s when it exists, skipped with a warning "
-                    "when it can't be opened); only with --by-pick, not "
-                    "with --prior or --no-prior", P1_INDEX_PATH);
+                    "when it can't be opened); only %s, not with --prior "
+                    "or --no-prior", P1_INDEX_PATH, prior_users);
     dfs_help_option("--clues CLUEDATA",
                     "score each pair's prior from the cluer clue index "
                     "beside CLUEDATA too, or alone (default: %s when it "
                     "exists, skipped with a warning when it can't be "
-                    "opened); with neither index, --by-pick has no prior",
+                    "opened); with neither index, the picks have no prior",
                     CLUEDATA_PATH);
     dfs_help_option("--prior-weights SPEC",
                     "how --p1 and --clues score a pair, as pair-prior "
@@ -338,7 +366,7 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
             *out = found->second;
             return true;
         };
-    } else if (args.by_pick && !args.no_prior) {
+    } else if ((args.by_pick || args.pair_score) && !args.no_prior) {
         PriorPaths paths = args.evidence;
         default_prior_paths(&paths);
         if (!open_default_prior(program, &paths, args.prior_weights, false,
@@ -351,8 +379,8 @@ bool load_pick_bags(std::string_view program, RankArgs const& args,
                 return true;
             };
         else
-            warn(program, "no prior index, neither %s nor %s; --by-pick "
-                 "ranks without a prior", P1_INDEX_PATH, CLUEDATA_PATH);
+            warn(program, "no prior index, neither %s nor %s; ranking "
+                 "without a prior", P1_INDEX_PATH, CLUEDATA_PATH);
     }
     *has_prior = bool(prior);
     std::vector<PairBag>* const loaded = final_bags ? final_bags : pair_bags;
@@ -528,6 +556,13 @@ std::vector<uint32_t> PickRanker::leaders(
     return out;
 }
 
+double PickRanker::top_fraction(size_t k, uint32_t pick,
+                                double value) const {
+    Distribution const& group = groups_[k * ranks_.size() + pick];
+    auto const [above, tied] = group.above_and_tied(value);
+    return (double(above) + double(tied) / 2) / double(group.size());
+}
+
 std::vector<PickRanker::PickDetail> PickRanker::detail(
         BagStatsRow const& row, std::span<uint32_t const> picks) const {
     std::vector<PickDetail> out;
@@ -631,7 +666,8 @@ bool ranks_before(RankedRow const& a, RankedRow const& b) {
 bool score_picks(std::string_view program,
                  std::vector<std::string> const& score, Search const& search,
                  std::vector<std::vector<PairBag> const*> const& steps,
-                 PairsCounts const& letters, std::vector<size_t>* out) {
+                 PairsCounts const& letters, std::vector<size_t>* out,
+                 std::string_view option) {
     size_t const prospects = size_t(search.prospects);
     std::vector<size_t> picks(steps.size());
     for (size_t i = 0; i < score.size(); ++i) {
@@ -648,8 +684,8 @@ bool score_picks(std::string_view program,
             comma + 1 == name.size() ||
             name.find(',', comma + 1) != std::string::npos ||
             found == bags.end()) {
-            report(program, "--score %s isn't two words whose bag is "
-                   "in %s and fits the letters", name.c_str(),
+            report(program, "%.*s %s isn't two words whose bag is "
+                   "in %s and fits the letters", SV_ARG(option), name.c_str(),
                    i < prospects
                         ? "--pp"
                         : "PAIRS-FILE, of at least --min-pb-len letters,");
@@ -664,8 +700,8 @@ bool score_picks(std::string_view program,
         for (size_t i = 0; i < j; ++i)
             repeats = repeats || (*steps[i])[picks[i]].counts == counts;
         if (repeats || !pairs_subtract(rest, counts, &rest)) {
-            report(program, "the --score picks don't fit the letters "
-                   "together");
+            report(program, "the %.*s picks don't fit the letters "
+                   "together", SV_ARG(option));
             return false;
         }
     }

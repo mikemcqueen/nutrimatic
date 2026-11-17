@@ -10,9 +10,11 @@
 #include "log.h"
 #include "optparse.h"
 #include "pairs-impl.h"
+#include "parse-number.h"
 #include "workflow-paths.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -35,6 +37,8 @@ constexpr int OPT_PROSPECTS = 258;
 constexpr int OPT_PAIRS = 259;
 constexpr int OPT_BEST_ROWS = 260;
 constexpr int OPT_SORT = 261;
+constexpr int OPT_PAIR_SCORE = 262;
+constexpr int OPT_GOAL = 263;
 
 struct Args {
     int sentence = CLASSIFIED_NO_SENTENCE;
@@ -43,6 +47,8 @@ struct Args {
     bool best_rows = false;
     // -x, each pair's letters.
     std::vector<PairsCounts> excluded;
+    // --goal, each word,word.
+    std::vector<std::string> goals;
     // --ss, --pp and --pairs, when given.
     std::optional<std::string> search;
     std::optional<std::filesystem::path> prospects_file;
@@ -55,7 +61,8 @@ void usage(std::string_view program, FILE* out) {
             "usage: %.*s [-s N] [-n N] --sort KEY[,KEY...]...\n"
             "       [--by-length | --by-pick]\n"
             "       [--score W1,W2... [--score-detail]]\n"
-            "       [--best-pairs appear|lead | --best-rows]\n"
+            "       [--best-pairs appear|lead | --best-rows | "
+            "--pair-score LAMBDA [--goal PAIR]...]\n"
             "       [--prior FILE | --no-prior |\n"
             "        [--p1 INDEX] [--clues CLUEDATA] [--prior-weights SPEC]]\n"
             "       [--top-segments] [--pb-len N] [--ss STEPS] [--pp FILE]\n"
@@ -91,6 +98,15 @@ void usage(std::string_view program, FILE* out) {
     dfs_help_option("-x, --exclude PAIR",
                     "drop the rows with a ppb or pb pick whose bag is "
                     "PAIR's, word,word, before ranking; repeatable");
+    dfs_help_option("--goal PAIR",
+                    "with --pair-score, one per ppb and pb step, each "
+                    "word,word: print the goal picks' lines, each with its "
+                    "RANK among all picks, then for each goal pick, where "
+                    "the row with every goal pick ranks among its rows by "
+                    "row score for the pick, and those rows by that score: "
+                    "SCORE POINTS, each sort key's top fraction F, each "
+                    "pick's PRIOR and PAIR, '*' marking the goal row; -n "
+                    "prints only the first N rows of each goal pick");
     dfs_help_option("--pb-len N",
                     "rank and print only the rows whose PAIR has N letters");
     dfs_help_option("--ss STEPS",
@@ -110,7 +126,7 @@ void usage(std::string_view program, FILE* out) {
           "sorts by:\n", stdout);
     bag_stats_help_sorts();
     fputs("\nranking options:\n", stdout);
-    help_rank_sort_options();
+    help_rank_sort_options(true);
 }
 
 bool parse_args(char* argv[], Args* out, bool* help) {
@@ -123,6 +139,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "pairs", OPT_PAIRS, OPTPARSE_REQUIRED },
         { "best-rows", OPT_BEST_ROWS, OPTPARSE_NONE },
         { "sort", OPT_SORT, OPTPARSE_REQUIRED },
+        { "pair-score", OPT_PAIR_SCORE, OPTPARSE_REQUIRED },
+        { "goal", OPT_GOAL, OPTPARSE_REQUIRED },
         { "exclude", 'x', OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
@@ -174,6 +192,20 @@ bool parse_args(char* argv[], Args* out, bool* help) {
                 keys.remove_prefix(comma + 1);
             }
             break;
+          case OPT_PAIR_SCORE: {
+            double lambda;
+            if (!parse_number(std::string_view(options.optarg), &lambda) ||
+                !std::isfinite(lambda) || lambda < 0) {
+                report(PROGRAM, "--pair-score LAMBDA is a finite number, "
+                       "not negative");
+                return false;
+            }
+            out->rank.pair_score = lambda;
+            break;
+          }
+          case OPT_GOAL:
+            out->goals.push_back(options.optarg);
+            break;
           case 'x': {
             std::string_view const pair = options.optarg;
             size_t const comma = pair.find(',');
@@ -203,6 +235,14 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         (out->rank.best_pairs != BestPairs::NONE ||
          !out->rank.score.empty())) {
         report(PROGRAM, "--best-rows goes without --best-pairs and --score");
+        return false;
+    }
+    if (!out->goals.empty() && !out->rank.pair_score) {
+        report(PROGRAM, "--goal goes with --pair-score");
+        return false;
+    }
+    if (out->best_rows && out->rank.pair_score) {
+        report(PROGRAM, "--pair-score goes without --best-rows");
         return false;
     }
     char const* const input = optparse_arg(&options);
@@ -485,19 +525,22 @@ int print_score(Dump const& dump, Args const& args, R const& ranker) {
     return 0;
 }
 
+// Counts the dump's rows into `ranker` and finishes it.
+template <typename R>
+void count_rows(Dump const& dump, R* ranker) {
+    std::vector<typename R::Part> parts(1, ranker->part());
+    for (RankedRow const& row : dump.rows)
+        ranker->add(&parts[0], row.row, bag_stats_pair_length(row.row.pair),
+                    dump.row_picks(row.seq));
+    ranker->finish(parts);
+}
+
 // Ranks the dump's rows with `ranker` and prints them, the -n first of them,
 // or the --score row.
 template <typename R>
 int print_ranked(Dump* dump, Args const& args, R* ranker) {
     RankArgs const& rank = args.rank;
-    if (ranker->needs_counts()) {
-        std::vector<typename R::Part> parts(1, ranker->part());
-        for (RankedRow const& row : dump->rows)
-            ranker->add(&parts[0], row.row,
-                        bag_stats_pair_length(row.row.pair),
-                        dump->row_picks(row.seq));
-        ranker->finish(parts);
-    }
+    if (ranker->needs_counts()) count_rows(*dump, ranker);
     if (!rank.score.empty()) return print_score(*dump, args, *ranker);
 
     std::vector<RankedRow>& rows = dump->rows;
@@ -544,6 +587,216 @@ int print_ranked(Dump* dump, Args const& args, R* ranker) {
     return 0;
 }
 
+// Prints --pair-score's line per pick, best first, or with --goal, the goal
+// picks and the rows with them.
+int print_pair_scores(Dump const& dump, Args const& args) {
+    std::vector<BagStatsSort const*> const& keys = args.rank.sorts;
+    double const lambda = *args.rank.pair_score;
+
+    std::vector<uint32_t> goal;
+    if (!args.goals.empty()) {
+        if (args.goals.size() !=
+            size_t(dump.search.prospects + dump.search.pairs)) {
+            report(PROGRAM, "--goal names one pick per ppb and pb step, %d",
+                   dump.search.prospects + dump.search.pairs);
+            return 1;
+        }
+        std::vector<size_t> picks;
+        if (!score_picks(PROGRAM, args.goals, dump.search, dump.steps,
+                         pairs_letter_counts(dump.header.letters), &picks,
+                         "--goal"))
+            return 1;
+        for (size_t j = 0; j < picks.size(); ++j)
+            goal.push_back(uint32_t(
+                picks[j] + (j < size_t(dump.search.pairs)
+                            ? 0 : dump.pair_bags.size())));
+    }
+
+    size_t const pair_count = dump.pair_bags.size();
+    size_t const pick_count = pair_count + dump.prospect_bags.size();
+    PickRanker ranker(keys, std::vector<double>(pick_count, 1.0));
+    count_rows(dump, &ranker);
+
+    auto const bag = [&](uint32_t pick) -> PairBag const& {
+        return pick < pair_count ? dump.pair_bags[pick]
+                                 : dump.prospect_bags[pick - pair_count];
+    };
+    auto const prior = [&](uint32_t pick) {
+        double const p = bag(pick).prior;
+        return std::isfinite(p) ? p : 0.0;
+    };
+    auto const words = [&](uint32_t pick) {
+        std::string out = bag(pick).pair;
+        std::replace(out.begin(), out.end(), ' ', ',');
+        return out;
+    };
+    // The row's POINTS for its pick `i`, and into `fractions` unless null
+    // each key's f_k, the largest over the other picks.
+    auto const row_points = [&](BagStatsRow const& row,
+                                std::span<uint32_t const> row_picks, size_t i,
+                                std::vector<double>* fractions) {
+        if (fractions) fractions->assign(keys.size(), 0);
+        double f = 0;
+        for (size_t j = 0; j < row_picks.size(); ++j) {
+            if (j == i) continue;
+            double best = 1;
+            for (size_t k = 0; k < keys.size(); ++k) {
+                double const f_k = ranker.top_fraction(
+                    k, row_picks[j], bag_stats_sort_value(keys[k], row));
+                if (fractions)
+                    (*fractions)[k] = std::max((*fractions)[k], f_k);
+                best = std::min(best, f_k);
+            }
+            f = std::max(f, best);
+        }
+        return 0.0 - std::log2(std::min(1.0, double(keys.size()) * f));
+    };
+    auto const prior_sum = [&](std::span<uint32_t const> row_picks) {
+        double sum = 0;
+        for (uint32_t pick : row_picks) sum += prior(pick);
+        return sum;
+    };
+
+    struct Pick {
+        uint64_t rows = 0;
+        double best = 0;
+        double points = 0;
+        uint64_t seq = 0;
+    };
+    std::vector<Pick> picks(pick_count);
+    for (RankedRow const& ranked : dump.rows) {
+        std::span<uint32_t const> const row_picks = dump.row_picks(ranked.seq);
+        double const priors = prior_sum(row_picks);
+        for (size_t i = 0; i < row_picks.size(); ++i) {
+            double const points =
+                row_points(ranked.row, row_picks, i, nullptr);
+            double const score = priors + lambda * points;
+            Pick& p = picks[row_picks[i]];
+            if (p.rows++ == 0 || score > p.best) {
+                p.best = score;
+                p.points = points;
+                p.seq = ranked.seq;
+            }
+        }
+    }
+
+    std::vector<std::pair<double, uint32_t>> order;
+    for (uint32_t pick = 0; pick < picks.size(); ++pick)
+        if (picks[pick].rows > 0) order.emplace_back(picks[pick].best, pick);
+    std::stable_sort(order.begin(), order.end(),
+                     [](auto const& a, auto const& b) {
+                         return a.first > b.first;
+                     });
+
+    auto const print_pick = [&](double score, uint32_t pick) {
+        Pick const& p = picks[pick];
+        printf("%.3f %.3f %.3f %llu %s %s\n", score, prior(pick), p.points,
+               (unsigned long long)p.rows, words(pick).c_str(),
+               dump.rows[p.seq].row.pair.c_str());
+    };
+    if (goal.empty()) {
+        if (args.rank.top > 0 && size_t(args.rank.top) < order.size())
+            order.resize(size_t(args.rank.top));
+        fputs("SCORE PRIOR POINTS ROWS PICK BEST\n", stdout);
+        for (auto const& [score, pick] : order) print_pick(score, pick);
+        return 0;
+    }
+
+    fputs("RANK SCORE PRIOR POINTS ROWS PICK BEST\n", stdout);
+    for (uint32_t pick : goal) {
+        auto const found = std::find_if(order.begin(), order.end(),
+            [&](auto const& entry) { return entry.second == pick; });
+        if (found == order.end()) {
+            printf("- - %.3f - 0 %s -\n", prior(pick), words(pick).c_str());
+            continue;
+        }
+        printf("%zu/%zu ", size_t(found - order.begin()) + 1,
+               order.size());
+        print_pick(found->first, pick);
+    }
+
+    // Each goal pick's rows, by the row score for the pick, then walk order.
+    struct GoalRow {
+        double score;
+        double points;
+        uint64_t seq;
+        size_t index;
+        bool goal;
+    };
+    for (uint32_t pick : goal) {
+        std::vector<GoalRow> rows;
+        for (RankedRow const& ranked : dump.rows) {
+            std::span<uint32_t const> const row_picks =
+                dump.row_picks(ranked.seq);
+            auto const at =
+                std::find(row_picks.begin(), row_picks.end(), pick);
+            if (at == row_picks.end()) continue;
+            size_t const index = size_t(at - row_picks.begin());
+            bool const all = std::all_of(goal.begin(), goal.end(),
+                [&](uint32_t g) {
+                    return std::find(row_picks.begin(), row_picks.end(),
+                                     g) != row_picks.end();
+                });
+            double const points =
+                row_points(ranked.row, row_picks, index, nullptr);
+            rows.push_back({prior_sum(row_picks) + lambda * points, points,
+                            ranked.seq, index, all});
+        }
+        std::stable_sort(rows.begin(), rows.end(),
+                         [](GoalRow const& a, GoalRow const& b) {
+                             return a.score > b.score;
+                         });
+
+        putchar('\n');
+        auto const goal_row = std::find_if(rows.begin(), rows.end(),
+            [](GoalRow const& row) { return row.goal; });
+        if (goal_row == rows.end()) {
+            printf("%s: no kept row has every --goal pick\n",
+                   words(pick).c_str());
+        } else {
+            uint64_t above = 0;
+            uint64_t tied = 0;
+            for (GoalRow const& row : rows) {
+                if (&row == &*goal_row) continue;
+                above += row.score > goal_row->score;
+                tied += row.score == goal_row->score;
+            }
+            printf("%s: the goal row is %llu of %zu rows, %llu above it "
+                   "and %llu tied with it\n", words(pick).c_str(),
+                   (unsigned long long)(above + 1), rows.size(),
+                   (unsigned long long)above, (unsigned long long)tied);
+        }
+
+        fputs("SCORE POINTS", stdout);
+        for (BagStatsSort const* key : keys) printf(" F:%s", key->option);
+        fputs(" PRIORS PAIR\n", stdout);
+        std::vector<double> fractions;
+        size_t printed = 0;
+        for (GoalRow const& row : rows) {
+            if (args.rank.top > 0 && printed++ == size_t(args.rank.top)) break;
+            BagStatsRow const& bag_row = dump.rows[row.seq].row;
+            std::span<uint32_t const> const row_picks =
+                dump.row_picks(row.seq);
+            row_points(bag_row, row_picks, row.index, &fractions);
+            printf("%s%.3f %.3f", row.goal ? "*" : "", row.score, row.points);
+            for (double f : fractions) printf(" %.4g", f);
+            // PAIR names ppb picks first, then pb picks.
+            char separator = ' ';
+            for (size_t i = size_t(dump.search.pairs); i < row_picks.size();
+                 ++i) {
+                printf("%c%.3f", separator, prior(row_picks[i]));
+                separator = ',';
+            }
+            for (size_t i = 0; i < size_t(dump.search.pairs); ++i) {
+                printf("%c%.3f", separator, prior(row_picks[i]));
+                separator = ',';
+            }
+            printf(" %s\n", bag_row.pair.c_str());
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -563,6 +816,7 @@ int main(int argc, char* argv[]) {
 
     std::vector<BagStatsSort const*> const& keys = args.rank.sorts;
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
+    if (args.rank.pair_score) return print_pair_scores(dump, args);
     if (args.rank.by_pick) {
         PickRanker ranker(keys, pick_ranks(dump.pair_bags, dump.prospect_bags,
                                            dump.has_prior));

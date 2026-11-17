@@ -475,11 +475,14 @@ PairsCounts numbered_rest(RemainderIndex const& index, uint64_t number) {
 // `feeders` threads of their own, one a stream of `counter`, feed the GPU a
 // chunk's batches while `threads` threads decode the next chunk's rests and
 // call store(i, letters, counts) for each rest i of the chunk before,
-// `letters` its GPU_LETTERS_BYTES letter counts.
+// `letters` its GPU_LETTERS_BYTES letter counts. Unless `progress` is empty,
+// calls progress(counted) after each chunk, `counted` the rests the GPU has
+// counted so far.
 template <typename Store>
 void count_rests(GpuRowCounter const& counter, RemainderIndex const& index,
                  std::vector<uint64_t> const& rests, size_t threads,
-                 size_t feeders, Store const& store) {
+                 size_t feeders, Store const& store,
+                 std::function<void(size_t)> const& progress = {}) {
     constexpr size_t CHUNK_ROWS = 16 * GPU_BATCH_ROWS;
     constexpr size_t SHARE_ROWS = 4096;
     struct Chunk {
@@ -498,6 +501,7 @@ void count_rests(GpuRowCounter const& counter, RemainderIndex const& index,
     Chunk* counted = &chunks[1];
     Chunk* stored = &chunks[2];
     size_t next_first = 0;
+    size_t stored_rows = 0;
     while (true) {
         std::swap(stored, counted);
         std::swap(counted, decoded);
@@ -541,7 +545,9 @@ void count_rests(GpuRowCounter const& counter, RemainderIndex const& index,
             }
         });
         for (std::thread& feeder : feeding) feeder.join();
+        stored_rows += stored->rows;
         stored->rows = 0;
+        if (progress) progress(stored_rows + counted->rows);
     }
 }
 
@@ -1218,6 +1224,19 @@ void print_top_by_rest(Walk const& walk, BagStatsInputs const& inputs,
             int left = 0;
             for (size_t k = 0; k < GPU_LETTERS_BYTES; ++k) left += letters[k];
             range.pair_lengths[i] = uint8_t(bag_letters - left);
+        }, [&, counting = std::chrono::steady_clock::now(),
+            next_report = double(args.progress)](size_t done) mutable {
+            if (args.progress == 0) return;
+            double const elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - counting).count();
+            if (elapsed < next_report) return;
+            next_report = elapsed + double(args.progress);
+            std::string const of_range = ranges == 1 ? "" :
+                " of range " + std::to_string(r + 1) + "/" +
+                std::to_string(ranges);
+            report(PROGRAM, "counted %zu/%zu distinct remainders%s, %s",
+                   done, count, of_range.c_str(),
+                   format_duration(elapsed).c_str());
         });
         if (!keep || one_range || count == 0 || count > packed_room)
             return range;

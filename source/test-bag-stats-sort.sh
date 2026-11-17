@@ -104,6 +104,36 @@ actual=$("$bag_stats_sort" -n 1 --sort tp-per-wb "$test_dir/dump" 2> /dev/null |
 "$bag_stats_sort" --sort tp-wb "$test_dir/dump" > /dev/null 2>&1 &&
   fail "--sort takes an unknown key"
 
+printf '%s\n' cat,dog low,ant bee,rat tan,glow > "$test_dir/pairs2"
+{
+  sed -n '1,/^$/p' "$test_dir/dump" | sed "s|^pairs .*|pairs $test_dir/pairs2|"
+  printf '%s\n' 'cat dog + low ant,1,1,1,10,1,0,1' \
+    'cat dog + bee rat,1,1,1,20,1,0,1' 'low ant + bee rat,1,1,1,20,1,0,1' \
+    'cat dog + tan glow,1,1,1,5,1,0,1' 'bee rat + tan glow,1,1,1,3,1,0,1'
+} > "$test_dir/dump2"
+actual=$("$bag_stats_sort" --sort tp --pair-score 1 --no-prior \
+  "$test_dir/dump2" 2> /dev/null)
+expected='SCORE PRIOR POINTS ROWS PICK BEST
+2.585 0.000 2.585 3 bee,rat cat dog + bee rat
+2.000 0.000 2.000 3 cat,dog cat dog + tan glow
+1.585 0.000 1.585 2 low,ant low ant + bee rat
+0.263 0.000 0.263 2 tan,glow cat dog + tan glow'
+[[ $actual == "$expected" ]] || fail "--pair-score: $actual"
+for options in --by-length --by-pick --best-rows --top-segments \
+               "--score cat,dog --score low,ant" "--best-pairs appear -n 2"; do
+  "$bag_stats_sort" --sort tp --pair-score 1 $options "$test_dir/dump2" \
+    > /dev/null 2>&1 && fail "--pair-score takes $options"
+done
+actual=$("$bag_stats_sort" --sort tp --pair-score 1 --no-prior \
+  --goal bee,rat --goal low,ant "$test_dir/dump2" 2> /dev/null | grep 'goal row')
+expected='low,ant: the goal row is 1 of 2 rows, 0 above it and 0 tied with it
+bee,rat: the goal row is 2 of 3 rows, 1 above it and 0 tied with it'
+[[ $actual == "$expected" ]] || fail "--goal: $actual"
+"$bag_stats_sort" --sort tp --pair-score 1 --goal bee,rat "$test_dir/dump2" \
+  > /dev/null 2>&1 && fail "--goal takes one pick for two pb steps"
+"$bag_stats_sort" --sort tp --pair-score -1 "$test_dir/dump2" \
+  > /dev/null 2>&1 && fail "--pair-score takes a negative LAMBDA"
+
 mkdir -p "$WFROOT/.wf/classified/no"
 printf '%s\n' act,god bee,rat > "$WFROOT/.wf/classified/no/no.pairs"
 actual=$("$bag_stats_sort" --sort tp "$test_dir/dump" 2> "$test_dir/err" |

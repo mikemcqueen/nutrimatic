@@ -66,6 +66,8 @@ struct RankArgs {
     std::vector<std::string> score;
     bool score_detail = false;
     BestPairs best_pairs = BestPairs::NONE;
+    // bag-stats-sort's --pair-score LAMBDA.
+    std::optional<double> pair_score;
 };
 
 enum {
@@ -125,9 +127,9 @@ bool check_rank_args(std::string_view program, RankArgs const& args,
 // --best-pairs.
 void help_rank_output_options();
 
-// Prints the --help lines of --by-length, --by-pick and the prior options,
-// and the --prior-weights terms.
-void help_rank_sort_options();
+// Prints the --help lines of --by-length, --by-pick, with `pair_score`
+// --pair-score, and the prior options, and the --prior-weights terms.
+void help_rank_sort_options(bool pair_score = false);
 
 struct PairBag {
     PairsCounts counts;
@@ -335,6 +337,10 @@ class PickRanker {
     std::vector<uint32_t> leaders(BagStatsRow const& row,
                                   std::span<uint32_t const> picks) const;
 
+    // The top fraction of `value` under key `k` among the rows sharing
+    // `pick`: (rows above it + half the rows tied with it) / those rows.
+    double top_fraction(size_t k, uint32_t pick, double value) const;
+
     // What key() makes of one of a row's picks.
     struct PickDetail {
         double p;
@@ -412,11 +418,13 @@ inline void add_score_rank(RankedRow const& ranked, RankedRow const& target,
 // The list index of each --score pick of `score`, in walk step order, pb
 // picks, then ppb picks, each kind in increasing order; `steps` is each
 // step's list. False, diagnosed prefixed by `program`, when a pick isn't a
-// bag of its list or the picks' bags don't fit `letters` together.
+// bag of its list or the picks' bags don't fit `letters` together, naming
+// the picks `option`.
 bool score_picks(std::string_view program,
                  std::vector<std::string> const& score, Search const& search,
                  std::vector<std::vector<PairBag> const*> const& steps,
-                 PairsCounts const& letters, std::vector<size_t>* out);
+                 PairsCounts const& letters, std::vector<size_t>* out,
+                 std::string_view option = "--score");
 
 // Appends `row` as a bag-stats row, or with --top-segments as a top-segments
 // row.
