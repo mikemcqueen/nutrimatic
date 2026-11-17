@@ -205,7 +205,6 @@ void help_rank_output_options() {
 }
 
 void help_rank_sort_options() {
-    bag_stats_help_sort_flags();
     dfs_help_option("--by-length",
                     "rank each row's sort value only among the rows whose "
                     "pair picks have as many letters, so the best of each "
@@ -623,14 +622,6 @@ std::vector<double> pick_ranks(std::vector<PairBag> const& pair_bags,
     return out;
 }
 
-std::vector<BagStatsCount const*> sort_flag_keys(
-        std::vector<BagStatsSortFlag const*> const& sorts) {
-    std::vector<BagStatsCount const*> out;
-    for (BagStatsSortFlag const* sort : sorts)
-        out.push_back(bag_stats_sort_key(*sort));
-    return out;
-}
-
 bool ranks_before(RankedRow const& a, RankedRow const& b) {
     if (a.key != b.key) return a.key > b.key;
     if (a.unit != b.unit) return a.unit < b.unit;
@@ -704,7 +695,8 @@ void print_score_rank(BagStatsRow const& row, ScoreRank const& rank) {
     putchar('\n');
 }
 
-void print_score_detail(std::vector<BagStatsSortFlag const*> const& sorts,
+void print_score_detail(std::string_view prefix,
+                        std::vector<BagStatsSort const*> const& sorts,
                         PickRanker const& ranker, RankedRow const& target,
                         std::vector<PairBag const*> const& bags,
                         std::span<uint32_t const> row_picks) {
@@ -722,10 +714,10 @@ void print_score_detail(std::vector<BagStatsSortFlag const*> const& sorts,
             auto const [above, tied] = part.above_and_tied[k];
             std::array<std::string, COLUMNS>& line =
                 lines.back().emplace_back();
-            BagStatsSortFlag const& sort = *sorts[k];
-            line[0] = std::string("--") + sort.option;
+            BagStatsSort const& sort = *sorts[k];
+            line[0] = std::string(prefix) + sort.option;
             snprintf(text, sizeof text,
-                     sort.column == NULL ? "%.3f" : "%.6g",
+                     sort.per != NULL ? "%.3f" : "%.6g",
                      part.values[k]);
             line[1] = text;
             if (tied > 1)

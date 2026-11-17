@@ -100,7 +100,8 @@ enum {
     { "cache-size", OPT_COMMON_CACHE_SIZE, OPTPARSE_REQUIRED }, \
     { "progress", OPT_COMMON_PROGRESS, OPTPARSE_REQUIRED }, \
     { "no-nopairs", OPT_COMMON_NO_NOPAIRS, OPTPARSE_NONE }, \
-    BAG_STATS_RANK_LONG_OPTIONS
+    BAG_STATS_RANK_LONG_OPTIONS, \
+    BAG_STATS_SORT_FLAG_LONG_OPTIONS
 
 // Applies `option`, with `arg`, to `out` when it is one of
 // BAG_STATS_COMMON_LONG_OPTIONS. A bad argument is diagnosed, prefixed by
@@ -864,8 +865,8 @@ int print_score(Walk const& walk, R* ranker, bool passes) {
             std::vector<PairBag const*> bags;
             for (size_t j = 0; j < picks.size(); ++j)
                 bags.push_back(&(*walk.steps[j])[picks[j]]);
-            print_score_detail(walk.args.rank.sorts, *ranker, target, bags,
-                               target_picks);
+            print_score_detail("--", walk.args.rank.sorts, *ranker, target,
+                               bags, target_picks);
         }
     }
     walk.after_score(picks);

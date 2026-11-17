@@ -28,14 +28,45 @@ BagStatsCount const BAG_STATS_COUNTS[7] = {
   {"WB_WITH_MIN_PAIRS", &BagStatsRow::with_min_pairs},
 };
 
-BagStatsSortFlag const BAG_STATS_SORT_FLAGS[6] = {
-  {"wb", "WORDBAGS"},
-  {"wbwp", "WB_WITH_PAIRS"},
-  {"tp", "TOTAL_PAIRS"},
-  {"mp", "MAX_PAIRS"},
-  {"wbwp-min", "WB_WITH_MIN_PAIRS"},
-  {"wbfrac-min", NULL},
+#define BAG_STATS_SORT(option, column, member) \
+  {option, column, NULL, &BagStatsRow::member, NULL}
+#define BAG_STATS_SORT_PER(option, column, member, per, per_member) \
+  {option, column, per, &BagStatsRow::member, &BagStatsRow::per_member}
+
+BagStatsSort const BAG_STATS_SORT_FLAGS[6] = {
+  BAG_STATS_SORT("wb", "WORDBAGS", word_bags),
+  BAG_STATS_SORT("wbwp", "WB_WITH_PAIRS", with_pairs),
+  BAG_STATS_SORT("tp", "TOTAL_PAIRS", total_pairs),
+  BAG_STATS_SORT("mp", "MAX_PAIRS", max_pairs),
+  BAG_STATS_SORT("wbwp-min", "WB_WITH_MIN_PAIRS", with_min_pairs),
+  BAG_STATS_SORT_PER("wbfrac-min", "WB_WITH_MIN_PAIRS", with_min_pairs,
+                     "WORDBAGS", word_bags),
 };
+
+BagStatsSort const BAG_STATS_SORTS[12] = {
+  BAG_STATS_SORT("wb", "WORDBAGS", word_bags),
+  BAG_STATS_SORT("wbwp", "WB_WITH_PAIRS", with_pairs),
+  BAG_STATS_SORT("tp", "TOTAL_PAIRS", total_pairs),
+  BAG_STATS_SORT("mp", "MAX_PAIRS", max_pairs),
+  BAG_STATS_SORT("wbwp-min", "WB_WITH_MIN_PAIRS", with_min_pairs),
+  BAG_STATS_SORT_PER("wbwp-per-wb", "WB_WITH_PAIRS", with_pairs,
+                     "WORDBAGS", word_bags),
+  BAG_STATS_SORT_PER("wbwp-min-per-wb", "WB_WITH_MIN_PAIRS", with_min_pairs,
+                     "WORDBAGS", word_bags),
+  BAG_STATS_SORT_PER("wbwp-min-per-wbwp", "WB_WITH_MIN_PAIRS",
+                     with_min_pairs, "WB_WITH_PAIRS", with_pairs),
+  BAG_STATS_SORT_PER("wbwp-per-wbwp-min", "WB_WITH_PAIRS", with_pairs,
+                     "WB_WITH_MIN_PAIRS", with_min_pairs),
+  BAG_STATS_SORT_PER("tp-per-wb", "TOTAL_PAIRS", total_pairs,
+                     "WORDBAGS", word_bags),
+  BAG_STATS_SORT_PER("tp-per-wbwp", "TOTAL_PAIRS", total_pairs,
+                     "WB_WITH_PAIRS", with_pairs),
+  BAG_STATS_SORT_PER("tp-per-wbwp-min", "TOTAL_PAIRS", total_pairs,
+                     "WB_WITH_MIN_PAIRS", with_min_pairs),
+};
+
+#undef BAG_STATS_SORT
+#undef BAG_STATS_SORT_PER
 
 namespace {
 
@@ -74,8 +105,8 @@ BagStatsCount const* find_bag_stats_count(std::string const& column) {
 }
 
 void bag_stats_help_sort_flags() {
-  for (BagStatsSortFlag const& flag : BAG_STATS_SORT_FLAGS) {
-    if (flag.column == NULL) continue;
+  for (BagStatsSort const& flag : BAG_STATS_SORT_FLAGS) {
+    if (flag.per != NULL) continue;
     std::string const option = std::string("--") + flag.option;
     dfs_help_option(option.c_str(), "sort by %s", flag.column);
   }
@@ -85,18 +116,27 @@ void bag_stats_help_sort_flags() {
                   "pairs (0 when WORDBAGS is 0)");
 }
 
-BagStatsCount const* bag_stats_sort_key(BagStatsSortFlag const& flag) {
-  return flag.column == NULL ? NULL : find_bag_stats_count(flag.column);
+void bag_stats_help_sorts() {
+  for (BagStatsSort const& sort : BAG_STATS_SORTS) {
+    if (sort.per == NULL)
+      dfs_help_option(sort.option, "%s", sort.column);
+    else
+      dfs_help_option(sort.option, "%s / %s, 0 when %s is 0", sort.column,
+                      sort.per, sort.per);
+  }
 }
 
-double bag_stats_min_wb_fraction(BagStatsRow const& row) {
-  return row.word_bags == 0
-      ? 0 : double(row.with_min_pairs) / double(row.word_bags);
+BagStatsSort const* find_bag_stats_sort(std::string_view name) {
+  for (BagStatsSort const& sort : BAG_STATS_SORTS)
+    if (name == sort.option) return &sort;
+  return NULL;
 }
 
-double bag_stats_sort_value(BagStatsCount const* key, BagStatsRow const& row) {
-  return key == NULL ? bag_stats_min_wb_fraction(row)
-                     : double(row.*key->value);
+double bag_stats_sort_value(BagStatsSort const* sort, BagStatsRow const& row) {
+  double const value = double(row.*sort->value);
+  if (sort->per == NULL) return value;
+  uint64_t const per = row.*sort->per_value;
+  return per == 0 ? 0 : value / double(per);
 }
 
 size_t bag_stats_pair_length(std::string const& pair) {

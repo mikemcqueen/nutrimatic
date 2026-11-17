@@ -53,7 +53,7 @@ struct RankArgs {
     // -n; 0 prints every row.
     int top = 0;
     // The sort options, in command line order.
-    std::vector<BagStatsSortFlag const*> sorts;
+    std::vector<BagStatsSort const*> sorts;
     bool by_length = false;
     bool by_pick = false;
     std::optional<std::filesystem::path> prior_file;
@@ -97,7 +97,10 @@ enum {
     { "clues", OPT_RANK_CLUES, OPTPARSE_REQUIRED }, \
     { "prior-weights", OPT_RANK_PRIOR_WEIGHTS, OPTPARSE_REQUIRED }, \
     { "score-detail", OPT_RANK_SCORE_DETAIL, OPTPARSE_NONE }, \
-    { "best-pairs", OPT_RANK_BEST_PAIRS, OPTPARSE_REQUIRED }, \
+    { "best-pairs", OPT_RANK_BEST_PAIRS, OPTPARSE_REQUIRED }
+
+// The optparse_long entries of BAG_STATS_SORT_FLAGS.
+#define BAG_STATS_SORT_FLAG_LONG_OPTIONS \
     { BAG_STATS_SORT_FLAGS[0].option, OPT_RANK_SORT + 0, OPTPARSE_NONE }, \
     { BAG_STATS_SORT_FLAGS[1].option, OPT_RANK_SORT + 1, OPTPARSE_NONE }, \
     { BAG_STATS_SORT_FLAGS[2].option, OPT_RANK_SORT + 2, OPTPARSE_NONE }, \
@@ -122,8 +125,8 @@ bool check_rank_args(std::string_view program, RankArgs const& args,
 // --best-pairs.
 void help_rank_output_options();
 
-// Prints the --help lines of the SORT options, --by-length, --by-pick and the
-// prior options, and the --prior-weights terms.
+// Prints the --help lines of --by-length, --by-pick and the prior options,
+// and the --prior-weights terms.
 void help_rank_sort_options();
 
 struct PairBag {
@@ -247,7 +250,7 @@ class Distribution {
 // rather than from the rows themselves.
 class Ranker {
   public:
-    Ranker(std::vector<BagStatsCount const*> keys, bool by_length)
+    Ranker(std::vector<BagStatsSort const*> keys, bool by_length)
         : keys_(std::move(keys)), by_length_(by_length) {}
 
     // Whether key() needs finish() first: a row's rank then depends on the
@@ -282,7 +285,7 @@ class Ranker {
         return by_length_ ? groups_[k].at(group).percentile(value) : value;
     }
 
-    std::vector<BagStatsCount const*> keys_;
+    std::vector<BagStatsSort const*> keys_;
     bool by_length_;
     std::vector<std::unordered_map<size_t, Distribution>> groups_;
     std::vector<Distribution> overall_;
@@ -294,7 +297,7 @@ class PickRanker {
   public:
     // `ranks`: each pick's P, its prior's percentile from the top, 1 for
     // every pick without a prior.
-    PickRanker(std::vector<BagStatsCount const*> keys,
+    PickRanker(std::vector<BagStatsSort const*> keys,
                std::vector<double> ranks)
         : keys_(std::move(keys)), ranks_(std::move(ranks)) {}
 
@@ -360,7 +363,7 @@ class PickRanker {
 
     static void compact(std::vector<Entry>* entries);
 
-    std::vector<BagStatsCount const*> keys_;
+    std::vector<BagStatsSort const*> keys_;
     std::vector<double> ranks_;
     std::vector<Distribution> groups_;
 };
@@ -371,10 +374,6 @@ class PickRanker {
 std::vector<double> pick_ranks(std::vector<PairBag> const& pair_bags,
                                std::vector<PairBag> const& prospect_bags,
                                bool prior);
-
-// The sort keys of `sorts`.
-std::vector<BagStatsCount const*> sort_flag_keys(
-    std::vector<BagStatsSortFlag const*> const& sorts);
 
 // A ranked row, with where it came in the walk, its first pick's list index
 // and its place among that pick's rows, to break ties in walk order.
@@ -428,8 +427,9 @@ void print_score_rank(BagStatsRow const& row, ScoreRank const& rank);
 
 // Prints --score-detail for the --score row `target`, `bags` its picks' bags
 // in walk step order, `row_picks` its picks as PickRanker numbers them, and
-// `sorts` the sort options.
-void print_score_detail(std::vector<BagStatsSortFlag const*> const& sorts,
+// `sorts` the sort keys, each printed as `prefix` and its name.
+void print_score_detail(std::string_view prefix,
+                        std::vector<BagStatsSort const*> const& sorts,
                         PickRanker const& ranker, RankedRow const& target,
                         std::vector<PairBag const*> const& bags,
                         std::span<uint32_t const> row_picks);

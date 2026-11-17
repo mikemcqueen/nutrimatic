@@ -62,6 +62,6 @@ bag-stats' "pb"/"wb" toggles with an "ss:" field and counts a last p in
 * Record --no-nopairs in the dump header (bag-stats 6), so that
   bag-stats-sort doesn't re-apply no.pairs to a dump made without them.
 
-* Consolidate the sort flags (--wb, --wbwp, --tp, --mp, --wbwp-min,
-  --wbfrac-min) into one --sort flag,flag,flag, in bag-stats,
-  bag-stats-cuda and bag-stats-sort.
+* Replace bag-stats' and bag-stats-cuda's sort flags (--wb, --wbwp, --tp,
+  --mp, --wbwp-min, --wbfrac-min) with bag-stats-sort's --sort KEY,KEY,
+  and its ratio keys (wbwp-per-wb, tp-per-wbwp-min, ...).

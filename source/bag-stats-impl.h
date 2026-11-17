@@ -91,28 +91,34 @@ extern BagStatsCount const BAG_STATS_COUNTS[7];
 // The count column named `column`; null when there isn't one.
 BagStatsCount const* find_bag_stats_count(std::string const& column);
 
-// A sort option of bag-stats-sort and bag-stats -n: `option` without its
-// leading "--", and the count column it sorts by, NULL for
-// WB_WITH_MIN_PAIRS / WORDBAGS.
-struct BagStatsSortFlag {
+// A sort key: `option`, its name, and the value it sorts a row by,
+// `column`'s count, over `per`'s when `per` isn't NULL (0 when that count is
+// 0); `value` and `per_value` the row members holding them.
+struct BagStatsSort {
   char const* option;
   char const* column;
+  char const* per;
+  uint64_t BagStatsRow::*value;
+  uint64_t BagStatsRow::*per_value;
 };
 
-extern BagStatsSortFlag const BAG_STATS_SORT_FLAGS[6];
+// bag-stats' and bag-stats-cuda's sort options, each --OPTION.
+extern BagStatsSort const BAG_STATS_SORT_FLAGS[6];
+
+// bag-stats-sort's --sort keys.
+extern BagStatsSort const BAG_STATS_SORTS[12];
 
 // Prints the --help lines of BAG_STATS_SORT_FLAGS.
 void bag_stats_help_sort_flags();
 
-// The sort key of `flag`: its count column, NULL for WB_WITH_MIN_PAIRS /
-// WORDBAGS.
-BagStatsCount const* bag_stats_sort_key(BagStatsSortFlag const& flag);
+// Prints the --help lines of BAG_STATS_SORTS, under --sort.
+void bag_stats_help_sorts();
 
-// WB_WITH_MIN_PAIRS / WORDBAGS, 0 when WORDBAGS is 0.
-double bag_stats_min_wb_fraction(BagStatsRow const& row);
+// The BAG_STATS_SORTS key named `name`; null when there isn't one.
+BagStatsSort const* find_bag_stats_sort(std::string_view name);
 
-// The value `key` sorts `row` by; a NULL key is WB_WITH_MIN_PAIRS / WORDBAGS.
-double bag_stats_sort_value(BagStatsCount const* key, BagStatsRow const& row);
+// The value `sort` sorts `row` by.
+double bag_stats_sort_value(BagStatsSort const* sort, BagStatsRow const& row);
 
 // The letters in `pair`: its pair picks' combined length.
 size_t bag_stats_pair_length(std::string const& pair);

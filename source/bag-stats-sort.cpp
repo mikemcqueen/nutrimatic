@@ -33,11 +33,16 @@ constexpr int OPT_PAIR_BAG_LENGTH = 256;
 constexpr int OPT_SEARCH = 257;
 constexpr int OPT_PROSPECTS = 258;
 constexpr int OPT_PAIRS = 259;
+constexpr int OPT_BEST_ROWS = 260;
+constexpr int OPT_SORT = 261;
 
 struct Args {
     int sentence = CLASSIFIED_NO_SENTENCE;
     RankArgs rank;
     int pair_bag_length = -1;
+    bool best_rows = false;
+    // -x, each pair's letters.
+    std::vector<PairsCounts> excluded;
     // --ss, --pp and --pairs, when given.
     std::optional<std::string> search;
     std::optional<std::filesystem::path> prospects_file;
@@ -47,13 +52,14 @@ struct Args {
 
 void usage(std::string_view program, FILE* out) {
     fprintf(out,
-            "usage: %.*s [-s N] [-n N] SORT... [--by-length | --by-pick]\n"
+            "usage: %.*s [-s N] [-n N] --sort KEY[,KEY...]...\n"
+            "       [--by-length | --by-pick]\n"
             "       [--score W1,W2... [--score-detail]]\n"
-            "       [--best-pairs appear|lead]\n"
+            "       [--best-pairs appear|lead | --best-rows]\n"
             "       [--prior FILE | --no-prior |\n"
             "        [--p1 INDEX] [--clues CLUEDATA] [--prior-weights SPEC]]\n"
             "       [--top-segments] [--pb-len N] [--ss STEPS] [--pp FILE]\n"
-            "       [--pairs PAIRS-FILE] [FILE|-]\n",
+            "       [--pairs PAIRS-FILE] [-x PAIR]... [FILE|-]\n",
             SV_ARG(program));
     if (out != stdout) return;
 
@@ -68,8 +74,8 @@ void usage(std::string_view program, FILE* out) {
           "  is dropped, and the others' PAIR and PAIRS are rebuilt from\n"
           "  their bags\n"
           "\n"
-          "  with more than one sort option, each row's value under each\n"
-          "  option becomes its percentile among all rows, and rows sort by\n"
+          "  with more than one sort key, each row's value under each key\n"
+          "  becomes its percentile among all rows, and rows sort by\n"
           "  their best percentile, then by the sum of them: the sorted lists\n"
           "  merged, each row at its better place\n"
           "\noptions:\n", stdout);
@@ -79,6 +85,12 @@ void usage(std::string_view program, FILE* out) {
                     WORKFLOW_CLASSIFIED_PATH);
     dfs_help_option("-n N", "print only the N rows that rank first");
     help_rank_output_options();
+    dfs_help_option("--best-rows",
+                    "print only the rows none of whose ppb and pb picks is in "
+                    "a row printed before; -n counts the rows printed");
+    dfs_help_option("-x, --exclude PAIR",
+                    "drop the rows with a ppb or pb pick whose bag is "
+                    "PAIR's, word,word, before ranking; repeatable");
     dfs_help_option("--pb-len N",
                     "rank and print only the rows whose PAIR has N letters");
     dfs_help_option("--ss STEPS",
@@ -94,7 +106,10 @@ void usage(std::string_view program, FILE* out) {
                     "the pairs the pb picks are from, in place of the "
                     "dump's");
     dfs_help_option("-h, --help", "show this help");
-    fputs("\nSORT options, at least one:\n", stdout);
+    fputs("\n--sort KEY[,KEY...], at least one KEY, repeatable; each "
+          "sorts by:\n", stdout);
+    bag_stats_help_sorts();
+    fputs("\nranking options:\n", stdout);
     help_rank_sort_options();
 }
 
@@ -106,6 +121,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
         { "ss", OPT_SEARCH, OPTPARSE_REQUIRED },
         { "pp", OPT_PROSPECTS, OPTPARSE_REQUIRED },
         { "pairs", OPT_PAIRS, OPTPARSE_REQUIRED },
+        { "best-rows", OPT_BEST_ROWS, OPTPARSE_NONE },
+        { "sort", OPT_SORT, OPTPARSE_REQUIRED },
+        { "exclude", 'x', OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
         { NULL, 0, OPTPARSE_NONE },
     };
@@ -138,6 +156,36 @@ bool parse_args(char* argv[], Args* out, bool* help) {
           case OPT_PAIRS:
             out->pairs_file = options.optarg;
             break;
+          case OPT_BEST_ROWS:
+            out->best_rows = true;
+            break;
+          case OPT_SORT:
+            for (std::string_view keys = options.optarg;;) {
+                size_t const comma = keys.find(',');
+                std::string_view const name = keys.substr(0, comma);
+                BagStatsSort const* const sort = find_bag_stats_sort(name);
+                if (sort == NULL) {
+                    report(PROGRAM, "--sort has no key %.*s",
+                           SV_ARG(name));
+                    return false;
+                }
+                out->rank.sorts.push_back(sort);
+                if (comma == std::string_view::npos) break;
+                keys.remove_prefix(comma + 1);
+            }
+            break;
+          case 'x': {
+            std::string_view const pair = options.optarg;
+            size_t const comma = pair.find(',');
+            if (comma == std::string_view::npos || comma == 0 ||
+                comma + 1 == pair.size() ||
+                pair.find(',', comma + 1) != std::string_view::npos) {
+                report(PROGRAM, "-x %s isn't word,word", options.optarg);
+                return false;
+            }
+            out->excluded.push_back(pairs_letter_counts(pair));
+            break;
+          }
           case 'h':
             *help = true;
             return true;
@@ -148,7 +196,13 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     }
 
     if (out->rank.sorts.empty()) {
-        report(PROGRAM, "give a sort option");
+        report(PROGRAM, "give --sort");
+        return false;
+    }
+    if (out->best_rows &&
+        (out->rank.best_pairs != BestPairs::NONE ||
+         !out->rank.score.empty())) {
+        report(PROGRAM, "--best-rows goes without --best-pairs and --score");
         return false;
     }
     char const* const input = optparse_arg(&options);
@@ -243,6 +297,7 @@ bool read_rows(FILE* in, std::string const& path, Args const& args,
     size_t line_number = 0;
     uint64_t dropped = 0;
     uint64_t not_the_search = 0;
+    uint64_t excluded = 0;
     while (read_line(in, &line)) {
         auto row = parse_bag_stats_row(line, path, ++line_number);
         if (!row) return false;
@@ -257,6 +312,15 @@ bool read_rows(FILE* in, std::string const& path, Args const& args,
             fprintf(stderr, "%s line %zu: PAIR doesn't have %zu picks\n",
                     path.c_str(), line_number, dump->steps.size());
             return false;
+        }
+        if (std::any_of(names.begin(), names.end(),
+                        [&](std::string const& name) {
+            PairsCounts const counts = pairs_letter_counts(name);
+            return std::find(args.excluded.begin(), args.excluded.end(),
+                             counts) != args.excluded.end();
+        })) {
+            ++excluded;
+            continue;
         }
         size_t const kept = dump->picks.size();
         Refresh const refreshed =
@@ -275,6 +339,9 @@ bool read_rows(FILE* in, std::string const& path, Args const& args,
         perror(path.c_str());
         return false;
     }
+    if (!args.excluded.empty())
+        report(PROGRAM, "-x dropped %llu of %zu rows",
+               (unsigned long long)excluded, line_number);
     if (dropped > 0)
         report(PROGRAM, "dropped %llu of %zu rows whose picks have no "
                "pairs left", (unsigned long long)dropped, line_number);
@@ -413,7 +480,7 @@ int print_score(Dump const& dump, Args const& args, R const& ranker) {
     print_score_rank(target.row, rank);
     if constexpr (R::NEEDS_PICKS)
         if (args.rank.score_detail)
-            print_score_detail(args.rank.sorts, ranker, target, bags,
+            print_score_detail("", args.rank.sorts, ranker, target, bags,
                                target_picks);
     return 0;
 }
@@ -437,7 +504,7 @@ int print_ranked(Dump* dump, Args const& args, R* ranker) {
     for (RankedRow& row : rows)
         row.key = ranker->key(row.row, bag_stats_pair_length(row.row.pair),
                               dump->row_picks(row.seq));
-    if (rank.top > 0 && size_t(rank.top) < rows.size()) {
+    if (rank.top > 0 && size_t(rank.top) < rows.size() && !args.best_rows) {
         std::partial_sort(rows.begin(), rows.begin() + rank.top, rows.end(),
                           ranks_before);
         rows.erase(rows.begin() + rank.top, rows.end());
@@ -449,9 +516,18 @@ int print_ranked(Dump* dump, Args const& args, R* ranker) {
         write_bag_stats_header(stdout, dump->header);
     std::string line;
     std::unordered_set<uint32_t> seen;
+    size_t printed = 0;
     for (RankedRow& ranked : rows) {
         line.clear();
         std::span<uint32_t const> const picks = dump->row_picks(ranked.seq);
+        if (args.best_rows) {
+            if (rank.top > 0 && printed == size_t(rank.top)) break;
+            if (std::any_of(picks.begin(), picks.end(),
+                            [&](uint32_t pick) { return seen.count(pick); }))
+                continue;
+            seen.insert(picks.begin(), picks.end());
+            ++printed;
+        }
         if (rank.best_pairs == BestPairs::NONE) {
             append_row(&line, ranked.row, rank.top_segments);
         } else {
@@ -485,8 +561,7 @@ int main(int argc, char* argv[]) {
     Dump dump;
     if (!load_dump(args, &dump)) return 1;
 
-    std::vector<BagStatsCount const*> const keys =
-        sort_flag_keys(args.rank.sorts);
+    std::vector<BagStatsSort const*> const& keys = args.rank.sorts;
     setvbuf(stdout, nullptr, _IOFBF, 1 << 22);
     if (args.rank.by_pick) {
         PickRanker ranker(keys, pick_ranks(dump.pair_bags, dump.prospect_bags,

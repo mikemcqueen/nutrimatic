@@ -221,6 +221,7 @@ void help_common_tail() {
     dfs_help_option("-h, --help", "show this help");
     fputs("\nSORT options, with -n, or with --score for its rank:\n",
           stdout);
+    bag_stats_help_sort_flags();
     help_rank_sort_options();
 }
 
@@ -528,8 +529,8 @@ void write_walk_header(WalkBase const& walk, std::string const& letters) {
 
 BagStatsRankers::BagStatsRankers(BagStatsArgs const& args,
                                  BagStatsInputs const& inputs)
-    : ranker(sort_flag_keys(args.rank.sorts), args.rank.by_length),
-      pick_ranker(sort_flag_keys(args.rank.sorts),
+    : ranker(args.rank.sorts, args.rank.by_length),
+      pick_ranker(args.rank.sorts,
                   pick_ranks(inputs.pair_bags, inputs.prospect_bags,
                              inputs.has_prior)),
       passes((args.rank.top != 0 || !args.rank.score.empty()) &&
