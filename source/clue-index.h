@@ -40,9 +40,10 @@ struct CluePairCounts {
     uint32_t clues_b = 0;
 };
 
-// How answers() matches a pair's two parts against a clue, as cluer's
-// query_index.py -e and -j do.
+// How answers() matches a pair's two parts against a clue.
 enum class ClueMatch {
+    // The clue has every word of the two parts, anywhere, in any order.
+    together,
     // The whole clue, ignoring case, is the two parts in either order joined
     // by one space or hyphen.
     exact,

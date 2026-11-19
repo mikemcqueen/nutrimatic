@@ -25,6 +25,7 @@ constexpr int OPT_CLUES = 256;
 
 struct Args {
     std::optional<ClueMatch> match;
+    bool pairs_only = false;
     std::filesystem::path dict;
     std::filesystem::path clues = CLUEDATA_PATH;
     std::filesystem::path pairs;
@@ -38,7 +39,8 @@ struct Dictionary {
 };
 
 void usage(std::string_view program, FILE* out) {
-    fprintf(out, "usage: %.*s -e|-j [-d DICT] [--clues CLUEDATA] PAIRS-FILE\n",
+    fprintf(out, "usage: %.*s [-e|-j] [-p] [-d DICT] [--clues CLUEDATA] "
+                 "PAIRS-FILE\n",
             SV_ARG(program));
     if (out != stdout) return;
 
@@ -47,12 +49,15 @@ void usage(std::string_view program, FILE* out) {
           "  is the first, then \"ANSWER: FLAGS\" for each answer, FLAGS\n"
           "  being M when ANSWER is a DICT word, P when it is a prefix of a\n"
           "  DICT word whose rest is a DICT word, S when it is such a suffix,\n"
-          "  or X for none of them\n"
+          "  or X for none of them; without -e or -j a clue matches when it\n"
+          "  has every word of both phrases, anywhere, in any order\n"
           "\noptions:\n", stdout);
-    dfs_help_option("-e", "match clues that are the pair and nothing else, "
-                    "as cluer's query_index.py -e does");
-    dfs_help_option("-j", "match clues where the pair's words are adjacent, "
-                    "as cluer's query_index.py -j does");
+    dfs_help_option("-e, --exact", "match clues that are the pair's words, "
+                    "in either order, and nothing else");
+    dfs_help_option("-j, --adjacent", "match clues where the pair's words "
+                    "are adjacent, in either order");
+    dfs_help_option("-p, --pairs-only", "print only the matching pairs, one "
+                    "per line, without their answers; DICT isn't read");
     dfs_help_option("-d DICT", "the dictionary, one word per line "
                     "(default: $DICT)");
     dfs_help_option("--clues CLUEDATA",
@@ -63,8 +68,9 @@ void usage(std::string_view program, FILE* out) {
 
 bool parse_args(char* argv[], Args* out, bool* help) {
     static struct optparse_long const long_options[] = {
-        { NULL, 'e', OPTPARSE_NONE },
-        { NULL, 'j', OPTPARSE_NONE },
+        { "exact", 'e', OPTPARSE_NONE },
+        { "adjacent", 'j', OPTPARSE_NONE },
+        { "pairs-only", 'p', OPTPARSE_NONE },
         { NULL, 'd', OPTPARSE_REQUIRED },
         { "clues", OPT_CLUES, OPTPARSE_REQUIRED },
         { "help", 'h', OPTPARSE_NONE },
@@ -86,6 +92,9 @@ bool parse_args(char* argv[], Args* out, bool* help) {
             out->match = match;
             break;
           }
+          case 'p':
+            out->pairs_only = true;
+            break;
           case 'd':
             out->dict = options.optarg;
             break;
@@ -103,11 +112,8 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     char const* const pairs = optparse_arg(&options);
     if (pairs == NULL || optparse_arg(&options) != NULL) return false;
     out->pairs = pairs;
-    if (!out->match) {
-        report(PROGRAM, "needs -e or -j");
-        return false;
-    }
-    if (out->dict.empty()) {
+    if (!out->match) out->match = ClueMatch::together;
+    if (!out->pairs_only && out->dict.empty()) {
         char const* const env = getenv("DICT");
         if (env == NULL || *env == '\0') {
             report(PROGRAM, "needs -d DICT or $DICT");
@@ -176,7 +182,7 @@ int main(int argc, char* argv[]) {
     }
 
     Dictionary dict;
-    if (!load(args.dict, &dict)) return 1;
+    if (!args.pairs_only && !load(args.dict, &dict)) return 1;
     ClueIndex index;
     std::string error;
     if (!index.open(args.clues, &error)) {
@@ -191,6 +197,10 @@ int main(int argc, char* argv[]) {
         [&](uint64_t, DfsPairRow const& row, std::string const&) {
             index.answers(row.left, row.right, *args.match, &answers);
             if (answers.empty()) return true;
+            if (args.pairs_only) {
+                printf("%s,%s\n", row.left.c_str(), row.right.c_str());
+                return true;
+            }
             std::sort(answers.begin(), answers.end());
             printf("%s%s,%s\n", first ? "" : "\n", row.left.c_str(),
                    row.right.c_str());

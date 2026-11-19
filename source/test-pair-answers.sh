@@ -49,7 +49,7 @@ printf '{"version": 4, "source_size": %s, "source_mtime_ns": %s}\n' \
   > data/index/metadata.json
 
 printf '%s\n' den mark denmark markup up > dict
-printf '%s\n' new,york "York,  New" "new york,city" big,york > pairs
+printf '%s\n' new,york "York,  New" "new york,city" big,york york\ new,city > pairs
 
 actual=$("$pair_answers" -e -d dict --clues data/cluedata pairs)
 expected='new,york
@@ -74,6 +74,35 @@ new york,city
 MARK: MPS
 NOPE: X'
 [[ $actual == "$expected" ]] || fail "-j output is wrong: $actual"
+
+actual=$("$pair_answers" -d dict --clues data/cluedata pairs)
+expected='new,york
+DEN: MP
+MARK: MPS
+NOPE: X
+
+york,new
+DEN: MP
+MARK: MPS
+NOPE: X
+
+new york,city
+MARK: MPS
+NOPE: X
+
+big,york
+MARK: MPS
+NOPE: X
+
+york new,city
+MARK: MPS
+NOPE: X'
+[[ $actual == "$expected" ]] || fail "default output is wrong: $actual"
+
+actual=$(env -u DICT "$pair_answers" -e -p --clues data/cluedata pairs)
+expected='new,york
+york,new'
+[[ $actual == "$expected" ]] || fail "-e -p output is wrong: $actual"
 
 : > empty
 if "$pair_answers" -e -d empty --clues data/cluedata pairs 2>/dev/null; then

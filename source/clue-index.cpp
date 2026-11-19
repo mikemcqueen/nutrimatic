@@ -336,7 +336,7 @@ void ClueIndex::answers(std::string_view a, std::string_view b,
             if (std::find(std::begin(joined), std::end(joined), text) ==
                 std::end(joined))
                 continue;
-        } else {
+        } else if (match == ClueMatch::adjacent) {
             clue_words(clue(id), &words);
             if (!contains_run(words, ab) && !contains_run(words, ba))
                 continue;
