@@ -29,8 +29,9 @@ MANIFEST = ".manifest.json"
 ALIASES = "aliases.json"
 GROUP = r"(?:[a-z]+|[A-Z]+)"
 LETTERS = rf"{GROUP}(?:-{GROUP})*"
-STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb([1-9][0-9]*)?)?(?:-(dict|big))?"
-                     rf"(?:-x([1-9][0-9]*))?(?:-({LETTERS}))?")
+STEP_RE = re.compile(r"pb([1-9][0-9]*)(wb([1-9][0-9]*)?)?"
+                     r"(?:-(dict|big|seed))?(?:-x([1-9][0-9]*))?"
+                     rf"(?:-({LETTERS}))?")
 PPB_RE = re.compile(r"ppb([1-9][0-9]*)?\.pb([1-9][0-9]*)?")
 USED_RE = re.compile(rf"u-({LETTERS})")
 ALIAS_RE = re.compile(r"([A-Z]+)=([a-z]+)")
@@ -58,6 +59,8 @@ class Sentence:
     dict: str
     big: str
     aliases: dict[str, str] = field(default_factory=dict)
+    seeds: dict[Segs, str] = field(default_factory=dict)
+    building: bool = True
 
     @property
     def root(self) -> Path:
@@ -71,9 +74,6 @@ class Sentence:
     def no_pairs_flag(self) -> str:
         return "--no-nopairs" if self.composite else f"-s{self.n}"
 
-    @property
-    def seed_flag(self) -> str:
-        return f"--pairs idx/pairs.s{self.n}" if self.composite else f"-s{self.n}"
 
 
 @dataclass
@@ -85,6 +85,7 @@ class Step:
     external: list[str]
     scratch: list[str] = field(default_factory=list)
     gpu: bool = False
+    seed: str | None = None
 
 
 def split_segs(segs: Segs) -> tuple[Segs, Segs]:
@@ -162,7 +163,7 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
     kinds = [kind_of(seg) for seg in rest]
     if not rest or None in kinds or kinds[0] not in STEP_KINDS:
         return ("want any u-LETTERS directories, then a step (pbN, "
-                "pbNwb[M], optionally -dict or -big, then -xN, then "
+                "pbNwb[M], optionally -dict, -big or -seed, then -xN, then "
                 "-LETTERS; or ppb[N].pb[M]), then links of cuts (Nk, "
                 "pp-NAME-Nk, Nk/pp-NAME-Nk or union-Nk) followed by a step, "
                 "and optionally cuts at the end")
@@ -207,7 +208,7 @@ def path_error(sentence: Sentence, segs: Segs) -> str | None:
             return f"-{match[4]} is only for a root step"
         if match[5] and (index or match[2]):
             return f"-x{match[5]} is only for a root pbN step"
-        for group in ("dict", "big"):
+        for group in ("dict", "big", "seed"):
             if used and group in used.split("-"):
                 return f"-{group} must come right after pbN or pbNwb[M]"
         if used and (index or used_dirs):
@@ -226,14 +227,53 @@ def node_dir(sentence: Sentence, segs: Segs) -> Path:
     return sentence.root.joinpath(*segs)
 
 
+def seed_root(segs: Segs) -> Segs | None:
+    used_dirs, rest = split_segs(segs)
+    match = STEP_RE.fullmatch(rest[0])
+    if match[4] != "seed":
+        return None
+    return (*(used_dirs if match[2] else used_dirs[:1]), rest[0])
+
+
+def recorded_seed(sentence: Sentence, root: Segs) -> str | None:
+    manifest = read_manifest(node_dir(sentence, root))
+    return next((record["seed"] for record in manifest.values()
+                 if "seed" in record), None)
+
+
+UNKNOWN_SEED = "<unknown seed>"
+
+
+def seed_file(sentence: Sentence, segs: Segs) -> str | None:
+    root = seed_root(segs)
+    if root is None:
+        return None
+    seed = sentence.seeds.get(root) or recorded_seed(sentence, root)
+    if seed is None and not sentence.building:
+        return UNKNOWN_SEED
+    if seed is None:
+        die(f"s{sentence.n}/{'/'.join(root)} has no recorded seed file; "
+            "give --seed PAIRS-FILE")
+    return seed
+
+
+def seed_flag(sentence: Sentence) -> str:
+    return (f"--pairs idx/pairs.s{sentence.n}" if sentence.composite
+            else f"-s{sentence.n}")
+
+
 def step_input(sentence: Sentence, segs: Segs) -> tuple[str, list, list[str]]:
     match = STEP_RE.fullmatch(segs[-1])
     used_dirs, rest = split_segs(segs)
     if len(rest) == 1 and (len(used_dirs) < 2 or match[2]):
-        source = f"seed-pairs {sentence.seed_flag} -m4"
+        seed = seed_file(sentence, segs)
+        source = f"seed-pairs {seed_flag(sentence)} -m4"
         deps = []
         external = [f"idx/pairs.s{sentence.n}"]
-        if match[4]:
+        if seed:
+            source = f"cat {shlex.quote(seed)}"
+            external = [seed]
+        elif match[4]:
             seed_dict = sentence.big if match[4] == "big" else sentence.dict
             source += f" -d {shlex.quote(seed_dict)}"
             external.append(seed_dict)
@@ -272,7 +312,8 @@ def pair_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
         f"{source} | bag-stats-cuda --threads 0 {sentence.no_pairs_flag} "
         f"{used_flag(sentence, segs)}--ss {ss} --uc "
         f"{letters} - {dictionary} --progress 15 > {d / 'pairs.ranked.tmp'}",
-        [sentence.dict, *external], gpu=True)
+        [sentence.dict, *external], gpu=True,
+        seed=seed_file(sentence, segs))
     return [rank, pairs_step(sentence, segs), counted_step(sentence, segs),
             words_step(sentence, segs)]
 
@@ -327,7 +368,8 @@ def word_bag_step(sentence: Sentence, segs: Segs, count: int,
         f"--threads 0 {sentence.no_pairs_flag} {used_flag(sentence, segs)}--ss {ss} "
         f"{letters} - {dictionary} "
         f"--progress 15 --cache-size 5000 > {d / 'dump.tmp'}",
-        [sentence.dict, *external], gpu=True)
+        [sentence.dict, *external], gpu=True,
+        seed=seed_file(sentence, segs))
     top = d / "top.tmp"
     digest = Step(
         segs, ["pairs.ranked", "words.ranked"], [(segs, "dump")],
@@ -344,14 +386,20 @@ def cut_step(sentence: Sentence, segs: Segs, count: int) -> list[Step]:
     d = node_dir(sentence, segs)
     parent = segs[:-1]
     words = node_dir(sentence, parent) / "words"
-    n = sentence.n
+    seed = seed_file(sentence, segs)
+    source = f"seed-pairs {seed_flag(sentence)} -m4 -d /dev/stdin"
+    external = [f"idx/pairs.s{sentence.n}"]
+    if seed:
+        source = (f"awk -F, 'NR==FNR{{w[$1];next}} ($1 in w) && ($2 in w)' "
+                  f"- {shlex.quote(seed)}")
+        external = [seed]
     return [Step(
         segs, ["pairs"], [(parent, "words")],
-        f"head -n {count} {words} | seed-pairs {sentence.seed_flag} "
-        f"-m4 -d /dev/stdin | pfilter {sentence.no_pairs_flag} --no-dict -x0 "
+        f"head -n {count} {words} | {source} | pfilter "
+        f"{sentence.no_pairs_flag} --no-dict -x0 "
         f"-l {shlex.quote(sentence.letters)} {used_flag(sentence, segs)}- "
         f"> {d / 'pairs.tmp'}",
-        [f"idx/pairs.s{n}"])]
+        external)]
 
 
 def pp_cut_step(sentence: Sentence, segs: Segs, name: str,
@@ -463,6 +511,8 @@ def stale_reason(sentence: Sentence, step: Step) -> str | None:
         record = manifest.get(output)
         if record is None:
             return "no record"
+        if step.seed == UNKNOWN_SEED:
+            return "unknown seed"
         if not record.get("adopted") and record["command"] != step.command:
             return "command changed"
         if record["inputs"] != current_inputs(sentence, step):
@@ -532,6 +582,8 @@ def run_step(sentence: Sentence, step: Step) -> None:
             "inputs": current_inputs(sentence, step),
             "external": {path: stat(path) for path in step.external},
         }
+        if step.seed:
+            record["seed"] = step.seed
         for output in step.outputs:
             manifest[output] = record
         write_manifest(directory, manifest)
@@ -784,6 +836,11 @@ def main() -> int:
                         help="also rerun every step of the named path; "
                         "the only way an out-of-date root bag-stats-cuda "
                         "step (e.g. pb3) is rebuilt")
+    parser.add_argument("--seed", metavar="PAIRS-FILE",
+                        help="the pair file seed-pairs reads for a root "
+                        "step with -seed (pb3-seed) and the Nk cuts below "
+                        "it; recorded, so later builds of that tree may "
+                        "omit it; a different file needs -f")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true",
                       help="show the tree and what is stale; with "
@@ -804,8 +861,20 @@ def main() -> int:
     parser.add_argument("paths", metavar="PATH", nargs="*")
     args = parser.parse_args()
 
+    seed = None
+    if args.seed:
+        seed_path = Path(args.seed).resolve()
+        if not seed_path.is_file():
+            die(f"{args.seed} not found")
+        here = Path(__file__).resolve().parent
+        seed = str(seed_path.relative_to(here)
+                   if seed_path.is_relative_to(here) else seed_path)
     os.chdir(Path(__file__).resolve().parent)
     sentence = load_sentence(args.sentence)
+    if seed and (args.status or args.report or args.adopt or args.add_alias
+                 or args.remove_alias):
+        parser.error("--seed is only for a build")
+    sentence.building = not (args.status or args.report)
     if args.status:
         used = [USED_RE.fullmatch(path) for path in args.paths]
         if sum(map(bool, used)) > 1:
@@ -841,10 +910,24 @@ def main() -> int:
             remove_aliases(sentence, args.remove_alias)
             return 0
         segs = parse_path(sentence, args.paths[0])
-        planner = Planner(sentence, {segs} if args.force else set())
+        forced = {segs} if args.force else set()
+        root = seed_root(segs)
+        if seed and root is None:
+            parser.error(f"--seed needs a path whose root step has -seed, "
+                         f"such as pb3-seed")
+        if seed:
+            recorded = recorded_seed(sentence, root)
+            if recorded not in (None, seed):
+                if not args.force:
+                    die(f"s{sentence.n}/{'/'.join(root)} was built from "
+                        f"seed file {recorded}, not {seed}; give -f to "
+                        "rebuild it from the new one")
+                forced.add(root)
+            sentence.seeds[root] = seed
+        planner = Planner(sentence, forced)
         for step in steps_of(sentence, segs):
             planner.visit(step)
-        needed = {segs[:i] for i in range(1, len(segs) + 1)}
+        needed = {segs[:i] for i in range(1, len(segs) + 1)} | forced
         for step, reason in planner.order:
             if step.gpu and is_root(step.segs) and step.segs not in needed:
                 die(f"parent GPU results missing; run {PROGRAM}.py "

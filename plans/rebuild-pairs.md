@@ -164,13 +164,22 @@ A `pbN` or `pbNwb` step takes three optional suffixes, in this order:
   on a root `pbN` or `pbNwb` only. bag-stats-cuda's `DICT` argument stays
   `$DICT` either way. A forced pair with a word outside the dictionary is
   dropped, with a warning
+* `-seed`, in place of `-dict` or `-big`: the file given with `--seed
+  PAIRS-FILE` is the step's seeds, in place of `seed-pairs`.
+  Accepted on a root `pbN` or `pbNwb` only. The step's manifest records the
+  file, so later builds of the tree may leave `--seed` out; one that has no
+  record needs it. A `--seed` naming a different file than the recorded one
+  is refused without `-f`, which reruns that root step from the new file.
+  `--seed` is rejected on a path whose root step has no `-seed`
 * `-xN`: the step's input seeds go through `pfilter -xN` first, a cap of N
   letters per pair; without it they have no cap. Accepted on a root `pbN` only
 * `-LETTERS`: as under Used letters
 
 `-xN` applies to that step alone: a cut below it isn't filtered by it. `-dict`
 and `-big` carry down: a cut's words come from the step's pairs, so they are
-all in the dictionary.
+all in the dictionary. `-seed` carries down too: an `Nk` cut below it takes
+the seed file's pairs with both words in its top N words, in place of
+`seed-pairs -d`.
 
 ### Step inputs
 
