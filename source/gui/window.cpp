@@ -5,6 +5,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
@@ -86,9 +87,33 @@ void Window::render() {
   ImGui::Begin("pgui", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
   ImGui::SetKeyOwner(ImGuiMod_Alt, ImGui::GetID("alt"));
+  ImGuiStyle& style = ImGui::GetStyle();
+  ImGuiIO const& io = ImGui::GetIO();
+  if (!io.KeyCtrl || (io.MouseWheel != 0 && io.MouseWheel * font_wheel_ < 0))
+    font_wheel_ = 0;
+  if (io.KeyCtrl && io.MouseWheel != 0) {
+    font_wheel_ += io.MouseWheel;
+    int const steps = int(std::trunc(font_wheel_));
+    if (steps != 0) {
+      font_wheel_ -= float(steps);
+      auto const focused = std::ranges::find_if(columns_, [](Column const& c) {
+        return c.shows_list() && c.list_.focused();
+      });
+      if (focused != columns_.end()) {
+        focused->font_size_ = std::clamp(focused->font_size_ + steps,
+                                         MIN_FONT_SIZE, MAX_FONT_SIZE);
+        ImGui::MarkIniSettingsDirty();
+      } else {
+        style._NextFrameFontSizeBase = float(
+            std::clamp(int(std::lround(style.FontSizeBase)) + steps,
+                       MIN_FONT_SIZE, MAX_FONT_SIZE));
+        ImGui::MarkIniSettingsDirty();
+      }
+    }
+  }
 
-  if (ImGui::BeginTable("fields", 8)) {
-    for (int i = 0; i < 8; ++i) {
+  if (ImGui::BeginTable("fields", 9)) {
+    for (int i = 0; i < 9; ++i) {
       ImGui::TableSetupColumn("", i == 0 || i == 2 || i == 3 || i == 4
                                       ? ImGuiTableColumnFlags_WidthStretch
                                       : ImGuiTableColumnFlags_WidthFixed);
@@ -138,6 +163,7 @@ void Window::render() {
     bool const max_length_entered =
         ImGui::InputInt("##seed_max", &seed_max_length_, 0, 0,
                         ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SetItemTooltip("per-word max length");
     if (!app_state().seed_pairs().readable) {
       ImGui::SameLine();
       ImGui::TextDisabled("unreadable");
@@ -181,12 +207,26 @@ void Window::render() {
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("s:");
-    for (int i = 1; i <= 9; ++i) {
-      ImGui::SameLine();
-      bool const selected = sentence_ == i;
-      char label[4];
-      std::snprintf(label, sizeof label, "S%d", i);
-      if (toggle_button(label, selected)) sentence_ = i;
+    ImGui::SameLine(0, 0);
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("0").x +
+                            2 * ImGui::GetStyle().FramePadding.x +
+                            ImGui::GetFrameHeight());
+    std::string const sentence_preview =
+        sentence_ == CLASSIFIED_NO_SENTENCE ? "" : std::to_string(sentence_);
+    if (ImGui::BeginCombo("##sentence", sentence_preview.c_str())) {
+      for (int i = 1; i <= 9; ++i) {
+        bool const selected = sentence_ == i;
+        if (ImGui::Selectable(std::to_string(i).c_str(), selected))
+          sentence_ = i;
+        if (selected) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::TableNextColumn();
+    int font_size = int(std::lround(style.FontSizeBase));
+    if (font_size_input("font_size", &font_size)) {
+      style._NextFrameFontSizeBase = float(font_size);
+      ImGui::MarkIniSettingsDirty();
     }
     ImGui::EndTable();
     AppState& state = app_state();

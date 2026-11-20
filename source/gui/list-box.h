@@ -24,7 +24,8 @@ class ListBox {
  public:
   ListBox(SharedLines items, SharedLines values);
 
-  void render();
+  // Draws the list with its text at `font_size`.
+  void render(float font_size);
 
   SharedLines const& items() const { return items_; }
 
@@ -73,6 +74,9 @@ class ListBox {
   // Whether Shift+R was pressed while the list had keyboard focus during the
   // last render().
   bool review_pressed() const { return review_pressed_; }
+
+  // Whether the list had keyboard focus during the last render().
+  bool focused() const { return focused_; }
 
   // The screen rect of the list's frame during the last render().
   ImVec2 rect_min() const { return rect_min_; }

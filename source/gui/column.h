@@ -11,55 +11,54 @@
 #include "command.h"
 #include "input-source.h"
 #include "list-box.h"
+#include "widgets.h"
 
 // Loads the font Column's lc tooltips use, Cascadia Mono, after the default
 // font. The tooltips use the current font when it can't be loaded, which is
 // diagnosed.
 void load_letter_count_font();
 
-// One top-level pane: a line of a source dropdown, offering app_state()'s
-// seed keys unless the command reads columns only (see
+// One top-level pane: a line of a source dropdown, offering app_state()'s seed
+// keys unless the command reads columns only (see
 // Command::reads_columns_only()), "dict" when the command has it (see
 // Command::has_dictionary_in_src()), and the number, counting from 1, of each
-// column before this one, and a letter
-// source dropdown, offering "all" and those same numbers; a line of an "f:"
-// filter field and a "D:" dropdown of DICT ("sml_dict") and BIG ("big_dict"),
-// starting at DICT, naming the dictionary in app_state()'s dictionaries the
-// command runs with, that "dict" names, and that a seed source is filtered
-// by (see AppState::seed_view()); then a dropdown of
-// command_names, less "bag-stats" and the commands reading columns only in
-// the first column, naming the command (see make_command()), sized to the
-// longest name, and setting the source to the column just before when the
-// command reads columns only, or to the command's default seed when it has
-// one
-// (see Command::default_seed()), beside that command's option widgets, with
-// its display option widgets on the line below (see
-// Command::render_display_options()), followed, when the command has a word
-// bag source (see Command::has_word_bag_source()), by a "wb:" dropdown of
-// DICT, BIG and the number of each column before this one, naming the
-// dictionary or column whose words it runs with as its word bags; a status
-// line, and a ListBox of
-// that command's output on its input source, omitted when the source is
-// std::monostate. Each choice keeps its own options. render() reruns the
+// column before this one, a letter source dropdown, offering "all" and those
+// same numbers, and a "p:" font size field for the ListBox's text, which
+// Ctrl+wheel also steps while the ListBox has keyboard focus (see Window); a
+// line of an "f:" filter field and a "D:" dropdown of DICT ("sml_dict") and BIG
+// ("big_dict"), starting at DICT, naming the dictionary in app_state()'s
+// dictionaries the command runs with, that "dict" names, and that a seed source
+// is filtered by (see AppState::seed_view()); then a dropdown of command_names,
+// less "bag-stats" and the commands reading columns only in the first column,
+// naming the command (see make_command()), sized to the longest name, and
+// setting the source to the column just before when the command reads columns
+// only, or to the command's default seed when it has one (see
+// Command::default_seed()), beside that command's option widgets, with its
+// display option widgets on the line below (see
+// Command::render_display_options()), followed, when the command has a word bag
+// source (see Command::has_word_bag_source()), by a "wb:" dropdown of DICT, BIG
+// and the number of each column before this one, naming the dictionary or
+// column whose words it runs with as its word bags; a status line, and a
+// ListBox of that command's output on its input source, omitted when the source
+// is std::monostate. Each choice keeps its own options. render() reruns the
 // command, on a worker thread, when the source, the choice, its options, the
-// dictionary, the word bag source, app_state(), or the source, letters or
-// word bag column's output or selection has changed since it last ran, or
-// the seed view the source names or a dictionary file D: or wb: names has
-// been rebuilt or reloaded, or p1 has been reopened for a command that uses
-// it (see Command::uses_p1()); it waits for a pending source, letters or word
-// bag column to finish first. The letters column is the one letter_source
-// names, none for "all". The command runs with the used letters passed on by the letters
-// column (see output_used_letters()), or app_state()'s (the window's u:
+// dictionary, the word bag source, app_state(), or the source, letters or word
+// bag column's output or selection has changed since it last ran, or the seed
+// view the source names or a dictionary file D: or wb: names has been rebuilt
+// or reloaded, or p1 has been reopened for a command that uses it (see
+// Command::uses_p1()); it waits for a pending source, letters or word bag
+// column to finish first. The letters column is the one letter_source names,
+// none for "all". The command runs with the used letters passed on by the
+// letters column (see output_used_letters()), or app_state()'s (the window's u:
 // field) for "all", plus its own (see Command::used_letters()). A status line
-// shows the letters left once those used letters are removed from
-// app_state()'s letters (the window's l: field); while the mouse is held on
-// it, a tooltip below it shows lc's report on them (see
-// letter_count_lines()). Items that would leave letters judged bad (see
-// AppState::is_judged_bad()), were they taken from the letters left, are,
-// while app_state()'s judged_bad_filter is on, hidden from the ListBox (see
-// ListBox::set_hidden()), once output() is up to date, as are those the
-// command that made output() hides by their values (see
-// Command::display_hides()). While app_state()'s new_only, a column whose
+// shows the letters left once those used letters are removed from app_state()'s
+// letters (the window's l: field); while the mouse is held on it, a tooltip
+// below it shows lc's report on them (see letter_count_lines()). Items that
+// would leave letters judged bad (see AppState::is_judged_bad()), were they
+// taken from the letters left, are, while app_state()'s judged_bad_filter is
+// on, hidden from the ListBox (see ListBox::set_hidden()), once output() is up
+// to date, as are those the command that made output() hides by their values
+// (see Command::display_hides()). While app_state()'s new_only, a column whose
 // command hides_old_pairs() also hides the old pairs: those that fit the
 // letters left once used_letters(true), the used letters with the window's u:
 // as the baseline, are removed, unless new_keep_yes and the pair is in
@@ -89,6 +88,12 @@ class Column {
   void render();
 
   InputSource const& input_source() const { return source_; }
+
+  // The font size of the ListBox's text, kept across sessions (see pgui.cpp).
+  int font_size() const { return font_size_; }
+
+  // Sets font_size() to `size` when it's from MIN_FONT_SIZE to MAX_FONT_SIZE.
+  void set_font_size(int size);
 
   // The command's output, shared rather than copied by readers: empty before
   // the first run completes, when the choice names no command, and when the
@@ -170,10 +175,12 @@ class Column {
     SharedLines values;
   };
 
-  // "src:" and the source dropdown, which sets source_, then "l:" and
-  // the letter source dropdown, which sets letter_source_.
+  // "s:" and the source dropdown, which sets source_, then "l:" and the
+  // letter source dropdown, which sets letter_source_, then the p: field (see
+  // font_size_input()), which sets font_size_.
   void render_sources();
-  // letter_count_ in a tooltip whose top left is at `x`, `y`.
+  // letter_count_ in a tooltip whose top left is at `x`, `y`, at font size 18
+  // whatever FontSizeBase is.
   void render_letter_count(float x, float y) const;
   // Whether render() shows the ListBox: the source isn't std::monostate.
   bool shows_list() const {
@@ -221,6 +228,8 @@ class Column {
   ColumnIdentifier id_ = 0;
   InputSource source_;
   LetterSource letter_source_;
+  // The font size of the ListBox's text.
+  int font_size_ = DEFAULT_FONT_SIZE;
   char filter_[256] = {};
   // filter_ as of the last set_filter().
   std::string applied_filter_;

@@ -12,8 +12,9 @@
 ListBox::ListBox(SharedLines items, SharedLines values)
     : items_(std::move(items)), values_(std::move(values)) {}
 
-void ListBox::render() {
+void ListBox::render(float font_size) {
   review_pressed_ = false;
+  ImGui::PushFont(nullptr, font_size);
   ImGui::PushStyleColor(ImGuiCol_FrameBg, focused_ ? IM_COL32(0x31, 0x3b, 0x4a, 0xff)
                                                    : IM_COL32(0x2a, 0x33, 0x40, 0xff));
   bool const open = ImGui::BeginListBox("##list", ImVec2(-FLT_MIN, -FLT_MIN));
@@ -22,6 +23,7 @@ void ListBox::render() {
   if (!open) {
     rect_min_ = ImGui::GetItemRectMin();
     rect_max_ = ImGui::GetItemRectMax();
+    ImGui::PopFont();
     return;
   }
   sideways_pressed_ = 0;
@@ -76,6 +78,7 @@ void ListBox::render() {
   ImGui::EndListBox();
   rect_min_ = ImGui::GetItemRectMin();
   rect_max_ = ImGui::GetItemRectMax();
+  ImGui::PopFont();
 }
 
 void ListBox::set_items(SharedLines items, SharedLines values) {

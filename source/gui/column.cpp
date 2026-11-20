@@ -2,6 +2,7 @@
 
 #include <SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cctype>
@@ -122,6 +123,7 @@ std::string remaining_letters(std::string const& letters,
 }
 
 char const* const LETTER_COUNT_FONT = "/mnt/c/Windows/Fonts/CascadiaMono.ttf";
+float const LETTER_COUNT_FONT_SIZE = 18;
 
 // The font lc's output is shown in, or null for the current font.
 ImFont* letter_count_font = nullptr;
@@ -365,10 +367,14 @@ void Column::render() {
 
   if (shows_list()) {
     int const selected = list_.selected();
-    list_.render();
+    list_.render(float(font_size_));
     if (list_.selected() != selected) ++version_;
   }
   ImGui::PopID();
+}
+
+void Column::set_font_size(int size) {
+  if (size >= MIN_FONT_SIZE && size <= MAX_FONT_SIZE) font_size_ = size;
 }
 
 void load_letter_count_font() {
@@ -381,7 +387,7 @@ void load_letter_count_font() {
 }
 
 void Column::render_letter_count(float x, float y) const {
-  ImGui::PushFont(letter_count_font, 0.0f);
+  ImGui::PushFont(letter_count_font, LETTER_COUNT_FONT_SIZE);
   float width = 0;
   for (std::string const& line : letter_count_)
     width = std::max(width, ImGui::CalcTextSize(line.c_str()).x);
@@ -409,7 +415,7 @@ void Column::render_sources() {
       widest.push_back(band.key);
   if (has_dictionary_in_src) widest.push_back("dict");
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("src:");
+  ImGui::TextUnformatted("s:");
   ImGui::SameLine(0, 0);
   ImGui::SetNextItemWidth(combo_width(widest));
   if (ImGui::BeginCombo("##source", label.c_str())) {
@@ -447,6 +453,8 @@ void Column::render_sources() {
     }
     ImGui::EndCombo();
   }
+  ImGui::SameLine();
+  if (font_size_input("font_size", &font_size_)) ImGui::MarkIniSettingsDirty();
 }
 
 void Column::render_dictionary(float width) {

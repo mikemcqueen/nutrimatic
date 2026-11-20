@@ -5,6 +5,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,16 +14,17 @@
 
 #include "app-state.h"
 #include "log.h"
+#include "widgets.h"
 #include "window.h"
 
 namespace {
 
-// The SDL window's position and size, kept in the ImGui ini file as
-// "[pgui][Window]": read from it before the window is created, and written
-// from the live window, when ImGui saves settings, once it is set. The window
-// is created with its frame at x, y but reports where its contents are, so
-// the offset between them, measured once it is shown, is taken off the
-// position written.
+// The SDL window's position and size, and the global font size, kept in the
+// ImGui ini file as "[pgui][Window]": read from it before the window is
+// created, and written from the live window and ImGui's FontSizeBase, when
+// ImGui saves settings, once it is set. The window is created with its frame at
+// x, y but reports where its contents are, so the offset between them, measured
+// once it is shown, is taken off the position written.
 struct WindowGeometry {
   int x = SDL_WINDOWPOS_CENTERED;
   int y = SDL_WINDOWPOS_CENTERED;
@@ -31,6 +33,7 @@ struct WindowGeometry {
   SDL_Window* window = nullptr;
   int frame_left = 0;
   int frame_top = 0;
+  int font_size = DEFAULT_FONT_SIZE;
 };
 
 WindowGeometry& window_geometry() {
@@ -38,12 +41,35 @@ WindowGeometry& window_geometry() {
   return geometry;
 }
 
-void* geometry_open(ImGuiContext*, ImGuiSettingsHandler*, char const* name) {
-  return std::strcmp(name, "Window") == 0 ? &window_geometry() : nullptr;
+// The columns' font sizes are kept in the ini file as "[pgui][Columns]", on a
+// "FontSizes=" line listing them in column order, comma-separated.
+void* settings_open(ImGuiContext*, ImGuiSettingsHandler*, char const* name) {
+  if (std::strcmp(name, "Window") == 0) return &window_geometry();
+  if (std::strcmp(name, "Columns") == 0) return &main_window();
+  return nullptr;
 }
 
-void geometry_read_line(ImGuiContext*, ImGuiSettingsHandler*, void* entry,
+void read_column_font_sizes(char const* line) {
+  char const* const prefix = "FontSizes=";
+  if (std::strncmp(line, prefix, std::strlen(prefix)) != 0) return;
+  char const* p = line + std::strlen(prefix);
+  Window& window = main_window();
+  for (int i = 0; i < window.column_count(); ++i) {
+    char* end;
+    long const size = std::strtol(p, &end, 10);
+    if (end == p) return;
+    window.get_column(i).set_font_size(int(size));
+    if (*end != ',') return;
+    p = end + 1;
+  }
+}
+
+void settings_read_line(ImGuiContext*, ImGuiSettingsHandler*, void* entry,
                         char const* line) {
+  if (entry == &main_window()) {
+    read_column_font_sizes(line);
+    return;
+  }
   auto* geometry = static_cast<WindowGeometry*>(entry);
   int a, b;
   if (std::sscanf(line, "Pos=%d,%d", &a, &b) == 2) {
@@ -52,30 +78,40 @@ void geometry_read_line(ImGuiContext*, ImGuiSettingsHandler*, void* entry,
   } else if (std::sscanf(line, "Size=%d,%d", &a, &b) == 2 && a > 0 && b > 0) {
     geometry->width = a;
     geometry->height = b;
+  } else if (std::sscanf(line, "FontSize=%d", &a) == 1 &&
+             a >= MIN_FONT_SIZE && a <= MAX_FONT_SIZE) {
+    geometry->font_size = a;
   }
 }
 
-void geometry_write_all(ImGuiContext*, ImGuiSettingsHandler*,
+void settings_write_all(ImGuiContext*, ImGuiSettingsHandler*,
                         ImGuiTextBuffer* out) {
+  Window& top = main_window();
+  out->appendf("[pgui][Columns]\nFontSizes=");
+  for (int i = 0; i < top.column_count(); ++i)
+    out->appendf("%s%d", i ? "," : "", top.get_column(i).font_size());
+  out->appendf("\n\n");
   SDL_Window* const window = window_geometry().window;
   if (!window) return;
   int x, y, width, height;
   SDL_GetWindowPosition(window, &x, &y);
   SDL_GetWindowSize(window, &width, &height);
-  out->appendf("[pgui][Window]\nPos=%d,%d\nSize=%d,%d\n\n",
+  out->appendf("[pgui][Window]\nPos=%d,%d\nSize=%d,%d\nFontSize=%ld\n\n",
                x - window_geometry().frame_left,
-               y - window_geometry().frame_top, width, height);
+               y - window_geometry().frame_top, width, height,
+               std::lround(ImGui::GetStyle().FontSizeBase));
 }
 
 // Registers the "[pgui]" ini section and loads the ini file into
-// window_geometry(), ahead of the first NewFrame().
-void load_window_geometry() {
+// window_geometry() and the columns' font sizes, ahead of the first
+// NewFrame().
+void load_settings() {
   ImGuiSettingsHandler handler;
   handler.TypeName = "pgui";
   handler.TypeHash = ImHashStr("pgui");
-  handler.ReadOpenFn = geometry_open;
-  handler.ReadLineFn = geometry_read_line;
-  handler.WriteAllFn = geometry_write_all;
+  handler.ReadOpenFn = settings_open;
+  handler.ReadLineFn = settings_read_line;
+  handler.WriteAllFn = settings_write_all;
   ImGui::AddSettingsHandler(&handler);
   ImGui::LoadIniSettingsFromDisk(ImGui::GetIO().IniFilename);
 }
@@ -123,12 +159,12 @@ int main(int, char**) {
   if (!load_app_state(seed)) return 1;
   Window& top = main_window();
   ColumnIdentifier previous = top.add_column(Column(Seed{app_state().seed_key}, std::nullopt));
-  for (int i = 1; i < 6; ++i)
+  for (int i = 1; i < 8; ++i)
     previous = top.add_column(Column(previous, previous));
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
-  load_window_geometry();
+  load_settings();
 
   SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
@@ -153,7 +189,7 @@ int main(int, char**) {
   ImGui::StyleColorsDark();
   ImGui::GetIO().Fonts->AddFontDefaultVector();
   load_letter_count_font();
-  ImGui::GetStyle().FontSizeBase = 20.0f;
+  ImGui::GetStyle().FontSizeBase = float(window_geometry().font_size);
   ImGui::GetIO().ConfigInputTextCursorBlink = false;
   ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);

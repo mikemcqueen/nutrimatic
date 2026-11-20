@@ -26,6 +26,22 @@ bool clearable_input(std::string_view id, char* text, size_t size,
   return changed;
 }
 
+bool font_size_input(std::string_view id, int* size) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("p:");
+  ImGui::SameLine(0, 0);
+  ImGui::SetNextItemWidth(ImGui::CalcTextSize("00").x +
+                          2 * ImGui::GetStyle().FramePadding.x);
+  ImGui::PushID(id.data(), id.data() + id.size());
+  int field = *size;
+  bool const entered = ImGui::InputInt("##size", &field, 0, 0,
+                                       ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::PopID();
+  if (!entered || field < MIN_FONT_SIZE || field > MAX_FONT_SIZE) return false;
+  *size = field;
+  return true;
+}
+
 bool toggle_button(std::string_view label, bool on) {
   if (on) {
     ImGui::PushStyleColor(ImGuiCol_Button,
