@@ -12,31 +12,35 @@
 
 // The top-level pane filling the viewport: a line of seed, letters (l),
 // used-letters (u), and new used-letters (u_new) fields splitting its width
-// evenly, the seed field followed by a per-word max length (x) field, then
-// "new" and "YES" checkboxes setting app_state()'s new_only and new_keep_yes,
-// "YES" greyed out unless "new" is checked, then a BAD checkbox that toggles
-// app_state()'s judged_bad_filter, a sentence (s) dropdown of 1-9, and a font
-// size (p) field, then the columns side by side. The seed field starts from
-// app_state()'s seed_name and is followed by a dropdown arrow listing the
-// selected sentence's pair files for the root typed in the field (see
-// list_seeds()), listed again whenever the root changes, then a refresh button.
-// Enter in the field loads the file named there, and choosing a listed file
-// puts it there and loads it, with its bad bags (see
+// evenly, the seed field followed by an answers (a) dropdown and a per-word max
+// length (x) field, then "new" and "YES" checkboxes setting app_state()'s
+// new_only and new_keep_yes, "YES" greyed out unless "new" is checked, then a
+// BAD checkbox that toggles app_state()'s judged_bad_filter, a sentence (s)
+// dropdown of 1-9, and a font size (p) field, then the columns side by side.
+// The seed field starts from app_state()'s seed_name and is followed by a
+// dropdown arrow listing the selected sentence's pair files for the root typed
+// in the field (see list_seeds()), listed again whenever the root changes, then
+// a refresh button. Enter in the field loads the file named there, and choosing
+// a listed file puts it there and loads it, with its bad bags (see
 // AppState::load_seed_and_bad_bags()), keeps only the seed views the columns'
 // seed sources name and reads the pair file again when it's newer (see
 // AppState::refresh_seed_files()), reloads the loaded dictionaries whose files
 // are newer (see AppState::refresh_dictionaries()), and refreshes the required
 // words (see AppState::refresh_required_words()); the refresh button lists the
-// files again and does the same for the name in the field. The x: field starts
-// from app_state()'s seed_max_length, and Enter in it stores it there; its
-// tooltip says it's the per-word max length. The p: field (see
-// font_size_input()) shows ImGui's FontSizeBase, rounded, and Enter in it sets
-// FontSizeBase from the next frame; it sizes the text everywhere but the
-// columns' ListBoxes, which use their columns' p: (see Column). Ctrl+wheel
-// steps the p: of the column whose ListBox has keyboard focus, or else
-// FontSizeBase from the next frame, by 1 for each whole unit of wheel motion,
-// kept from MIN_FONT_SIZE to MAX_FONT_SIZE. Both sizes are kept across
-// sessions (see pgui.cpp).
+// files again and does the same for the name in the field. The a: dropdown
+// shows app_state()'s seed_answers, and choosing an entry stores it there,
+// bumping seed_answers_version, and starts finding the seed pairs' answers (see
+// AppState::start_seed_answered()); "filtering" is beside it while that runs,
+// and "no clues" when the clue index failed to open, which the refresh button
+// then lets be opened again. The x: field starts from app_state()'s
+// seed_max_length, and Enter in it stores it there; its tooltip says it's the
+// per-word max length. The p: field (see font_size_input()) shows ImGui's
+// FontSizeBase, rounded, and Enter in it sets FontSizeBase from the next frame;
+// it sizes the text everywhere but the columns' ListBoxes, which use their
+// columns' p: (see Column). Ctrl+wheel steps the p: of the column whose ListBox
+// has keyboard focus, or else FontSizeBase from the next frame, by 1 for each
+// whole unit of wheel motion, kept from MIN_FONT_SIZE to MAX_FONT_SIZE. Both
+// sizes are kept across sessions (see pgui.cpp).
 // The letters fields start from app_state(), and Enter in any of them, or
 // toggling "new", stores all three and "new" there and validates them (see
 // AppState::validate_letters()), bumping app_state()'s generation when what the

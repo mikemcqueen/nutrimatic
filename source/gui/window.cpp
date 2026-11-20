@@ -5,6 +5,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -48,6 +49,18 @@ bool framed_red(bool invalid, F draw) {
 std::string_view seed_root(std::string_view name) {
   return name.substr(0, name.find('.'));
 }
+
+// The a: dropdown's entries.
+struct AnswerMatch {
+  char const* name;
+  std::optional<ClueMatch> match;
+};
+constexpr std::array<AnswerMatch, 4> ANSWER_MATCHES = {{
+    {"none", std::nullopt},
+    {"all", ClueMatch::together},
+    {"adjacent", ClueMatch::adjacent},
+    {"exact", ClueMatch::exact},
+}};
 
 }  // namespace
 
@@ -154,6 +167,38 @@ void Window::render() {
     ImGui::SameLine(0, spacing);
     bool const seed_refreshed = refresh_button("seed_refresh");
     ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("a:");
+    ImGui::SameLine(0, 0);
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("adjacent").x +
+                            2 * ImGui::GetStyle().FramePadding.x +
+                            ImGui::GetFrameHeight());
+    char const* const answers_preview =
+        std::ranges::find(ANSWER_MATCHES, app_state().seed_answers,
+                          &AnswerMatch::match)
+            ->name;
+    if (ImGui::BeginCombo("##seed_answers", answers_preview)) {
+      for (auto const& [name, match] : ANSWER_MATCHES) {
+        bool const selected = match == app_state().seed_answers;
+        if (ImGui::Selectable(name, selected) && !selected) {
+          app_state().seed_answers = match;
+          ++app_state().seed_answers_version;
+          app_state().start_seed_answered();
+        }
+        if (selected) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("keep seed pairs with clue answers, as "
+                          "pair-answers -p matches them");
+    ImGui::SameLine();
+    if (app_state().seed_answered_pending()) {
+      ImGui::TextDisabled("filtering");
+      ImGui::SameLine();
+    } else if (app_state().clues_failed()) {
+      ImGui::TextDisabled("no clues");
+      ImGui::SameLine();
+    }
     float const length_width = ImGui::CalcTextSize("00").x +
                                2 * ImGui::GetStyle().FramePadding.x;
     ImGui::AlignTextToFramePadding();
@@ -279,6 +324,10 @@ void Window::render() {
       if (!seed_names_.empty()) seed_chosen = seed_names_.front();
     }
     if (seed_refreshed) {
+      if (state.clues_failed()) {
+        state.clues = {};
+        ++state.seed_answers_version;
+      }
       list_seeds();
       seed_chosen = seed_;
     }
@@ -291,6 +340,7 @@ void Window::render() {
           keys.push_back(std::move(*key));
       }
       state.refresh_seed_files(keys);
+      state.start_seed_answered();
       state.refresh_dictionaries();
       state.refresh_required_words();
       state.refresh_hotspots();

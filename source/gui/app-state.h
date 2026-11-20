@@ -3,6 +3,7 @@
 
 #include <array>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -21,6 +23,7 @@
 #include "input-source.h"
 #include "letter-bag.h"
 #include "p1-index.h"
+#include "pair-answers-impl.h"
 #include "seed-view.h"
 
 // A word list's words, as a set and as sorted lines.
@@ -116,14 +119,15 @@ struct AppState {
   };
 
   // The lines of the pairs passing a view's filter, with a version unique
-  // to this build, and the pair file, dictionary and max length versions it
-  // was built from.
+  // to this build, and the pair file, dictionary, max length and answers
+  // versions it was built from.
   struct SeedView {
     SharedLines lines;
     unsigned version = 0;
     unsigned pairs_version = 0;
     unsigned dictionary_version = 0;
     unsigned max_length_version = 0;
+    unsigned answers_version = 0;
   };
 
   // Drops from seed_views those none of `keys` name, reopens p1 when p1_path
@@ -136,11 +140,42 @@ struct AppState {
   // seed_name's pairs, read the first time they're asked for.
   SeedPairs const& seed_pairs();
 
+  // Starts finding, on a thread of its own, whether each pair of
+  // seed_pairs() has answers, as pair-answers -p finds them, under
+  // seed_answers, unless seed_answers is none or that is already found or
+  // being found for this pair file load and seed_answers_version. The clue
+  // index at CLUEDATA_PATH is opened first, on a thread of its own, unless
+  // it is open or being opened; one that can't be is diagnosed and stays
+  // unopened until clues is reset. Pushes an SDL_USEREVENT when done.
+  void start_seed_answered();
+
+  // start_seed_answered(), then that job's flags; null while seed_answers
+  // is none, the job is still running or the clue index can't be opened.
+  std::shared_ptr<std::vector<char> const> seed_answered();
+
+  // Whether seed_answers isn't none and the job start_seed_answered() last
+  // started is still running.
+  bool seed_answered_pending() const;
+
+  // Whether any job start_seed_answered() started, or the clue index open,
+  // is still running.
+  bool seed_answered_running() const;
+
+  // Waits for every job start_seed_answered() started, and the clue index
+  // open, to finish.
+  void stop_seed_answered();
+
+  // Whether the clue index has failed to open.
+  bool clues_failed() const;
+
   // The view under `band` and `dictionary`: seed_pairs() passing a
   // SeedFilter of the band's min length, seed_max_length, the band's YES,
-  // and the dictionary under `dictionary` in dictionaries. Built the first
-  // time it's asked for, and again, under a new seed_file_version, when the
-  // pair file, that dictionary or seed_max_length have changed since. No
+  // and the dictionary under `dictionary` in dictionaries, and, unless
+  // forced, seed_answered() when it isn't null. Built the first time it's
+  // asked for, and again, under a new seed_file_version, when the pair file,
+  // that dictionary, seed_max_length or seed_answers have changed since,
+  // but not while seed_answered_pending(): the view built before, or no
+  // lines and version 0 when there is none, is given until it isn't. No
   // lines and version 0 when no band in seed_bands has the key `band`. The
   // first view built from a pair file load and a dictionary load warns
   // about each forced pair word not in that dictionary.
@@ -263,6 +298,26 @@ struct AppState {
   // when it changes.
   int seed_max_length = SeedFilter{}.max_len;
   unsigned seed_max_length_version = 0;
+  // The window's a: dropdown: how seed views match pairs against clues for
+  // seed_answered(), none for not at all, and a version that goes up when it
+  // changes.
+  std::optional<ClueMatch> seed_answers = ClueMatch::together;
+  unsigned seed_answers_version = 0;
+  // The clue index start_seed_answered() opens, null when it can't be;
+  // invalid before it is first started.
+  std::shared_future<std::shared_ptr<PairAnswers const>> clues;
+  // The flags start_seed_answered() last started finding, and the pair file
+  // and seed_answers versions they are for.
+  std::shared_future<std::shared_ptr<std::vector<char> const>>
+      seed_answered_flags;
+  std::optional<std::pair<unsigned, unsigned>> seed_answered_key;
+  // The thread opening clues, and each job start_seed_answered() started
+  // that wasn't yet done when it last started one, with its flags.
+  std::jthread clues_opener;
+  std::vector<std::pair<
+      std::shared_future<std::shared_ptr<std::vector<char> const>>,
+      std::jthread>>
+      seed_answered_jobs;
   // seed_name's pairs, once read by seed_pairs().
   std::optional<SeedPairs> seed_pairs_file;
   // The views built by seed_view().

@@ -1,13 +1,17 @@
 #include "app-state.h"
 
+#include <SDL.h>
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -198,6 +202,7 @@ bool load_app_state(std::string const& seed_path) {
   state.load_seed_and_bad_bags(seed.filename().string());
   state.refresh_required_words();
   state.refresh_hotspots();
+  state.start_seed_answered();
   return true;
 }
 
@@ -260,6 +265,87 @@ AppState::SeedPairs const& AppState::seed_pairs() {
   return *seed_pairs_file;
 }
 
+void AppState::start_seed_answered() {
+  if (!seed_answers) return;
+  SeedPairs const& pairs = seed_pairs();
+  std::pair<unsigned, unsigned> const key = {pairs.version,
+                                             seed_answers_version};
+  if (seed_answered_key == key) return;
+  std::erase_if(seed_answered_jobs, [](auto const& job) {
+    return job.first.wait_for(std::chrono::seconds(0)) ==
+           std::future_status::ready;
+  });
+  if (!clues.valid()) {
+    std::promise<std::shared_ptr<PairAnswers const>> opened;
+    clues = opened.get_future().share();
+    clues_opener = std::jthread([opened = std::move(opened)]() mutable {
+      auto index = std::make_shared<PairAnswers>();
+      opened.set_value(index->open("pgui", CLUEDATA_PATH)
+                           ? std::move(index)
+                           : nullptr);
+    });
+  }
+  std::promise<std::shared_ptr<std::vector<char> const>> found;
+  seed_answered_flags = found.get_future().share();
+  seed_answered_key = key;
+  std::jthread job([found = std::move(found), clues = clues,
+                    pairs = pairs.pairs, match = *seed_answers]() mutable {
+    std::shared_ptr<PairAnswers const> const index = clues.get();
+    std::shared_ptr<std::vector<char> const> flags;
+    if (index) {
+      std::vector<std::pair<std::string_view, std::string_view>> words;
+      words.reserve(pairs->size());
+      for (SeedPair const& pair : *pairs) {
+        std::string_view const line = pair.line;
+        words.emplace_back(line.substr(0, pair.comma),
+                           line.substr(pair.comma + 1));
+      }
+      flags = std::make_shared<std::vector<char> const>(index->have_answers(
+          words, match, std::thread::hardware_concurrency()));
+    }
+    found.set_value(std::move(flags));
+    SDL_Event event = {};
+    event.type = SDL_USEREVENT;
+    SDL_PushEvent(&event);
+  });
+  seed_answered_jobs.emplace_back(seed_answered_flags, std::move(job));
+}
+
+std::shared_ptr<std::vector<char> const> AppState::seed_answered() {
+  start_seed_answered();
+  if (!seed_answers || seed_answered_pending()) return nullptr;
+  return seed_answered_flags.get();
+}
+
+bool AppState::seed_answered_pending() const {
+  return seed_answers && seed_answered_flags.valid() &&
+         seed_answered_flags.wait_for(std::chrono::seconds(0)) !=
+             std::future_status::ready;
+}
+
+bool AppState::seed_answered_running() const {
+  auto const running = [](auto const& future) {
+    return future.valid() && future.wait_for(std::chrono::seconds(0)) !=
+                                 std::future_status::ready;
+  };
+  return running(clues) ||
+         std::ranges::any_of(seed_answered_jobs, [&](auto const& job) {
+           return running(job.first);
+         });
+}
+
+void AppState::stop_seed_answered() {
+  seed_answered_jobs.clear();
+  if (clues_opener.joinable()) clues_opener.join();
+}
+
+bool AppState::clues_failed() const {
+  return clues.valid() &&
+         clues.wait_for(std::chrono::seconds(0)) ==
+             std::future_status::ready &&
+         !clues.get();
+}
+
 AppState::SeedView const& AppState::seed_view(std::string const& band,
                                               std::string const& dictionary) {
   static SeedView const none = {std::make_shared<Lines const>()};
@@ -270,18 +356,26 @@ AppState::SeedView const& AppState::seed_view(std::string const& band,
   SeedView& view = seed_views[{band, dictionary}];
   if (view.lines && view.pairs_version == pairs.version &&
       view.dictionary_version == words.version &&
-      view.max_length_version == seed_max_length_version)
+      view.max_length_version == seed_max_length_version &&
+      view.answers_version == seed_answers_version)
     return view;
+  start_seed_answered();
+  if (seed_answered_pending()) return view.lines ? view : none;
+  std::shared_ptr<std::vector<char> const> const answered = seed_answered();
   SeedFilter const filter = {found->min_length, seed_max_length,
                              found->min_yes, &words.words->words};
   auto lines = std::make_shared<Lines>();
-  for (SeedPair const& pair : *pairs.pairs)
-    if (seed_pair_passes(pair, filter)) lines->push_back(pair.line);
+  for (size_t i = 0; i < pairs.pairs->size(); ++i) {
+    SeedPair const& pair = (*pairs.pairs)[i];
+    if (seed_pair_passes(pair, filter) &&
+        (!answered || pair.forced || (*answered)[i]))
+      lines->push_back(pair.line);
+  }
   if (forced_warned.emplace(pairs.version, words.version).second)
     warn_forced_words_missing("pgui", *pairs.pairs, pairs.forced,
                               words.words->words, words.path);
   view = {std::move(lines), ++seed_file_version, pairs.version, words.version,
-          seed_max_length_version};
+          seed_max_length_version, seed_answers_version};
   return view;
 }
 

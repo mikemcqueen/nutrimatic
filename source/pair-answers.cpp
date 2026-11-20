@@ -1,15 +1,14 @@
 // pair-answers.cpp - List the crossword answers of each pair's clues, marked
 // by how each fits a dictionary.
 
-#include "clue-index.h"
 #include "dfs-cli-args.h"
 #include "dfs-cli-help.h"
 #include "log.h"
 #include "optparse.h"
+#include "pair-answers-impl.h"
 #include "row-input.h"
 #include "workflow-paths.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -29,13 +28,6 @@ struct Args {
     std::filesystem::path dict;
     std::filesystem::path clues = CLUEDATA_PATH;
     std::filesystem::path pairs;
-};
-
-struct Dictionary {
-    DfsDictionary words;
-    std::vector<std::string> forward;
-    // Each word spelled backwards, sorted.
-    std::vector<std::string> reversed;
 };
 
 void usage(std::string_view program, FILE* out) {
@@ -124,48 +116,6 @@ bool parse_args(char* argv[], Args* out, bool* help) {
     return true;
 }
 
-bool load(std::filesystem::path const& path, Dictionary* out) {
-    if (!load_dictionary(path, &out->words)) return false;
-    if (out->words.empty()) {
-        report(PROGRAM, "%s: no words", path.c_str());
-        return false;
-    }
-    out->forward.assign(out->words.begin(), out->words.end());
-    std::sort(out->forward.begin(), out->forward.end());
-    out->reversed.reserve(out->forward.size());
-    for (std::string const& word : out->forward)
-        out->reversed.emplace_back(word.rbegin(), word.rend());
-    std::sort(out->reversed.begin(), out->reversed.end());
-    return true;
-}
-
-// Whether a word of `sorted` starts with `part` and goes on to a word of
-// `words`, spelled backwards when `backwards`.
-bool splits(std::vector<std::string> const& sorted, DfsDictionary const& words,
-            std::string_view part, bool backwards) {
-    for (auto it = std::lower_bound(sorted.begin(), sorted.end(), part);
-         it != sorted.end() && it->starts_with(part); ++it) {
-        if (it->size() == part.size()) continue;
-        std::string rest = it->substr(part.size());
-        if (backwards) std::reverse(rest.begin(), rest.end());
-        if (words.contains(rest)) return true;
-    }
-    return false;
-}
-
-std::string flags(Dictionary const& dict, std::string_view answer) {
-    std::string word(answer);
-    for (char& c : word)
-        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
-    std::string const backwards(word.rbegin(), word.rend());
-    std::string out;
-    if (dict.words.contains(word)) out += 'M';
-    if (splits(dict.forward, dict.words, word, false)) out += 'P';
-    if (splits(dict.reversed, dict.words, backwards, true)) out += 'S';
-    if (out.empty()) out = "X";
-    return out;
-}
-
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -181,14 +131,11 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    Dictionary dict;
-    if (!args.pairs_only && !load(args.dict, &dict)) return 1;
-    ClueIndex index;
-    std::string error;
-    if (!index.open(args.clues, &error)) {
-        report(PROGRAM, "%s", error.c_str());
+    AnswerDictionary dict;
+    if (!args.pairs_only && !load_answer_dictionary(PROGRAM, args.dict, &dict))
         return 1;
-    }
+    PairAnswers index;
+    if (!index.open(PROGRAM, args.clues)) return 1;
 
     std::vector<std::string_view> answers;
     bool first = true;
@@ -201,13 +148,12 @@ int main(int argc, char* argv[]) {
                 printf("%s,%s\n", row.left.c_str(), row.right.c_str());
                 return true;
             }
-            std::sort(answers.begin(), answers.end());
             printf("%s%s,%s\n", first ? "" : "\n", row.left.c_str(),
                    row.right.c_str());
             first = false;
             for (std::string_view answer : answers)
                 printf("%.*s: %s\n", SV_ARG(answer),
-                       flags(dict, answer).c_str());
+                       answer_flags(dict, answer).c_str());
             return true;
         });
     if (!read) return 1;

@@ -239,9 +239,10 @@ int main(int, char**) {
     SDL_RenderPresent(renderer);
   }
 
-  if (top.running())
+  if (top.running() || app_state().seed_answered_running())
     report("pgui", "exiting: waiting on running tasks...");
   top.stop();
+  app_state().stop_seed_answered();
 
   ImGui_ImplSDLRenderer2_Shutdown();
   ImGui_ImplSDL2_Shutdown();

@@ -318,8 +318,12 @@ pair_prior = executable('pair-prior', 'pair-prior.cpp',
   link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
   install: true)
 
+pair_answers_lib = static_library('pair-answers', 'pair-answers-impl.cpp',
+  dependencies: thread_dep)
+
 pair_answers = executable('pair-answers', 'pair-answers.cpp',
-  link_with: [pair_evidence_lib, dfs_class_list_lib, optparse_lib],
+  link_with: [pair_answers_lib, pair_evidence_lib, dfs_class_list_lib,
+    optparse_lib],
   install: true)
 
 make_p1_index = executable('make-p1-index', 'make-p1-index.cpp',
@@ -642,7 +646,8 @@ if sdl2_dep.found()
     include_directories: pgui_inc,
     link_with: [pfilter_lib, freqsort_lib, bag_stats_cpu_lib,
       bag_stats_run_lib, bag_stats_rank_lib, bag_stats_lib, pairs_lib,
-      seed_pairs_lib, seed_view_lib, pair_evidence_lib, lc_lib,
+      seed_pairs_lib, seed_view_lib, pair_answers_lib, pair_evidence_lib,
+      lc_lib,
       dfs_class_list_lib, optparse_lib, log_lib],
     dependencies: [imgui_backends_dep, thread_dep], install: true)
 endif
