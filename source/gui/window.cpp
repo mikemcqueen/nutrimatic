@@ -273,6 +273,7 @@ void Window::render() {
       state.sentence = sentence_;
       state.load_sentence_letters();
       state.refresh_required_words();
+      state.refresh_hotspots();
       ++state.generation;
       list_seeds();
       if (!seed_names_.empty()) seed_chosen = seed_names_.front();
@@ -292,6 +293,7 @@ void Window::render() {
       state.refresh_seed_files(keys);
       state.refresh_dictionaries();
       state.refresh_required_words();
+      state.refresh_hotspots();
     }
   }
 

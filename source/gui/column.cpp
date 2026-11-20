@@ -351,12 +351,14 @@ void Column::render() {
   } else {
     ImGui::TextDisabled("%zu", output()->size());
   }
-  Command const* const made = made_command();
-  ImGui::SameLine();
-  ImGui::BeginDisabled(job_ || waiting || !made || !made->saveable() ||
-                       list_.shown_count() == 0);
-  if (ImGui::SmallButton("save")) save_shown();
-  ImGui::EndDisabled();
+  if (!commands_[choice_] || !commands_[choice_]->hides_save_button()) {
+    Command const* const made = made_command();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(job_ || waiting || !made || !made->saveable() ||
+                         list_.shown_count() == 0);
+    if (ImGui::SmallButton("save")) save_shown();
+    ImGui::EndDisabled();
+  }
   char cv_text[32];
   std::snprintf(cv_text, sizeof cv_text, "CV %.2f", remaining_cv_);
   float const cv_width = ImGui::CalcTextSize(cv_text).x;
@@ -753,15 +755,16 @@ void Column::start(Key key) {
   auto job = std::make_shared<Job>();
   job->key = key;
   job->cancellable = command->cancellable();
+  bool const whole = command->keeps_lines_whole();
   job_ = job;
-  worker_ = std::jthread([job, command = std::move(*command),
+  worker_ = std::jthread([job, whole, command = std::move(*command),
                           params = std::move(params),
                           input = std::move(input)](
                              std::stop_token stop) mutable {
     params.stop = std::move(stop);
     Lines output;
     job->ok = command.run({input}, params, &output);
-    job->values = split_values(&output);
+    job->values = whole ? empty_lines() : split_values(&output);
     job->output = std::make_shared<Lines const>(std::move(output));
     job->done.store(true, std::memory_order_release);
     wake_main_loop();

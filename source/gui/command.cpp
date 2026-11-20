@@ -3,6 +3,7 @@
 #include "bag-stats.h"
 #include "find-pairs.h"
 #include "freq-sort.h"
+#include "hotspots.h"
 #include "pair-filter.h"
 #include "seed-pairs.h"
 
@@ -12,5 +13,6 @@ std::optional<Command> make_command(std::string const& name) {
   if (name == "pairs") return Command(FindPairs());
   if (name == "bag-stats") return Command(BagStats());
   if (name == "seed-pairs") return Command(SeedPairsFilter());
+  if (name == "hotspots") return Command(Hotspots());
   return std::nullopt;
 }

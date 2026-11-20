@@ -197,6 +197,7 @@ bool load_app_state(std::string const& seed_path) {
   state.bad_bags_sentence.reset();
   state.load_seed_and_bad_bags(seed.filename().string());
   state.refresh_required_words();
+  state.refresh_hotspots();
   return true;
 }
 
@@ -326,6 +327,52 @@ void AppState::refresh_required_words() {
   if (readable)
     warn("pgui", "\"%s\" has no words", required_words.path.c_str());
   required_words.words = nullptr;
+}
+
+void AppState::refresh_hotspots() {
+  std::filesystem::path path;
+  if (sentence != CLASSIFIED_NO_SENTENCE)
+    path = std::filesystem::path(seed_directory) /
+           ("s" + std::to_string(sentence) + ".hotspots");
+  if (path != hotspots.path)
+    hotspots = {std::move(path), std::make_shared<Hotspots::Sections const>(),
+                std::filesystem::file_time_type::min(), 0};
+  std::filesystem::file_time_type const mtime =
+      modification_time(hotspots.path);
+  if (mtime == hotspots.mtime) return;
+  hotspots.mtime = mtime;
+  hotspots.version = ++dictionary_version;
+  auto sections = std::make_shared<Hotspots::Sections>();
+  Lines lines;
+  if (mtime != std::filesystem::file_time_type::min() &&
+      read_file_lines(hotspots.path.string(), &lines)) {
+    Lines pairs;
+    auto const close = [&] {
+      if (!sections->empty())
+        sections->back().second =
+            std::make_shared<Lines const>(std::move(pairs));
+      pairs.clear();
+    };
+    for (std::string const& line : lines) {
+      size_t const begin = line.find_first_not_of(" \t\r");
+      if (begin == std::string::npos) continue;
+      std::string_view const text = std::string_view(line).substr(
+          begin, line.find_last_not_of(" \t\r") + 1 - begin);
+      if (text.size() >= 2 && text.front() == '[' && text.back() == ']') {
+        close();
+        sections->emplace_back(std::string(text.substr(1, text.size() - 2)),
+                               nullptr);
+      } else if (sections->empty()) {
+        warn("pgui", "%s: skipping \"%.*s\" before any [section]",
+             hotspots.path.c_str(), static_cast<int>(text.size()),
+             text.data());
+      } else {
+        pairs.emplace_back(text);
+      }
+    }
+    close();
+  }
+  hotspots.sections = std::move(sections);
 }
 
 bool AppState::is_judged_bad(std::string const& letters,

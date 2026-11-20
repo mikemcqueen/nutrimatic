@@ -176,6 +176,26 @@ struct AppState {
   // has no words, which is diagnosed.
   void refresh_required_words();
 
+  // A hotspots file's sections, in file order, each a [name] line followed
+  // by the nonblank lines under it, trimmed, its path, its modification time
+  // when read, the earliest time when it can't be stat'ed, and a version
+  // unique to that load.
+  struct Hotspots {
+    using Sections = std::vector<std::pair<std::string, SharedLines>>;
+    std::filesystem::path path;
+    std::shared_ptr<Sections const> sections;
+    std::filesystem::file_time_type mtime;
+    unsigned version = 0;
+  };
+
+  // Points hotspots at sentence's sN.hotspots in seed_directory, with no
+  // sections and version 0 when that path changed, and reloads it when its
+  // modification time changed since it was read. It has no sections while
+  // sentence is CLASSIFIED_NO_SENTENCE or that file is missing, which isn't
+  // diagnosed; lines before the first section and a file that can't be
+  // read are diagnosed.
+  void refresh_hotspots();
+
   // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't
   // there already, bumps judged_bad_version, and appends it as a line to the
   // judged-bad file in seed_directory. A failed append is diagnosed.
@@ -281,6 +301,8 @@ struct AppState {
   std::optional<std::array<unsigned, 3>> keep_yes_pairs_key_;
   // The required words pfilter runs share, set by refresh_required_words().
   Dictionary required_words;
+  // The hotspot sections hotspots columns share, set by refresh_hotspots().
+  Hotspots hotspots;
 };
 
 // What a command runs with, taken when it starts so it runs unaffected by
@@ -307,7 +329,8 @@ struct LetterToolsParams {
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
 // "sml_dict", not loaded yet, with letters "$S1", empty used letters,
 // sentence 1's letters (see AppState::load_sentence_letters()) and required
-// words (see AppState::refresh_required_words()), the pair
+// words (see AppState::refresh_required_words()) and hotspots (see
+// AppState::refresh_hotspots()), the pair
 // file at `seed_path`, the p1.idx beside it, and judged_bad and
 // bad_bags_bitmap from the judged-bad and bad.sN files beside it (see
 // AppState::load_seed_and_bad_bags()). Returns false, with the error

@@ -91,7 +91,15 @@
 // file (see Column); commands without it don't. And it may have
 //   static constexpr bool hides_old_pairs
 // true when its output is pairs its Column hides as old while
-// AppState::new_only (see Column); commands without it don't.
+// AppState::new_only (see Column); commands without it don't. And it may
+// have
+//   static constexpr bool keeps_lines_whole
+// true when its Column keeps each output line whole, spaces and all, rather
+// than cutting off a value at its first space (see Column::output());
+// commands without it have their lines cut. And it may have
+//   static constexpr bool hides_save_button
+// true when its Column shows no save button at all; commands without it
+// show one, greyed out unless they're saveable.
 // Holds its value by copy.
 class Command {
  public:
@@ -157,6 +165,10 @@ class Command {
 
   bool hides_old_pairs() const { return self_->hides_old_pairs(); }
 
+  bool keeps_lines_whole() const { return self_->keeps_lines_whole(); }
+
+  bool hides_save_button() const { return self_->hides_save_button(); }
+
   // Empty when it has none.
   std::string default_seed() const { return self_->default_seed(); }
 
@@ -185,6 +197,8 @@ class Command {
     virtual bool uses_required_words() const = 0;
     virtual bool saveable() const = 0;
     virtual bool hides_old_pairs() const = 0;
+    virtual bool keeps_lines_whole() const = 0;
+    virtual bool hides_save_button() const = 0;
     virtual std::string default_seed() const = 0;
   };
 
@@ -312,6 +326,18 @@ class Command {
       else
         return false;
     }
+    bool keeps_lines_whole() const override {
+      if constexpr (requires { T::keeps_lines_whole; })
+        return T::keeps_lines_whole;
+      else
+        return false;
+    }
+    bool hides_save_button() const override {
+      if constexpr (requires { T::hides_save_button; })
+        return T::hides_save_button;
+      else
+        return false;
+    }
     std::string default_seed() const override {
       if constexpr (requires { T::default_seed; })
         return T::default_seed;
@@ -325,12 +351,12 @@ class Command {
 };
 
 // The names every Column's dropdown offers, in order; "" names no command.
-inline constexpr std::array<char const*, 6> command_names = {
-    "", "pfilter", "freqsort", "pairs", "bag-stats", "seed-pairs"};
+inline constexpr std::array<char const*, 7> command_names = {
+    "", "pfilter", "freqsort", "pairs", "bag-stats", "seed-pairs", "hotspots"};
 
 // The command a Column's dropdown names: PairFilter for "pfilter", FreqSort
 // for "freqsort", FindPairs for "pairs", BagStats for "bag-stats",
-// SeedPairsFilter for "seed-pairs", none otherwise.
+// SeedPairsFilter for "seed-pairs", Hotspots for "hotspots", none otherwise.
 std::optional<Command> make_command(std::string const& name);
 
 #endif

@@ -74,13 +74,14 @@ void load_letter_count_font();
 // Command::apply_fields()), the filter field as regexes to the ListBox (see
 // ListBox::set_filter()); the X button beside a field clears it and counts as
 // Enter. The filter changes only what is shown, never output(),
-// selected_item(), or version(). After the status line's count, a "save"
-// button, enabled when output() is up to date, the command that made it is
-// saveable (see Command::saveable()), and the ListBox shows any items,
-// overwrites pgui.out in std::filesystem::temp_directory_path() with the shown
-// items, one per line, without their values. Widget IDs are scoped to the
-// Column, so any number can be rendered side by side in a Window. Both
-// dropdowns offer only columns before this one, so sources never form a cycle.
+// selected_item(), or version(). After the status line's count, unless the
+// command hides it (see Command::hides_save_button()), a "save" button,
+// enabled when output() is up to date, the command that made it is saveable
+// (see Command::saveable()), and the ListBox shows any items, overwrites
+// pgui.out in std::filesystem::temp_directory_path() with the shown items, one
+// per line, without their values. Widget IDs are scoped to the Column, so any
+// number can be rendered side by side in a Window. Both dropdowns offer only
+// columns before this one, so sources never form a cycle.
 class Column {
  public:
   Column(InputSource source, LetterSource letter_source);
@@ -99,7 +100,8 @@ class Column {
   // the first run completes, when the choice names no command, and when the
   // command fails. When any line the command printed has a space, each is cut
   // at its first space, and the rest, trimmed, becomes its value, shown
-  // beside it in the ListBox but left out of output().
+  // beside it in the ListBox but left out of output(), unless the command
+  // keeps its lines whole (see Command::keeps_lines_whole()).
   SharedLines const& output() const { return list_.items(); }
 
   // The selected item of output(), or empty when nothing is selected.
