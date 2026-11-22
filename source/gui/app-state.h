@@ -20,6 +20,7 @@
 #include "bad-bag-bitmap.h"
 #include "classified.h"
 #include "dfs-class-list.h"
+#include "hotspots.h"
 #include "input-source.h"
 #include "letter-bag.h"
 #include "p1-index.h"
@@ -182,6 +183,27 @@ struct AppState {
   SeedView const& seed_view(std::string const& band,
                             std::string const& dictionary);
 
+  // A seed list file, seed.sN.<pattern> in seed_directory, and, once read by
+  // seed_list(), its lines, none when it can't be read, which is diagnosed,
+  // its modification time when read, and a version unique to that read.
+  struct SeedListFile {
+    std::filesystem::path path;
+    std::filesystem::file_time_type mtime;
+    SharedLines lines;
+    unsigned version = 0;
+  };
+
+  // Sets seed_lists to the files in seed_directory named seed.sN.<pattern>,
+  // sN being seed_name's sN component, keyed by pattern, keeping a file's
+  // lines only while its path is unchanged and its modification time is the
+  // one they were read at; empty when that component isn't
+  // valid_seed_sentence(). Reads no file; see seed_list().
+  void refresh_seed_lists();
+
+  // The seed list under `pattern` in seed_lists, reading its file first when
+  // its lines haven't been read; no lines and version 0 when there is none.
+  SeedListFile const& seed_list(std::string const& pattern);
+
   // A word list file, and, once loaded, its words, its modification time
   // when read, the earliest time when it can't be stat'ed, and a version
   // unique to that load.
@@ -211,24 +233,30 @@ struct AppState {
   // has no words, which is diagnosed.
   void refresh_required_words();
 
-  // A hotspots file's sections, in file order, each a [name] line followed
-  // by the nonblank lines under it, trimmed, its path, its modification time
-  // when read, the earliest time when it can't be stat'ed, and a version
-  // unique to that load.
+  // The sections of a sentence's hotspots files, sN.hotspots.M for M 1-9, as
+  // read_hotspots_file() reads them, in M order. Also the sN.hotspots path
+  // the files are named from, each file's modification time when read, the
+  // earliest time when it can't be stat'ed, and its sections as of then, and
+  // a version unique to that load.
   struct Hotspots {
-    using Sections = std::vector<std::pair<std::string, SharedLines>>;
+    using Sections = HotspotSections;
+    struct File {
+      std::filesystem::file_time_type mtime =
+          std::filesystem::file_time_type::min();
+      std::shared_ptr<Sections const> sections;
+    };
     std::filesystem::path path;
     std::shared_ptr<Sections const> sections;
-    std::filesystem::file_time_type mtime;
+    std::array<File, 9> files;
     unsigned version = 0;
   };
 
   // Points hotspots at sentence's sN.hotspots in seed_directory, with no
-  // sections and version 0 when that path changed, and reloads it when its
-  // modification time changed since it was read. It has no sections while
-  // sentence is CLASSIFIED_NO_SENTENCE or that file is missing, which isn't
-  // diagnosed; lines before the first section and a file that can't be
-  // read are diagnosed.
+  // sections and version 0 when that path changed, and rereads each of its
+  // sN.hotspots.M files that appeared, disappeared, or whose modification
+  // time changed since it was read. It has no sections while sentence is
+  // CLASSIFIED_NO_SENTENCE or those files are missing, which isn't
+  // diagnosed.
   void refresh_hotspots();
 
   // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't
@@ -322,10 +350,12 @@ struct AppState {
   std::optional<SeedPairs> seed_pairs_file;
   // The views built by seed_view().
   std::map<SeedViewKey, SeedView> seed_views;
+  // The seed lists set by refresh_seed_lists(), shared by the columns.
+  std::map<std::string, SeedListFile> seed_lists;
   // The pair file and dictionary versions seed_view() has warned about
   // forced pair words under.
   std::set<std::pair<unsigned, unsigned>> forced_warned;
-  // The last SeedPairs or SeedView version given out.
+  // The last SeedPairs, SeedView or SeedListFile version given out.
   unsigned seed_file_version = 0;
   unsigned generation = 0;
   // Remaining letters judged bad, each lowercase a-z and sorted, whatever
@@ -382,16 +412,16 @@ struct LetterToolsParams {
 };
 
 // Loads $WFROOT's filtered dictionary into app_state() as "big_dict", beside
-// "sml_dict", not loaded yet, with letters "$S1", empty used letters,
-// sentence 1's letters (see AppState::load_sentence_letters()) and required
-// words (see AppState::refresh_required_words()) and hotspots (see
-// AppState::refresh_hotspots()), the pair
-// file at `seed_path`, the p1.idx beside it, and judged_bad and
-// bad_bags_bitmap from the judged-bad and bad.sN files beside it (see
-// AppState::load_seed_and_bad_bags()). Returns false, with the error
-// diagnosed, when the dictionary can't be read; a pair file that can't be
-// read is left empty, and a p1.idx that can't be opened, which is
-// diagnosed, leaves every pair without a verdict.
+// "sml_dict", not loaded yet, with letters "$S1", empty used letters, sentence
+// 1's letters (see AppState::load_sentence_letters()) and required words (see
+// AppState::refresh_required_words()) and hotspots (see
+// AppState::refresh_hotspots()), the pair file at `seed_path` and its seed
+// lists (see AppState::refresh_seed_lists()), the p1.idx beside it, and
+// judged_bad and bad_bags_bitmap from the judged-bad and bad.sN files beside it
+// (see AppState::load_seed_and_bad_bags()). Returns false, with the error
+// diagnosed, when the dictionary can't be read; a pair file that can't be read
+// is left empty, and a p1.idx that can't be opened, which is diagnosed, leaves
+// every pair without a verdict.
 bool load_app_state(std::string const& seed_path);
 
 AppState& app_state();

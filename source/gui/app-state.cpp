@@ -24,6 +24,7 @@
 
 #include "bad-bag-bitmap.h"
 #include "dfs-cli-args.h"
+#include "hotspots.h"
 #include "input-source.h"
 #include "letter-bag.h"
 #include "log.h"
@@ -200,6 +201,7 @@ bool load_app_state(std::string const& seed_path) {
   state.p1_open = open_p1_index(state.p1_path, &state.p1, &state.p1_mtime);
   state.bad_bags_sentence.reset();
   state.load_seed_and_bad_bags(seed.filename().string());
+  state.refresh_seed_lists();
   state.refresh_required_words();
   state.refresh_hotspots();
   state.start_seed_answered();
@@ -379,6 +381,47 @@ AppState::SeedView const& AppState::seed_view(std::string const& band,
   return view;
 }
 
+void AppState::refresh_seed_lists() {
+  std::string_view const sentence = get_seed_sentence(seed_name);
+  if (!valid_seed_sentence(sentence)) {
+    seed_lists.clear();
+    return;
+  }
+  std::string const prefix = "seed." + std::string(sentence) + ".";
+  std::map<std::string, SeedListFile> lists;
+  std::error_code error;
+  for (std::filesystem::directory_iterator it(seed_directory, error), end;
+       !error && it != end; it.increment(error)) {
+    std::string const name = it->path().filename().string();
+    if (name.size() <= prefix.size() || !name.starts_with(prefix)) continue;
+    std::string pattern = name.substr(prefix.size());
+    auto const found = seed_lists.find(pattern);
+    SeedListFile list =
+        found != seed_lists.end() && found->second.path == it->path() &&
+                (!found->second.lines ||
+                 modification_time(it->path()) == found->second.mtime)
+            ? std::move(found->second)
+            : SeedListFile{it->path(), {}, nullptr, 0};
+    lists.emplace(std::move(pattern), std::move(list));
+  }
+  seed_lists = std::move(lists);
+}
+
+AppState::SeedListFile const& AppState::seed_list(std::string const& pattern) {
+  static SeedListFile const none = {{}, {}, std::make_shared<Lines const>(), 0};
+  auto const found = seed_lists.find(pattern);
+  if (found == seed_lists.end()) return none;
+  SeedListFile& list = found->second;
+  if (!list.lines) {
+    list.mtime = modification_time(list.path);
+    auto lines = std::make_shared<Lines>();
+    if (!read_file_lines(list.path.string(), lines.get())) lines->clear();
+    list.lines = std::move(lines);
+    list.version = ++seed_file_version;
+  }
+  return list;
+}
+
 SeedBand const* AppState::seed_band(std::string_view key) {
   auto const found = std::ranges::find(seed_bands, key, &SeedBand::key);
   return found == seed_bands.end() ? nullptr : &*found;
@@ -430,42 +473,28 @@ void AppState::refresh_hotspots() {
            ("s" + std::to_string(sentence) + ".hotspots");
   if (path != hotspots.path)
     hotspots = {std::move(path), std::make_shared<Hotspots::Sections const>(),
-                std::filesystem::file_time_type::min(), 0};
-  std::filesystem::file_time_type const mtime =
-      modification_time(hotspots.path);
-  if (mtime == hotspots.mtime) return;
-  hotspots.mtime = mtime;
+                {}, 0};
+  if (hotspots.path.empty()) return;
+  bool changed = false;
+  for (size_t i = 0; i < hotspots.files.size(); ++i) {
+    Hotspots::File& file = hotspots.files[i];
+    std::filesystem::path const file_path =
+        hotspots.path.string() + "." + std::to_string(i + 1);
+    std::filesystem::file_time_type const mtime =
+        modification_time(file_path);
+    if (mtime == file.mtime) continue;
+    file = {mtime, mtime == std::filesystem::file_time_type::min()
+                       ? nullptr
+                       : read_hotspots_file(file_path, i + 1)};
+    changed = true;
+  }
+  if (!changed) return;
   hotspots.version = ++dictionary_version;
   auto sections = std::make_shared<Hotspots::Sections>();
-  Lines lines;
-  if (mtime != std::filesystem::file_time_type::min() &&
-      read_file_lines(hotspots.path.string(), &lines)) {
-    Lines pairs;
-    auto const close = [&] {
-      if (!sections->empty())
-        sections->back().second =
-            std::make_shared<Lines const>(std::move(pairs));
-      pairs.clear();
-    };
-    for (std::string const& line : lines) {
-      size_t const begin = line.find_first_not_of(" \t\r");
-      if (begin == std::string::npos) continue;
-      std::string_view const text = std::string_view(line).substr(
-          begin, line.find_last_not_of(" \t\r") + 1 - begin);
-      if (text.size() >= 2 && text.front() == '[' && text.back() == ']') {
-        close();
-        sections->emplace_back(std::string(text.substr(1, text.size() - 2)),
-                               nullptr);
-      } else if (sections->empty()) {
-        warn("pgui", "%s: skipping \"%.*s\" before any [section]",
-             hotspots.path.c_str(), static_cast<int>(text.size()),
-             text.data());
-      } else {
-        pairs.emplace_back(text);
-      }
-    }
-    close();
-  }
+  for (Hotspots::File const& file : hotspots.files)
+    if (file.sections)
+      sections->insert(sections->end(), file.sections->begin(),
+                       file.sections->end());
   hotspots.sections = std::move(sections);
 }
 

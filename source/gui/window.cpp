@@ -334,6 +334,7 @@ void Window::render() {
     if (seed_chosen) {
       std::snprintf(seed_, sizeof seed_, "%s", seed_chosen->c_str());
       state.load_seed_and_bad_bags(std::move(*seed_chosen));
+      state.refresh_seed_lists();
       std::vector<SeedViewKey> keys;
       for (Column const& column : columns_) {
         if (std::optional<SeedViewKey> key = column.seed_view_key())

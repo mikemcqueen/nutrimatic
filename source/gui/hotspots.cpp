@@ -3,9 +3,58 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <optional>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 
+#include "app-state.h"
 #include "letter-bag.h"
+#include "log.h"
+
+std::shared_ptr<HotspotSections const> read_hotspots_file(
+    std::filesystem::path const& path, size_t number) {
+  Lines lines;
+  if (!read_file_lines(path.string(), &lines)) return nullptr;
+  std::string const prefix = std::to_string(number) + ".";
+  auto sections = std::make_shared<HotspotSections>();
+  std::optional<size_t> all;
+  Lines pairs;
+  auto const close = [&] {
+    if (!sections->empty())
+      sections->back().second =
+          std::make_shared<Lines const>(std::move(pairs));
+    pairs.clear();
+  };
+  for (std::string const& line : lines) {
+    size_t const begin = line.find_first_not_of(" \t\r");
+    if (begin == std::string::npos) continue;
+    std::string_view const text = std::string_view(line).substr(
+        begin, line.find_last_not_of(" \t\r") + 1 - begin);
+    if (text.size() >= 2 && text.front() == '[' && text.back() == ']') {
+      close();
+      std::string_view const name = text.substr(1, text.size() - 2);
+      if (name == "all" && !all) all = sections->size();
+      sections->emplace_back(prefix + std::string(name), nullptr);
+    } else if (sections->empty()) {
+      warn("pgui", "%s: skipping \"%.*s\" before any [section]",
+           path.c_str(), static_cast<int>(text.size()), text.data());
+    } else {
+      pairs.emplace_back(text);
+    }
+  }
+  close();
+  if (all) {
+    Lines combined;
+    std::unordered_set<std::string_view> seen;
+    for (auto const& [name, section_lines] : *sections)
+      for (std::string const& pair : *section_lines)
+        if (seen.insert(pair).second) combined.push_back(pair);
+    (*sections)[*all].second =
+        std::make_shared<Lines const>(std::move(combined));
+  }
+  return sections;
+}
 
 bool Hotspots::run(std::vector<SharedLines> const&,
                    LetterToolsParams const& params, Lines* output) const {

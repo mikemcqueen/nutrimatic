@@ -19,22 +19,22 @@
 void load_letter_count_font();
 
 // One top-level pane: a line of a source dropdown, offering app_state()'s seed
-// keys unless the command reads columns only (see
-// Command::reads_columns_only()), "dict" when the command has it (see
-// Command::has_dictionary_in_src()), and the number, counting from 1, of each
-// column before this one, a letter source dropdown, offering "all" and those
-// same numbers, and a "p:" font size field for the ListBox's text, which
-// Ctrl+wheel also steps while the ListBox has keyboard focus (see Window); a
-// line of an "f:" filter field and a "D:" dropdown of DICT ("sml_dict") and BIG
-// ("big_dict"), starting at DICT, naming the dictionary in app_state()'s
-// dictionaries the command runs with, that "dict" names, and that a seed source
-// is filtered by (see AppState::seed_view()); then a dropdown of command_names,
-// less "bag-stats" and the commands reading columns only in the first column,
-// naming the command (see make_command()), sized to the longest name, and
-// setting the source to the column just before when the command reads columns
-// only, or to the command's default seed when it has one (see
-// Command::default_seed()), beside that command's option widgets, with its
-// display option widgets on the line below (see
+// keys and seed list patterns (see AppState::refresh_seed_lists()) unless the
+// command reads columns only (see Command::reads_columns_only()), "dict" when
+// the command has it (see Command::has_dictionary_in_src()), and the number,
+// counting from 1, of each column before this one, a letter source dropdown,
+// offering "all" and those same numbers, and a "p:" font size field for the
+// ListBox's text, which Ctrl+wheel also steps while the ListBox has keyboard
+// focus (see Window); a line of an "f:" filter field and a "D:" dropdown of
+// DICT ("sml_dict") and BIG ("big_dict"), starting at DICT, naming the
+// dictionary in app_state()'s dictionaries the command runs with, that "dict"
+// names, and that a seed source is filtered by (see AppState::seed_view());
+// then a dropdown of command_names, less "bag-stats" and the commands reading
+// columns only in the first column, naming the command (see make_command()),
+// sized to the longest name, and setting the source to the column just before
+// when the command reads columns only, or to the command's default seed when it
+// has one (see Command::default_seed()), beside that command's option widgets,
+// with its display option widgets on the line below (see
 // Command::render_display_options()), followed, when the command has a word bag
 // source (see Command::has_word_bag_source()), by a "wb:" dropdown of DICT, BIG
 // and the number of each column before this one, naming the dictionary or
@@ -75,13 +75,13 @@ void load_letter_count_font();
 // ListBox::set_filter()); the X button beside a field clears it and counts as
 // Enter. The filter changes only what is shown, never output(),
 // selected_item(), or version(). After the status line's count, unless the
-// command hides it (see Command::hides_save_button()), a "save" button,
-// enabled when output() is up to date, the command that made it is saveable
-// (see Command::saveable()), and the ListBox shows any items, overwrites
-// pgui.out in std::filesystem::temp_directory_path() with the shown items, one
-// per line, without their values. Widget IDs are scoped to the Column, so any
-// number can be rendered side by side in a Window. Both dropdowns offer only
-// columns before this one, so sources never form a cycle.
+// command hides it (see Command::hides_save_button()), a "save" button, enabled
+// when output() is up to date, the command that made it is saveable (see
+// Command::saveable()), and the ListBox shows any items, overwrites pgui.out in
+// std::filesystem::temp_directory_path() with the shown items, one per line,
+// without their values. Widget IDs are scoped to the Column, so any number can
+// be rendered side by side in a Window. Both dropdowns offer only columns
+// before this one, so sources never form a cycle.
 class Column {
  public:
   Column(InputSource source, LetterSource letter_source);
@@ -137,8 +137,9 @@ class Column {
     unsigned classified_version;
     unsigned source_version;
     InputSource source;
-    // The version of app_state()'s seed view the source and D: name, or 0
-    // when the source isn't a seed or the choice names no command.
+    // The version of app_state()'s seed view the source and D: name, or of
+    // the seed list the source names, or 0 when the source is neither or the
+    // choice names no command.
     unsigned seed_version;
     unsigned letters_version;
     LetterSource letter_source;

@@ -17,16 +17,24 @@ struct Seed {
   bool operator==(Seed const&) const = default;
 };
 
+// The lines of app_state()'s seed list `pattern`, seed.sN.<pattern> in the seed
+// directory, unfiltered, as a Column's input source (see
+// AppState::seed_list()).
+struct SeedList {
+  std::string pattern;
+  bool operator==(SeedList const&) const = default;
+};
+
 // The words of the dictionary a Column's D: dropdown names as its input
 // source.
 struct Dict {
   bool operator==(Dict const&) const = default;
 };
 
-// Where a Column's items come from: nothing, one of app_state()'s seed views,
-// the Column's dictionary, or another Column's items.
+// Where a Column's items come from: nothing, one of app_state()'s seed views
+// or seed lists, the Column's dictionary, or another Column's items.
 using InputSource =
-    std::variant<std::monostate, Seed, Dict, ColumnIdentifier>;
+    std::variant<std::monostate, Seed, SeedList, Dict, ColumnIdentifier>;
 
 // Where a Column's used letters come from: another Column, or none ("all"),
 // taking app_state()'s used letters from its letters.

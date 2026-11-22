@@ -144,6 +144,7 @@ std::string source_label(InputSource const& source) {
   if (auto const* id = std::get_if<ColumnIdentifier>(&source))
     return std::to_string(*id + 1);
   if (auto const* seed = std::get_if<Seed>(&source)) return seed->key;
+  if (auto const* list = std::get_if<SeedList>(&source)) return list->pattern;
   if (std::holds_alternative<Dict>(source)) return "dict";
   return "none";
 }
@@ -412,9 +413,12 @@ void Column::render_sources() {
       commands_[choice_] && commands_[choice_]->reads_columns_only();
   std::string const label = source_label(source_);
   std::vector<char const*> widest = {label.c_str()};
-  if (!columns_only)
+  if (!columns_only) {
     for (SeedBand const& band : AppState::seed_bands)
       widest.push_back(band.key);
+    for (auto const& [pattern, list] : app_state().seed_lists)
+      widest.push_back(pattern.c_str());
+  }
   if (has_dictionary_in_src) widest.push_back("dict");
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("s:");
@@ -425,6 +429,12 @@ void Column::render_sources() {
       for (SeedBand const& band : AppState::seed_bands) {
         InputSource const choice = Seed{band.key};
         if (ImGui::Selectable(band.key, source_ == choice)) source_ = choice;
+      }
+      for (auto const& [pattern, list] : app_state().seed_lists) {
+        InputSource const choice = SeedList{pattern};
+        if (ImGui::Selectable((pattern + "##seed_list").c_str(),
+                              source_ == choice))
+          source_ = choice;
       }
     }
     if (has_dictionary_in_src) {
@@ -556,6 +566,7 @@ Column::Key Column::wanted_key() const {
   Column const* letters = letters_column();
   Column const* word_bag = word_bag_column();
   std::optional<SeedViewKey> const seed = seed_view_key();
+  auto const* seed_list = std::get_if<SeedList>(&source_);
   bool const has_word_bag = has_word_bag_source();
   return {choice_,
           options_version_,
@@ -565,9 +576,10 @@ Column::Key Column::wanted_key() const {
               : 0,
           source ? source->version() : 0,
           source_,
-          seed && commands_[choice_]
-              ? app_state().seed_view(seed->first, seed->second).version
-              : 0,
+          !commands_[choice_] ? 0
+          : seed ? app_state().seed_view(seed->first, seed->second).version
+          : seed_list ? app_state().seed_list(seed_list->pattern).version
+          : 0,
           letters ? letters->version() : 0,
           letter_source_,
           dictionary_,
@@ -740,6 +752,8 @@ void Column::start(Key key) {
     input = source->output();
   } else if (std::optional<SeedViewKey> const seed = seed_view_key()) {
     input = state.seed_view(seed->first, seed->second).lines;
+  } else if (auto const* list = std::get_if<SeedList>(&source_)) {
+    input = state.seed_list(list->pattern).lines;
   } else if (std::holds_alternative<Dict>(source_)) {
     input = dictionary_lines;
   } else {
