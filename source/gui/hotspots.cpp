@@ -31,6 +31,7 @@ std::shared_ptr<HotspotSections const> read_hotspots_file(
     if (begin == std::string::npos) continue;
     std::string_view const text = std::string_view(line).substr(
         begin, line.find_last_not_of(" \t\r") + 1 - begin);
+    if (text.starts_with('#')) continue;
     if (text.size() >= 2 && text.front() == '[' && text.back() == ']') {
       close();
       std::string_view const name = text.substr(1, text.size() - 2);

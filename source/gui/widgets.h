@@ -29,6 +29,10 @@ inline constexpr int DEFAULT_FONT_SIZE = 15;
 // when that's from MIN_FONT_SIZE to MAX_FONT_SIZE. `id` is the field's ID.
 bool font_size_input(std::string_view id, int* size);
 
+// Writes value into text as a cv bound fitting a field sized for "0.00": two
+// decimals below 10, one below 100, none above.
+void format_cv_bound(double value, char* text, size_t size);
+
 // "m" and "x" fields, sized for "0.00", editing min_text and max_text, then a
 // square "X" button setting them to default_min and default_max, all greyed
 // out unless `enabled`. Sets *entered when Enter is pressed in a field or the

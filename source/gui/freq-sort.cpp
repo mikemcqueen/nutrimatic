@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <limits>
 #include <utility>
@@ -14,8 +15,9 @@
 FreqSort::FreqSort() {
   options.mode = FREQSORT_SCORE_CV;
   options.min_cv = 1.0;
-  std::snprintf(min_cv, sizeof min_cv, "%.2f", options.min_cv);
-  std::snprintf(max_cv, sizeof max_cv, "%.2f", 0.0);
+  format_cv_bound(options.min_cv, min_cv, sizeof min_cv);
+  format_cv_bound(std::isinf(options.max_cv) ? 0 : options.max_cv, max_cv,
+                  sizeof max_cv);
   min_letters = options.min_letters;
 }
 

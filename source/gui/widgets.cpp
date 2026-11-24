@@ -108,6 +108,11 @@ bool refresh_button(std::string_view id) {
   return clicked;
 }
 
+void format_cv_bound(double value, char* text, size_t size) {
+  int const decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
+  std::snprintf(text, size, "%.*f", decimals, value);
+}
+
 void cv_range_input(char* min_text, char* max_text, size_t size,
                     std::string_view default_min,
                     std::string_view default_max, bool enabled, bool* entered) {

@@ -13,6 +13,11 @@
 #include "log.h"
 #include "widgets.h"
 
+PairFilter::PairFilter() {
+  format_cv_bound(min_cv, min_cv_text, sizeof min_cv_text);
+  format_cv_bound(max_cv, max_cv_text, sizeof max_cv_text);
+}
+
 bool PairFilter::run(std::vector<SharedLines> const& inputs,
                      LetterToolsParams const& params, Lines* output) const {
   if (inputs.size() != 1) {

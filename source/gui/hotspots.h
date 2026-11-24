@@ -16,9 +16,10 @@ using HotspotSections = std::vector<std::pair<std::string, SharedLines>>;
 
 // The sections of hotspots file `number` at `path`, in file order, each a
 // [name] line, named number.name, followed by the nonblank lines under it,
-// trimmed. Its [all] section, named number.all, instead holds every distinct
-// line of all its sections, in file order. Null when the file can't be read;
-// that and lines before its first section are diagnosed.
+// trimmed. Lines starting with # are ignored. Its [all] section, named
+// number.all, instead holds every distinct line of all its sections, in file
+// order. Null when the file can't be read; that and lines before its first
+// section are diagnosed.
 std::shared_ptr<HotspotSections const> read_hotspots_file(
     std::filesystem::path const& path, size_t number);
 

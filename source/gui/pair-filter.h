@@ -37,6 +37,8 @@ struct PairFilter {
 
   ReviewKind review_kind(InputSource const&) const { return ReviewKind::pairs; }
 
+  PairFilter();
+
   bool run(std::vector<SharedLines> const& inputs,
            LetterToolsParams const& params, Lines* output) const;
   bool render_options(bool* entered);
@@ -51,15 +53,15 @@ struct PairFilter {
   bool required = false;  // --rw sN.required
   bool cv = true;   // --cv
   int min_letters = PFILTER_DEFAULT_MIN_LETTERS;  // -m
-  int min_letters_field = PFILTER_DEFAULT_MIN_LETTERS;
-  int max_letters = PFILTER_DEFAULT_MAX_LETTERS;  // -x
-  int max_letters_field = PFILTER_DEFAULT_MAX_LETTERS;
+  int min_letters_field = min_letters;
+  int max_letters = 0;  // -x, 0 for no limit
+  int max_letters_field = max_letters;
   std::string used;
   char used_text[64] = {};
   double min_cv = 0;
   double max_cv = 10;
-  char min_cv_text[32] = "0.00";
-  char max_cv_text[32] = "10.0";
+  char min_cv_text[32];
+  char max_cv_text[32];
   unsigned display_version_ = 0;
 };
 
