@@ -475,23 +475,32 @@ void AppState::refresh_hotspots() {
     hotspots = {std::move(path), std::make_shared<Hotspots::Sections const>(),
                 {}, 0};
   if (hotspots.path.empty()) return;
+  std::string const prefix = hotspots.path.filename().string() + ".";
+  std::map<std::string, Hotspots::File> files;
   bool changed = false;
-  for (size_t i = 0; i < hotspots.files.size(); ++i) {
-    Hotspots::File& file = hotspots.files[i];
-    std::filesystem::path const file_path =
-        hotspots.path.string() + "." + std::to_string(i + 1);
+  std::error_code error;
+  for (std::filesystem::directory_iterator it(seed_directory, error), end;
+       !error && it != end; it.increment(error)) {
+    std::string const name = it->path().filename().string();
+    if (name.size() <= prefix.size() || !name.starts_with(prefix)) continue;
+    std::string suffix = name.substr(prefix.size());
     std::filesystem::file_time_type const mtime =
-        modification_time(file_path);
-    if (mtime == file.mtime) continue;
-    file = {mtime, mtime == std::filesystem::file_time_type::min()
-                       ? nullptr
-                       : read_hotspots_file(file_path, i + 1)};
+        modification_time(it->path());
+    auto const found = hotspots.files.find(suffix);
+    if (found != hotspots.files.end() && found->second.mtime == mtime) {
+      files.emplace(std::move(suffix), std::move(found->second));
+      continue;
+    }
+    Hotspots::File file = {mtime, read_hotspots_file(it->path(), suffix)};
+    files.emplace(std::move(suffix), std::move(file));
     changed = true;
   }
+  changed = changed || files.size() != hotspots.files.size();
+  hotspots.files = std::move(files);
   if (!changed) return;
   hotspots.version = ++dictionary_version;
   auto sections = std::make_shared<Hotspots::Sections>();
-  for (Hotspots::File const& file : hotspots.files)
+  for (auto const& [suffix, file] : hotspots.files)
     if (file.sections)
       sections->insert(sections->end(), file.sections->begin(),
                        file.sections->end());

@@ -233,30 +233,29 @@ struct AppState {
   // has no words, which is diagnosed.
   void refresh_required_words();
 
-  // The sections of a sentence's hotspots files, sN.hotspots.M for M 1-9, as
-  // read_hotspots_file() reads them, in M order. Also the sN.hotspots path
-  // the files are named from, each file's modification time when read, the
-  // earliest time when it can't be stat'ed, and its sections as of then, and
-  // a version unique to that load.
+  // The sections of a sentence's hotspots files, sN.hotspots.SFX for any
+  // nonempty SFX, as read_hotspots_file() reads them, in SFX order. Also the
+  // sN.hotspots path the files are named from, each file's modification time
+  // when read and its sections as of then, by SFX, and a version unique to
+  // that load.
   struct Hotspots {
     using Sections = HotspotSections;
     struct File {
-      std::filesystem::file_time_type mtime =
-          std::filesystem::file_time_type::min();
+      std::filesystem::file_time_type mtime;
       std::shared_ptr<Sections const> sections;
     };
     std::filesystem::path path;
     std::shared_ptr<Sections const> sections;
-    std::array<File, 9> files;
+    std::map<std::string, File> files;
     unsigned version = 0;
   };
 
   // Points hotspots at sentence's sN.hotspots in seed_directory, with no
   // sections and version 0 when that path changed, and rereads each of its
-  // sN.hotspots.M files that appeared, disappeared, or whose modification
-  // time changed since it was read. It has no sections while sentence is
-  // CLASSIFIED_NO_SENTENCE or those files are missing, which isn't
-  // diagnosed.
+  // sN.hotspots.SFX files that appeared or whose modification time changed
+  // since it was read, dropping those that disappeared. It has no sections
+  // while sentence is CLASSIFIED_NO_SENTENCE or those files are missing,
+  // which isn't diagnosed.
   void refresh_hotspots();
 
   // Adds `letters`, lowercase a-z and sorted, to judged_bad when it isn't

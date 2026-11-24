@@ -14,12 +14,13 @@
 #include "text-util.h"
 
 std::shared_ptr<HotspotSections const> read_hotspots_file(
-    std::filesystem::path const& path, size_t number) {
+    std::filesystem::path const& path, std::string_view const suffix) {
   Lines lines;
   if (!read_file_lines(path.string(), &lines)) return nullptr;
-  std::string const prefix = std::to_string(number) + ".";
+  std::string const prefix = std::string(suffix) + ".";
   auto sections = std::make_shared<HotspotSections>();
   std::optional<size_t> all;
+  bool only_all = false;
   Lines pairs;
   auto const close = [&] {
     if (!sections->empty())
@@ -32,7 +33,11 @@ std::shared_ptr<HotspotSections const> read_hotspots_file(
     if (text.empty() || text.starts_with('#')) continue;
     if (text.size() >= 2 && text.front() == '[' && text.back() == ']') {
       close();
-      std::string_view const name = text.substr(1, text.size() - 2);
+      std::string_view name = text.substr(1, text.size() - 2);
+      if (name == "all-only" || name == "only-all") {
+        only_all = true;
+        name = "all";
+      }
       if (name == "all" && !all) all = sections->size();
       sections->emplace_back(prefix + std::string(name), nullptr);
     } else if (sections->empty()) {
@@ -51,6 +56,8 @@ std::shared_ptr<HotspotSections const> read_hotspots_file(
         if (seen.insert(pair).second) combined.push_back(pair);
     (*sections)[*all].second =
         std::make_shared<Lines const>(std::move(combined));
+    if (only_all)
+      *sections = HotspotSections{std::move((*sections)[*all])};
   }
   return sections;
 }
