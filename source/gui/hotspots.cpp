@@ -11,6 +11,7 @@
 #include "app-state.h"
 #include "letter-bag.h"
 #include "log.h"
+#include "text-util.h"
 
 std::shared_ptr<HotspotSections const> read_hotspots_file(
     std::filesystem::path const& path, size_t number) {
@@ -27,11 +28,8 @@ std::shared_ptr<HotspotSections const> read_hotspots_file(
     pairs.clear();
   };
   for (std::string const& line : lines) {
-    size_t const begin = line.find_first_not_of(" \t\r");
-    if (begin == std::string::npos) continue;
-    std::string_view const text = std::string_view(line).substr(
-        begin, line.find_last_not_of(" \t\r") + 1 - begin);
-    if (text.starts_with('#')) continue;
+    std::string_view const text = trim(line);
+    if (text.empty() || text.starts_with('#')) continue;
     if (text.size() >= 2 && text.front() == '[' && text.back() == ']') {
       close();
       std::string_view const name = text.substr(1, text.size() - 2);

@@ -23,6 +23,7 @@
 #include "lc-impl.h"
 #include "letter-bag.h"
 #include "log.h"
+#include "text-util.h"
 #include "widgets.h"
 #include "window.h"
 
@@ -49,12 +50,7 @@ SharedLines split_values(Lines* lines) {
       values.emplace_back();
       continue;
     }
-    size_t const begin = line.find_first_not_of(" \t\r", space);
-    if (begin == std::string::npos)
-      values.emplace_back();
-    else
-      values.push_back(
-          line.substr(begin, line.find_last_not_of(" \t\r") + 1 - begin));
+    values.emplace_back(trim(std::string_view(line).substr(space)));
     line.resize(space);
   }
   return std::make_shared<Lines const>(std::move(values));

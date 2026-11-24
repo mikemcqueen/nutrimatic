@@ -20,9 +20,9 @@
 #include "optparse.h"
 #include "workflow-paths.h"
 #include "tail-map.h"
+#include "text-util.h"
 
 #include <assert.h>
-#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -554,11 +554,7 @@ static bool parse_positional_score_value(
     std::string const& query, ScoreValue* out) {
   size_t const comma = query.find(',');
   if (comma == std::string::npos) {
-    size_t first = 0;
-    size_t last = query.size();
-    while (first < last && isspace((unsigned char) query[first])) ++first;
-    while (last > first && isspace((unsigned char) query[last - 1])) --last;
-    out->entry = query.substr(first, last - first);
+    out->entry = trim(query);
     if (out->entry.empty()) {
       fputs("error: empty entry in --score query\n", stderr);
       return false;
@@ -574,26 +570,9 @@ static bool parse_positional_score_value(
     return false;
   }
 
-  size_t left_first = 0;
-  size_t left_last = comma;
-  while (left_first < left_last &&
-         isspace((unsigned char) query[left_first]))
-    ++left_first;
-  while (left_last > left_first &&
-         isspace((unsigned char) query[left_last - 1]))
-    --left_last;
-  size_t right_first = comma + 1;
-  size_t right_last = query.size();
-  while (right_first < right_last &&
-         isspace((unsigned char) query[right_first]))
-    ++right_first;
-  while (right_last > right_first &&
-         isspace((unsigned char) query[right_last - 1]))
-    --right_last;
-
-  std::string const left = query.substr(left_first, left_last - left_first);
-  std::string const right =
-      query.substr(right_first, right_last - right_first);
+  std::string_view const query_view = query;
+  std::string const left(trim(query_view.substr(0, comma)));
+  std::string const right(trim(query_view.substr(comma + 1)));
   if (!is_literal_word(left) || !is_literal_word(right)) {
     fputs("error: positional --score pair must be two lowercase a-z0-9 words\n",
           stderr);
@@ -615,12 +594,8 @@ static bool parse_score_line(
     size_t start = 0;
     for (;;) {
       size_t const comma = line.find(',', start);
-      size_t first = start;
-      size_t last = comma == std::string::npos ? line.size() : comma;
-      while (first < last && isspace((unsigned char) line[first])) ++first;
-      while (last > first && isspace((unsigned char) line[last - 1])) --last;
-
-      std::string const word = line.substr(first, last - first);
+      std::string const word(trim(std::string_view(line).substr(
+          start, comma == std::string::npos ? comma : comma - start)));
       if (!is_literal_word(word)) {
         fprintf(stderr,
             "error: stdin line %zu: expected comma-separated words\n",
